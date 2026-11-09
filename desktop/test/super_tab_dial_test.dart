@@ -414,42 +414,48 @@ void main() {
     expect(ids.where((id) => '$id'.startsWith('buddy-')), isEmpty);
   });
 
-  test('access revoked while the dial\'s Buddy open is in flight opens nothing', () async {
-    final (f, c) = await openChats();
-    final server = f.connection.server;
-    final hold = server.holdReads = Completer<void>();
-    // The Swarm's rows are gone when the pick arrives; its read is answered
-    // with the access already removed.
-    c.revokeAccess('Access removed.');
-    server.state['conversations'] = <Map<String, dynamic>>[];
-    server.state['projects'] = <Map<String, dynamic>>[];
-    final picking = follow(f, 'design', 'buddy');
-    await settle();
-    server.holdReads = null;
-    hold.complete();
-    await picking;
-    await settle();
-    expect(c.selectedId, isNot('design-pm'));
-    expect(c.buddyChat('design'), isNull);
-    // The device's mark does not outlive the pick that found nothing.
-    f.app.announceWindowForeground();
-    await settle();
-    expect(announces(f).last.containsKey('fromDevice'), isFalse);
-  });
+  test(
+    'access revoked while the dial\'s Buddy open is in flight opens nothing',
+    () async {
+      final (f, c) = await openChats();
+      final server = f.connection.server;
+      final hold = server.holdReads = Completer<void>();
+      // The Swarm's rows are gone when the pick arrives; its read is answered
+      // with the access already removed.
+      c.revokeAccess('Access removed.');
+      server.state['conversations'] = <Map<String, dynamic>>[];
+      server.state['projects'] = <Map<String, dynamic>>[];
+      final picking = follow(f, 'design', 'buddy');
+      await settle();
+      server.holdReads = null;
+      hold.complete();
+      await picking;
+      await settle();
+      expect(c.selectedId, isNot('design-pm'));
+      expect(c.buddyChat('design'), isNull);
+      // The device's mark does not outlive the pick that found nothing.
+      f.app.announceWindowForeground();
+      await settle();
+      expect(announces(f).last.containsKey('fromDevice'), isFalse);
+    },
+  );
 
-  test('an unknown chat, tab or project from the dial opens nothing new', () async {
-    final (f, c) = await openChats();
-    final count = f.app.swarms.length;
-    await follow(f, 'design', 'terminal');
-    await settle();
-    // An unknown chat reads as the older pick: the project's Lead chat.
-    expect(c.selectedId, 'design-lead');
-    await follow(f, 'nope', 'buddy');
-    await follow(f, 'design', 'buddy', tab: 'ffffffffffffffffffffffff');
-    await settle();
-    expect(c.selectedId, 'design-lead');
-    expect(f.app.swarms, hasLength(count));
-  });
+  test(
+    'an unknown chat, tab or project from the dial opens nothing new',
+    () async {
+      final (f, c) = await openChats();
+      final count = f.app.swarms.length;
+      await follow(f, 'design', 'terminal');
+      await settle();
+      // An unknown chat reads as the older pick: the project's Lead chat.
+      expect(c.selectedId, 'design-lead');
+      await follow(f, 'nope', 'buddy');
+      await follow(f, 'design', 'buddy', tab: 'ffffffffffffffffffffffff');
+      await settle();
+      expect(c.selectedId, 'design-lead');
+      expect(f.app.swarms, hasLength(count));
+    },
+  );
 
   test('a Swarm tab announces the open conversation\'s id', () async {
     final (f, c) = await openChats();
@@ -541,24 +547,27 @@ void main() {
     },
   });
 
-  test('a threadOnly open does not raise the window or change the active Swarm', () async {
-    final (f, c) = await openChats();
-    final tab = f.app.activeSwarmId;
-    f.app.newSwarm(newTabPage: true);
-    final other = f.app.activeSwarmId;
-    var raised = 0;
-    final sub = f.app.deviceWindowRequests.listen((_) => raised++);
-    f.connection.server.append('Fix it', conversationId: 'design-lead');
-    final root = 'message-${f.connection.server.revision}';
-    await threadOnly(f, 'design-lead', root);
-    await settle();
-    await sub.cancel();
-    expect(raised, 0);
-    expect(f.app.activeSwarmId, other);
-    expect(f.app.activeSwarmId, isNot(tab));
-    expect(c.openedThread?.conversationId, 'design-lead');
-    expect(c.openedThread?.root, root);
-  });
+  test(
+    'a threadOnly open does not raise the window or change the active Swarm',
+    () async {
+      final (f, c) = await openChats();
+      final tab = f.app.activeSwarmId;
+      f.app.newSwarm(newTabPage: true);
+      final other = f.app.activeSwarmId;
+      var raised = 0;
+      final sub = f.app.deviceWindowRequests.listen((_) => raised++);
+      f.connection.server.append('Fix it', conversationId: 'design-lead');
+      final root = 'message-${f.connection.server.revision}';
+      await threadOnly(f, 'design-lead', root);
+      await settle();
+      await sub.cancel();
+      expect(raised, 0);
+      expect(f.app.activeSwarmId, other);
+      expect(f.app.activeSwarmId, isNot(tab));
+      expect(c.openedThread?.conversationId, 'design-lead');
+      expect(c.openedThread?.root, root);
+    },
+  );
 
   test('a threadOnly open in a group chat opens the group\'s thread', () async {
     final (f, c) = await openChats();
@@ -612,16 +621,19 @@ void main() {
     expect(c.openedThread?.root, 'm-root');
   });
 
-  test('a leave while the dial\'s thread still waits opens nothing later', () async {
-    final (f, c) = await openChats();
-    final root = nextRoot(f);
-    await threadOnly(f, 'design-lead', root);
-    await settle();
-    await threadOnly(f, 'design-lead', null);
-    await settle();
-    await arrive(f, c);
-    expect(c.openedThread, isNull);
-  });
+  test(
+    'a leave while the dial\'s thread still waits opens nothing later',
+    () async {
+      final (f, c) = await openChats();
+      final root = nextRoot(f);
+      await threadOnly(f, 'design-lead', root);
+      await settle();
+      await threadOnly(f, 'design-lead', null);
+      await settle();
+      await arrive(f, c);
+      expect(c.openedThread, isNull);
+    },
+  );
 
   test('a newer dial thread replaces a pending one', () async {
     final (f, c) = await openChats();
@@ -683,25 +695,28 @@ void main() {
 
   // Review of #2756 (AGENTS.md standard 6): a dial thread whose root never
   // reaches the chat is given up, and the log says so, without its root.
-  test('a dial thread whose root never arrives is given up, and logged', () async {
-    final lines = <String>[];
-    final previous = appLog;
-    appLog = _RecordingLog(lines);
-    addTearDown(() => appLog = previous);
-    final (f, c) = await openChats();
-    f.app.dialThreadWaitForTest = const Duration(milliseconds: 20);
-    await threadOnly(f, 'design-lead', 'message-never');
-    // Waits for the give-up's log line itself, never a fixed time (AGENTS.md
-    // standard 3).
-    final given = DateTime.now().add(const Duration(seconds: 5));
-    while (!lines.any((l) => l.contains('thread')) &&
-        DateTime.now().isBefore(given)) {
-      await settle();
-    }
-    expect(c.openedThread, isNull);
-    expect(lines.where((l) => l.contains('thread')), hasLength(1));
-    expect(lines.join('\n'), isNot(contains('message-never')));
-  });
+  test(
+    'a dial thread whose root never arrives is given up, and logged',
+    () async {
+      final lines = <String>[];
+      final previous = appLog;
+      appLog = _RecordingLog(lines);
+      addTearDown(() => appLog = previous);
+      final (f, c) = await openChats();
+      f.app.dialThreadWaitForTest = const Duration(milliseconds: 20);
+      await threadOnly(f, 'design-lead', 'message-never');
+      // Waits for the give-up's log line itself, never a fixed time (AGENTS.md
+      // standard 3).
+      final given = DateTime.now().add(const Duration(seconds: 5));
+      while (!lines.any((l) => l.contains('thread')) &&
+          DateTime.now().isBefore(given)) {
+        await settle();
+      }
+      expect(c.openedThread, isNull);
+      expect(lines.where((l) => l.contains('thread')), hasLength(1));
+      expect(lines.join('\n'), isNot(contains('message-never')));
+    },
+  );
 
   test('a decisions view or an unloaded Swarm leaves conversationId out', () async {
     final (f, c) = await openChats();

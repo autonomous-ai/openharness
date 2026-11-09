@@ -8,7 +8,6 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
 import 'model.dart';
-import 'project_github.dart';
 
 /// The Desktop's Projects in the middle (task #4466, anh Dee 11-07): every project as a card, like repositories under
 /// a GitHub org, most recent first. A card opens its project's Board; New project is the page's one blue button.
@@ -164,8 +163,6 @@ class _ProjectCard extends StatelessWidget {
                       color: grid.AppPalette.textFaint,
                     ),
                   ),
-                // Teammates' agents cannot push to its repository yet: the one thing here to act on.
-                ProjectGitHubLine(controller: controller, project: project),
               ],
             ),
           ),

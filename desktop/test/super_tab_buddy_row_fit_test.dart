@@ -31,9 +31,7 @@ void main() {
   bool cut(WidgetTester t, String text) =>
       t.renderObject<RenderParagraph>(find.text(text)).didExceedMaxLines;
 
-  testWidgets('the name stays whole and the note gives way at 180', (
-    t,
-  ) async {
+  testWidgets('the name stays whole and the note gives way at 180', (t) async {
     await row(t, note: 'not started');
     expect(cut(t, 'Buddy'), isFalse);
     expect(t.takeException(), isNull);

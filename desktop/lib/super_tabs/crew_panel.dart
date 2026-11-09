@@ -60,7 +60,8 @@ List<SuperTabCrewRow> superTabCrewRows(
           state: switch (agent.downSince) {
             _ when agent.crewAsleep => 'Asleep',
             null => 'Running',
-            final DateTime since when at.difference(since) < superTabCrewReopenGrace =>
+            final DateTime since
+                when at.difference(since) < superTabCrewReopenGrace =>
               'Reopening',
             final DateTime since => 'Down ${at.difference(since).inMinutes}m',
           },
@@ -72,8 +73,10 @@ List<SuperTabCrewRow> superTabCrewRows(
               )
               .firstOrNull) {
             null => 'No task',
-            final SuperTabConversation c =>
-              [if (c.number != null) '#${c.number}', c.title].join(' '),
+            final SuperTabConversation c => [
+              if (c.number != null) '#${c.number}',
+              c.title,
+            ].join(' '),
           },
         ),
   ];
@@ -128,8 +131,7 @@ Future<void> showSuperTabCrew(
         final swarm = c.snapshot;
         return SuperTabDetailDialog(
           title: 'Crew',
-          detail:
-              'Agents the Swarm keeps running. A crashed or frozen session reopens with its task, and idle never closes them.',
+          detail: 'Agents the Swarm keeps running. A crashed or frozen session reopens with its task, and idle never closes them.',
           body: SuperTabCrewList(
             rows: swarm == null ? const [] : superTabCrewRows(swarm, projectId),
           ),

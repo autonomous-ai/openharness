@@ -330,26 +330,30 @@ void main() {
   group('where the new agent runs', () {
     // Swarm v3 (#4120, #4289): a new agent runs on its own person's computer,
     // as them; a Team account takes no new agent.
-    test('this Mac in the Swarm: import is offered, with no Team account',
-        () async {
-      final f = await fixture();
-      expect(importUnavailable(f.app, f.c), isNull);
-      f.server.state['machines'] = <dynamic>[f.macPool];
-      await f.c.refresh();
-      expect(importUnavailable(f.app, f.c), isNull);
-    });
+    test(
+      'this Mac in the Swarm: import is offered, with no Team account',
+      () async {
+        final f = await fixture();
+        expect(importUnavailable(f.app, f.c), isNull);
+        f.server.state['machines'] = <dynamic>[f.macPool];
+        await f.c.refresh();
+        expect(importUnavailable(f.app, f.c), isNull);
+      },
+    );
 
-    test('a Team account that takes no work does not hold import back',
-        () async {
-      final f = await fixture();
-      f.teamPool['teamWork'] = {
-        'allowed': false,
-        'code': 'TEAM_ACCOUNTS_REMOVED',
-        'reason': 'Harness Team accounts are gone.',
-      };
-      await f.c.refresh();
-      expect(importUnavailable(f.app, f.c), isNull);
-    });
+    test(
+      'a Team account that takes no work does not hold import back',
+      () async {
+        final f = await fixture();
+        f.teamPool['teamWork'] = {
+          'allowed': false,
+          'code': 'TEAM_ACCOUNTS_REMOVED',
+          'reason': 'Harness Team accounts are gone.',
+        };
+        await f.c.refresh();
+        expect(importUnavailable(f.app, f.c), isNull);
+      },
+    );
 
     test('this Mac not in the Swarm says to add it', () async {
       final f = await fixture();
@@ -698,26 +702,28 @@ void main() {
       expect(f.daemon.calls.first.$3['action'], 'swarmListed');
     });
 
-    test('a project whose repository is this Mac\'s own folder starts there',
-        () async {
-      final (f, agent, handoff) = await prepared();
-      (f.server.state['projects'] as List).first['repository'] = {
-        'machineId': 'm',
-        'cwd': '/Users/owner/code/openharness',
-      };
-      await f.c.refresh();
-      await importAgent(
-        f.app,
-        f.c,
-        'lead',
-        agent,
-        handoff,
-        progress: AgentImport(),
-      );
-      final start = f.server.commands[1].$2['request'] as Map;
-      expect(start['machineId'], 'm');
-      expect(start['cwd'], '/Users/owner/code/openharness');
-    });
+    test(
+      'a project whose repository is this Mac\'s own folder starts there',
+      () async {
+        final (f, agent, handoff) = await prepared();
+        (f.server.state['projects'] as List).first['repository'] = {
+          'machineId': 'm',
+          'cwd': '/Users/owner/code/openharness',
+        };
+        await f.c.refresh();
+        await importAgent(
+          f.app,
+          f.c,
+          'lead',
+          agent,
+          handoff,
+          progress: AgentImport(),
+        );
+        final start = f.server.commands[1].$2['request'] as Map;
+        expect(start['machineId'], 'm');
+        expect(start['cwd'], '/Users/owner/code/openharness');
+      },
+    );
 
     Matcher failedAt(ImportStep step, [Object? words]) => isA<ImportFailure>()
         .having((e) => e.step, 'step', step)

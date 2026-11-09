@@ -1,31 +1,14 @@
-/// Native creation accepts at most 2,000 UTF-16 code units. Keep the bootstrap
-/// bounded independently of the person's request, which agent.add commits to
-/// this exact conversation before status confirms registration.
-String superTabLaunchPrompt({
-  required String tabId,
-  required String conversationId,
-  required bool lead,
-}) =>
-    'Harness Swarm agent. '
-    '${lead ? 'You are the Lead. ' : ''}'
-    'Use `harness super-tab --tab $tabId` subcommands. '
-    'First: `status`. Retry AGENT_UNAVAILABLE briefly; do not work or post before registration. '
-    'Read `messages $conversationId` for the full request; if empty, ask what to work on. '
-    // Answers go right below, not in a thread (anh Dee, 2026-11-04; cli host.ts reply line).
-    'Reply: `post GROUP "message" UNIQUE_OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID]`. '
-    'A main-chat message is answered right below it with --answers; one in a thread, in its thread with --reply-to; answer each message once, do not post again. Retry lost replies with the same ID and text. '
-    'Terminal output is not shared chat. If sandbox blocks commands, request permission. '
-    "Read your role in the project's instructions: `harness super-tab --tab $tabId instructions`. "
-    'Be a helpful colleague: answer first, in their language, under 150 words unless asked. Hide commands, internal IDs and field names. Give results with revision/links. '
-    // Quiet project chats (Dee, 2026-10-31): progress lives in the project's
-    // status card, never in posts at a cadence (cli swarmSkills.ts, Lead text).
-    '${lead ? kLeadQuietChat : ''}';
+import '../core/first_task.dart';
 
-/// How a Lead keeps people informed, the same as the Lead skill text: the
-/// status card holds progress, and the chat hears only what needs people.
-const kLeadQuietChat =
-    "Keep the project's status card current with project.report, the whole card as text: one short line per active task, where it is and what it waits on; it posts nothing. "
-    'Post in the Lead chat only when work merges or ships, a person must decide something new, or work is badly stuck: one or two lines with the link. '
-    'Ask a person a question once, as a decision; never repeat it. Answer questions, blockers and completion at once. '
-    'On scheduled requests read new reports, then use project.report with the whole card, or text:null when nothing changed. No per-turn summarizer. '
-    'Scope workgroups and sessions to this project.';
+/// An agent's first message (Swarm v4, anh Dee 2026-11-08): its name, then what its person asked, as a person starting
+/// Claude Code or Codex would type it. No Swarm manual: messages reach it as they arrive (cli superTabs/host.ts).
+/// Native creation accepts at most [kFirstTaskMaxLength] UTF-16 code units, so a longer request is cut there; the whole
+/// of it stays in the agent's chat. With no name given, the request alone.
+String superTabLaunchPrompt({required String? name, required String task}) {
+  final head = name == null ? '' : 'You are $name.';
+  final body = task.trim();
+  if (body.isEmpty) return head;
+  final lead = head.isEmpty ? '' : '$head\n\n';
+  final room = kFirstTaskMaxLength - lead.length;
+  return '$lead${body.length > room ? body.substring(0, room) : body}';
+}
