@@ -87,7 +87,9 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     ['Pip Two', 'builder:pip-two', `Pip${cp(0x200b)} Two`],
     ['Pip Two', 'builder:pip-two', `${cp(0xff30)}ip ${cp(0xff34)}wo`],
     ['Pip Two', 'builder:pip-two', `**Pip Two** ${cp(0x1f41d)}`],
-    ['Pip Two', 'builder:pip-two', 'Pîp Twö'],
+    // Hangul as typed in jamo (GitHub keeps a comment as typed), and a Greek name whose label has its final sigma.
+    ['민수', 'builder:민수', '민수'.normalize('NFD')],
+    ['ΖΕΥΣ', 'builder:ζευς', 'ΖΕΥΣ'],
   ])('never merges on its author\'s own READ-OK: %s, labelled %s, signing %j', async (name, label, signature) => {
     const f = setup()
     f.crew.mockResolvedValue({ builders: [{ id: 'writer', name, label, machineId: 'mac', engine: 'claude' }], machines: [] })
@@ -233,7 +235,7 @@ describe('the rule\'s parts', () => {
   it('reads each reader\'s last verdict by the name it signs with, or its login unsigned, and TWO READS', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
-      comment('Kai, 14:00: TWO READS for this one')], '')
+      comment('Kai, 14:00: TWO READS for this one')], '', [])
     expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno' },
       faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye' }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore' } })
     expect(twoReads).toBe(true)

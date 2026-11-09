@@ -256,6 +256,21 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)[0]).not.toContain(name)
     })
 
+    it('asks none of a pull request\'s writers to read it: its label\'s agent nor its branch\'s', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:atlas' }], head: { sha: HEAD, ref: 'juno/14' } })]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Pip\*\*: please read this pull request/)])
+    })
+
+    it('counts a reader who signs its name two ways once for TWO READS, as the merger does, and asks another', async () => {
+      const f = setup([])
+      f.github.state.pulls = [pull({ body: 'Closes #14. TWO READS' })]
+      f.github.state.comments.set(30, [comment('Kai Lee, 07:10: READ-OK f6edb44'), comment('kai-lee, 07:12: READ-OK f6edb44')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+    })
+
     it('asks a reader for the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
       const f = setup([], { crew: team })
       const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` }, body: '' }))
