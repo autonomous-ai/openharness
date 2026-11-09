@@ -660,7 +660,7 @@ export class SwarmReads {
 
   /** The CLI version each of the Swarm's machines' daemons last connected with (store.ts): the
    *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
-   *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
+   *  MACHINE_READS_MS. A start's dispatch still looks up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
   private machineLookups(state: SuperTabState): Promise<MachineReads> {
     if (!state.machines?.length) return Promise.resolve({})
     const now = this.now()

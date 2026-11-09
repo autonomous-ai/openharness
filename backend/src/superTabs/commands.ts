@@ -181,7 +181,8 @@ export const startRequestSchema = z.object({
     maxCpuPercent: z.number().min(0).max(100), tools: z.array(z.string().regex(/^[A-Za-z0-9_.+-]{1,80}$/)).max(20),
     devices: z.array(path).max(20), quotaRequired: z.boolean() }).strict(),
 }).strict()
-/** An access name a task listed as needed: an older client's, stored for older readers and read by nothing since machine.access went. */
+/** An access name a task listed as needed: an older client's, stored for older readers and read by nothing since machine.access went
+ *  (a task naming one starts on any machine now). Delete it with the task records (slice S13). */
 const accessName = z.string().trim().min(1).max(60).regex(/^[^\n\r\t]+$/)
 // `independent` is an older client's: stored for older readers, read by nothing (checks are information, project instructions).
 const check = z.object({ description: z.string().trim().min(1).max(1000), independent: z.boolean().optional() }).strict()

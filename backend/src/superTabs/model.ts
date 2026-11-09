@@ -407,7 +407,8 @@ export const reviewsWanted = (task: WorkTask | undefined): number => task?.revie
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
  *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
-/** `access`: an older client's: the names of what the work needs to reach, stored and read by nothing since machine.access went. */
+/** `access`: an older client's: the names of what the work needs to reach, stored and read by nothing since machine.access went.
+ *  Delete it with the task records (slice S13). */
 export interface TaskRequirement { machines?: string[]; devices?: string[]; access?: string[]; unseenMachines?: number }
 
 /** The machines a reader sees: listed in their visible state, or running an agent they see. */
@@ -915,6 +916,7 @@ export const NOTICE_READERS = {
   // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
   'pm-switch-notice': 'people',
   // The machine owner's line, once a week, when someone else's work started on their machine: written until Swarm v4, read still.
+  // Delete it with the notice readers of v1-v3 (slice S18).
   'others-work-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>

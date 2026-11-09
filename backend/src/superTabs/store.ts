@@ -379,18 +379,6 @@ const WIDE_WINDOW = 5 * LIST_SIZE
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
 export const ABANDONED_START_MS = 15 * 60_000
 
-/** Whether an agent's command adds an agent to a task by opening it, by posting into it or by naming one there: those joins
- *  check team access as conversation.agent does (commands.ts teamJoin). An ordinary post reads no machine rows. */
-const addsAgent = (state: SuperTabState, actor: Actor, command: Command): boolean => {
-  // A person's agent.add naming a session already in the Swarm checks it as conversation.agent does (security review S2).
-  if (command.type === 'agent.add') return state.agents.some(a => a.id === stableId(command.machineId, command.harnessId))
-  if (actor.kind !== 'agent') return false
-  if (command.type === 'conversation.create') return true
-  if (command.type !== 'message.send') return false
-  const group = state.conversations.find(c => c.id === command.conversationId)
-  return !group || [actor.agentId, ...command.recipientIds].some(id => !group.agentIds.includes(id))
-}
-
 /** Starts on a not-yet-contributed machine that never dispatched, dated by their own operation receipt (starts carry no
  *  time of their own). A dispatched start may have a native session coming, so it is never counted. */
 async function abandonedStarts(tx: Transaction, tabId: string, state: SuperTabState, machineId: string, now: number) {
@@ -4035,7 +4023,7 @@ export class SuperTabStore {
   }
 
   /** What the crew keeper asks of the store (crewKeep.ts CrewDeps): whether a machine admits a crew member's move start now,
-   *  under the same checks an agent.start meets, Team-account facts read once per sweep. */
+   *  under the same checks an agent.start meets. */
   private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
     // Each crew project's machine rules from its record (machineRules.ts): one indexed read per project with crew (at most
     // the Swarm's 100), only in a sweep where a member needs a machine.
@@ -4346,7 +4334,7 @@ export class SuperTabStore {
         const facts = { elsewhere: new Set(back.flatMap(r => { const key = sessionKey(machineId, r.harnessId); return elsewhere.registered.has(key) || elsewhere.confidential.has(key) ? [r.harnessId] : [] })),
         }
         for (const record of back) {
-          const refused = restoreRefusal(state, record, user.sub, now, facts)
+          const refused = restoreRefusal(state, record, user.sub, facts)
           if (refused) { logger.info('[swarm] a reopened session was not restored', { reason: refused }); continue }
           // Its share, then the record every Swarm registering this session writes: withdrawn, stopping or tied to a private project.
           try {
