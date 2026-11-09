@@ -30,8 +30,9 @@ void main() {
 
   Future<SuperTabController> show(
     WidgetTester tester,
-    ConversationServer server,
-  ) async {
+    ConversationServer server, {
+    bool board = true,
+  }) async {
     final c = server.controller();
     await c.refresh();
     await tester.pumpWidget(
@@ -44,6 +45,7 @@ void main() {
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
+            board: board,
           ),
         ),
       ),
@@ -58,6 +60,7 @@ void main() {
     SuperTabController c, {
     bool terminals = false,
     bool hidden = false,
+    bool board = true,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -74,6 +77,7 @@ void main() {
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Team Mac',
                 terminalsVisible: terminals,
+                board: board,
               ),
             ),
           ),
@@ -91,7 +95,7 @@ void main() {
   testWidgets('polling a displayed transcript does not keep requesting frames', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Already read');
+    final server = ConversationServer.chat()..append('Already read');
     final c = SuperTabController(
       tabId: 'tab',
       accountId: 'owner',
@@ -145,11 +149,11 @@ void main() {
     bool chatTicks() => TickerMode.valuesOf(
       tester.element(find.text('Hello', skipOffstage: false)),
     ).enabled;
-    await showReadView(tester, c);
+    await showReadView(tester, c, board: false);
     expect(chatTicks(), isTrue);
-    await showReadView(tester, c, terminals: true);
+    await showReadView(tester, c, terminals: true, board: false);
     expect(chatTicks(), isFalse);
-    await showReadView(tester, c);
+    await showReadView(tester, c, board: false);
     expect(chatTicks(), isTrue);
     await closeReadView(tester, c);
   });
@@ -158,7 +162,7 @@ void main() {
   testWidgets(
     'an open chat set to All is told behind the terminals, not on screen',
     (tester) async {
-      final server = ConversationServer()..append('Hello');
+      final server = ConversationServer.chat()..append('Hello');
       final c = server.controller();
       addTearDown(c.dispose);
       await c.refresh();
@@ -193,7 +197,7 @@ void main() {
   testWidgets('returning from terminals reads the already loaded transcript', (
     tester,
   ) async {
-    final server = ConversationServer()..append('The result is ready.');
+    final server = ConversationServer.chat()..append('The result is ready.');
     final c = server.controller();
     addTearDown(c.dispose);
     await c.refresh();
@@ -209,7 +213,7 @@ void main() {
   testWidgets(
     'revisiting a cached conversation acknowledges its visible tail',
     (tester) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append('The lead has an update.')
         ..append('Workgroup result.', conversationId: 'offline');
       final c = server.controller();
@@ -234,7 +238,7 @@ void main() {
     'returning from pull requests reads only the displayed messages',
     (tester) async {
       final server = ConversationServer()..append('First update');
-      final c = await show(tester, server);
+      final c = await show(tester, server, board: false);
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
@@ -254,7 +258,7 @@ void main() {
   testWidgets(
     'a read message does not become unread when its snapshot arrives',
     (tester) async {
-      final server = ConversationServer()..append('First update');
+      final server = ConversationServer.chat()..append('First update');
       final c = await show(tester, server);
       server.append('Loaded before the snapshot');
       await c.loadMessages('lead');
@@ -273,7 +277,7 @@ void main() {
     tester,
   ) async {
     final server = ConversationServer()..append('Visible update');
-    final c = await show(tester, server);
+    final c = await show(tester, server, board: false);
     await tester.tap(find.byTooltip('Project options'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
@@ -294,7 +298,7 @@ void main() {
   testWidgets('a hidden transcript does not consume a queued read callback', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Already read');
+    final server = ConversationServer.chat()..append('Already read');
     final c = server.controller();
     addTearDown(c.dispose);
     await c.refresh();
@@ -313,7 +317,7 @@ void main() {
   testWidgets('background windows keep messages unread until foregrounded', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Already read');
+    final server = ConversationServer.chat()..append('Already read');
     final c = await show(tester, server);
     addTearDown(
       () => tester.binding.handleAppLifecycleStateChanged(
@@ -338,7 +342,7 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(600, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final server = ConversationServer()..append('Already read');
-      final c = await show(tester, server);
+      final c = await show(tester, server, board: false);
       expect(c.unread(c.selected!), isFalse);
 
       await tester.tap(find.byTooltip(drawer));
@@ -375,7 +379,7 @@ void main() {
     final server = ConversationServer()
       ..append('The lead update')
       ..append('An unread workgroup update', conversationId: 'offline');
-    final c = await show(tester, server);
+    final c = await show(tester, server, board: false);
     // Unread is the project's name in bold, with no dot (Dee, 2026-10-29).
     final name = c.snapshot!.projects.single.name;
     FontWeight? projectWeight() => tester
@@ -428,7 +432,7 @@ void main() {
         'id': 'lead-agent',
         'name': 'Lead',
       };
-      final c = await show(tester, server);
+      final c = await show(tester, server, board: false);
       final row = find.byKey(const ValueKey('super-message-message-1'));
       expect(
         find.descendant(of: row, matching: find.text('Atlas')),
@@ -474,7 +478,7 @@ void main() {
           'Removed a credential (JWT) before saving. Revoke or rotate it.';
       final server = ConversationServer()
         ..commandResult['credentialNotice'] = notice;
-      await show(tester, server);
+      await show(tester, server, board: false);
       expect(
         find.byKey(const ValueKey('super-operation-notice')),
         findsNothing,
@@ -498,7 +502,7 @@ void main() {
   testWidgets('the quote of your own message reads You, not your email', (
     tester,
   ) async {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('Where do we stand?')
       ..append('Almost done.');
     server.messages.last
@@ -520,7 +524,7 @@ void main() {
   testWidgets('a removed agent keeps its recorded individual name', (
     tester,
   ) async {
-    final server = ConversationServer()..append('The review is complete.');
+    final server = ConversationServer.chat()..append('The review is complete.');
     server.messages.last['author'] = {
       'kind': 'agent',
       'id': 'removed-agent',
@@ -535,7 +539,7 @@ void main() {
   test(
     'current agent identities resolve by ID; removed agents use recorded names',
     () {
-      final server = ConversationServer()..append('An older message');
+      final server = ConversationServer.chat()..append('An older message');
       (server.state['agents'] as List).add({
         'id': 'old-agent',
         'name': 'Builder',
@@ -587,7 +591,7 @@ void main() {
   testWidgets(
     'a keyboard reply keeps its quoted context after sending and refreshing',
     (tester) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append('Should edits survive restarting the app?');
       server.messages.last['author'] = {
         'kind': 'agent',
@@ -645,7 +649,7 @@ void main() {
           'name': 'Builder $i',
         };
       }
-      final c = await show(tester, server);
+      final c = await show(tester, server, board: false);
       ScrollController scroll() => tester
           .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-lead')),
@@ -690,7 +694,7 @@ void main() {
     'more than a page arriving while scrolled up keeps the place, and the '
     'jump reads the newest',
     (tester) async {
-      final server = ConversationServer()..messagePage = 20;
+      final server = ConversationServer.chat()..messagePage = 20;
       for (var i = 1; i <= 40; i++) {
         server.append(
           'Agent update $i: checking the offline queue and reconnect behavior.',
@@ -735,7 +739,7 @@ void main() {
   testWidgets(
     'revocation removes the quoted original as well as the transcript',
     (tester) async {
-      final server = ConversationServer()..append('A private question');
+      final server = ConversationServer.chat()..append('A private question');
       final c = await show(tester, server);
       await tester.tap(find.byTooltip('Reply'));
       await tester.pumpAndSettle();
@@ -759,7 +763,7 @@ void main() {
   testWidgets(
     'a human request belongs only to its group and clears with the recorded state',
     (tester) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       server.state['agents'] = [
         {
           'id': 'builder',
@@ -892,7 +896,7 @@ void main() {
   test(
     'grouping preserves author, day, reply and native source boundaries',
     () {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append('First update')
         ..append('Second update');
       SuperTabMessage message(int i) =>
@@ -930,7 +934,7 @@ void main() {
   );
 
   test('a new display name starts its own message heading', () {
-    final server = ConversationServer()
+    final server = ConversationServer.chat()
       ..append('Older update')
       ..append('Newer update');
     for (final row in server.messages) {
@@ -945,7 +949,7 @@ void main() {
   test(
     'reading loaded messages cannot mark an unfetched tail as read',
     () async {
-      final server = ConversationServer()..append('Visible');
+      final server = ConversationServer.chat()..append('Visible');
       final c = server.controller();
       await c.refresh();
       server.append('Not loaded');

@@ -227,6 +227,7 @@ Future<(SuperTabController, GlobalKey)> _show(
           body: _keymapped(
             keymap,
             SuperTabView(
+              board: false,
               controller: c,
               app: app,
               onInvite: () {},
