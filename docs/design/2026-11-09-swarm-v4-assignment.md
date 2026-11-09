@@ -127,11 +127,19 @@ ask. A verdict on an older head no longer counts, and a HOLD on one still blocks
 reader is asked to read the new head, once ("the head is now abcdef1, after your HOLD on f6edb44: please read it again").
 Nobody able to read it is said once.
 
+## Taking work back (built)
+
+A builder that cannot work keeps nothing: one its person is stopping gives back all its open tasks at once; one whose
+machine is down gives back its queued tasks after 30 minutes (a sleep or a restart is back well within that) and the ones
+it took after 3 hours (work may be on that machine). Its builder label, and status:taken, come off with one comment
+("Harness, 23:10: Atlas's machine has been down since 15:40 UTC, so this task goes to the builder who can start it
+next."), and the next plan gives each to another builder (`assign/crew.ts takeBacks`, `githubAssign.ts takeBack`).
+
 ## Next
 
 1. **Estimates.** Each finished task records its real minutes, peak CPU and memory, disk and spend, by part, size and
    model; estimates take the mean for time and the 80th percentile for memory and disk.
 2. **CPU cores** in each machine's report, so CPU is measured, not assumed.
-3. **Moving work** when a builder stops, stalls or runs out of quota.
+3. **Moving work** when a builder stalls (no activity on a task it took) or runs out of quota.
 4. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.
