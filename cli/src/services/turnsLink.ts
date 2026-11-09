@@ -8,11 +8,15 @@
  * cancel took a delivery back cannot be answered at once here (`cancelDelivery` says false); a caller that
  * can wait asks `cancel`. A delivery the core never heard of (the link went before it was answered) is said
  * to be `unknown`: it may have been written, and nothing here can tell.
+ *
+ * The core also tells a service that asked for them (`TURN_END_HEARERS`) each live turn's end (`service_event` kind
+ * `turn_end`), which it hands to whoever listens here (`turns.onEnd`). An end the link misses is gone: it costs that turn
+ * what its listener would have done at the end, and the core never waits for it.
  */
-import type { CoreApi, TurnDelivery } from '../core/api.js'
+import type { CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
 
 type Payload = Record<string, unknown>
-type DeliveryTurns = Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery'>
+type DeliveryTurns = Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onEnd'>
 
 const STATES: ReadonlySet<string> = new Set(['queued', 'delivered', 'started', 'rejected', 'unknown'])
 
@@ -28,9 +32,17 @@ export function deliveryIn(payload: Payload): TurnDelivery | null {
   }
 }
 
+/** A turn's end as the core sent it, or null when it is not one. */
+export function endIn(payload: Payload): TurnEnd | null {
+  const event = payload.kind === 'turn_end' ? payload.event as Payload | undefined : undefined
+  if (!event || typeof event.agentId !== 'string' || typeof event.sessionId !== 'string' || typeof event.aborted !== 'boolean') return null
+  return { agentId: event.agentId, sessionId: event.sessionId, aborted: event.aborted }
+}
+
 /** `query` asks the core (`CoreConnection.query`, services/process.ts); it rejects when the link goes. */
 export function turnsLink(query: (query: string, payload: Payload) => Promise<Payload>, log: (line: string) => void = (line) => console.warn(line)) {
   const listeners = new Set<(event: TurnDelivery) => void>()
+  const endListeners = new Set<(event: TurnEnd) => void>()
   const tell = (event: TurnDelivery): void => {
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
@@ -54,13 +66,26 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
+    onEnd: (listener) => {
+      endListeners.add(listener)
+      return () => { endListeners.delete(listener) }
+    },
   }
   return {
     turns,
     /** Take back a delivery and hear whether the core could, for a caller that can wait for the answer. */
     cancel,
-    /** What the core told this service: true when it was a delivery's progress, now heard here. */
+    /** What the core told this service: true when it was a delivery's progress or a turn's end, now heard here. */
     heard(payload: Payload): boolean {
+      const end = endIn(payload)
+      if (end) {
+        for (const listener of endListeners) {
+          try { listener(end) } catch (error) {
+            log(`[turns] a turn-end listener failed on ${end.agentId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        return true
+      }
       const event = deliveryIn(payload)
       if (!event) return false
       tell(event)
