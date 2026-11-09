@@ -48,7 +48,6 @@ const conversation: Required<Conversation> = {
   dormant: false,
   foldedInto: ['f'],
   handOutLane: 'Desktop',
-  heardAt: 0,
   hold: { kind: 'requester' },
   id: 'g',
   kind: 'leads',

@@ -537,19 +537,6 @@ describe('an instructions save keeps the rules people gave', () => {
     expect(f.run(save(3, `${doc(both)}\n- Tests run first.`, { askedBy: 'owner' }), as(lead), stored(doc(both), 3)).instructions!.dropped).toBeUndefined()
   })
 
-  // A tidy counts as done only when a save follows it (pmSchedule.ts tidyRequest): the coordinator's save, not a person's.
-  it('marks a pending daily tidy done on the coordinator\'s save that says it is the tidy', () => {
-    const { f, lead } = pm()
-    f.state.projects![0]!.schedule = { lastSlot: 1, tidiedOn: '2026-11-04', tidyPending: true }
-    f.run(save(1, `${base}\n- Tests run first.`, { tidy: true }), peer, stored())
-    expect(f.state.projects![0]!.schedule).toMatchObject({ tidyPending: true })
-    // Review of #3112 (Heron21): a correction the coordinator saves after the request is not the tidy.
-    f.run(save(2, `${base}\n- Tests run first.\n- Lint first.`, { askedBy: 'owner' }), as(lead), stored(`${base}\n- Tests run first.`, 2))
-    expect(f.state.projects![0]!.schedule).toMatchObject({ tidyPending: true })
-    f.run(save(3, base, { askedBy: 'owner', tidy: true }), as(lead), stored(`${base}\n- Tests run first.\n- Lint first.`, 3))
-    expect(f.state.projects![0]!.schedule).toEqual({ lastSlot: 1, tidiedOn: '2026-11-04', tidiedRevision: 4 })
-  })
-
   // Review of #3112 (Heron21): with the revision it replaces unread, nothing can be checked, so nothing is saved.
   it('refuses a save when the revision it replaces cannot be read', () => {
     const { f, lead } = pm()
@@ -665,7 +652,7 @@ describe('server-made instruction saves and the repeat refusal', () => {
   it('saves a tidy that merges two copies of a line into one', () => {
     const f = fixture()
     const twice = `${doc}- Phone tasks run on Tony's Mac first.\n`
-    const effects = f.run({ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: doc, summary: 'Tidied', tidy: true } as Command, owner,
+    const effects = f.run({ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: doc, summary: 'Tidied' } as Command, owner,
       { instructions: { revision: 1, text: twice, at: 500 } })
     expect(effects.result).toMatchObject({ revision: 2 })
   })

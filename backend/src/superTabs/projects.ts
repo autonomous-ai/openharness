@@ -52,26 +52,12 @@ export interface SwarmProject {
   /** Tasks up to this number stay Simple after returning to Full. One watermark covers dormant tasks and repeated
    *  switches without loading or rewriting any task history; absent until the first Simple→Full switch (#3896). */
   simpleThrough?: number
-  /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent.
-   *  On by default: a project without one gets the default on its coordinator's next poll, unless a person turned it off. */
-  digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
-  /** A person turned the digest off (project.digest with time null), so the default is not filled in again. */
-  digestOff?: true
-  /** The last 30-minute slot of the built-in PM schedule in which its coordinator's poll found something to sweep
-   *  (pmSchedule.ts), woken or held back, and the message that last carried a wake (its own, an update request or a notice
-   *  digest): no new wake while that one is unread. A slot with nothing to sweep is not written. Readers never get it.
-   *  `heardAt`: when the last wake asked it to save what people taught it; `tidiedOn` and `tidiedRevision`: the local date
-   *  the daily tidy was last asked, and the instructions revision its last save made; `tidyPending`: asked, and no save has
-   *  followed yet (pmSchedule.ts tidyRequest; tasks #3022, #3151). */
-  schedule?: { lastSlot: number; wakeId?: string; heardAt?: number; tidiedOn?: string; tidiedRevision?: number; tidyPending?: boolean }
   /** The Board way of working (boardRights.ts, task #3819): `boardMode` true once its owner switched it on, absent otherwise;
    *  `canChat` the people its owner granted the right to write in its chat (its owners always have it); `decider` its top
    *  decider, who sets P0 and pauses as its owners do. Every reader of the project reads them. */
   boardMode?: true
   canChat?: string[]
   decider?: string
-  /** The what-changed note for PMs (processNotes.ts, task #3581) its PM was last woken for, and the newest it confirmed. */
-  processNote?: { told?: string; confirmed?: string }
   /** The oldest message a person sent its PM in the last day that the PM has not answered, and when it was sent, as the worker's
    *  time checks last found it (timeChecks.ts owedAsk); absent when it owes none. Its PM's host restarts a PM that hangs while it
    *  owes one (task #3385). Readers never get it: it may name a message in a person's private chat with the PM. */

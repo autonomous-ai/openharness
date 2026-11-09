@@ -108,10 +108,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const part = <T>(list: Part<T>[]) => { const keyed = new Map(list.map(p => [p.key, p])); return (key: string) => keyed.get(key)! }
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
-  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The built-in
-  // schedule's slot is the coordinator poll's bookkeeping (pmSchedule.ts), like progress, and so is the release list (releases.ts):
-  // no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, schedule: _schedule, releases: _releases, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The progress
+  // and the release list (releases.ts) are the server's bookkeeping: no reader shows them. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   // Always, its default too (task #3818): an app offers several Buddies only where the head says how many, so an older backend,
   // which sends none, is never taken for one that makes them.

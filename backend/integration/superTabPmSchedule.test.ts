@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { latestProcessNote } from '../src/superTabs/processNotes.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -17,19 +16,15 @@ import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
-import { wantSchedule } from './noDefaultDigest.test-support.js'
-import { SCHEDULE_SLOT_MS, scheduleRequest, scheduleSlot } from '../src/superTabs/pmSchedule.js'
-import { plan, profiled, reads } from './plans.test-support.js'
 
-// Ken, 2026-11-04 (docs/plans/2026-11-04-pm-built-in-schedule-design.md): the coordinator's poll wakes it every 30 minutes for
-// the built-in schedule when the sweep has something to do, in one message per poll. A fresh loopback replica set, created here.
+// Swarm v4 (anh Dee 2026-11-09): the server wakes no PM for a built-in schedule, a daily tidy or a morning digest, and sends it no
+// "what changed for PMs" note. A fresh loopback replica set, created here.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '210000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '210000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const MINUTE = 60_000
-const DUE = 5 * MINUTE
 
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
@@ -73,8 +68,6 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
     return agentId
   }
   const lead = await add('lead', 'lead-host', 'Lead', true)
-  // Its PM confirmed the newest note for PMs, which would otherwise wake it and head its inbox (processNotes.ts, task #3581).
-  await execute({ type: 'process.confirm', projectId: 'lead', noteId: latestProcessNote()!.id }, host, lead)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [] })).result.conversationId)
   const worker = await add(group, 'test-host', 'Worker')
@@ -126,187 +119,13 @@ const headOf = async (tabId: string) => db.swarmHead.findUniqueOrThrow({ where: 
 const projectOf = async (f: Awaited<ReturnType<typeof swarm>>) => (await f.timed.read(host, f.tab, undefined, f.lead)).state.projects![0]!
 /** A task with no agent: what the sweep is for. */
 const unassigned = (f: Awaited<ReturnType<typeof swarm>>) => f.execute({ type: 'conversation.create', title: 'Nobody has this', brief: 'Do it', checks: [] })
-
-describe('the built-in schedule on the coordinator\'s poll', () => {
-  it('wakes the coordinator once per slot, as its own message when nothing else goes', async () => {
+describe('the coordinator\'s poll', () => {
+  it('sends no built-in schedule, tidy request, digest or process note, however long it waits', async () => {
     const f = await swarm()
-    wantSchedule()
     await unassigned(f)
-    const inbox = await f.poll()
-    const [wake] = await schedules(f.tab)
-    expect(wake).toBeDefined()
-    expect(kindOf(wake!)).toBe('schedule-request')
-    expect(wake!.recipientIds).toEqual([f.lead])
-    expect(inbox.map(d => d.messageId)).toContain(wake!.id)
-    f.clock.now += MINUTE
+    f.clock.now += 26 * 60 * MINUTE
     await f.poll()
-    expect(await schedules(f.tab)).toHaveLength(1)
-    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
-  })
-
-  it('is the coordinator\'s alone: no person sees it in the chat, and no other agent reads it', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await unassigned(f)
-    await f.poll()
-    const [wake] = await schedules(f.tab)
-    const page = async (user: AuthUser, asAgentId?: string) => (await f.timed.messages(user, f.tab, 'lead', { messageId: wake!.id }, asAgentId)).messages.map(m => m.id)
-    expect(await page(host, f.lead)).toEqual([wake!.id])
-    for (const user of [owner, host]) expect(await page(user)).toEqual([])
-    expect(await page(host, f.worker)).toEqual([])
-  })
-
-  it('writes nothing to the Swarm\'s head and sends nothing when every task has an agent working on it', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await f.poll()
-    f.clock.now += SCHEDULE_SLOT_MS
-    // Every reader rereads a head that moved: a slot with nothing due must leave it as it was (#2946 review, 1).
-    const before = await headOf(f.tab)
-    await f.poll()
-    expect(await schedules(f.tab)).toEqual([])
-    expect(await headOf(f.tab)).toEqual(before)
-    expect((await projectOf(f)).schedule).toBeUndefined()
-    // Something to sweep later in the same slot wakes it once (at the next full poll, 30 seconds on).
-    await unassigned(f)
-    f.clock.now += 30_000
-    await f.poll()
-    expect(await schedules(f.tab)).toHaveLength(1)
-  })
-
-  it('keeps the slot out of the head readers get', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await unassigned(f)
-    await f.poll()
-    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
-    const reads = new SwarmReads(f.timed)
-    for (const [user, asAgentId] of [[owner], [host], [host, f.lead]] as const) {
-      const { head } = await reads.firstLoad(user, f.tab, asAgentId)
-      expect(head.data.projects!.map(p => 'schedule' in p)).toEqual([false])
-    }
-  })
-
-  it('sends no second wake while the first is unread, and still moves the slot', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await unassigned(f)
-    await f.poll()
-    f.clock.now += SCHEDULE_SLOT_MS
-    await f.poll()
-    expect(await schedules(f.tab)).toHaveLength(1)
-    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
-  })
-
-  it('sends no second wake over three slots while the first is unread', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await unassigned(f)
-    await f.poll()
-    for (const _ of [1, 2]) { f.clock.now += SCHEDULE_SLOT_MS; await f.poll() }
-    expect(await schedules(f.tab)).toHaveLength(1)
-  })
-
-  it('sends no wake of its own while the wake that carried the last one is unread', async () => {
-    const f = await swarm({ fresh: true })
-    wantSchedule()
-    await unassigned(f)
-    f.clock.now += DUE
-    await f.poll()
-    f.clock.now += SCHEDULE_SLOT_MS
-    await f.poll()
-    expect((await schedules(f.tab)).map(kindOf)).toEqual(['schedule-request'])
-  })
-
-  it('goes in the notice digest when one is written', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await f.write({ kind: 'idle' }, f.lead)
-    await unassigned(f)
-    f.clock.now += DUE
-    await f.poll()
-    const [digest] = await digests(f.tab)
-    expect(digest!.text).toContain('Built-in schedule,')
-    expect(digest!.source).toMatchObject({ kind: 'notice-digest', schedule: scheduleSlot(f.clock.now) })
-    expect(await schedules(f.tab)).toHaveLength(1)
-  })
-
-  it('sends nothing in a paused Swarm, and one wake for the current slot once it resumes', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await unassigned(f)
-    await f.execute({ type: 'tab.pause', paused: true })
-    await f.poll()
-    f.clock.now += 3 * SCHEDULE_SLOT_MS
-    await f.poll()
-    expect(await schedules(f.tab)).toEqual([])
-    await f.execute({ type: 'tab.pause', paused: false })
-    f.clock.now += 30_000
-    await f.poll()
-    expect(await schedules(f.tab)).toHaveLength(1)
-    expect((await projectOf(f)).schedule).toMatchObject({ lastSlot: scheduleSlot(f.clock.now) })
-  })
-})
-
-// Task #3151 (Ken, 11-05): the tidy left the 30-minute wake for its own message at 23:00 local, and counts only when a save
-// follows it.
-describe('the daily tidy on the coordinator\'s poll', () => {
-  const tidies = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } }))
-    .filter(m => kindOf(m) === 'tidy-request')
-  /** 23:05 in Vietnam on the given November day. */
-  const night = (day: number) => Date.UTC(2026, 10, day, 16, 5)
-
-  it('asks once a night in its own message, says the next night when no save followed, and stops once one did', async () => {
-    const f = await swarm()
-    wantSchedule()
-    await f.execute({ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: '# Rules\n\n- Tests run first (owner, 2026-11-02).', summary: 'Tests first' })
-    await f.poll()
-    expect(await tidies(f.tab)).toEqual([])
-    f.clock.now = night(2)
-    const inbox = await f.poll()
-    const [first] = await tidies(f.tab)
-    expect(first).toBeDefined()
-    expect(first!.recipientIds).toEqual([f.lead])
-    expect(first!.text).toMatch(/^Daily tidy, 23:05 \(Asia\/Ho_Chi_Minh\)\./)
-    expect(first!.text).not.toContain('Yesterday\'s tidy was skipped')
-    expect(inbox.map(d => d.messageId)).toContain(first!.id)
-    // Never inside a wake.
-    expect((await schedules(f.tab)).some(m => m.text.includes('Daily tidy'))).toBe(false)
-    f.clock.now += 10 * MINUTE
-    await f.poll()
-    expect(await tidies(f.tab)).toHaveLength(1)
-    // No save followed: the next night asks again and says so.
-    f.clock.now = night(3)
-    await f.poll()
-    const second = (await tidies(f.tab))[1]
-    expect(second?.text).toContain('Yesterday\'s tidy was skipped: no save followed it.')
-    // The coordinator's save is the tidy done: nothing to tidy the night after.
-    expect((await f.execute({ type: 'instructions.save', projectId: 'lead', baseRevision: 2,
-      text: '# Rules\n\n- Tests run first (owner, 2026-11-02).\n- Reviews run on Opus.', summary: 'Tidied: nothing dropped', askedBy: owner.sub, tidy: true },
-    host, f.lead)).result.revision).toBe(3)
-    f.clock.now = night(4)
-    await f.poll()
-    expect(await tidies(f.tab)).toHaveLength(2)
-  })
-})
-
-// A kept message's deliveries were read by message id alone: a scan of all 43 k deliveries, 440 ms inside this write transaction, 21 times
-// a day (Atlas slow log, 2026-11-04). The path is the Lead's poll keeping a message already stored; this wake is one (the update request
-// that used to carry this check is gone, task #3593).
-describe('a poll keeping a message already stored', () => {
-  it('reads its deliveries by Swarm and message, examining only those', async () => {
-    const f = await swarm({ fresh: true })
-    wantSchedule()
-    await unassigned(f)
-    f.clock.now += DUE
-    const { state } = await f.timed.read(host, f.tab, undefined, f.lead)
-    const { draft } = scheduleRequest(state, state.agents.find(a => a.id === f.lead)!, f.clock.now)!
-    await db.superTabMessage.create({ data: { id: draft.id, tabId: f.tab, conversationId: draft.conversationId, sequence: 1, text: draft.text, replyTo: null, recipientIds: draft.recipients,
-      mentions: [], thread: draft.id, source: draft.source as object, author: draft.author as object } })
-    const entries = await profiled(db, () => f.poll())
-    const rows = reads(entries, 'SuperTabDelivery', ['messageId'], ['agentId'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, messageId: 1/)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
+    const sent = await db.superTabMessage.findMany({ where: { tabId: f.tab, recipientIds: { has: f.lead } } })
+    expect(sent.filter(m => /Built-in schedule|daily tidy|What changed for PMs|digest/i.test(m.text) || ['schedule-request', 'tidy-request', 'digest'].includes(kindOf(m) ?? ''))).toEqual([])
   })
 })

@@ -9,7 +9,6 @@ import { crewNeedLine, gathersForInbox, INBOX_CAPABILITY, inboxSection, OWED_LIN
 import type { Author } from './model.js'
 import { CREW_NEED_KIND } from './crewNeeds.js'
 import { agentProjectId, projectsOf } from './projects.js'
-import { latestProcessNote } from './processNotes.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 import { swarmUsernames } from './usernames.js'
 
@@ -19,8 +18,6 @@ function setup() {
   const f = stepsFixture()
   const ask = (text: string) => f.run({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] } as Command, owner).result.messageId as string
   const project = () => projectsOf(f.state)[0]!
-  // A PM that confirmed the newest note for PMs, in a project with a crew: nothing else is owed (processNotes.ts, task #3581).
-  project().processNote = { confirmed: latestProcessNote()!.id }
   const member = f.state.agents.find(a => agentProjectId(f.state, a) === project().id && a.id !== f.lead)!
   member.crew = { role: 'Engineer', at: 0, by: 'owner' }
   return { f, ask, project }

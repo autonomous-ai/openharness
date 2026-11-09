@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import type { SuperTabState } from '../superTabs/model.js'
-import { projectsOf, type SwarmProject } from '../superTabs/projects.js'
+import { projectsOf } from '../superTabs/projects.js'
 import type { SuperTabStore } from '../superTabs/store.js'
 import { weekStart } from '../superTabs/leaderboard/week.js'
 import { DEFAULT_TIME_ZONE } from '../superTabs/costs/reflection.js'
@@ -35,11 +35,9 @@ function localNow(timeZone: string, now: number): { date: string; hour: string }
   return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: parts.hour! }
 }
 
-/** The local date whose report is due at `now`, or null outside the project's 23:00 hour. A zone the runtime does not know
- *  counts as the default one. */
-export function reflectionDue(project: Pick<SwarmProject, 'digest'>, now: number): string | null {
-  let local: ReturnType<typeof localNow>
-  try { local = localNow(project.digest?.timeZone ?? DEFAULT_TIME_ZONE, now) } catch { local = localNow(DEFAULT_TIME_ZONE, now) }
+/** The local date whose report is due at `now`, or null outside the 23:00 hour in the default zone. */
+export function reflectionDue(now: number): string | null {
+  const local = localNow(DEFAULT_TIME_ZONE, now)
   return local.hour === HOUR ? local.date : null
 }
 
@@ -57,8 +55,8 @@ export async function reflectionCandidates(db: PrismaClient, now: number, log: P
   return byTab
 }
 
-/** A project that may get a report, with what tells when: its digest's time zone. */
-export interface ReflectionTarget { tabId: string; projectId: string; digest?: SwarmProject['digest'] }
+/** A project that may get a report. */
+export interface ReflectionTarget { tabId: string; projectId: string }
 
 /** The candidates, each with its project's time zone from its Swarm's head. A Swarm with no projects list has its one project
  *  (projects.ts projectsOf). A Swarm whose head read fails is logged and counted in `failed`. */
@@ -70,7 +68,7 @@ export async function reflectionPlan(db: PrismaClient, now: number, log: Pick<ty
       const head = await db.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { deleted: true, data: true } })
       if (!head || head.deleted) continue
       for (const project of projectsOf(head.data as unknown as SuperTabState).filter(p => projectIds.includes(p.id))) {
-        targets.push({ tabId, projectId: project.id, ...project.digest ? { digest: project.digest } : {} })
+        targets.push({ tabId, projectId: project.id })
       }
     } catch (error) {
       failed++
@@ -99,7 +97,7 @@ export async function reflectNightly(db: PrismaClient, store: Pick<SuperTabStore
 
   async function run(targets: ReflectionTarget[]): Promise<ReflectionPass> {
     for (const target of targets) {
-      const on = reflectionDue(target, now)
+      const on = reflectionDue(now)
       const key = JSON.stringify([target.tabId, target.projectId, on])
       if (!on || cache.settled.has(key)) continue
       try {
