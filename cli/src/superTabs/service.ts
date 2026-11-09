@@ -21,6 +21,7 @@ import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
+import { GitHubMentions, githubReader, watchedAgents } from './githubMentions.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { readTeamConfig } from '../team/config.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
@@ -285,6 +286,8 @@ export interface SuperTabServiceOptions {
   teamNodeTools?: () => unknown
   /** What reads a Buddy's pull requests with this machine's own GitHub (lib/pullRequestsStatus.ts), for a spec. */
   pullRequests?: BuddyStatusDeps['pullRequests']
+  /** What reads GitHub for this computer's person's v4 agents (superTabs/githubMentions.ts), for a spec. */
+  githubMentions?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMentions, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 
@@ -316,12 +319,22 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     book ??= (options.reservations ?? ((api, id) => new CapacityReservations(api, id)))(core, machine)
     return book
   }
+  // GitHub for this computer's person's v4 agents, read with this computer's own gh while the host runs: no host, no Swarm
+  // agents here to read for (githubMentions.ts).
+  const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
+    watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
+      roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
+    get: githubReader(),
+    relay: (tabId, operationId, command) => backend(api, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, command }),
+    file: join(api.dataDir, 'super-tab-github-news.json'),
+  })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
     host ??= (options.host ?? ((api, id, given) => new SuperTabHost(api, id, given)))(core, machine,
       { startReceipt: harnessId => reservations().creationOf(harnessId), sources: sources() })
     host.start()
+    mentions.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -359,7 +372,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
