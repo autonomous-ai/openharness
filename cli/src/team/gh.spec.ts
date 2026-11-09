@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -90,6 +90,15 @@ describe.runIf(process.platform === 'darwin')('the Harness Team account\'s own g
       expect(GH_BUILDS[arch]).toMatchObject({ archiveRoot: `gh_2.103.3_macOS_${name}`,
         url: `https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_macOS_${name}.zip`, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) })
     }
+  })
+
+  // Node 25.3's rmSync({ force: true }) left a link whose binary is gone in place, and the link made next failed with EEXIST.
+  it('replaces a gh link whose binary is gone', async () => {
+    const { d, home } = deps()
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+    symlinkSync(join(home, 'gone', 'gh'), join(home, '.local', 'bin', 'gh'))
+    expect(await ensureTeamGh(d)).toBe('installed')
+    expect(readlinkSync(join(home, '.local', 'bin', 'gh'))).toBe(join(home, '.harness', 'runtime', 'gh_2.103.3_macOS_arm64', 'bin', 'gh'))
   })
 
   // PR #1934 (2026-10-28): Homebrew's gh behind /opt/homebrew/bin, mode 770, answered "permission denied".

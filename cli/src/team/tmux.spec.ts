@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +44,15 @@ describe('the Harness Team account\'s own tmux', () => {
       [{ tmux: { 'darwin-arm64': { ...manifest.tmux['darwin-arm64'], sha256: 'nope' } } }, 'darwin', 'arm64'],
       [{ tmux: { 'darwin-arm64': { ...manifest.tmux['darwin-arm64'], archiveRoot: '../escape' } } }, 'darwin', 'arm64'],
     ] as Array<[unknown, NodeJS.Platform, string]>) expect(tmuxBuildFor(m, platform, arch)).toBeNull()
+  })
+
+  // Node 25.3's rmSync({ force: true }) left a link whose binary is gone in place, and the link made next failed with EEXIST.
+  it('replaces a tmux link whose binary is gone', async () => {
+    const { d, home } = deps()
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+    symlinkSync(join(home, 'gone', 'tmux'), join(home, '.local', 'bin', 'tmux'))
+    expect(await ensureTeamTmux(d)).toBe('installed')
+    expect(readlinkSync(join(home, '.local', 'bin', 'tmux'))).toBe(join(home, '.harness', 'runtime', 'tmux-3.7c-darwin-arm64', 'bin', 'tmux'))
   })
 
   it('installs the managed build in its own home when it has no tmux it can run, where the daemon looks for it', async () => {

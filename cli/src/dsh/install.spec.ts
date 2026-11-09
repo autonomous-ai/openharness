@@ -248,6 +248,19 @@ describe('installDsh, every way it can go', () => {
       expect(readInstalledIndex()).toHaveLength(1)
     })
 
+    // Node 25.3's rmSync({ force: true }) leaves a link whose checkout is gone in place, so linking again failed with EEXIST.
+    it('links again over a link whose checkout is gone', async () => {
+      const gone = join(root, 'gone')
+      mkdirSync(gone)
+      writeFileSync(join(gone, 'harness.json'), JSON.stringify({ spec: 1, id: 'acme/thing', name: 'Thing', engine: 'claude' }))
+      expect((await installDsh({ source: gone, link: true })).ok).toBe(true)
+      rmSync(gone, { recursive: true })
+      const repo = thing()
+      const again = await installDsh({ source: repo, link: true })
+      expect(again.ok, JSON.stringify(again)).toBe(true)
+      expect(realpathSync(dshInstallDir('acme/thing'))).toBe(realpathSync(repo))
+    })
+
     it('a folder that is not a git checkout links with no commit', async () => {
       const plain = join(root, 'plain')
       mkdirSync(plain)
