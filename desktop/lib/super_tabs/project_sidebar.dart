@@ -876,9 +876,7 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
-      detail:
-          agentStates?.of(agent) ??
-          (agent.downSince == null ? null : 'offline'),
+      detail: agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {

@@ -1,15 +1,16 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/agent_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
@@ -29,6 +30,18 @@ void main() {
   Finder inRow(String row, Finder finder) =>
       find.descendant(of: key(row), matching: finder);
 
+  /// [who]'s post in the Swarm's channel; a reply in [thread] (a message's id) when it has one.
+  void say(
+    ConversationServer server,
+    String who,
+    String text, {
+    String? thread,
+  }) {
+    server.append(text, conversationId: 'lead', agent: true);
+    server.messages.last['author'] = {'kind': 'agent', 'id': who, 'name': who};
+    if (thread != null) server.messages.last['thread'] = thread;
+  }
+
   /// lampOS's Swarm (the person is Dee: first builder is their PM, second and third their builders, reviewer-two their
   /// reader), with `third` offline, a free post of `second`'s, and `reviewer-two`'s latest post not a free one. The fake `gh`
   /// has `first builder` on #5759.
@@ -38,19 +51,10 @@ void main() {
         .cast<Map<String, dynamic>>();
     agents.firstWhere((a) => a['id'] == 'third')['downSince'] =
         '2026-11-09T05:00:00Z';
-    void say(String who, String text) {
-      server.append(text, conversationId: 'lead', agent: true);
-      server.messages.last['author'] = {
-        'kind': 'agent',
-        'id': who,
-        'name': who,
-      };
-    }
-
-    say('third', 'Read posted on #3913: no source P1.');
-    say('second', 'free: second');
-    say('reviewer-two', 'free: reviewer-two');
-    say('reviewer-two', 'Taking #3543 next.');
+    say(server, 'third', 'Read posted on #3913: no source P1.');
+    say(server, 'second', 'free: second');
+    say(server, 'reviewer-two', 'free: reviewer-two');
+    say(server, 'reviewer-two', 'Taking #3543 next.');
     return server;
   }
 
@@ -69,43 +73,84 @@ void main() {
     return c;
   }
 
-  Future<void> quiet() async {
-    for (var i = 0; i < 8; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+  /// Waits until [states] has nothing waiting to start and nothing being read: what the last change asked for is done.
+  Future<void> idle(SwarmAgentStates states) async {
+    for (var turn = 0; states.busy && turn < 5000; turn++) {
+      await Future<void>.delayed(Duration.zero);
     }
+    expect(states.busy, isFalse, reason: 'the reader never rested');
   }
 
-  /// The reader settles and reads, and the rows draw what it found.
-  Future<void> settled(WidgetTester tester) async {
-    for (var i = 0; i < 4; i++) {
-      await tester.runAsync(quiet);
-      await tester.pump(const Duration(milliseconds: 500));
+  /// Waits for [done], at most five seconds.
+  Future<void> until(bool Function() done) async {
+    for (var i = 0; i < 500 && !done(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
+    expect(done(), isTrue, reason: 'it did not happen in five seconds');
+  }
+
+  /// The reader of the view on screen settles and reads, and the rows draw what it found. A view with no reader, or whose left
+  /// pane is a drawer not opened, has nothing to wait for. Each round lets real time pass too: a change made inside
+  /// `runAsync` starts the reader's wait in real time.
+  Future<void> settled(WidgetTester tester) async {
+    final sidebar = find.byType(ProjectSidebar);
+    bool busy() => switch (sidebar.evaluate().isEmpty
+        ? null
+        : tester.widget<ProjectSidebar>(sidebar).agentStates) {
+      final states? => states.busy,
+      null => false,
+    };
+    for (var round = 0; round < 100; round++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      if (!busy()) {
+        // What the last frame asked for in turn (a read mark saved a moment later) is done too.
+        await tester.pump(const Duration(milliseconds: 500));
+        return;
+      }
+    }
+    fail('the reader never rested');
   }
 
   int channelReads(List<String> paths) =>
       paths.where((p) => p.contains('/conversations/lead/messages')).length;
 
   group('the reader', () {
+    SwarmAgentStates reader(
+      SuperTabController c, {
+      SwarmGitHub? github,
+      Duration? boardEvery = const Duration(minutes: 1),
+    }) {
+      final states = SwarmAgentStates(
+        controller: c,
+        github: github ?? swarmV4GitHub(),
+        boardEvery: boardEvery,
+        settle: Duration.zero,
+      );
+      addTearDown(states.dispose);
+      return states;
+    }
+
+    String? stateOf(
+      SwarmAgentStates states,
+      SuperTabController c,
+      String agent,
+    ) => states.of(c.snapshot!.agent(agent)!);
+
     test(
       'says offline before on #N before free, and nothing for the rest',
       () async {
-        final server = world();
-        final c = await read(server);
-        final states = SwarmAgentStates(
-          controller: c,
-          github: swarmV4GitHub(),
-          settle: Duration.zero,
-        );
-        addTearDown(states.dispose);
-        await quiet();
-        String? of(String id) => states.of(c.snapshot!.agent(id)!);
+        final c = await read(world());
+        final states = reader(c);
+        await idle(states);
         // Their PM is on a task the board says it took; second's last post said it is free; third is down.
-        expect(of('first builder'), 'on #5759');
-        expect(of('second'), 'free');
-        expect(of('third'), 'offline');
+        expect(stateOf(states, c, 'first builder'), 'on #5759');
+        expect(stateOf(states, c, 'second'), 'free');
+        expect(stateOf(states, c, 'third'), 'offline');
         // reviewer-two posted that it was free, then took something else: its latest post decides.
-        expect(of('reviewer-two'), isNull);
+        expect(stateOf(states, c, 'reviewer-two'), isNull);
       },
     );
 
@@ -113,31 +158,17 @@ void main() {
       'an agent that holds a task is not free, and a down one is only offline',
       () async {
         final server = world();
-        // first builder says it is free too, and is down.
-        server.append(
-          'free: first builder',
-          conversationId: 'lead',
-          agent: true,
-        );
-        server.messages.last['author'] = {
-          'kind': 'agent',
-          'id': 'first builder',
-          'name': 'first builder',
-        };
+        // first builder says it is free too; second is down.
+        say(server, 'first builder', 'free: first builder');
         final agents = (server.state['agents'] as List)
             .cast<Map<String, dynamic>>();
         agents.firstWhere((a) => a['id'] == 'second')['downSince'] =
             '2026-11-09T06:00:00Z';
         final c = await read(server);
-        final states = SwarmAgentStates(
-          controller: c,
-          github: swarmV4GitHub(),
-          settle: Duration.zero,
-        );
-        addTearDown(states.dispose);
-        await quiet();
-        expect(states.of(c.snapshot!.agent('first builder')!), 'on #5759');
-        expect(states.of(c.snapshot!.agent('second')!), 'offline');
+        final states = reader(c);
+        await idle(states);
+        expect(stateOf(states, c, 'first builder'), 'on #5759');
+        expect(stateOf(states, c, 'second'), 'offline');
       },
     );
 
@@ -151,13 +182,8 @@ void main() {
         final calls = <List<String>>[];
         var now = DateTime(2026, 11, 9, 9);
         await withClock(Clock(() => now), () async {
-          final states = SwarmAgentStates(
-            controller: c,
-            github: swarmV4GitHub(calls: calls),
-            settle: Duration.zero,
-          );
-          addTearDown(states.dispose);
-          await quiet();
+          final states = reader(c, github: swarmV4GitHub(calls: calls));
+          await idle(states);
           expect(channelReads(paths), 1);
           expect(calls, hasLength(1));
           final before = (channelReads(paths), calls.length);
@@ -165,24 +191,21 @@ void main() {
           // The Swarm changes in ways that leave the channel and the board as they were: nothing more is read.
           await c.refresh();
           await c.refresh();
-          await quiet();
+          await idle(states);
           expect((channelReads(paths), calls.length), before);
 
           // second takes a task: its next post is read, from where the last one ended.
-          server.append('Taking #5760.', conversationId: 'lead', agent: true);
-          server.messages.last['author'] = {
-            'kind': 'agent',
-            'id': 'second',
-            'name': 'second',
-          };
+          say(server, 'second', 'Taking #5760.');
           await c.refresh();
-          await quiet();
+          await idle(states);
           expect(channelReads(paths), 2);
           expect(
-            paths.where((p) => p.contains('?after=')).length,
-            greaterThanOrEqualTo(1),
+            paths.where(
+              (p) => p.contains('/conversations/lead/messages?after='),
+            ),
+            hasLength(1),
           );
-          expect(states.of(c.snapshot!.agent('second')!), isNull);
+          expect(stateOf(states, c, 'second'), isNull);
           expect(
             calls.length,
             before.$2,
@@ -192,12 +215,97 @@ void main() {
           // A minute later the board is asked again; the channel, unmoved, is not.
           now = now.add(const Duration(minutes: 2));
           await c.refresh();
-          await quiet();
+          await idle(states);
           expect(calls.length, before.$2 + 1);
           expect(channelReads(paths), 2);
         });
       },
     );
+
+    test(
+      'a board is read again when its time is up, with nothing else asking',
+      () async {
+        final c = await read(world());
+        final calls = <List<String>>[];
+        final states = reader(
+          c,
+          github: swarmV4GitHub(calls: calls),
+          boardEvery: const Duration(milliseconds: 60),
+        );
+        await idle(states);
+        expect(calls, hasLength(1));
+        await until(() => calls.length >= 2);
+      },
+    );
+
+    test('a board is read once when it has no time', () async {
+      final c = await read(world());
+      final calls = <List<String>>[];
+      final states = reader(
+        c,
+        github: swarmV4GitHub(calls: calls),
+        boardEvery: null,
+      );
+      await idle(states);
+      // The Swarm moves on and on: the board, with no time of its own, is not asked again.
+      for (var i = 0; i < 3; i++) {
+        await c.refresh();
+        await idle(states);
+      }
+      expect(calls, hasLength(1));
+    });
+
+    test('a reply in a thread is not an agent\'s latest word, unless it is also in the chat', () async {
+      final server = world();
+      final free =
+          server.messages.firstWhere((m) => m['text'] == 'free: second')['id']
+              as String;
+      final c = await read(server);
+      final states = reader(c);
+      await idle(states);
+      expect(stateOf(states, c, 'second'), 'free');
+      // It answers someone in a thread under its post: nothing changed in what it is doing, as the channel shows it.
+      say(server, 'second', 'Taking #5760.', thread: free);
+      await c.refresh();
+      await idle(states);
+      expect(stateOf(states, c, 'second'), 'free');
+      // The same reply, shown in the chat too, is as good as a post.
+      say(server, 'second', 'Taking #5761.', thread: free);
+      server.messages.last['alsoInChat'] = true;
+      await c.refresh();
+      await idle(states);
+      expect(stateOf(states, c, 'second'), isNull);
+    });
+
+    test('more posts than a page since the last read: the latest page says where things stand', () async {
+      final server = world();
+      final paths = <String>[];
+      server.onRead = paths.add;
+      final c = await read(server);
+      final states = reader(c);
+      await idle(states);
+      expect(stateOf(states, c, 'second'), 'free');
+      expect(stateOf(states, c, 'reviewer-two'), isNull);
+      // Three posts come at a page of two: the page after the last read ends before the third, which is where
+      // reviewer-two stopped being free.
+      server.messagePage = 2;
+      say(server, 'reviewer-two', 'free: reviewer-two');
+      say(server, 'second', 'free: second');
+      say(server, 'reviewer-two', 'Taking #3600.');
+      await c.refresh();
+      await idle(states);
+      expect(stateOf(states, c, 'reviewer-two'), isNull);
+      expect(stateOf(states, c, 'second'), 'free');
+      final reads = paths.where(
+        (p) => p.contains('/conversations/lead/messages'),
+      );
+      expect(reads.where((p) => p.contains('?after=')), hasLength(1));
+      expect(reads.where((p) => !p.contains('?after=')), hasLength(2));
+      // The channel is read to its end: nothing more is asked while it stands.
+      await c.refresh();
+      await idle(states);
+      expect(channelReads(paths), 3);
+    });
 
     test(
       'a Swarm with none of the person\'s own agents reads nothing',
@@ -211,33 +319,123 @@ void main() {
         server.onRead = paths.add;
         final c = await read(server);
         final calls = <List<String>>[];
-        final states = SwarmAgentStates(
-          controller: c,
-          github: swarmV4GitHub(calls: calls),
-          settle: Duration.zero,
-        );
-        addTearDown(states.dispose);
-        await quiet();
+        final states = reader(c, github: swarmV4GitHub(calls: calls));
+        await idle(states);
         expect(calls, isEmpty);
         expect(channelReads(paths), 0);
       },
     );
 
-    test('a board that cannot be read leaves the other states alone; a channel that cannot is read again later', () async {
+    test('a folded Your Team reads nothing, and opening it reads', () async {
       final server = world();
+      final paths = <String>[];
+      server.onRead = paths.add;
       final c = await read(server);
-      final states = SwarmAgentStates(
-        controller: c,
+      c.toggleAgentsGroup();
+      expect(c.agentsGroupOpen, isFalse);
+      final calls = <List<String>>[];
+      final states = reader(c, github: swarmV4GitHub(calls: calls));
+      await idle(states);
+      await c.refresh();
+      await idle(states);
+      expect(calls, isEmpty);
+      expect(channelReads(paths), 0);
+      expect(stateOf(states, c, 'second'), isNull);
+      c.toggleAgentsGroup();
+      await idle(states);
+      expect(calls, hasLength(1));
+      expect(channelReads(paths), 1);
+      expect(stateOf(states, c, 'second'), 'free');
+    });
+
+    test('a Swarm that is not on screen reads nothing until it is', () async {
+      final server = world();
+      final paths = <String>[];
+      server.onRead = paths.add;
+      final c = await read(server);
+      c.away = true;
+      final states = reader(c);
+      await idle(states);
+      await c.refresh();
+      await idle(states);
+      expect(channelReads(paths), 0);
+      c.away = false;
+      await c.refresh();
+      await idle(states);
+      expect(channelReads(paths), 1);
+      expect(stateOf(states, c, 'second'), 'free');
+    });
+
+    test('what was read of a project the person\'s agents left is forgotten: it is read as new when they come back', () async {
+      final server = world();
+      final paths = <String>[];
+      server.onRead = paths.add;
+      final c = await read(server);
+      final states = reader(c);
+      await idle(states);
+      expect(channelReads(paths), 1);
+      expect(stateOf(states, c, 'second'), 'free');
+      final agents = (server.state['agents'] as List)
+          .cast<Map<String, dynamic>>();
+      final own = agents.where((a) => a['myAgent'] == true).toList();
+      agents.removeWhere((a) => a['myAgent'] == true);
+      await c.refresh();
+      await idle(states);
+      expect(channelReads(paths), 1, reason: 'nothing is read for no agents');
+      agents.addAll(own);
+      await c.refresh();
+      await idle(states);
+      expect(channelReads(paths), 2);
+      expect(stateOf(states, c, 'second'), 'free');
+    });
+
+    test('a board that cannot be read leaves the other states alone', () async {
+      final c = await read(world());
+      final states = reader(
+        c,
         github: SwarmGitHub(
           run: (_) async => ProcessResult(1, 1, '', 'gh auth login'),
         ),
-        settle: Duration.zero,
       );
-      addTearDown(states.dispose);
-      await quiet();
-      expect(states.of(c.snapshot!.agent('first builder')!), isNull);
-      expect(states.of(c.snapshot!.agent('second')!), 'free');
-      expect(states.of(c.snapshot!.agent('third')!), 'offline');
+      await idle(states);
+      expect(stateOf(states, c, 'first builder'), isNull);
+      expect(stateOf(states, c, 'second'), 'free');
+      expect(stateOf(states, c, 'third'), 'offline');
+    });
+
+    test('a channel that cannot be read shows nothing for it, and is asked again after a wait', () async {
+      final server = world();
+      var down = true;
+      final paths = <String>[];
+      server.onRead = (path) {
+        paths.add(path);
+        if (down && path.contains('/conversations/lead/messages')) {
+          throw StateError('Offline');
+        }
+      };
+      final c = await read(server);
+      var now = DateTime(2026, 11, 9, 9);
+      await withClock(Clock(() => now), () async {
+        final states = reader(c);
+        await idle(states);
+        expect(channelReads(paths), 1);
+        expect(stateOf(states, c, 'second'), isNull);
+        // What does not need the channel is as it was.
+        expect(stateOf(states, c, 'first builder'), 'on #5759');
+        expect(stateOf(states, c, 'third'), 'offline');
+        // The Swarm moves on: within the wait the channel is not asked again.
+        say(server, 'second', 'free: second');
+        await c.refresh();
+        await idle(states);
+        expect(channelReads(paths), 1);
+        // After it, it is; and what it says shows.
+        down = false;
+        now = now.add(const Duration(minutes: 2));
+        await c.refresh();
+        await idle(states);
+        expect(channelReads(paths), 2);
+        expect(stateOf(states, c, 'second'), 'free');
+      });
     });
 
     test('stops reading once disposed', () async {
@@ -249,12 +447,38 @@ void main() {
       final states = SwarmAgentStates(
         controller: c,
         github: swarmV4GitHub(calls: calls),
-        settle: const Duration(milliseconds: 30),
+        settle: Duration.zero,
       );
       states.dispose();
-      await quiet();
+      expect(states.busy, isFalse);
+      // A few turns of the event loop: a read still due would have started in them.
+      for (var turn = 0; turn < 20; turn++) {
+        await Future<void>.delayed(Duration.zero);
+      }
       expect(calls, isEmpty);
       expect(channelReads(paths), 0);
+    });
+
+    test('disposed while it reads, it reads nothing more', () async {
+      final server = world();
+      final c = await read(server);
+      final calls = <List<String>>[];
+      final hold = Completer<void>();
+      server.holdReads = hold;
+      final states = SwarmAgentStates(
+        controller: c,
+        github: swarmV4GitHub(calls: calls),
+        settle: Duration.zero,
+      );
+      await until(() => states.busy);
+      states.dispose();
+      server.holdReads = null;
+      hold.complete();
+      for (var turn = 0; turn < 50 && calls.isEmpty; turn++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(calls, isEmpty, reason: 'its board is not read after it ended');
+      expect(states.busy, isFalse);
     });
 
     test('a free post is "free:" and a name, in any case', () {
@@ -280,23 +504,18 @@ void main() {
     test('an agent that goes down shows offline, and its state returns when it is back', () async {
       final server = world();
       final c = await read(server);
-      final states = SwarmAgentStates(
-        controller: c,
-        github: swarmV4GitHub(),
-        settle: Duration.zero,
-      );
-      addTearDown(states.dispose);
-      await quiet();
-      expect(states.of(c.snapshot!.agent('second')!), 'free');
+      final states = reader(c);
+      await idle(states);
+      expect(stateOf(states, c, 'second'), 'free');
       final second = (server.state['agents'] as List)
           .cast<Map<String, dynamic>>()
           .firstWhere((a) => a['id'] == 'second');
       second['downSince'] = '2026-11-09T08:00:00Z';
       await c.refresh();
-      expect(states.of(c.snapshot!.agent('second')!), 'offline');
+      expect(stateOf(states, c, 'second'), 'offline');
       second.remove('downSince');
       await c.refresh();
-      expect(states.of(c.snapshot!.agent('second')!), 'free');
+      expect(stateOf(states, c, 'second'), 'free');
     });
 
     test('projects of one repository read its board once', () async {
@@ -333,15 +552,10 @@ void main() {
       });
       final c = await read(server);
       final calls = <List<String>>[];
-      final states = SwarmAgentStates(
-        controller: c,
-        github: swarmV4GitHub(calls: calls),
-        settle: Duration.zero,
-      );
-      addTearDown(states.dispose);
-      await quiet();
+      final states = reader(c, github: swarmV4GitHub(calls: calls));
+      await idle(states);
       expect(calls, hasLength(1));
-      expect(states.of(c.snapshot!.agent('first builder')!), 'on #5759');
+      expect(stateOf(states, c, 'first builder'), 'on #5759');
     });
 
     test('at most a dozen projects are read for', () async {
@@ -377,13 +591,8 @@ void main() {
       final paths = <String>[];
       server.onRead = paths.add;
       final c = await read(server);
-      final states = SwarmAgentStates(
-        controller: c,
-        github: swarmV4GitHub(),
-        settle: Duration.zero,
-      );
-      addTearDown(states.dispose);
-      await quiet();
+      final states = reader(c);
+      await idle(states);
       final channels = {
         for (final p in paths)
           if (RegExp(r'/conversations/(channel-\d+|lead)/messages')
@@ -400,7 +609,7 @@ void main() {
     Future<(ConversationServer, SuperTabController)> show(
       WidgetTester tester, {
       ConversationServer? server,
-      AppNotifier? app,
+      bool withApp = true,
       Size size = const Size(1440, 900),
       Brightness brightness = Brightness.light,
     }) async {
@@ -423,7 +632,7 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              app: app ?? createApp(),
+              app: withApp ? createApp() : null,
               onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
@@ -469,6 +678,21 @@ void main() {
         }
         // Teammates' agents are not on Your Team.
         expect(key('super-agent-seventh'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'with no app to read with, an agent that is down still says offline and the rest say nothing',
+      (tester) async {
+        await show(tester, withApp: false);
+        expect(detail('super-agent-third'), 'offline');
+        expect(
+          inRow('super-agent-third', key('super-face-offline')),
+          findsOneWidget,
+        );
+        for (final other in ['first builder', 'second', 'reviewer-two']) {
+          expect(detail('super-agent-$other'), '', reason: other);
+        }
       },
     );
 
@@ -525,12 +749,7 @@ void main() {
         );
 
         // second posts that it took a task: it is no longer free.
-        server.append('Taking #5760.', conversationId: 'lead', agent: true);
-        server.messages.last['author'] = {
-          'kind': 'agent',
-          'id': 'second',
-          'name': 'second',
-        };
+        say(server, 'second', 'Taking #5760.');
         await tester.runAsync(c.refresh);
         await settled(tester);
         expect(detail('super-agent-second'), '');

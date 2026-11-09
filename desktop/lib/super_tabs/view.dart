@@ -376,12 +376,18 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
-  /// What each agent of Your Team is doing, its row's one line (agent_state.dart); read on the Desktop, where an app is.
-  late SwarmAgentStates? _states = _agentStates();
+  /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is and the Swarm is laid
+  /// out as v4.
+  SwarmAgentStates? _states;
 
-  SwarmAgentStates? _agentStates() => widget.app == null
+  SwarmAgentStates? _agentStates() => widget.app == null || !widget.board
       ? null
-      : SwarmAgentStates(controller: c, github: _github);
+      : SwarmAgentStates(
+          controller: c,
+          github: _github,
+          // A test never waits for the next read of a board.
+          boardEvery: kUnderTest ? null : const Duration(minutes: 1),
+        );
 
   /// What this computer's GitHub says of the pull requests on live cards.
   late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
@@ -449,6 +455,7 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     SuperTabPlaces.of(c).addListener(_takePlace);
     _registerDial();
+    _states = _agentStates();
     _changed();
   }
 
@@ -538,12 +545,12 @@ class _SuperTabViewState extends State<SuperTabView>
       _registerDial();
       _facts.dispose();
       _facts = SuperTabPullRequestFacts(widget.app?.readPullRequestsStatus);
+      _states?.dispose();
+      _states = _agentStates();
     }
     if (oldWidget.controller != c) {
       _board.dispose();
       _board = SuperTabProjectBoard(c);
-      _states?.dispose();
-      _states = _agentStates();
       oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
       oldWidget.controller.removeListener(_holdVoiceAway);
@@ -2090,7 +2097,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
     leaderboard: _board,
-    agentStates: widget.board ? _states : null,
+    agentStates: _states,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
