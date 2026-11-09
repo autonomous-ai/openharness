@@ -30,7 +30,7 @@ function fakeGitHub() {
     const body = url.pathname.endsWith('/issues/comments') ? comments.filter(c => String(c.updated_at) >= since)
       : url.pathname.endsWith('/pulls/comments') ? lineComments.filter(c => String(c.updated_at) >= since)
       : /\/pulls\/\d+\/reviews$/.test(url.pathname) ? reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
-      : issues.filter(i => String(i.updated_at) >= since && (!labels || (i.labels as Json[]).some(l => l.name === labels)) && (wanted === 'all' || i.state === wanted))
+      : issues.filter(i => String(i.updated_at) >= since && (!labels || (i.labels as Json[]).some(l => String(l.name).toLowerCase() === labels.toLowerCase())) && (wanted === 'all' || i.state === wanted))
     const tag = `"${createHash('sha1').update(JSON.stringify(body)).digest('hex')}"`
     return etag === tag ? { status: 304, etag: tag, body: null, resetAt: null } : { status: 200, etag: tag, body, resetAt: null }
   }
@@ -180,6 +180,19 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     f.github.issues[0]!.updated_at = at(12)
     await f.mentions.tick()
     expect(f.relayed()).toEqual([expect.objectContaining({ event: 'task', on: 'issue', number: 13, text: 'Task 13', url: 'https://github.com/acme/app/issues/13' })])
+  })
+
+  // GitHub shows a label as it was written and matches it in any case; the agent's name is Pip Two for its label builder:pip-two.
+  it('hears what is said on its own pull request, and a new task, whatever way its label is written', async () => {
+    const two: WatchedAgent = { ...PIP, agentId: 'two', names: ['Pip Two'], label: 'builder:pip-two' }
+    const f = setup([two])
+    f.github.issues.push(issue(4, -100, ['builder:Pip-Two'], { pull_request: {} }))
+    await f.mentions.tick()
+    f.github.issues[0]!.updated_at = at(12)
+    f.github.comments.push(comment(5, 10, 'Juno, 12:00: one question on the day count.'))
+    f.github.issues.push(issue(13, 11, ['builder:pip two']))
+    await f.mentions.tick()
+    expect(f.relayed().map(c => [c.event, c.number])).toEqual([['task', 13], ['comment', 4]])
   })
 
   it('asks again with ETags, and a restart relays nothing twice', async () => {

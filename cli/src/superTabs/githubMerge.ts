@@ -18,7 +18,7 @@
  */
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { repositorySlug, TEAM } from './githubMentions.js'
+import { nameKey, repositorySlug, signatureOf, TEAM } from './githubMentions.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -29,8 +29,6 @@ const MAX_PULLS = 30
 const PROJECTS_FRESH_MS = 60_000
 /** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits. */
 const VERDICT = /(?<![\w-])(READ-OK|HOLD)\s+([0-9a-f]{7,40})(?![0-9a-f])/
-/** A post's signature: its writer's name first, then a comma, colon or bracket ("Juno, 14:20:", "**Faye** (PM):"). */
-const SIGNATURE = /^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
 const SELF = 'Harness'
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
@@ -56,7 +54,9 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
   return [...found.values()]
 }
 
-/** What one pull request's comments say: each reader's last verdict, and whether it asks for two reads. */
+/** What one pull request's comments say: each reader's last verdict, and whether it asks for two reads. A reader is its name as signed
+ *  ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned, read as `nameKey` does: "Juno" and "JUNO" are one
+ *  reader, one that signs two ways counts once, and the pull request's author, in whatever spelling, is none. */
 export function verdicts(comments: Json[], body: string): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string }>; twoReads: boolean } {
   const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
@@ -66,10 +66,9 @@ export function verdicts(comments: Json[], body: string): { readers: Map<string,
     if (/\bTWO READS\b/.test(first)) twoReads = true
     const found = VERDICT.exec(first)
     if (!found) continue
-    const reader = SIGNATURE.exec(first)?.[1] ?? String(object(comment.user).login ?? '')
-    if (!reader || reader === SELF) continue
+    const key = nameKey(signatureOf(first) ?? String(object(comment.user).login ?? ''))
+    if (!key || key === nameKey(SELF)) continue
     const at = String(comment.created_at ?? '')
-    const key = reader.toLowerCase()
     const last = readers.get(key)
     if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, at })
   }
@@ -167,10 +166,12 @@ export class GitHubMerge {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
+      // Nothing says which agent wrote it (no builder label, no `name/` branch): the account that opened it did.
+      const writer = nameKey(author ?? String(object(pull.user).login ?? ''))
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
-      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== author)
+      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== writer)
       if (reads.length < (twoReads ? 2 : 1)) continue
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))

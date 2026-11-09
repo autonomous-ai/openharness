@@ -57,15 +57,42 @@ interface RepoMemory { comments: string; reviewComments: string; issues: string;
 interface Memory { repos: Record<string, RepoMemory> }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** Whether [body] is the agent's own post: it signs its posts with its name first ("Pip, 14:05: ..."). */
-export const signedBy = (body: string, names: readonly string[]): boolean =>
-  names.some(name => new RegExp(`^\\W*${escape(name)}[*_]*\\s*[,:]`).test(body))
+/** A name as every comparison here reads it, so one agent is one name however it is typed: width and accents folded, hidden
+ *  characters, spaces, hyphens and underscores dropped, case folded. "Pip Two", "pip-two" (its builder label), "PIP_TWO" and
+ *  "Ｐip Ｔwo" are one. The server's own `nameKey` (backend superTabs/usernames.ts) drops spaces but not hyphens, so it keeps
+ *  "Pip Two" and "Pip-Two" apart; this reads them as one, the safe way for a rule about who is someone else: an agent whose
+ *  label said pip-two was its own reader when it signed "Pip Two" (Q3, 2026-11-09). */
+export const nameKey = (name: string): string => name.normalize('NFKD').replace(/[\p{M}\p{Default_Ignorable_Code_Point}\u2800]/gu, '')
+  .toLowerCase().replace(/[\s\p{Zs}\p{Pd}_@]+/gu, '')
+/** What a name is made of: letters and digits, with accents, hidden characters and the few marks a name has. */
+const NAME_PART = "[\\p{L}\\p{N}][\\p{L}\\p{N}\\p{M}\\p{Default_Ignorable_Code_Point}_'\u2019.-]*"
+/** What stands before a post's first comma, colon or bracket, as an agent signs it: up to four words, and a first line that is a
+ *  verdict has none. */
+const SIGNATURE = new RegExp(`^[^\\p{L}\\p{N}]*(${NAME_PART}(?:[\\s\\p{Zs}]+${NAME_PART}){0,3})[*_~\`\\s\\p{Default_Ignorable_Code_Point}]*[,:(]`, 'u')
+/** The name [text] is signed with ("Pip, 14:05: ...", "**Pip** (builder): ...", "> Juno, to **Pip**: ..."), or null when its first line
+ *  starts with no name. */
+export function signatureOf(text: string): string | null {
+  const first = text.split('\n').find(line => line.trim()) ?? ''
+  const name = SIGNATURE.exec(first)?.[1]?.trim()
+  return name && !/^(?:read-?ok|hold)\b/i.test(name) ? name : null
+}
+/** Whether [body] is the agent's own post: it signs its posts with its name first ("Pip, 14:05: ..."), in any spelling of it. */
+export const signedBy = (body: string, names: readonly string[]): boolean => {
+  const signed = signatureOf(body)
+  return signed !== null && names.some(name => nameKey(name) === nameKey(signed))
+}
 /** Whether [body] names the agent: one of its names as written, as a whole word ("Pip", "@Pip", "**Pip**"). In its own case:
  *  "pip install" names nobody. */
 export const namesAgent = (body: string, names: readonly string[]): boolean =>
   names.some(name => new RegExp(`(?<![\\w-])${escape(name)}(?![\\w-])`).test(body))
 /** The builder label of an agent's tasks and pull requests: builder:pip for Pip. */
 export const builderLabel = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
+/** Whether one of [labels] is [agent]'s builder label, read as `nameKey` reads names: GitHub shows a label as it was written, and the
+ *  agent Pip Two has builder:pip-two, builder:Pip-Two and builder:pip two on its work alike. */
+const ownedBy = (labels: readonly string[], agent: WatchedAgent): boolean => {
+  const named = (label: string) => nameKey(label.replace(/^builder:/i, ''))
+  return labels.some(label => named(label) === named(agent.label))
+}
 
 /** owner/name of a github.com repository's address, https or ssh; null for any other host or shape. */
 export function repositorySlug(url: unknown): string | null {
@@ -195,14 +222,14 @@ export class GitHubMentions {
     for (const issue of changed) {
       const number = Number(issue.number)
       if (!Number.isSafeInteger(number)) continue
-      const labels = (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(l => String(l.name ?? '')).filter(name => name.startsWith('builder:'))
+      const labels = (Array.isArray(issue.labels) ? issue.labels.map(object) : []).map(l => String(l.name ?? '')).filter(name => /^builder:/i.test(name))
       if (labels.length) kept.owned[String(number)] = labels; else delete kept.owned[String(number)]
     }
     trim(kept.owned, MAX_OWNED)
     const tasks: Array<{ agent: WatchedAgent; issue: Json }> = []
     for (const issue of changed) {
       if (issue.pull_request || issue.state !== 'open') continue
-      for (const agent of agents) if (kept.owned[String(issue.number)]?.includes(agent.label) && !kept.tasks[agent.agentId]!.includes(Number(issue.number))) tasks.push({ agent, issue })
+      for (const agent of agents) if (ownedBy(kept.owned[String(issue.number)] ?? [], agent) && !kept.tasks[agent.agentId]!.includes(Number(issue.number))) tasks.push({ agent, issue })
     }
     for (const { agent, issue } of tasks) {
       // Only the repository's people can label an issue: a labelled one is the team's task, whoever opened it.
@@ -247,7 +274,7 @@ export class GitHubMentions {
       if ((item.event === 'comment' && item.createdAt < kept.comments) || (item.event === 'review-comment' && item.createdAt < kept.reviewComments)) continue
       const owners = kept.owned[String(item.number)] ?? []
       for (const agent of agents) {
-        const relay = 'lines' in item ? reviewFor(item as Review, agent, owners.includes(agent.label)) : sayingFor(item, agent, owners.includes(agent.label))
+        const relay = 'lines' in item ? reviewFor(item as Review, agent, ownedBy(owners, agent)) : sayingFor(item, agent, ownedBy(owners, agent))
         if (relay) await this.hand(repo, agent, item.number, relays, item.key, relay)
       }
       kept.seen.push(item.key, ...('lines' in item ? (item as Review).lines.map(line => line.key) : []))
