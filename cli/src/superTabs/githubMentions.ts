@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ghError, ghRun, type Run } from '../lib/github.js'
+import { GitHubReads, GitHubStop, PAGE, type GitHubGet } from './githubRest.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -28,7 +28,7 @@ export const MENTIONS_INTERVAL_MS = 20_000
 export const TEAM: ReadonlySet<unknown> = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
 /** Bounds on one pass and on what is kept: a Swarm reads at most this many repositories here, and a burst beyond a page
  *  count is read next pass. */
-const MAX_REPOS = 20, PAGE = 100, MAX_PAGES = 3, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000, MAX_ETAGS = 500
+const MAX_REPOS = 20, MAX_REVIEWED = 10, MAX_RELAYS = 50, MAX_SEEN = 2_000, MAX_OWNED = 1_000
 const TEXT_MAX = 4_000, TITLE_MAX = 300
 /** Who the agents here are and what they read, asked again at most this often: each ask reads every agent's Swarm. */
 const AGENTS_FRESH_MS = 60_000
@@ -37,16 +37,12 @@ const AGENTS_FRESH_MS = 60_000
 const LOOP_RELAYS = 6, LOOP_WINDOW_MS = 10 * 60_000
 /** A repository no agent here has read for this long is forgotten. */
 const FORGET_MS = 7 * 24 * 60 * 60_000
-/** How long to wait before asking again: gh missing or signed out, a repository this login cannot read, a rate limit. */
-const OFF_RETRY_MS = 5 * 60_000, UNREADABLE_RETRY_MS = 10 * 60_000, LIMIT_MAX_MS = 15 * 60_000
 const VERDICTS: ReadonlySet<unknown> = new Set(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'])
 
 /** One of this computer's person's v4 agents and where it is heard: its Swarm, its chat with its person, the names it goes
  *  by, the label of its tasks and pull requests, and the repositories of the projects it reads. */
 export interface WatchedAgent { tabId: string; agentId: string; chat: string; names: string[]; label: string; repos: string[] }
 
-export interface GitHubReply { status: number; etag: string | null; body: unknown; resetAt: number | null }
-export type GitHubGet = (path: string, etag: string | null) => Promise<GitHubReply>
 
 /** One thing GitHub said, before it is matched to the agents it reaches. */
 interface Said { key: string; event: 'comment' | 'review' | 'review-comment'; on: 'issue' | 'pull'; number: number; url: string; login: string
@@ -100,34 +96,10 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
   return watched
 }
 
-/** GitHub's REST API as this computer's own gh login. Its token is read from gh and kept in memory only, never logged or
- *  written, and read again after GitHub refuses it. Each answer within 10 seconds. */
-export function githubReader(run: Run = ghRun, request: typeof fetch = fetch, now: () => number = Date.now): GitHubGet {
-  let token: string | null = null
-  return async (path, etag) => {
-    if (!token) {
-      try { token = (await run(['auth', 'token'])).stdout.trim() || null } catch (error) { throw ghError(error) }
-      if (!token) throw ghError({ stderr: 'gh auth login' })
-    }
-    const response = await request(`https://api.github.com${path}`, { signal: AbortSignal.timeout(10_000), headers: {
-      Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'Harness',
-      ...(etag ? { 'If-None-Match': etag } : {}) } })
-    if (response.status === 401) token = null
-    const reset = Number(response.headers.get('x-ratelimit-reset'))
-    const limited = response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')
-    return { status: response.status, etag: response.headers.get('etag'), body: response.status === 200 ? await response.json() : null,
-      resetAt: !limited ? null : Number.isFinite(reset) && reset > 0 ? reset * 1000 : now() + 60_000 }
-  }
-}
-
-/** A failure that stops this pass for one repository, or for all of them. */
-class Stop extends Error { constructor(readonly code: string, message: string, readonly everywhere: boolean, readonly until: number) { super(message) } }
-
 export class GitHubMentions {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
-  /** Each request's last ETag: asked again with it, an unchanged answer is a 304. */
-  private readonly etags = new Map<string, string>()
+  private readonly reads: GitHubReads
   private readonly unreadable = new Map<string, number>()
   private readonly threads = new Map<string, number[]>()
   private agents: { at: number; list: WatchedAgent[] } | null = null
@@ -149,6 +121,7 @@ export class GitHubMentions {
   }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
+    this.reads = new GitHubReads(deps.get, this.now)
   }
 
   start(): void {
@@ -183,15 +156,15 @@ export class GitHubMentions {
         if ((this.unreadable.get(repo) ?? 0) > this.now()) continue
         try { await this.readRepo(repo, watching, memory, relays) } catch (error) {
           // What was read but not handed on is read again next pass: an ETag kept now would answer it with a 304.
-          for (const url of [...this.etags.keys()]) if (url.startsWith(`/repos/${repo}/`)) this.etags.delete(url)
-          if (error instanceof Stop && error.everywhere) throw error
-          if (error instanceof Stop) this.unreadable.set(repo, error.until)
-          this.tell(error instanceof Stop ? error.code : 'RELAY_FAILED', `${repo}: ${error instanceof Error ? error.message : String(error)}`)
+          this.reads.forget(repo)
+          if (error instanceof GitHubStop && error.everywhere) throw error
+          if (error instanceof GitHubStop) this.unreadable.set(repo, error.until)
+          this.tell(error instanceof GitHubStop ? error.code : 'RELAY_FAILED', `${repo}: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
       this.tell('', '')
     } catch (error) {
-      if (!(error instanceof Stop)) throw error
+      if (!(error instanceof GitHubStop)) throw error
       this.offUntil = error.until
       this.tell(error.code, error.message)
     } finally {
@@ -209,15 +182,14 @@ export class GitHubMentions {
     // labelled from now on is news; its pull requests are its own, so what is said on them from now on reaches it.
     for (const agent of agents) {
       if (kept.tasks[agent.agentId]) continue
-      const open = (await this.pages(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=${PAGE}`) ?? [])
-        .filter(issue => Number.isSafeInteger(issue.number))
+      const open = (await this.reads.changed(repo, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(agent.label)}&per_page=${PAGE}`)).filter(issue => Number.isSafeInteger(issue.number))
       for (const issue of open) kept.owned[String(issue.number)] = [...new Set([...kept.owned[String(issue.number)] ?? [], agent.label])]
       kept.tasks[agent.agentId] = open.filter(issue => !issue.pull_request).map(issue => Number(issue.number))
     }
     // Issues and pull requests changed since the last read: whose task or pull request each is, new tasks, and the pull requests
     // whose reviews to read. A comment changes its issue, so the issue it is on is known before its comment is matched.
     const issuesFrom = kept.issues
-    const changed = await this.pages(repo, `/repos/${repo}/issues?state=all&sort=updated&direction=asc&per_page=${PAGE}&since=${issuesFrom}`) ?? []
+    const changed = await this.reads.changed(repo, `/repos/${repo}/issues?state=all&sort=updated&direction=asc&per_page=${PAGE}&since=${issuesFrom}`)
     for (const issue of changed) {
       const number = Number(issue.number)
       if (!Number.isSafeInteger(number)) continue
@@ -239,18 +211,18 @@ export class GitHubMentions {
     }
     if (changed.length) kept.issues = newest(changed, issuesFrom)
 
-    const comments = await this.pages(repo, `/repos/${repo}/issues/comments?sort=updated&direction=asc&per_page=${PAGE}&since=${kept.comments}`) ?? []
+    const comments = await this.reads.changed(repo, `/repos/${repo}/issues/comments?sort=updated&direction=asc&per_page=${PAGE}&since=${kept.comments}`)
     const said: Said[] = comments.map(c => ({ key: `c:${c.id}`, event: 'comment' as const, on: String(c.html_url ?? '').includes('/pull/') ? 'pull' as const : 'issue' as const,
       number: Number(String(c.issue_url ?? '').split('/').pop()), url: String(c.html_url ?? ''), login: String(object(c.user).login ?? ''),
       association: String(c.author_association ?? ''), text: String(c.body ?? ''), createdAt: String(c.created_at ?? '') }))
-    const lineComments = await this.pages(repo, `/repos/${repo}/pulls/comments?sort=updated&direction=asc&per_page=${PAGE}&since=${kept.reviewComments}`) ?? []
+    const lineComments = await this.reads.changed(repo, `/repos/${repo}/pulls/comments?sort=updated&direction=asc&per_page=${PAGE}&since=${kept.reviewComments}`)
     said.push(...lineComments.map(c => ({ key: `l:${c.id}`, event: 'review-comment' as const, on: 'pull' as const,
       number: Number(String(c.pull_request_url ?? '').split('/').pop()), url: String(c.html_url ?? ''), login: String(object(c.user).login ?? ''),
       association: String(c.author_association ?? ''), text: String(c.body ?? ''), createdAt: String(c.created_at ?? ''),
       path: typeof c.path === 'string' ? c.path : undefined, line: Number.isSafeInteger(c.line) ? Number(c.line) : Number.isSafeInteger(c.original_line) ? Number(c.original_line) : undefined })))
     // A pull request's reviews have no feed of their own: read for the pull requests that changed, a few each pass.
     for (const pull of changed.filter(issue => issue.pull_request).slice(-MAX_REVIEWED)) {
-      const reviews = await this.pages(repo, `/repos/${repo}/pulls/${pull.number}/reviews?per_page=${PAGE}`) ?? []
+      const reviews = await this.reads.changed(repo, `/repos/${repo}/pulls/${pull.number}/reviews?per_page=${PAGE}`)
       said.push(...reviews.filter(r => VERDICTS.has(r.state) && String(r.submitted_at ?? '') >= issuesFrom).map(r => ({ key: `r:${r.id}`, event: 'review' as const,
         on: 'pull' as const, number: Number(pull.number), url: String(r.html_url ?? ''), login: String(object(r.user).login ?? ''),
         association: String(r.author_association ?? ''), text: String(r.body ?? ''), createdAt: String(r.submitted_at ?? ''), verdict: String(r.state) })))
@@ -276,7 +248,7 @@ export class GitHubMentions {
   /** Hands one relay to the backend, once per agent and item: a retry after a failure sends the same operation id, which the
    *  backend writes once. */
   private async hand(repo: string, agent: WatchedAgent, number: number, relays: { left: number }, key: string, item: Json): Promise<void> {
-    if (relays.left <= 0) throw new Stop('BUSY', 'More GitHub news than one pass relays: the rest goes next pass.', true, this.now())
+    if (relays.left <= 0) throw new GitHubStop('BUSY', 'More GitHub news than one pass relays: the rest goes next pass.', true, this.now())
     const thread = `${agent.agentId}\n${repo}#${number}`
     const recent = (this.threads.get(thread) ?? []).filter(at => this.now() - at < LOOP_WINDOW_MS)
     if (recent.length >= LOOP_RELAYS) {
@@ -287,33 +259,6 @@ export class GitHubMentions {
     await this.deps.relay(agent.tabId, operationId, { type: 'github.relay', conversationId: agent.chat, agentId: agent.agentId, repository: repo, ...item })
     this.threads.set(thread, [...recent, this.now()])
     relays.left--
-  }
-
-  /** Up to MAX_PAGES pages of [path], or [] when nothing changed since the last ask (a 304). */
-  private async pages(repo: string, path: string): Promise<Json[] | null> {
-    const rows: Json[] = []
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const url = page === 1 ? path : `${path}&page=${page}`
-      const reply = await this.deps.get(url, this.etags.get(url) ?? null).catch(error => {
-        const code = typeof error?.code === 'string' ? error.code : 'GH_FAILED'
-        // gh missing or signed out stops every repository until it is fixed; a slow or failed answer only this pass.
-        if (code === 'GH_MISSING' || code === 'GH_SIGNED_OUT') throw new Stop(code, error.message, true, this.now() + OFF_RETRY_MS)
-        throw new Stop(code === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE', 'GitHub did not answer.', true, this.now())
-      })
-      if (reply.status === 304) return rows
-      if (reply.resetAt !== null) throw new Stop('RATE_LIMITED', 'GitHub is limiting this computer\'s requests.', true, Math.min(reply.resetAt, this.now() + LIMIT_MAX_MS))
-      if (reply.status === 401) throw new Stop('GH_SIGNED_OUT', 'GitHub refused this computer\'s gh login: run gh auth login.', true, this.now())
-      if (reply.status === 404 || reply.status === 403) throw new Stop('UNREADABLE', `this computer's gh login cannot read ${repo}.`, false, this.now() + UNREADABLE_RETRY_MS)
-      if (reply.status !== 200 || !Array.isArray(reply.body)) throw new Stop('GH_FAILED', `GitHub answered ${reply.status}.`, true, this.now())
-      if (reply.etag) {
-        this.etags.delete(url)
-        this.etags.set(url, reply.etag)
-        if (this.etags.size > MAX_ETAGS) this.etags.delete(this.etags.keys().next().value!)
-      }
-      rows.push(...reply.body.map(object))
-      if (reply.body.length < PAGE) break
-    }
-    return rows
   }
 
   private tell(code: string, detail: string): void {

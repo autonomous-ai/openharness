@@ -2014,19 +2014,21 @@ describe('Super Tab attachments in delivered input', () => {
       : answer(method, path, body))
     const attachedFiles = vi.fn((_message: Record<string, unknown>, _options?: { signal?: AbortSignal }) => new Promise<typeof DOWNLOADED>(() => {}))
     const host = t.open({ attachedFiles: attachedFiles as never, downloadWaitMs: 10 })
+    // Each step waits for what it checks, not for `pass`: a pass gives up after 500 ms, and on a loaded CI runner the host's
+    // pass took longer, so the abort was checked before it happened (PR #3633's cli-tests, 2026-11-09).
     await pass(host)
-    expect(attachedFiles).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(attachedFiles).toHaveBeenCalledTimes(1), { timeout: 10_000 })
     // Answered elsewhere while it downloads: the delivery leaves this host, and its download with it.
     resolved = true
     t.wait(5_000)
     await pass(host)
     // No other delivery wanted it: the download stopped (and with it, its part file: attachments.ts).
-    expect(attachedFiles.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
+    await vi.waitFor(() => expect(attachedFiles.mock.calls[0]?.[1]?.signal?.aborted).toBe(true), { timeout: 10_000 })
     resolved = false
     t.send()
     t.wait(5_000)
     await pass(host)
-    expect(attachedFiles).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(attachedFiles).toHaveBeenCalledTimes(2), { timeout: 10_000 })
     const signal = attachedFiles.mock.calls[1]?.[1]?.signal
     expect(signal?.aborted).toBe(false)
     host.stop()
