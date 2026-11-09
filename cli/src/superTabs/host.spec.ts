@@ -3712,6 +3712,22 @@ describe('an agent its person attached', () => {
     }
   })
 
+  it('when the Swarm started it before the basics changed, is told the new ones once; one started since, nothing', async () => {
+    // Bound at 1, before this computer first ran these basics (now, in the host's clock).
+    const t = attached({ engine: 'codex', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 1 })
+    t.wait(1_000)
+    const host = t.open()
+    await host.tick(); await settle()
+    expect(t.told.map(c => c.command.text)).toEqual([`The team's ways have changed since you started. From now on:\n${SWARM_BASICS}`])
+    t.wait(SKILL_WAIT); await host.tick(); await settle()
+    await t.open().tick(); await settle()
+    expect(new Set(t.told.map(c => c.operationId)).size).toBe(1)
+    // A session bound after this computer first ran them was launched with them.
+    const fresh = attached({ engine: 'claude', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 10_000_000_000_000 })
+    await fresh.open().tick(); await settle()
+    expect(fresh.told).toEqual([])
+  })
+
   it('is told again later when the Swarm could not be read, by a backend whose roster row names no chat', async () => {
     const t = attached({ engine: 'claude' })
     delete t.row.agent.chatId

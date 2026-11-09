@@ -1834,16 +1834,24 @@ export class SuperTabHost {
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    // An agent its person attached (Desktop's Attach, Swarm v4) was started outside the Swarm, so without the team's basics
-    // that every agent the Swarm starts gets at launch (lib/swarmSkills.ts SWARM_BASICS): it is told them once, as only it
-    // reads, in its own chat. The operation id names the text, so a restart or a second daemon never tells it twice. A
-    // plain shell is no agent, and a Buddy keeps its own skill.
-    if (session && !skill && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && this.now() >= due) {
+    // Every Swarm agent follows the team's basics of this release (lib/swarmSkills.ts SWARM_BASICS, PM_BASICS), which its
+    // launch carries. One its person attached (Desktop's Attach) was started outside the Swarm, without them; one the Swarm
+    // started before they last changed has the old ones, and keeps them as long as it runs (anh Dee's team moved to Swarm
+    // v4 on 2026-11-10 with agents started days before). Either is told the current basics once, as only it reads, in its own
+    // chat. The operation id names the text, so a restart or a second daemon never tells it twice. A plain shell is no
+    // agent, and a Buddy keeps its own skill.
+    const agent = session && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && skill?.role !== 'buddy'
+    if (session && agent && this.now() >= due) {
       this.skillChecks.set(target.agent.harnessId, Infinity)
-      const notice = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
+      const basics = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
+      const version = createHash('sha256').update(basics).digest('hex')
+      // Started by the Swarm since this computer first ran these basics: its launch carried them. A session not bound yet is
+      // starting now, with them.
+      if (skill && (typeof session.boundAt !== 'number' || session.boundAt >= this.basicsSince(version))) return
+      const notice = skill ? `The team's ways have changed since you started. From now on:\n${basics}` : basics
       try {
         // Named by its text alone: its own hash, so no Buddy notice shares its id.
-        const told = await this.tellSkill(target, { version: createHash('sha256').update(notice).digest('hex'), change: 0, notice }, current,
+        const told = await this.tellSkill(target, { version, change: 0, notice }, current,
           identifier(target.agent.chatId) ? target.agent.chatId : undefined)
         if (!told && current()) this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
         else if (!told) this.skillChecks.delete(target.agent.harnessId)
@@ -1853,7 +1861,7 @@ export class SuperTabHost {
       }
       return
     }
-    // Every other agent the Swarm started has the basics from its launch; only a Buddy has Harness text to keep fresh.
+    // Only a Buddy has Harness text of its own to keep fresh.
     if (!session || !skill || !session.cwd || this.now() < due || skill.role !== 'buddy') return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
@@ -1863,6 +1871,20 @@ export class SuperTabHost {
       this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
     }
   }
+  /** When this computer first ran the basics named [version]: kept in its data folder, so a restart keeps the moment. A
+   *  record it cannot read or write counts from now, which tells a running agent once more at worst. */
+  private basicsSince(version: string): number {
+    const file = join(this.core.dataDir, 'super-tab-basics.json')
+    let seen: Record<string, number> = {}
+    try { seen = object(JSON.parse(readFileSync(file, 'utf8'))) as Record<string, number> } catch { /* First run of any. */ }
+    if (typeof seen[version] === 'number') return seen[version]
+    const now = this.now()
+    // The last few texts are enough: an older one is never asked about again.
+    const kept = Object.fromEntries([...Object.entries(seen).filter(([, at]) => typeof at === 'number'), [version, now] as const].slice(-5))
+    try { writeFileSync(file, JSON.stringify(kept), { mode: 0o600 }) } catch (error) { this.log(`The basics record was not saved: ${error instanceof Error ? error.message : String(error)}`) }
+    return now
+  }
+
   /** Put a Buddy's skill file on this release's text and tell it if owed; when the notice could not be sent it is due again
    *  later, or dropped for a newer roster's refresh. */
   private async refreshBuddyFile(target: HostAgent, cwd: string, skill: SwarmSkill, current: () => boolean): Promise<void> {
