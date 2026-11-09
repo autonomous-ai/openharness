@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'support/super_tab_fixture.dart';
 import 'support/super_tab_left_pane.dart';
 
 /// The left pane's smaller polish (Desktop 1.3.89 audit, task #4445). A Lead's project and Projects' counts are the

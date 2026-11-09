@@ -446,13 +446,13 @@ void main() {
       expect(api.reads, greaterThanOrEqualTo(9));
       expect(tester.state(find.byType(SharedHarnessPanel)), same(panel));
       expect(f.app.panes.single, same(pane));
-      // No Retry where the terminal is; its chat beside it, in the right pane
-      // (#2792), answers for its own connection.
+      // No Retry where the terminal is; its chat, in the middle with the terminal on its right (Swarm v4, was the
+      // right pane in #2792), answers for its own connection.
       expect(
         find.text('Retry').evaluate().length,
         find
             .descendant(
-              of: find.byKey(const ValueKey('super-right-pane')),
+              of: find.byKey(const ValueKey('super-center-pane')),
               matching: find.text('Retry'),
             )
             .evaluate()

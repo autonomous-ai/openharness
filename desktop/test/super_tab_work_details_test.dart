@@ -30,60 +30,33 @@ void main() {
     },
   );
 
+  // Swarm v4 (anh Dee 2026-11-08): an agent starts plain, as a person would
+  // start Claude Code: its name, then what its person asked. No Swarm manual.
   test(
-    'launch prompt points to the instructions and stays within the limit',
+    'launch prompt is the agent\'s name and its person\'s first message',
     () {
-      for (final lead in [true, false]) {
-        final prompt = superTabLaunchPrompt(
-          tabId: 't' * 160,
-          conversationId: 'c' * 160,
-          lead: lead,
-        );
-        expect(prompt, contains('instructions'));
-        expect(prompt, isNot(contains('swarm-lead')));
-        expect(prompt, isNot(contains('swarm-dev')));
-        expect(prompt.length, lessThanOrEqualTo(2000));
+      expect(
+        superTabLaunchPrompt(name: 'friday', task: 'Own memory on lampos.'),
+        'You are friday.\n\nOwn memory on lampos.',
+      );
+      expect(
+        superTabLaunchPrompt(name: 'friday', task: '  '),
+        'You are friday.',
+      );
+      final long = superTabLaunchPrompt(name: 'n' * 40, task: 'x' * 5000);
+      expect(long.length, lessThanOrEqualTo(2000));
+      expect(long, startsWith('You are ${'n' * 40}.\n\nxxx'));
+      for (final gone in [
+        'super-tab',
+        'status',
+        'Lead',
+        'instructions',
+        'colleague',
+      ]) {
+        expect(long, isNot(contains(gone)), reason: gone);
       }
     },
   );
-
-  // Quiet project chats (Dee, 2026-10-31): a Lead started from Desktop keeps
-  // progress in the status card and posts only what needs people.
-  test('launch prompt keeps a Lead\'s progress in the status card, never cadence posts', () {
-    final lead = superTabLaunchPrompt(
-      tabId: 'tab',
-      conversationId: 'lead',
-      lead: true,
-    );
-    expect(
-      lead,
-      contains("Keep the project's status card current with project.report"),
-    );
-    expect(
-      lead,
-      contains(
-        'Post in the Lead chat only when work merges or ships, a person must decide something new, or work is badly stuck',
-      ),
-    );
-    expect(
-      lead,
-      contains('Ask a person a question once, as a decision; never repeat it.'),
-    );
-    for (final gone in [
-      'cadence',
-      'consolidate',
-      'Update Lead chat',
-      'progress, blockers, next steps',
-    ]) {
-      expect(lead, isNot(contains(gone)), reason: gone);
-    }
-    final builder = superTabLaunchPrompt(
-      tabId: 'tab',
-      conversationId: 'group',
-      lead: false,
-    );
-    expect(builder, isNot(contains('status card')));
-  });
 
   for (final structured in [true, false]) {
     testWidgets(

@@ -12,20 +12,24 @@ import 'support/super_tab_left_pane.dart';
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
-  /// Kestrel at work on `offline`, selected; Orion the PM of web-project.
+  /// Kestrel and Orion, each with its own chat (Swarm v4); Orion the PM.
   void agents(ConversationServer server) {
     server.state['agents'] = [
-      leftPaneAgent('kestrel', 'Kestrel'),
-      leftPaneAgent('orion', 'Orion'),
+      {...leftPaneAgent('kestrel', 'Kestrel'), 'chatId': 'agent-chat-kestrel'},
+      {
+        ...leftPaneAgent('orion', 'Orion'),
+        'chatId': 'agent-chat-orion',
+        'kind': 'pm',
+      },
     ];
-    final groups = (server.state['conversations'] as List)
-        .cast<Map<String, dynamic>>();
-    groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';
-    groups.firstWhere((g) => g['id'] == 'offline')['assignment'] = {
-      'id': 'a1',
-      'agentId': 'kestrel',
-      'status': 'working',
-    };
+    (server.state['conversations'] as List<Map<String, dynamic>>).addAll([
+      for (final id in ['kestrel', 'orion'])
+        {
+          ...conversationFixture('agent-chat-$id', id),
+          'kind': 'agent-chat',
+          'agentIds': [id],
+        },
+    ]);
   }
 
   Future<void> tabTo(WidgetTester tester, Finder row) async {
@@ -66,14 +70,12 @@ void main() {
 
   for (final (row, label) in [
     ('super-agent-orion', 'an agent row'),
-    // The Desktop's Projects is one link (task #4466).
-    ('super-projects', 'the Projects row'),
-    ('super-decisions', 'a page row'),
+    ('super-project-lead', 'a project row'),
   ]) {
     testWidgets('Tab to $label that is not selected: a ring, and its fill '
         'unchanged', (tester) async {
       final c = await showLeftPane(tester, setup: agents);
-      c.select('offline');
+      c.select('agent-chat-kestrel');
       await tester.pump();
       await tabTo(tester, key(row));
       final drawn = key(row);

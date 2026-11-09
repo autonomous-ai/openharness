@@ -3,9 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm, unreadThread, wait;
+import 'super_tab_activity_lists_test.dart' show swarm, wait;
 import 'super_tab_mentions_test.dart' show showView;
-import 'support/super_tab_fixture.dart';
 
 /// Quiet Swarm's polish pass: what a walk of the screens found drifting from
 /// the design (docs/plans/2026-11-03-quiet-swarm-polish-plan.md).
@@ -84,27 +83,6 @@ void main() {
 
     // Project rows are 4 px taller than the rest since Huy's ask (11-03,
     // #2427); Activity and Buddy keep Slack's pitch.
-    testWidgets('Decisions and Mentions sit 4 px closer than project rows', (
-      tester,
-    ) async {
-      final server = swarm();
-      server.state['swarmBuddy'] = true;
-      (server.state['projects'] as List).add(
-        projectFixture('second', 'second-project', 'second'),
-      );
-      (server.state['conversations'] as List).add(
-        conversationFixture('second', 'second-project'),
-      );
-      await showView(tester, server);
-      double y(Finder f) => tester.getCenter(f).dy;
-      final rows =
-          y(find.text('second-project').first) -
-          y(find.text('web-project').first);
-      expect(
-        y(_key('super-mentions')) - y(_key('super-decisions')),
-        rows.abs() - 4,
-      );
-    });
   });
 
   group('the header', () {
@@ -115,13 +93,6 @@ void main() {
       await tester.tap(_key('super-manage'));
       await tester.pumpAndSettle();
       expect(_key('super-project-menu'), findsNothing);
-      expect(_key('super-members-button'), findsNothing);
-    });
-
-    testWidgets('Decisions has no Members', (tester) async {
-      await showView(tester, swarm());
-      await tester.tap(_key('super-decisions'));
-      await tester.pumpAndSettle();
       expect(_key('super-members-button'), findsNothing);
     });
 
@@ -166,73 +137,6 @@ void main() {
       final mine = bubble('A plain message.');
       expect(bubble('Goal: Activity read fix').right, mine.right);
       expect(bubble('Windows credential fix').left, lessThan(mine.left));
-    });
-  });
-
-  group('Decisions, Mentions and Threads', () {
-    testWidgets("its marks are the app's icons, as task lines' are", (
-      tester,
-    ) async {
-      final server = swarm();
-      server.followedThreads = {
-        'unread': [unreadThread('message-1')],
-        'read': [],
-        'more': false,
-      };
-      await showView(tester, server);
-      await tester.tap(_key('super-threads'));
-      await tester.pumpAndSettle();
-      for (final glyph in ['↳', '✓', '◐']) {
-        expect(find.text(glyph), findsNothing);
-      }
-      expect(find.byIcon(AppIcons.reply), findsNothing);
-      // The card marked its thread read: its save runs out.
-      await tester.pump(const Duration(seconds: 1));
-    });
-
-    testWidgets("today's time reads as the chat's", (tester) async {
-      final server = swarm()..followedThreads = null;
-      final now = DateTime.now();
-      server.tag(
-        'message-1',
-        createdAt: DateTime(
-          now.year,
-          now.month,
-          now.day,
-          20,
-          8,
-        ).toUtc().toIso8601String(),
-      );
-      await showView(tester, server);
-      await tester.tap(_key('super-mentions'));
-      await tester.pumpAndSettle();
-      expect(find.text('8:08 PM'), findsOneWidget);
-    });
-
-    testWidgets('a heading sits nearer its rows than the section above', (
-      tester,
-    ) async {
-      final server = swarm()..followedThreads = null;
-      final now = DateTime.now().toUtc();
-      server.tag(
-        'message-1',
-        leadId: 'a',
-        text: 'Older tag',
-        createdAt: now.subtract(const Duration(days: 3)).toIso8601String(),
-      );
-      server.tag(
-        'message-1',
-        leadId: 'b',
-        text: 'Newer tag',
-        createdAt: now.toIso8601String(),
-      );
-      await showView(tester, server);
-      await tester.tap(_key('super-mentions'));
-      await tester.pumpAndSettle();
-      double y(String text) => tester.getCenter(find.text(text)).dy;
-      final under = y('Older tag') - y('Earlier');
-      final over = y('Earlier') - y('Newer tag');
-      expect(under, lessThan(over));
     });
   });
 

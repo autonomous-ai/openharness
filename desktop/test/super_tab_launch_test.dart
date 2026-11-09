@@ -17,6 +17,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/state/lead_placement.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/super_tabs/agent_names.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -67,6 +68,7 @@ class SuperTabFixtureConnection extends WsConn {
   int? maxAvailableAgents = 16;
 
   bool loseCreate = false, loseJoin = false;
+  bool journaled = true;
 
   /// Refuses the next join as the backend would, before anything is written.
   SuperTabFailure? failJoin;
@@ -279,11 +281,22 @@ class SuperTabFixtureConnection extends WsConn {
           (server.state['agents'] as List).last['projectId'] =
               group['projectId'] ?? 'lead';
           (group['agentIds'] as List).add('lead-agent');
-          if (command['lead'] == true) group['leadId'] = 'lead-agent';
+          // As the v4 backend: a PM gets a chat of its own with its person, which holds its first request.
+          String? pmChat;
+          if (command['lead'] == true) {
+            group['leadId'] = 'lead-agent';
+            pmChat = 'pm-chat';
+            (server.state['conversations'] as List).add({
+              ...conversationFixture(pmChat, command['name'] as String),
+              'kind': 'agent-chat',
+              'agentIds': ['lead-agent'],
+            });
+            (server.state['agents'] as List).last['chatId'] = pmChat;
+          }
           if (command['initialMessage'] is String) {
             server.append(
               command['initialMessage'] as String,
-              conversationId: command['conversationId'] as String,
+              conversationId: pmChat ?? command['conversationId'] as String,
             );
           }
         }
@@ -350,13 +363,16 @@ class SuperTabFixtureConnection extends WsConn {
         );
       }
       cancelledCreation = false;
-      final records = store.values.entries.where(
-        (e) => e.key.startsWith('super_tab.launch.'),
-      );
-      expect(records, hasLength(1));
-      final saved = jsonDecode(records.single.value) as Map;
-      expect(saved['phase'], 'starting');
-      expect(saved['creationId'], payload['creationId']);
+      // The old launch keeps a journal of its start; Swarm v4's New agent keeps none (new_agent.dart).
+      if (journaled) {
+        final records = store.values.entries.where(
+          (e) => e.key.startsWith('super_tab.launch.'),
+        );
+        expect(records, hasLength(1));
+        final saved = jsonDecode(records.single.value) as Map;
+        expect(saved['phase'], 'starting');
+        expect(saved['creationId'], payload['creationId']);
+      }
       native = {
         'id': 'native-lead',
         'name': nativeName,
@@ -675,7 +691,7 @@ void main() {
       final c = f.app.superTabs.peek(tabId)!;
       final project = c.snapshot!.projects.last;
       expect(project.isPrivate, isTrue);
-      expect(c.selectedId, project.leadConversationId);
+      expect(c.selectedId, 'pm-chat'); // its PM's own chat (Swarm v4)
       expect(c.snapshot!.conversation('offline'), isNotNull);
       expect(
         f.connection.joins.single['command'],
@@ -2268,7 +2284,7 @@ void main() {
           f.connection.terminalCalls
               .singleWhere((c) => c.$1 == 'message')
               .$2['content'],
-          contains('messages lead'),
+          contains('Discuss the architecture.'),
         );
         expect(f.connection.terminalCalls.last.$1, 'terminal_close');
         expect(f.app.activeSwarm.panes, isEmpty);
@@ -2356,12 +2372,13 @@ void main() {
         final creates = f.connection.calls.where((c) => c.$1 == 'agent_create');
         expect(creates, hasLength(1));
         expect(creates.single.$2['engine'], engine);
-        expect(f.connection.joins.single['command']['name'], 'Lead');
-        expect(creates.single.$2['prompt'], contains('messages lead'));
-        expect(
-          creates.single.$2['prompt'],
-          contains('harness super-tab --tab $tabId'),
-        );
+        // Given no name, it gets one of the Swarm's names (Faye, Atlas, ...),
+        // starts as that name and joins under it (anh Dee, 2026-11-09).
+        final name = f.connection.joins.single['command']['name'] as String;
+        expect(agentNames, contains(name));
+        expect(creates.single.$2['prompt'], startsWith('You are $name.\n\n'));
+        // Swarm v4: the person's request, with no Swarm manual.
+        expect(creates.single.$2['prompt'], isNot(contains('super-tab')));
         expect(f.app.swarms, hasLength(1));
         expect(f.app.activeSwarmId, initialTab);
         expect(f.app.activeSwarm.superTabId, tabId);
@@ -2370,6 +2387,12 @@ void main() {
           f.connection.server.messages.single['text'],
           'Discuss the architecture.',
         );
+        // Swarm v4: its person goes on in their chat with the PM, not the channel only agents post in.
+        expect(
+          f.connection.server.messages.single['conversationId'],
+          'pm-chat',
+        );
+        expect(f.app.superTabs.peek(tabId)!.selectedId, 'pm-chat');
       },
     );
   }
@@ -2405,7 +2428,7 @@ void main() {
           .firstWhere((c) => c.$1 == 'agent_create')
           .$2;
       expect(create['swarmRole'], 'dev');
-      expect(create['prompt'], contains('instructions'));
+      expect(create['prompt'], isNot(contains('super-tab')));
       expect(create['prompt'], isNot(contains('swarm-dev')));
     });
   }
@@ -2754,27 +2777,30 @@ void main() {
     );
   });
 
-  test('the lead prompt points to the project instructions', () async {
-    final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
-    final box = await f.box(engine: 'claude');
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    final prompt =
-        f.connection.calls
-                .firstWhere((c) => c.$1 == 'agent_create')
-                .$2['prompt']
-            as String;
-    expect(prompt, contains('harness super-tab --tab '));
-    expect(prompt, contains(' instructions'));
-    for (final gone in [
-      'swarm-lead',
-      'swarm-dev',
-      'Route only',
-      'route GROUP',
-    ]) {
-      expect(prompt, isNot(contains(gone)), reason: gone);
-    }
-    expect(prompt.length, lessThanOrEqualTo(2000));
-  });
+  test(
+    'the lead prompt is its person\'s request, with no Swarm manual',
+    () async {
+      final f = SuperTabLaunchFixture()..connection.nativeName = 'hi';
+      final box = await f.box(engine: 'claude');
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final prompt =
+          f.connection.calls
+                  .firstWhere((c) => c.$1 == 'agent_create')
+                  .$2['prompt']
+              as String;
+      for (final gone in [
+        'super-tab',
+        'instructions',
+        'swarm-lead',
+        'swarm-dev',
+        'Route only',
+        'route GROUP',
+      ]) {
+        expect(prompt, isNot(contains(gone)), reason: gone);
+      }
+      expect(prompt.length, lessThanOrEqualTo(2000));
+    },
+  );
 
   test('a new Lead starts Claude Code or Codex; other agents stay open to the rest', () async {
     final f = SuperTabLaunchFixture();
@@ -2805,29 +2831,6 @@ void main() {
     expect(member.integration!.engines, isNull);
     expect(member.compatibleEngines, contains('opencode'));
     expect(member.engine, 'opencode');
-  });
-
-  test('the lead prompt asks for short plain replies, answered once', () async {
-    final f = SuperTabLaunchFixture();
-    final box = await f.box(engine: 'claude');
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    final prompt =
-        f.connection.calls
-                .firstWhere((c) => c.$1 == 'agent_create')
-                .$2['prompt']
-            as String;
-    expect(prompt, contains('helpful colleague'));
-    expect(prompt, contains('under 150 words'));
-    expect(
-      prompt,
-      contains(
-        'UNIQUE_OPERATION_ID [--answers MESSAGE_ID | --reply-to MESSAGE_ID]`',
-      ),
-    );
-    expect(prompt, contains('answer each message once'));
-    expect(prompt, contains('do not post again'));
-    expect(prompt, isNot(contains('Report exact revisions')));
-    expect(prompt, isNot(contains('email addresses')));
   });
 
   test('lost join acknowledgement retries the same contribution without a second native launch', () async {

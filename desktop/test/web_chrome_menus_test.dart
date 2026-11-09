@@ -15,7 +15,6 @@ import 'package:harness/widgets/swarm_switcher.dart';
 import 'package:harness/widgets/workspace_account_button.dart';
 
 import 'support/capture.dart';
-import 'support/real_fonts.dart';
 import 'support/super_tab_phone.dart';
 import 'swarm_state_test.dart' show createApp;
 

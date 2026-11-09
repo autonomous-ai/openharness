@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/swarm_type.dart';
 
 /// The Desktop left pane's one row style and its heading (task #4466, anh Dee 11-07): face, name, one quiet detail on
 /// the right; 30 high; 13 names, 12 details; bold only for unread; chevrons only on hover.
@@ -116,10 +117,10 @@ void main() {
         ),
       ]);
       final read = styleOf(tester, 'Read'), unread = styleOf(tester, 'Unread');
-      expect(read.fontSize, 13);
+      expect(read.fontSize, SwarmType.sidebarSize);
       expect(read.color, grid.AppPalette.textSecondary);
       expect(read.fontWeight, FontWeight.w400);
-      expect(unread.fontSize, 13);
+      expect(unread.fontSize, SwarmType.sidebarSize);
       expect(unread.color, grid.AppPalette.textPrimary);
       expect(unread.fontWeight, grid.AppFont.semibold);
       expect(

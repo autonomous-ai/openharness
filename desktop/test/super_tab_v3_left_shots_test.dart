@@ -41,17 +41,11 @@ void main() {
     }
   });
 
-  // Task #4466: the quiet left pane and the Projects grid, at 880 and wide.
+  // Task #4466: the quiet left pane, with an agent's chat open and with no agents.
   for (final brightness in Brightness.values) {
     for (final (scene, width) in [
       ('agent-chat', 1440.0),
       ('no-agents', 1440.0),
-      ('board', 1440.0),
-      ('board-880', 880.0),
-      ('folded', 1440.0),
-      ('projects', 1440.0),
-      ('projects-880', 880.0),
-      ('decisions', 1440.0),
     ]) {
       testWidgets('$scene (${brightness.name})', (tester) async {
         await tester.binding.setSurfaceSize(Size(width, 800));
@@ -168,12 +162,7 @@ void main() {
         ]);
         final c = server.controller(
           account: 'owner',
-          initial: {
-            'tabId': 'tab',
-            'accountId': 'owner',
-            'selectedId': 'lead',
-            if (scene == 'folded') 'agentsGroupOpen': false,
-          },
+          initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
         );
         await tester.runAsync(c.refresh);
         // With an app the left pane has the org switcher and + New agent, as it does in the real window.
@@ -213,28 +202,8 @@ void main() {
         }
 
         await settle();
-        // Under 1000 the Board folds the left pane into its drawer (#4445): its header opens it.
-        Future<void> openProjects() async {
-          if (find.byKey(const ValueKey('super-projects')).evaluate().isEmpty) {
-            await tester.tap(find.byTooltip('Conversations').first);
-            await settle();
-          }
-          await tester.tap(find.byKey(const ValueKey('super-projects')));
-          await settle();
-        }
-
         if (scene == 'agent-chat') {
           await tester.tap(find.byKey(const ValueKey('super-agent-kestrel')));
-          await settle();
-        } else if (scene.startsWith('projects')) {
-          await openProjects();
-        } else if (scene.startsWith('board')) {
-          // A project's Board opens from the Projects grid (task #4466).
-          await openProjects();
-          await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-          await settle();
-        } else if (scene == 'decisions') {
-          await tester.tap(find.byKey(const ValueKey('super-decisions')));
           await settle();
         }
         await captureWindow(tester, shots, '$scene-${brightness.name}');

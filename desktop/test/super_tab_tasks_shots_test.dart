@@ -241,7 +241,8 @@ void main() {
           );
           await tester.pumpAndSettle();
         }
-        expect(find.textContaining('Needs you'), findsNWidgets(2));
+        // Swarm v4 removed Mentions (anh Dee, 2026-11-09), so a tag no longer marks its task; one waiting on its person still does.
+        expect(find.textContaining('Needs you'), findsOneWidget);
         expect(find.byKey(const ValueKey('super-tasks-badge')), findsOneWidget);
         expect(tester.takeException(), isNull);
         await captureWindow(tester, shots, 'tasks-$layout-${brightness.name}');
