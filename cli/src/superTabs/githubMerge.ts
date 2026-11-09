@@ -25,7 +25,11 @@ import { identifier, object } from './wire.js'
 type Json = Record<string, unknown>
 
 export const MERGE_INTERVAL_MS = 30_000
-const MAX_PULLS = 30
+/** Open pull requests are read a hundred a page, the most recently updated first, up to this many pages each pass: a busy shared
+ *  repository has over a hundred open (lampOS and openharness about 110 each, 2026-11-10), and the team's own can be any of
+ *  them. The newest thirty alone left an older team pull request unread and unmerged for good. */
+export const PULL_PAGES = 3
+export const openPullsPath = (repo: string): string => `/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PAGE}`
 /** How often the projects whose PM runs here are asked again: each ask reads the PM's Swarm. */
 const PROJECTS_FRESH_MS = 60_000
 /** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits. */
@@ -77,6 +81,11 @@ export function verdicts(comments: Json[], body: string): { readers: Map<string,
   }
   return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
 }
+
+/** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
+ *  otherwise. Without it, "pip two" and "pip-two" were two people, so an agent with a two-word name read its own pull request
+ *  and the merger merged it (found by the other session's Q3 tester, 2026-11-09; #3665 reads names more fully). */
+export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export function authorOf(pull: Json): string | null {
@@ -163,7 +172,7 @@ export class GitHubMerge {
   private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
-    const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
+    const pulls = (await this.reads.current(repo, openPullsPath(repo), PULL_PAGES))
       .filter(pull => pull.draft !== true && object(pull.base).ref === base)
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
     if (!pulls.length) return
@@ -177,7 +186,7 @@ export class GitHubMerge {
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
-      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== author)
+      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && sameKey(reader) !== sameKey(author))
       if (reads.length < (twoReads ? 2 : 1)) continue
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))

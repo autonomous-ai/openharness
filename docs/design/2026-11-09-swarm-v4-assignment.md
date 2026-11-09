@@ -94,7 +94,10 @@ Every minute, in the PM's person's Harness, for each project its PM leads from t
   gets the free tasks it starts next until it holds two: `builder:<name>` on the issue and one comment, "Harness, 15:40: for
   **Pip**: it can start now, and it finished 3 part:api tasks." GitHub news then brings each its task.
 - **Failures** are said once: a label GitHub refused (tried again next pass), a task no builder can do and why, gh signed
-  out or rate limited (as the merger: `githubRest.ts`).
+  out or rate limited (as the merger: `githubRest.ts`). A sized task nobody can start for a reason its PM can act on is
+  said on the task, to the PM by name, once: a need no builder's machine meets ("it needs xcode, which no builder's
+  machine has"), a task larger than every machine, or "after #N" lines that wait on each other (`blockedWhy`). A wait
+  that passes (busy builders, spent quota, a task it waits on) is not.
 
 ## What an agent works on (built)
 
@@ -112,7 +115,10 @@ must be more proactive and ask the user what area they want the agent to focus o
   some (`assign/crew.ts FOCUS`, `AWAY`), on top of what it learned. So a mobile agent gets mobile tasks first, others take
   one only when it is well behind, and it takes other work when its own area has none.
 - **Labels:** an area an agent works on that has no `part:` label yet gets one, made by the assigner, so its PM labels
-  tasks with the same words.
+  tasks with the same words. So do the flow's own labels (status:taken, size:s/m/l, p0 to p2) and each builder's, in a
+  repository that lacks them: gh refuses to add a label a repository does not have, so in a fresh one a builder could not
+  take its first task, nor the PM size one (`githubAssign.ts labelRepo`). Labels are read only when the team needs one
+  not seen yet.
 
 ## Readers (built)
 
@@ -126,11 +132,15 @@ one holding the fewest tasks (`assign/crew.ts readerFor`); when no other builder
 before (the swarm-sandbox's Juno for Pip). The comment names the reader, so GitHub news brings it the
 ask. A verdict on an older head no longer counts, and a HOLD on one still blocks the merge, so when its author pushes, its
 reader is asked to read the new head, once ("the head is now abcdef1, after your HOLD on f6edb44: please read it again").
+Each pass reads every open pull request, a hundred a page, the most recently updated first, up to three hundred: a busy
+shared repository has over a hundred open (lampOS and openharness about 110 each), and the team's own can be any of them.
 Harness asks readers for, and merges, only the team's own pull requests: a builder's (away ones too) or its PM's
 (`assign/crew.ts teamOf`). A person's, or anyone's in a shared repository, is theirs to have read and merged
 (openharness has dozens open at a time, by people and their own agents). A reader asked 2 hours ago with no verdict since
 is no longer counted on: another is asked too, and the first READ-OK on
 the head counts, whoever's (agents read within minutes of the ask that wakes them, so one that has not is stopped or stuck).
+With nobody else to ask, the silent reader is asked again, at most twice for a head and two hours apart: one stopped when
+it was asked never heard it, as GitHub news reads what is said from when its agent runs again.
 Nobody able to read it is said once.
 
 ## Taking work back (built)
@@ -140,6 +150,9 @@ machine is down gives back its queued tasks after 30 minutes (a sleep or a resta
 it took after 3 hours (work may be on that machine). Its builder label, and status:taken, come off with one comment
 ("Harness, 23:10: Atlas's machine has been down since 15:40 UTC, so this task goes to the builder who can start it
 next."), and the next plan gives each to another builder (`assign/crew.ts takeBacks`, `githubAssign.ts takeBack`). A
+task whose pull request waits for its readers or its merge is kept: its builder has done its part, and the pull request
+merges without it; another builder would do it again. A builder whose machine is down keeps its tasks while no other
+builder can take them: they would only come back to it. One its person is stopping gives them back all the same. A
 builder whose subscription has less room than a small task until a reset more than two hours off gives back what waits
 for it, never what it took (`outOfQuota`): the plan would only hold it until the reset. A task its builder took that
 nothing touched for 4 hours (no comment or label on the issue, no change to a pull request for it, drafts included) gets
@@ -153,12 +166,17 @@ once (`TAKE_BACK_REFUSED`, `ASK_REFUSED`) and tried again next pass.
 ## Learned task times (built)
 
 Each pass the assigner reads up to five closed sized issues it has not measured: a task's work runs from its builder's
-"taken by" comment (or Harness's word giving it) to its close. Once a size has three, its median in this project replaces
+"taken by" comment (or Harness's word giving it) to its close. Only a task closed as completed counts: one closed as not
+planned (a duplicate, one dropped) ended without its work. Once a size has three, its median in this project replaces
 the size's guess, kept between 10 minutes and a day; a median, so one task left open over a weekend does not move the
 rest (`assign/crew.ts startedAt`, `learnedMinutes`; `githubAssign.ts measure`).
 
 ## Next
 
-1. **Estimates of memory, disk and spend** from what finished tasks used, by part, size and model, beside their time.
-2. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
+1. **Read only what changed.** Each pass reads every open issue and pull request (GitHub's list counts both): lampOS had
+   259 open (2026-11-10), against the 1,000 ten pages hold, so a busy repository is far less than 10x from that limit, and
+   each pass costs a page per hundred. Issues updated since the last read (`since=`), kept as a model of the open ones, read
+   only what changed (standard 4). Until then a list that fills the pages is said (`TOO_MANY_OPEN`).
+2. **Estimates of memory, disk and spend** from what finished tasks used, by part, size and model, beside their time.
+3. **Measures** in Desktop: time from label to merge, idle builder-minutes, quota left unspent at resets, overload minutes,
    holds and conflicts.

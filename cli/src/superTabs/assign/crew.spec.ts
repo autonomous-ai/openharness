@@ -32,7 +32,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     expect(first).toMatchObject({ minutes: SIZES.s.minutes, needs: { cpu: SIZES.s.cpu, ram: SIZES.s.ram, disk: SIZES.s.disk }, part: 'api', weight: 8,
       spend: { five_hour: SIZES.s.spend, seven_day: SIZES.s.spend / 5 }, notBuilders: [] })
     // Only a machine that reports Xcode builds what needs it.
-    expect(second).toMatchObject({ minutes: SIZES.l.minutes, weight: 1, notBuilders: ['atlas'] })
+    expect(second).toMatchObject({ minutes: SIZES.l.minutes, weight: 1, notBuilders: ['atlas'], notWhy: 'its builder\'s machine lacks one of: xcode' })
     // A dependency on an issue that is not open is not waited for.
     expect(fifth!.deps).toEqual(['#1'])
     expect([...read.free]).toEqual(['#1', '#2', '#5'])
