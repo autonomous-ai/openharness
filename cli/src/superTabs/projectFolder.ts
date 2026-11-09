@@ -83,6 +83,9 @@ export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
   // (buddyHome.ts). Asking for a token anyway was refused with a 404, which failed every such start (2026-11-02).
   if (request.buddyScope === 'swarm') return null
+  // Nor does a Regular agent (backend agent.new, task #4116): it starts in no project, in a folder of its own (start.ts). A
+  // Member's start is a Regular agent's in its person's chat, but it sets its project up there (task #4698), so it is prepared.
+  if (request.regular === true && !memberProject(request)) return null
   // Nor does a project with no repository address (task #3211): there is nothing to clone, and the server refuses a token
   // for it. Its work starts in a folder of its own, made without any login (prepareSwarmProject).
   const project = startProject(row, request)
@@ -112,12 +115,18 @@ function sameFolder(requested: unknown, folder: unknown): boolean {
   return typeof requested === 'string' && typeof folder === 'string' && isAbsolute(requested) && resolve(requested) === resolve(folder)
 }
 
-/** The project a queued start is for, of those this machine was told of. A project session of a person's one Buddy chat
- *  names its project: that chat is in no project's list (backend hostRows.ts). */
+/** The project a Member's start sets up (task #4698): its person's chat is in no project's list, so the start names it. */
+const memberProject = (request: Json): string | undefined => {
+  const id = object(request.member).projectId
+  return typeof id === 'string' && id ? id : undefined
+}
+
+/** The project a queued start is for, of those this machine was told of. A project session of a person's one Buddy chat and a
+ *  Member's start name their project: those chats are in no project's list (backend hostRows.ts). */
 function startProject(row: Json, request: Json): Json | undefined {
-  const session = object(request.buddySession).projectId
+  const named = object(request.buddySession).projectId ?? memberProject(request)
   return (Array.isArray(row.projects) ? row.projects.map(object) : [])
-    .find(p => session ? p.id === session : Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
+    .find(p => named ? p.id === named : Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
 }
 
 const NOT_OWN_FOLDER = 'This machine has something that is not this project\'s own folder where its folder goes. Its owner can move it aside, then start again.'

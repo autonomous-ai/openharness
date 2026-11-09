@@ -583,6 +583,22 @@ describe('restarting an agent', () => {
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
     })
 
+    // Ken, 11-09: a PM brought back with Restart (⌘⇧E) came up in its owner's settings, asking before each tool, and stood
+    // still until a person approved. Since #4215 a Swarm agent restarts in the mode its person chose, or none.
+    it('restarts a Swarm\'s PM in full mode; any other Swarm agent keeps its own mode', async () => {
+      const pm = agent({ swarmSkill: { role: 'coordinator', key: 'p1' } } as Partial<RegisteredSession>)
+      const run = setup(pm)
+      expect(await run.restart('a1')).toMatchObject({ ok: true })
+      const full = { ...pm, permissionMode: 'full' }
+      expect(bypassPermissionFor).toHaveBeenCalledWith(full, expect.any(Function))
+      expect(run.deps.downgradedPermission).toHaveBeenCalledWith(full, true, 'restart', undefined)
+
+      vi.mocked(bypassPermissionFor).mockClear()
+      const worker = agent({ swarmSkill: { role: 'agent', key: 'p1' } } as Partial<RegisteredSession>)
+      expect(await setup(worker).restart('a1')).toMatchObject({ ok: true })
+      expect(bypassPermissionFor).toHaveBeenCalledWith(worker, expect.any(Function))
+    })
+
     it('without a mode or a yes, launches with no mode and no bypass; a fresh session on a grid says both', async () => {
       const grid = agent({ gridLaunch: { networkName: 'Home' } } as Partial<RegisteredSession>)
       const run = setup(grid, { downgradedPermission: vi.fn(async () => ({ bypassPermission: false })) as never })

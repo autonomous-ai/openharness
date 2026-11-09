@@ -55,13 +55,19 @@ describe('shell guard: kill by name', () => {
 
 describe('shell guard: kill -1, every process the account can reach', () => {
   it.each([
+    'kill -1',
+    'kill -4242',
+    'kill -- -4242',
+    'kill -TERM -4242',
+    'kill -s TERM -4242',
+    'kill -n 9 -4242',
+    'kill -- 0',
     'kill -9 -1',
     'kill -- -1',
     'kill -KILL -1',
     'kill -s TERM -1',
     '/bin/kill -1 -1',
     'kill 4242 -1',
-    'kill -1',
     '/bin/kill -9 -1 ; true',
   ])('refuses %s', (command) => {
     expect(refused(command)).toBe(GUARD_REASONS.killAll)
@@ -69,7 +75,6 @@ describe('shell guard: kill -1, every process the account can reach', () => {
 
   it.each([
     'kill -1 4242',
-    'kill -- -4242',
     'kill -l',
   ])('lets %s through', (command) => {
     expect(refused(command)).toBeNull()
@@ -142,6 +147,29 @@ describe('shell guard: heredocs', () => {
   it('still reads the command a heredoc feeds', () => {
     expect(refused('cat <<EOF | sudo tee /etc/x\nhi\nEOF')).toBe(GUARD_REASONS.systemWide)
     expect(refused('cat <<-EOF > /tmp/x\n\tbody\n\tEOF')).toBe(GUARD_REASONS.fixedTmp)
+  })
+})
+
+describe('shell guard: temporary paths in simple variables', () => {
+  it.each([
+    'OUT=/tmp; echo hi > "$OUT/shared.txt"',
+    'OUT=/tmp; cat ${OUT}/shared.txt',
+    'OUT=/private; OUT="$OUT/tmp"; touch "$OUT/shared.txt"',
+    'OUT=/tmp; NEXT=$OUT; curl -o "$NEXT/shared.txt" https://example.com',
+    'export OUT=/tmp; tee "$OUT/shared.txt"',
+    "bash -c 'OUT=/tmp; echo hi > \"$OUT/shared.txt\"'",
+  ])('refuses %s', command => {
+    expect(refused(command)).toBe(GUARD_REASONS.fixedTmp)
+  })
+
+  it.each([
+    'OUT=/work; echo hi > "$OUT/shared.txt"',
+    'OUT=/tmp; OUT=/work; echo hi > "$OUT/shared.txt"',
+    "OUT=/tmp; echo '$OUT/shared.txt'",
+    "OUT=/tmp; echo \\$OUT/shared.txt",
+    'OUT=$(mktemp -d "${TMPDIR:-/tmp}/out.XXXXXX"); echo hi > "$OUT/shared.txt"',
+  ])('allows %s', command => {
+    expect(refused(command)).toBeNull()
   })
 })
 
@@ -267,6 +295,41 @@ describe('shell guard: removing a worktree a live process uses', () => {
   it('refuses when it cannot tell which processes are live', () => {
     expect(refused(`git worktree remove ${worktree}`, { linkedWorktree: linked, liveCwds: () => null }))
       .toBe(GUARD_REASONS.worktreeUnknown(worktree))
+  })
+})
+
+// The Mac test of #3506: macOS's mktemp, given no template and no folder, makes its file in the account's own temporary folder
+// (/var/folders/…/T) whatever TMPDIR says. Every agent and app of the account shares that folder, so it is never an agent's
+// allowed folder, and an agent's owner's settings stop it there with a question it waits on (Authorder, 11-07).
+describe('shell guard: mktemp on a Mac', () => {
+  it.each([
+    'mktemp',
+    'mktemp -d',
+    'T=$(mktemp -d)',
+    'mktemp -q -d',
+    'mktemp -t build',
+    'mktemp -dt build',
+    'mktemp -d -t build -u',
+  ])('refuses %s, saying how to make it in the agent\'s own folder', (command) => {
+    expect(refused(command)).toBe(GUARD_REASONS.macMktemp)
+  })
+
+  it.each([
+    'T=$(mktemp -d "${TMPDIR:-/tmp}/wren.XXXXXX")',
+    'mktemp "$TMPDIR/out.XXXXXX"',
+    'mktemp -d -p "$TMPDIR"',
+    'mktemp -dp "$TMPDIR"',
+    'mktemp -d -t build -p "$TMPDIR"',
+    'mktemp -d --tmpdir',
+    'mktemp --tmpdir="$TMPDIR"',
+    'mktemp -d work.XXXXXX',
+  ])('allows %s, which TMPDIR or its folder decides', (command) => {
+    expect(refused(command)).toBeNull()
+  })
+
+  it('leaves Linux alone, whose mktemp follows TMPDIR', () => {
+    expect(refused('mktemp -d', { platform: 'linux' })).toBeNull()
+    expect(refused('T=$(mktemp)', { platform: 'linux' })).toBeNull()
   })
 })
 

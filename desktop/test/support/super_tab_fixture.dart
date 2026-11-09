@@ -195,6 +195,7 @@ class SwarmPartsBackend {
       'otherProjectsWork': state['otherProjectsWork'],
     // Each project's board pulse (backend superTabs/pulse.ts, task #3384).
     if (state['pulse'] != null) 'pulse': state['pulse'],
+    if (state['releaseTimes'] != null) 'releaseTimes': state['releaseTimes'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
     // Only where the server does not try Team accounts (backend read/views.ts).
     if (state['teamAccounts'] == false) 'teamAccounts': false,
@@ -594,6 +595,14 @@ class ConversationServer {
 
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
+
+  /// A Member's own chat that agent.new opens is left out of a Swarm's first load, as a big Swarm's read can leave out
+  /// a quiet chat (hotfix #4647): only a read of the chat itself finds it.
+  bool newAgentChatsDormant = false;
+
+  /// A read of a chat's messages the Swarm no longer has answers 404; off, the older tests' reads of chats they never
+  /// listed keep their empty pages.
+  bool chatsGoneAreNotFound = false;
   final leaderboardReads = <String>[];
 
   /// Answers by the read's path instead of [leaderboard], as a server does.
@@ -1608,7 +1617,8 @@ class ConversationServer {
         output['conversationId'] = chatId;
       } else if (command['type'] == 'buddy.rename') {
         // As the backend's: the reader's own Buddy chat keeps the name, or
-        // drops it for the default, and its Buddy shows it at once.
+        // takes a fresh real one when cleared (task #4568), and its Buddy
+        // shows it at once.
         final person = reader ?? 'owner';
         final chat = (state['conversations'] as List)
             .cast<Map<String, dynamic>>()
@@ -1627,19 +1637,8 @@ class ConversationServer {
           );
         }
         revision++;
-        final owner = (state['people'] as List? ?? const [])
-            .cast<Map>()
-            .where((p) => p['id'] == person)
-            .firstOrNull;
-        final name = command['name'] as String?;
-        final shown =
-            name ??
-            "${(owner?['email'] as String? ?? person).split('@').first}'s Buddy";
-        if (name == null) {
-          chat.remove('buddyName');
-        } else {
-          chat['buddyName'] = name;
-        }
+        final shown = command['name'] as String? ?? 'Atlas';
+        chat['buddyName'] = shown;
         chat['title'] = shown;
         for (final agent in (state['agents'] as List).cast<Map>()) {
           if ((chat['agentIds'] as List).contains(agent['id'])) {
@@ -1748,6 +1747,22 @@ class ConversationServer {
           'machineId': ?machineId,
           'requestedAt': revision,
         };
+      } else if (command['type'] == 'agent.new' && command['local'] == true) {
+        // As backend agent.new with `local` (task #4196): a Member's own chat,
+        // and no start; its person's Desktop starts the agent itself.
+        revision++;
+        final id = 'agent-chat-$revision';
+        (state['conversations'] as List).add({
+          ...conversationFixture(id, command['name'] as String),
+          'kind': 'agent-chat',
+          'audience': {
+            'people': [
+              {'id': 'owner', 'generation': 'g'},
+            ],
+          },
+          if (newAgentChatsDormant) 'dormant': true,
+        });
+        output['conversationId'] = id;
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[
@@ -2183,6 +2198,13 @@ class ConversationServer {
     if (uri.pathSegments.last == 'messages') {
       onRead?.call(path);
       final conversationId = uri.pathSegments[4];
+      // A chat the Swarm no longer has is not found, as the backend answers (hotfix #4647).
+      if (chatsGoneAreNotFound &&
+          !(state['conversations'] as List).any(
+            (g) => (g as Map)['id'] == conversationId,
+          )) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
       final query = uri.queryParameters;
       final after = int.tryParse(query['after'] ?? '');
       final before = int.tryParse(query['before'] ?? '');

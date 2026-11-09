@@ -92,18 +92,20 @@ describe('waking and moving through commands', () => {
 })
 
 describe('a take-over never joins a conversation its new session is barred from (security review of #3229)', () => {
-  it('leaves a Team-written task out when the new session runs in the main account', () => {
+  // Task #4120 (the PM's ruling): only the project owner's own agent may take over Team-written work, as ada is here; another
+  // member's agent stays out (teamWritten.test.ts, closedAgents.test.ts).
+  it('takes a Team-written task back when the new session is the project owner\'s own agent', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
     f.state = run(f.state, { type: 'conversation.create', title: 'Team task', brief: 'b', checks: [] } as Command, 'tw', NOW - 3_600_000)
     const task = f.state.conversations.find(c => c.title === 'Team task')!
     task.agentIds.push(f.ada.id)
-    // Placed by hand, as an older server could have: the take-over itself must still refuse the join.
+    // Placed by hand, as an older server could have: the take-over keeps it, the owner's own agent.
     applyCrewKeep(f.state, NOW, everywhere)
     const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
     f.state.conversations.find(c => c.id === task.id)!.teamWritten = true
     f.state = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: config } as Command, 'started-tw', NOW + 5000, host)
     const moved = f.state.agents.find(a => a.harnessId === 'ada-2')!
-    expect(f.state.conversations.find(c => c.id === task.id)!.agentIds).not.toContain(moved.id)
+    expect(f.state.conversations.find(c => c.id === task.id)!.agentIds).toContain(moved.id)
     expect(f.state.conversations.find(c => c.id === 'lead')!.agentIds).toContain(moved.id)
   })
 })
@@ -166,3 +168,27 @@ describe('a take-over marks nothing Team-written (security review of #3229, Curl
     expect(after.teamWritten).toBeFalsy()
   })
 })
+
+describe('a member that keeps stopping is moved and its task goes back at once (#3662)', () => {
+  it('hands its task on as soon as the move is decided, not after its start runs, and says why', () => {
+    const f = fixture()
+    const task = working(f)
+    f.state.agents.find(a => a.id === f.ada.id)!.stops = [NOW - 50 * 60_000, NOW - 30 * 60_000, NOW - 5 * 60_000]
+    const drafts = applyCrewKeep(f.state, NOW, everywhere)
+    const ada = f.state.agents.find(a => a.id === f.ada.id)!
+    expect(ada.movedTo).toMatchObject({ machineId: 'mini', reason: 'unstable' })
+    const now = f.state.conversations.find(c => c.id === task.id)!
+    expect(now.assignment).toMatchObject({ status: 'lost', lost: { reason: 'crew-unstable', at: NOW } })
+    expect(activeWork(now)).toBe(false)
+    expect(drafts.map(d => d.text).join(' ')).toContain('stopped 3 times in the last hour')
+  })
+
+  it('moves a member below its quota floor without handing its task on: it is still working', () => {
+    const f = fixture([machine('mac', { usedPercent: 90 }), machine('mini')])
+    const task = working(f)
+    applyCrewKeep(f.state, NOW, everywhere)
+    expect(f.state.agents.find(a => a.id === f.ada.id)!.movedTo).toMatchObject({ machineId: 'mini', reason: 'quota-low' })
+    expect(f.state.conversations.find(c => c.id === task.id)!.assignment!.status).toBe('working')
+  })
+})
+

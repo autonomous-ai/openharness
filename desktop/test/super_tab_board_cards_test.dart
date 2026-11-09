@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_activity_lists_test.dart' show swarm;
@@ -22,7 +23,11 @@ Future<void> _settle(WidgetTester tester) async {
 
 Finder _key(String k) => find.byKey(ValueKey(k));
 
-final _deadline = DateTime(2026, 11, 6, 15, 0);
+// Today at 15:00, whatever today is: the card writes a deadline of another day with its date.
+final _deadline = () {
+  final today = DateTime.now();
+  return DateTime(today.year, today.month, today.day, 15);
+}();
 
 Map<String, dynamic> _proposal({
   Map<String, dynamic>? decision,
@@ -99,6 +104,9 @@ void main() {
       ),
     );
     await _settle(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     return c;
@@ -130,13 +138,13 @@ void main() {
       ],
     );
     expect(inColumn('proposals', 'pin'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: _key('super-task-card-pin'),
-        matching: find.textContaining('tuan'),
-      ),
-      findsOneWidget,
+    // Who proposed it is the card's requester avatar, as a tile names no one in text (#3869).
+    final proposer = find.descendant(
+      of: _key('super-task-card-pin'),
+      matching: _key('super-card-requester'),
     );
+    expect(proposer, findsOneWidget);
+    expect(tester.widget<SuperTabAvatar>(proposer).identity, 'person:tuan');
     expect(note(tester, 'pin'), isNull);
     await end(tester, c);
   });

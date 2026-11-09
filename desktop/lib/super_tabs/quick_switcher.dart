@@ -16,6 +16,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'my_agents.dart';
 import 'profile_sheet.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -220,7 +221,21 @@ bool _readable(SuperTabController c, SuperTabConversation? g) {
   if (c.hiddenByBuddies(g)) return false;
   if (g.isBuddyChat) return g.buddyOwnerId == c.accountId;
   if (g.audience != null && !g.audience!.contains(c.accountId)) return false;
+  // A person's chat with one of their own agents is in no project (v3).
+  if (g.isAgentChat) return g.agentIds.isNotEmpty;
   return c.snapshot?.projects.any((p) => p.id == g.projectId) == true;
+}
+
+/// The chat each of the person's own agents (My agents, but the Buddy and PMs, whose chats are listed as they are) opens
+/// by its agent, so every agent is found by name and opens its chat as in My agents (audit #4211, finding 11).
+Map<String, SuperTabAgent> _agentChats(SuperTabController c) {
+  final s = c.snapshot;
+  if (s == null) return const {};
+  return {
+    for (final a in superTabMyAgents(s, c.accountId))
+      if (a.buddyOf == null && !superTabAgentIsPm(s, a))
+        if (superTabAgentChat(s, a) case final chat?) chat.id: a,
+  };
 }
 
 class _Destination {
@@ -232,7 +247,8 @@ class _Destination {
     this.person,
     this.agent,
     this.unread = false,
-  }) : search = '$title $detail'.toLowerCase();
+    String alsoSearch = '',
+  }) : search = '$title $detail $alsoSearch'.toLowerCase();
   final String id, title, detail, search;
   final SuperTabConversation? conversation;
   final SuperTabPerson? person;
@@ -244,19 +260,28 @@ List<_Destination> _destinations(SuperTabController c) {
   final s = c.snapshot;
   if (c.accessRevoked || s == null) return [];
   final projects = {for (final p in s.projects) p.id: p};
+  final agentChats = _agentChats(c);
   return [
     for (final g in s.conversations)
       if (_readable(c, g))
         _Destination(
           'conversation:${g.id}',
-          s.isProjectLead(g.id) ? projects[g.projectId]!.name : g.label,
-          g.isBuddyChat
-              ? 'Your Buddy'
+          g.isAgentChat && agentChats[g.id] != null
+              ? s.agentName(agentChats[g.id]!.id)
+              : s.isProjectLead(g.id)
+              ? projects[g.projectId]!.name
+              : g.label,
+          g.isBuddyChat || g.isAgentChat
+              ? 'Your agent'
               : s.isProjectLead(g.id)
               ? 'Project chat'
               : projects[g.projectId]?.name ?? '',
           conversation: g,
           unread: c.unread(g),
+          // A task chat is also found by the name of the agent whose chat it is in My agents.
+          alsoSearch: agentChats[g.id] == null
+              ? ''
+              : s.agentName(agentChats[g.id]!.id),
         ),
     for (final p in s.people)
       _Destination(
@@ -266,7 +291,8 @@ List<_Destination> _destinations(SuperTabController c) {
         person: p,
       ),
     for (final a in s.teamAgents)
-      if (projects.containsKey(a.projectId))
+      if (projects.containsKey(a.projectId) &&
+          !agentChats.values.any((mine) => mine.id == a.id))
         _Destination(
           'agent:${a.id}',
           s.agentName(a.id),

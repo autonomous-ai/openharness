@@ -4,6 +4,12 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type * as CodexProfilesModule from './codexProfiles.js'
 
+const host = vi.hoisted(() => ({ win32: false }))
+vi.mock('../engines/kit/windowsFiles.js', async original => {
+  const actual = await original<typeof import('../engines/kit/windowsFiles.js')>()
+  return { ...actual, hostPlatform: () => host.win32 ? 'win32' : actual.hostPlatform() }
+})
+
 let dataDir = ''
 let home = ''
 
@@ -34,6 +40,18 @@ describe('codexProfiles', () => {
   it('resolveCodexProfilePath rejects a relative path', async () => {
     const { resolveCodexProfilePath } = await loadModule()
     expect(resolveCodexProfilePath('relative/codex')).toEqual({ error: 'INVALID_PATH' })
+  })
+
+  // #4183: on Windows a CODEX_HOME is `C:\\…`, and the check that wanted a leading '/' refused every one.
+  it('resolveCodexProfilePath on Windows takes a drive-letter folder and refuses a POSIX one', async () => {
+    host.win32 = true
+    try {
+      const { resolveCodexProfilePath } = await loadModule()
+      expect(resolveCodexProfilePath('Z:\\no\\such\\.codex-work')).toEqual({ error: 'NOT_FOUND' })
+      expect(resolveCodexProfilePath('/Users/u/.codex-work')).toEqual({ error: 'INVALID_PATH' })
+    } finally {
+      host.win32 = false
+    }
   })
 
   it('resolveCodexProfilePath rejects a path with control characters', async () => {
@@ -102,7 +120,7 @@ describe('codexProfiles', () => {
   it('listCodexProfiles includes freshly discovered folders', async () => {
     const { listCodexProfiles } = await loadModule()
     mkdirSync(join(home, '.codex'))
-    writeFileSync(join(home, '.codex', 'auth.json'), '{}')
+    writeFileSync(join(home, '.codex', 'config.toml'), '')
     expect(listCodexProfiles([], { home, environment: {} })).toEqual([
       { path: join(home, '.codex'), label: '.codex', offered: true },
     ])
@@ -112,7 +130,7 @@ describe('codexProfiles', () => {
     const { linkCodexProfile, listCodexProfiles } = await loadModule()
     const folder = join(home, '.codex')
     mkdirSync(folder)
-    writeFileSync(join(folder, 'auth.json'), '{}')
+    writeFileSync(join(folder, 'config.toml'), '')
     linkCodexProfile(folder)
     // The default account: offered with no offer of its own.
     expect(listCodexProfiles([folder], { home, environment: {} })).toEqual([{ path: folder, label: '.codex', offered: true }])

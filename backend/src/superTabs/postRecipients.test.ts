@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { REACHED_NO_AGENT, type Command } from './commands.js'
 import { agent } from './model.js'
+import { agentChatId } from './agentKind.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
@@ -91,6 +92,39 @@ describe('an agent post that names agents', () => {
     const other = f.add('other', f.task)
     expect(to(post(f.dev, f.task, `@${nameOf(other)} the CI runner is down.`))).toEqual([[other]])
     expect(to(post(f.dev, f.task, `@${nameOf(f.lead)} the CI runner is down.`))).toEqual([[f.lead]])
+  })
+})
+
+// Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel, so its person talks to the PM in a chat of its own.
+describe('a PM\'s own chat', () => {
+  it('opens when the PM joins its project, and its person\'s message there reaches the PM', () => {
+    const { f, to } = setup()
+    const chat = f.state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(f.lead))!
+    expect(chat.audience?.people.map(p => p.id)).toEqual(['owner'])
+    expect(agentChatId(f.state, agent(f.state, f.lead))).toBe(chat.id)
+    const sent = f.run({ type: 'message.send', conversationId: chat.id, text: 'Ship login by Friday.', replyTo: null, recipientIds: [] } as Command, owner)
+    expect(to(sent.messages)).toEqual([[f.lead]])
+  })
+
+  it('holds a new PM\'s first request, not the channel', () => {
+    const f = stepsFixture()
+    const made = f.run({ type: 'project.create', name: 'Todo', visibility: 'public', brief: '' } as Command, owner).result
+    const added = f.run({ type: 'agent.add', conversationId: made.conversationId as string, machineId: 'host', harnessId: 'pm2', name: 'pm2', lead: true,
+      configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
+      initialMessage: 'Build a tiny todo app.' } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } })
+    const chat = f.state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(added.result.agentId as string))!
+    expect(added.messages.filter(m => m.text === 'Build a tiny todo app.').map(m => m.conversationId)).toEqual([chat.id])
+  })
+})
+
+// Swarm v4 (anh Dee 2026-11-08): a project's chat is its channel, where its agents talk to each other by name, as lampOS's
+// did in its issues. An agent of the project is reached by @Name there before it has posted in it.
+describe('an agent post in the project channel', () => {
+  it('reaches an agent of the project it names, though that agent has not joined the channel', () => {
+    const { f, post, to, nameOf } = setup()
+    const other = f.add('other', f.task)
+    expect(f.group('lead').agentIds).not.toContain(other)
+    expect(to(post(f.dev, 'lead', `@${nameOf(other)} can you take the flaky login test?`))).toEqual([[other]])
   })
 })
 

@@ -185,7 +185,8 @@ void main() {
       },
     );
 
-    test('clearing the name sends none, for the default', () async {
+    // Task #4568: the server then gives it a fresh real name, never "<person>'s Buddy".
+    test('clearing the name sends none, for a fresh one', () async {
       final server = buddySwarm();
       giveBuddy(server);
       final c = server.controller(account: 'peer');
@@ -196,8 +197,8 @@ void main() {
       expect(await c.renameBuddy('lead', '   '), isTrue);
 
       expect(commands(server, 'buddy.rename').last['name'], isNull);
-      expect(c.snapshot!.agentName('wren'), "ken.tran's Buddy");
-      expect(c.buddyChat('lead')?.buddyName, isNull);
+      expect(c.snapshot!.agentName('wren'), 'Atlas');
+      expect(c.buddyChat('lead')?.buddyName, 'Atlas');
     });
 
     test('a refused rename says why and keeps the name', () async {
@@ -354,7 +355,7 @@ void main() {
           expect(find.text('Direct messages'), findsNothing);
           expect(pmEntry, findsNothing);
           expect(
-            find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+            find.descendant(of: buddyEntry, matching: find.text('Your agent')),
             findsOneWidget,
           );
           expect(
@@ -545,7 +546,7 @@ void main() {
         );
         final c = await show(tester, server);
         expect(
-          find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+          find.descendant(of: buddyEntry, matching: find.text('Your agent')),
           findsOneWidget,
         );
         expect(
@@ -554,7 +555,9 @@ void main() {
         );
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
-        expect(find.text('Your Buddy'), findsOneWidget);
+        // Named for its agent (task #4568): none runs here, so it reads as the person's agent.
+        // Its sidebar row and its header both say it (task #4568).
+        expect(find.text('Your agent'), findsWidgets);
         expect(find.textContaining("peer's Buddy"), findsNothing);
         await close(tester, c);
       },
@@ -580,13 +583,15 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+          find.descendant(of: buddyEntry, matching: find.text('Your agent')),
           findsNothing,
         );
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
 
-        expect(find.text('Sparky · Your Buddy'), findsOneWidget);
+        // The chat's header names the agent alone (task #4568).
+        expect(find.text('Sparky · Your Buddy'), findsNothing);
+        expect(find.text('Sparky'), findsWidgets);
         expect(find.text('Message Sparky'), findsOneWidget);
         await close(tester, c);
       },
@@ -614,7 +619,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(c.selectedId, 'buddy-peer-lead');
         expect(
-          find.text('Start your Buddy to brainstorm here'),
+          find.text('Start your agent to brainstorm here'),
           findsOneWidget,
         );
         expect(find.text('Add a Buddy'), findsNothing);
@@ -857,7 +862,7 @@ void main() {
           expect(c.selectedId, 'buddy-peer-lead');
 
           expect(
-            find.text('Start your Buddy to brainstorm here'),
+            find.text('Start your agent to brainstorm here'),
             findsOneWidget,
           );
           expect(
@@ -885,7 +890,7 @@ void main() {
           });
           expect(c.selectedId, 'buddy-peer-lead');
           expect(
-            find.text('Start your Buddy to brainstorm here'),
+            find.text('Start your agent to brainstorm here'),
             findsNothing,
           );
           await close(tester, c);
@@ -963,7 +968,9 @@ void main() {
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
 
-        expect(find.text('Wren · Your Buddy'), findsOneWidget);
+        // The chat's header names the agent alone (task #4568).
+        expect(find.text('Wren · Your Buddy'), findsNothing);
+        expect(find.text('Wren'), findsWidgets);
         expect(
           find.text(
             'Claude on Kens-MacBook · #Pilot · only you can read this chat',
@@ -1105,7 +1112,7 @@ void main() {
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
 
-        final text = tester.getRect(find.textContaining('Only you and Wren'));
+        final text = tester.getRect(find.textContaining('Say what to build'));
         final composer = tester.getRect(
           find.byKey(const ValueKey('super-message-composer-row')),
         );
@@ -1123,7 +1130,7 @@ void main() {
       });
 
       testWidgets(
-        'an empty Buddy chat says who reads it and how to reach the coordinator',
+        'an empty Buddy chat says, in one line, how to reach the coordinator (anh Dee\'s copy rules, #4465)',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server);
@@ -1132,9 +1139,7 @@ void main() {
           await tester.pumpAndSettle();
 
           expect(
-            find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the Product Manager' when it's ready.",
-            ),
+            find.text("Say what to build, then 'send to the Product Manager'."),
             findsOneWidget,
           );
           await close(tester, c);
@@ -1150,9 +1155,7 @@ void main() {
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
           expect(
-            find.text(
-              "Only you and Wren read this chat. Say what you want to build; say 'send to the Coordinator' when it's ready.",
-            ),
+            find.text("Say what to build, then 'send to the Coordinator'."),
             findsOneWidget,
           );
           await close(tester, c);
@@ -1231,7 +1234,7 @@ void main() {
         final c = await show(tester, server);
         await openRename(tester);
 
-        expect(find.text('Rename your Buddy'), findsOneWidget);
+        expect(find.text('Rename Wren'), findsOneWidget);
         expect(
           find.text('Everyone in this Swarm sees this name.'),
           findsOneWidget,
@@ -1248,7 +1251,9 @@ void main() {
           },
         ]);
         expect(find.text('Rename your Buddy'), findsNothing);
-        expect(find.text('Sparky · Your Buddy'), findsOneWidget);
+        // The chat's header names the agent alone (task #4568).
+        expect(find.text('Sparky · Your Buddy'), findsNothing);
+        expect(find.text('Sparky'), findsWidgets);
         await close(tester, c);
       });
 
@@ -1265,16 +1270,15 @@ void main() {
             tester.widget<TextField>(nameField).controller!.text,
             'Sparky',
           );
-          expect(
-            find.text('Leave it empty to go back to "ken.tran\'s Buddy".'),
-            findsOneWidget,
-          );
+          expect(find.text('Leave it empty for a new name.'), findsOneWidget);
           await tester.enterText(nameField, '');
           await tester.tap(find.widgetWithText(FilledButton, 'Save'));
           await tester.pumpAndSettle();
 
           expect(commands(server, 'buddy.rename').last['name'], isNull);
-          expect(find.text("ken.tran's Buddy · Your Buddy"), findsOneWidget);
+          // A fresh real name from the server (task #4568), never "<person>'s Buddy".
+          expect(find.text('Atlas'), findsWidgets);
+          expect(find.textContaining("'s Buddy"), findsNothing);
           await close(tester, c);
         },
       );
@@ -1302,7 +1306,9 @@ void main() {
           findsOneWidget,
         );
         expect(tester.widget<TextField>(nameField).controller!.text, 'Lead');
-        expect(find.text('Wren · Your Buddy'), findsOneWidget);
+        // The chat's header names the agent alone (task #4568).
+        expect(find.text('Wren · Your Buddy'), findsNothing);
+        expect(find.text('Wren'), findsWidgets);
         server.refuse = null;
         await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
         await tester.pumpAndSettle();
@@ -1380,7 +1386,9 @@ void main() {
         await tester.tap(find.widgetWithText(FilledButton, 'Save'));
         await tester.pumpAndSettle();
 
-        expect(find.text('Early · Your Buddy'), findsOneWidget);
+        // The chat's header names the agent alone (task #4568).
+        expect(find.text('Early · Your Buddy'), findsNothing);
+        expect(find.text('Early'), findsWidgets);
         await close(tester, c);
       });
     });

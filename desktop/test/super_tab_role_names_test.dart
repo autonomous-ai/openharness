@@ -100,12 +100,10 @@ void main() {
   });
 
   testWidgets(
-    'an empty project chat names its coordinator as the project does',
+    // Empty means empty (anh Dee's rule 7, #4465): whatever the project calls its coordinator.
+    'an empty project chat says nothing',
     (tester) async {
-      for (final (coordinator, line) in [
-        (null, 'Discuss the plan with Product Manager.'),
-        ('Coordinator', 'Discuss the plan with Coordinator.'),
-      ]) {
+      for (final coordinator in [null, 'Coordinator']) {
         final server = ConversationServer();
         server.state['projects'] = [
           {
@@ -130,7 +128,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.text(line), findsOneWidget);
+        expect(find.textContaining('Discuss the plan'), findsNothing);
         await tester.pumpWidget(const SizedBox());
         await c.flush();
         c.dispose();

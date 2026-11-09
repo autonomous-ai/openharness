@@ -2,13 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/desktop_prompt_surface.dart';
 import 'controller.dart';
 import 'join_link.dart';
-import 'join_account_choice.dart';
+import 'join/bring_agent.dart';
 import 'join_machine.dart' show swarmNewMemberRole;
 
 /// The native URL channel queues links before authentication. This host only
@@ -56,26 +57,22 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
       _presenting = true;
       final accountId = account!.id!;
       try {
-        final choice = await showAppDialog<bool>(
-          context: context,
-          builder: (context) => ListenableBuilder(
-            listenable: app,
-            builder: (context, _) =>
-                app.status == AppStatus.authenticated &&
-                    app.currentUser?.id == accountId &&
-                    !accountRequest.answered
-                ? SwarmJoinAccountDialog(swarmName: accountRequest.swarmName)
-                : AlertDialog(
-                    content: const Text('This join is no longer active.'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Close'),
-                      ),
-                    ],
-                  ),
-          ),
+        final c = await app.superTabs.open(accountRequest.tabId);
+        if (!mounted || app.currentUser?.id != accountId) return;
+        final started = await showBringAgentForm(
+          context,
+          controller: c,
+          app: app,
+          isCurrent: () =>
+              app.currentUser?.id == accountId && !accountRequest.answered,
         );
+        if (started != null &&
+            mounted &&
+            app.status == AppStatus.authenticated &&
+            app.currentUser?.id == accountId) {
+          app.openSuperTab(accountRequest.tabId, accountRequest.swarmName);
+        }
+        final choice = started != null;
         accountRequest.complete(
           app.status == AppStatus.authenticated &&
                   app.currentUser?.id == accountId
@@ -117,18 +114,6 @@ class _SwarmJoinHostState extends State<SwarmJoinHost> {
                   onJoined: (id, name) {
                     if (!current()) return;
                     app.openSuperTab(id, name);
-                  },
-                  // The choice is explicit before this computer is shared.
-                  showAccountChoice: app.canSetUpTeamAccount,
-                  onNewMemberAccount: (id, role, ownAccount) {
-                    if (!current()) return;
-                    unawaited(
-                      app.addMachineOnJoin(
-                        id,
-                        role: role,
-                        ownAccount: ownAccount,
-                      ),
-                    );
                   },
                   onNewMember: (id, role) {
                     if (!current()) return;
@@ -173,8 +158,6 @@ class SwarmJoinDialog extends StatefulWidget {
     required this.onJoined,
     required this.isCurrent,
     this.onNewMember,
-    this.onNewMemberAccount,
-    this.showAccountChoice = true,
   });
   final SwarmJoinLink link;
   final String accountEmail;
@@ -184,9 +167,6 @@ class SwarmJoinDialog extends StatefulWidget {
   /// After a join that made this account a member, with the role it joined
   /// as; never for someone who was one already.
   final void Function(String id, String role)? onNewMember;
-  final bool showAccountChoice;
-  final void Function(String id, String role, bool ownAccount)?
-  onNewMemberAccount;
   final bool Function() isCurrent;
 
   @override
@@ -197,12 +177,11 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
   final _operationId = superTabOperationId();
   Map<String, dynamic>? _preview;
   bool _loading = true, _joining = false;
-  bool _ownAccount = false;
-  bool get _choosesAccount =>
-      widget.showAccountChoice &&
-      _preview?['alreadyMember'] != true &&
-      _preview?['role'] == 'collaborator';
   String? _error;
+
+  /// The link can never work for this account (revoked, invalid, not
+  /// theirs): Close is the only action, never a Retry that fails again.
+  bool _unavailable = false;
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(widget.link.tabId)}/join';
   Map<String, dynamic> get _token => {
@@ -270,13 +249,7 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
       if (!_current) return;
       widget.onJoined(widget.link.tabId, _preview!['name'] as String);
       if (newRole != null) {
-        if (newRole == 'collaborator' &&
-            _choosesAccount &&
-            widget.onNewMemberAccount != null) {
-          widget.onNewMemberAccount!(widget.link.tabId, newRole, _ownAccount);
-        } else {
-          widget.onNewMember?.call(widget.link.tabId, newRole);
-        }
+        widget.onNewMember?.call(widget.link.tabId, newRole);
       }
       if (mounted) Navigator.pop(context);
     } catch (failure) {
@@ -295,6 +268,7 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
         'LINK_REVOKED',
         'JOIN_UNAVAILABLE',
       }.contains(failure.code)) {
+        _unavailable = true;
         return 'This link is unavailable for your account. Ask the owner for an invitation.';
       }
       if (failure.code == 'SIGNED_OUT' || failure.code == 'ACCOUNT_CHANGED') {
@@ -334,19 +308,16 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
             ),
           ],
           const SizedBox(height: 12),
-          Text(widget.accountEmail, style: DesktopChrome.metadata()),
-          if (_choosesAccount) ...[
-            const SizedBox(height: 16),
-            SwarmJoinAccountChoice(
-              ownAccount: _ownAccount,
-              onChanged: _joining
-                  ? null
-                  : (value) => setState(() => _ownAccount = value),
-            ),
-          ],
+          Text(
+            'Signed in as ${widget.accountEmail}',
+            style: DesktopChrome.metadata(),
+          ),
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!, style: DesktopChrome.text()),
+            Text(
+              _error!,
+              style: DesktopChrome.text(color: grid.AppPalette.dangerFill),
+            ),
           ],
         ],
       ),
@@ -354,17 +325,23 @@ class _SwarmJoinDialogState extends State<SwarmJoinDialog> {
     actions: [
       FilledButton(
         key: const Key('swarm-join-confirm'),
-        onPressed: _loading || _joining
+        onPressed: _unavailable
+            ? () => Navigator.pop(context)
+            : _loading || _joining
             ? null
             : _preview == null
             ? _load
             : _join,
+        // Named for what it will do: Join Swarm while the invitation loads,
+        // Retry only after a failure a retry can fix (audit finding 13).
         child: Text(
-          _joining
+          _unavailable
+              ? 'Close'
+              : _joining
               ? 'Joining…'
-              : _preview == null
+              : _preview == null && !_loading
               ? 'Retry'
-              : _preview!['alreadyMember'] == true
+              : _preview?['alreadyMember'] == true
               ? 'Open Swarm'
               : 'Join Swarm',
         ),

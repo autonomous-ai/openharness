@@ -62,8 +62,9 @@ async function swarm() {
   const generations = new Map<string, string>()
   for (const machineId of ['ev-lead-host', 'ev-test-host']) generations.set(machineId, (await poolRows(store, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
   const leadHarness = randomUUID(), workers = new Map<string, { agentId: string; harness: string }>()
+  // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
   const add = async (conversationId: string, machineId: string, harnessId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+    conversationId, machineId, harnessId, name, configuration: config, lead }, host)).result.agentId)
   const lead = await add('lead', 'ev-lead-host', leadHarness, 'Lead', true)
   const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}) => store.observeMachine(host, tab, machineId, {
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,
@@ -225,7 +226,7 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
       if (i % 3 === 0) await f.review(g, a, true)
       f.clock.now += MINUTE
       await f.done(g, a)
-      await f.execute({ type: 'agent.release', agentId: f.worker(g), decision: 'stop' } as Command, host, f.lead)
+      await f.execute({ type: 'agent.release', agentId: f.worker(g), decision: 'stop' } as Command)
     }
     // Attempts 0, 3, 6 and 9 failed; the last ten are attempts 2 to 11.
     expect((await f.evidence()).models[0]!.recent).toEqual([true, false, true, true, false, true, true, false, true, true])

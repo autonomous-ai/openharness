@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
 import { servedLocalModels, type ContributedMachine } from './machines.js'
-import { isBuddyChat, swarmBuddyChatId } from './buddies.js'
+import { BUDDY_PEAK_BYTES, BUDDY_REQUIREMENTS, isBuddyChat, swarmBuddyChatId } from './buddies.js'
 import { LEAD_CAPABILITY } from './leadStart.js'
 import { hostTab } from './read/hostRows.js'
 import { leaderboard } from './leaderboard/stats.js'
@@ -132,14 +132,16 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     expect((f.state.starts ?? []).filter(s => s.request.leadFor)).toEqual([])
   })
 
-  it('is no route candidate: a pick there is refused', () => {
+  it('is no route candidate: a pick there is left out with why, and the rest kept with no pick (task #4194)', () => {
     const f = setup()
     addOwn(f, f.app.projectId)
     const candidate = (id: string, machineId: string) => ({ id, kind: 'new', machineId, engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3,
       title: `Title ${id}`, label: `Label ${id}` })
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Fix a typo.' }, candidates: [candidate('c0', 'peer-laptop'), candidate('c1', 'owner-mac')],
       excluded: [], floor: 3, notes: false, pick: 'c0', via: 'jev', p: 0.8, belowFloor: false, why: 'Free machine.' }
-    expect(() => f.run({ type: 'route.record', conversationId: f.group, decision } as unknown as Command, pmActor(f))).toThrow('This machine is not one of the Swarm\'s machines')
+    const [created] = f.run({ type: 'route.record', conversationId: f.group, decision } as unknown as Command, pmActor(f)).routeDecisions as Array<{ record: Record<string, unknown> }>
+    expect(created!.record).toMatchObject({ candidates: [{ id: 'c1' }], excluded: [{ title: 'Title c0', reason: expect.stringContaining('not one of the Swarm\'s machines') }] })
+    expect(created!.record.pick).toBeUndefined()
   })
 
   it('is in nobody\'s Swarm read, its own person\'s included: Machines, status and the leaderboard\'s lent hours', () => {
@@ -406,8 +408,10 @@ describe('a Buddy-only machine after its reviews', () => {
         running(f, f.app.projectId)
         f.run({ type: 'work.define', conversationId: f.group, brief: 'Save edits.', checks: [{ description: 'Edits survive a reload.', independent: false }] })
         const pane = paneIn(f, f.group)
-        expect(() => f.run({ type: 'route.record', conversationId: f.group, decision: decision(pane) } as unknown as Command, pmActor(f)))
-          .toThrow('This machine is not one of the Swarm\'s machines')
+        const [created] = f.run({ type: 'route.record', conversationId: f.group, decision: decision(pane) } as unknown as Command, pmActor(f))
+          .routeDecisions as Array<{ record: { candidates: Array<{ id: string }>; pick?: string } }>
+        expect(created!.record.candidates.map(c => c.id)).toEqual(['c1'])
+        expect(created!.record.pick).toBeUndefined()
         expect(() => f.run({ type: 'work.assign', conversationId: f.group, agentId: pane })).toThrow('This machine is not one of the Swarm\'s machines')
         expect(f.state.conversations.find(c => c.id === f.group)!.assignment).toBeNull()
       }))
@@ -428,5 +432,17 @@ describe('a Buddy-only machine after its reviews', () => {
       f.run({ type: 'work.assign', conversationId: work, agentId: pane }, peer)
       expect(f.state.conversations.find(c => c.id === work)!.assignment).toMatchObject({ agentId: pane })
     })
+  })
+})
+
+// Task #3738 (tuan.dev, 11-06): some people run Windows PCs with 16 GB and often under 2 GB free, and could not add a Buddy. A Buddy is
+// one Claude session that reads and talks: what it asks of its machine comes from a measured peak, with a margin, not a round 2 GB.
+describe('the memory a Buddy asks of its machine (#3738)', () => {
+  const GIB = 1024 ** 3
+  it('comes from a measured peak with a margin above it, and is under the 2 GiB a Buddy asked before', () => {
+    expect(BUDDY_REQUIREMENTS.memoryBytes).toBeGreaterThanOrEqual(BUDDY_PEAK_BYTES * 1.5)
+    expect(BUDDY_REQUIREMENTS.memoryBytes).toBeLessThan(2 * GIB)
+    // Swarm agents' requirements stay as they were: this is a Buddy's alone.
+    expect(BUDDY_REQUIREMENTS.diskBytes).toBe(GIB)
   })
 })

@@ -99,10 +99,12 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/scorecard', `${t}/scorecard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
     json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
+    json('GET', 'GET /api/super-tabs/:tabId/project-list', `${t}/project-list?invitedTo=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/sharing', `${t}/sharing`),
     json('POST', 'POST /api/super-tabs/:tabId/sharing', `${t}/sharing`, { operationId: op(), revision: 0, access: { mode: 'link', role: 'viewer' } }),
     json('GET', 'GET /api/super-tabs/:tabId/routing-policy', `${t}/routing-policy`),
     json('GET', 'GET /api/super-tabs/:tabId/groups', `${t}/groups?dormant=1&projectId=${project}`),
+    json('GET', 'GET /api/super-tabs/:tabId/personal-tasks', `${t}/personal-tasks`),
     json('GET', 'GET /api/super-tabs/:tabId/groups/:conversationId', `${t}/groups/${chat}`),
     json('POST', 'POST /api/super-tabs/:tabId/join', `${t}/join`, { operationId: op(), token: 'a'.repeat(43) }),
     json('POST', 'POST /api/super-tabs/:tabId/join/preview', `${t}/join/preview`, { token: 'a'.repeat(43) }),
@@ -123,6 +125,7 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions', `${t}/projects/${project}/instructions/revisions`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', `${t}/projects/${project}/instructions/revisions/1`),
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/rules', `${t}/projects/${project}/rules`),
+    json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/machine-rules', `${t}/projects/${project}/machine-rules`),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads', `${t}/attachments/uploads`, { conversationId: chat, name: 'notes.txt', mime: 'text/plain', size: 12_000_000 }),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', `${t}/attachments/uploads/${MISSING}/complete`, {}),
     json('POST', 'POST /api/super-tabs/:tabId/attachments/:attachmentId/voice', `${t}/attachments/${MISSING}/voice?lang=en`, {}),
@@ -220,6 +223,12 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       const got = await answer(call, member), absent = await answer(missing[hidden.indexOf(call)]!, member)
       expect(got, call.url).toEqual(absent)
       if (before.includes(call.route)) continue
+      // The project to pick first is only a hint (task #4540): the member's own list, alike for a private project and a missing one.
+      if (call.route === 'GET /api/super-tabs/:tabId/project-list') {
+        expect(got.status, call.url).toBe(200)
+        expect(got.body, call.url).not.toContain(f.privateProject)
+        continue
+      }
       expect(got.status, call.url).toBe(404)
       expect(got.body, call.url).toBe(NOT_AVAILABLE_BODY)
       expect(JSON.parse(got.body).error.message).not.toMatch(about)
@@ -245,5 +254,22 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const refused = await answer(sharing, member)
     expect(refused.status).toBe(403)
     expect(JSON.parse(refused.body).error.code).toBe('OWNER_REQUIRED')
+  })
+})
+
+// Task #4540: the Cmd-N and join project list shows only the projects its reader can read, decided by the server.
+describe('the project list', () => {
+  it('lists a private project only to the people who read it', async () => {
+    const f = await swarm()
+    const list = async (as: AuthUser) => {
+      const res = await app.inject({ method: 'GET', url: `/api/super-tabs/${f.tab}/project-list?invitedTo=${f.privateProject}`, headers: { 'x-user': as.sub } })
+      expect(res.statusCode).toBe(200)
+      return JSON.parse(res.body).data as { projects: Array<{ id: string }>; pick: string | null }
+    }
+    const mine = await list(owner), theirs = await list(member)
+    expect(mine.pick).toBe(f.privateProject)
+    expect(theirs.projects.map(p => p.id)).toEqual(['lead'])
+    expect(theirs.pick).toBe('lead')
+    expect(JSON.stringify(theirs)).not.toContain(f.privateProject)
   })
 })

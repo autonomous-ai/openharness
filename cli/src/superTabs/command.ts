@@ -18,7 +18,6 @@ import type { ProcessRow } from '../lib/processTable.js'
 export { buddyRefusal } from './buddyPane.js'
 import { paneBuddy } from './buddyPane.js'
 import { sendPane } from '../messages/command.js'
-import { SWARM_TOOLS_SKILL } from '../lib/swarmTools.js'
 
 type PaneFrame = Frame
 /** Whether [pane] is a harness's here: a tmux pane as `callerOf` finds it, or a pty host's `<instance>:%N`. */
@@ -311,7 +310,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, { operationId: `terminal-${randomUUID()}`,
       command: { type: 'agent.input', agentId: first, ...(text ? { text } : {}), ...(keys.length ? { keys } : {}) } })
   } else if (action === 'help' && first === 'tools' && positional.length === 2) {
-    // The full tools manual, which the role sheets point to (swarmToolSheets.ts): printed by this CLI, no daemon asked.
+    // The full tools manual, which every agent's launch line has it read (lib/swarmSkills.ts): printed by this CLI, no daemon asked.
     payload.topic = 'tools'
   } else if (!['status', 'help'].includes(action) || positional.length !== 1) {
     throw new UsageError(buddy => jsonShapeError(positional, buddy) ?? (buddy ? BUDDY_USAGE : USAGE))
@@ -355,7 +354,6 @@ export async function superTabCommand(argv: readonly string[], deps: {
         throw error
       })
     operationId = request.payload.operationId
-    if (request.payload.action === 'help' && request.payload.topic === 'tools') { print(SWARM_TOOLS_SKILL); return 0 }
     // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
     // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
     const elsewhere = request.where.port !== local.port || request.where.machineId !== local.machineId
@@ -434,11 +432,8 @@ export async function superTabCommand(argv: readonly string[], deps: {
         const notes = Array.isArray(value.notes) ? value.notes.map(object) : []
         const coordinator = typeof value.coordinatorName === 'string' && value.coordinatorName ? value.coordinatorName : 'The coordinator'
         const when = (at: unknown) => typeof at === 'number' && Number.isFinite(at) ? new Date(at).toISOString() : String(at)
-        // The coordinator's read carries the Swarm's built-in PM schedule (2026-11-04 PM schedule design): printed after the
-        // document, so a new PM session reads it at launch as its skill will hold it.
-        const builtIn = typeof value.builtIn === 'string' && value.builtIn ? ['', value.builtIn] : []
         print([`Instructions of project ${value.projectId}, revision ${value.revision}${value.template ? ' (the built-in template)' : ''}`, '', value.text,
-          ...builtIn, ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
+          ...(notes.length ? ['', `${coordinator}'s notes:`, ...notes.map(n => `- ${n.text} (note ${n.id}, asked by ${n.askedByName ?? n.askedBy}, ${when(n.at)}`
             + `${n.expiresAt ? `, until ${when(n.expiresAt)}` : ''})`)] : [])].join('\n'))
         return 0
       }
@@ -507,7 +502,7 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   if (!wide && command.projectId && command.projectId !== projectId) throw new Error('A session sends only to its own project\'s PM: leave the project out.')
   if (typeof home !== 'string') throw new Error(wide ? 'Name the project to send this to, from your status.' : 'Name your own chat: a proposal comes from there.')
   const inside = wide ? buddyProjectFolder(folder, String(projectId)) : folder
-  if (!inside) throw new Error('That project\'s code is not on this machine: attach only a file your owner sent in your chat.')
+  if (!inside) throw new Error('That project\'s code is not on this machine: name by its id a file your owner sent in your chat, or one you showed them there.')
   const files = readInsideFolder(paths, inside)
   const uploaded = await uploadAttachments(files, operationId, { ...target, sentIn: home }, scoped, deps.fetch)
   return [...new Set([...named, ...uploaded])]

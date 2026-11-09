@@ -21,6 +21,13 @@ Future<void> loadCaptureFonts(String? captureDir) async {
     );
     await (FontLoader(family)..addFont(Future.value(bytes))).load();
   }
+  // The activity marks' fallback face, as in the app: without it they draw as empty boxes.
+  await (FontLoader('Apple Symbols')..addFont(
+        File('/System/Library/Fonts/Apple Symbols.ttf')
+            .readAsBytes()
+            .then(ByteData.sublistView),
+      ))
+      .load();
   final manifest =
       jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
   for (final entry in manifest.cast<Map<String, dynamic>>()) {

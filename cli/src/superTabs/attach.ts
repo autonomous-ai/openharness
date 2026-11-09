@@ -150,7 +150,7 @@ export interface CheckedFile { name: string; type: string; bytes: Buffer }
 export function readInsideFolder(paths: string[], folder: string): CheckedFile[] {
   const root = realpathSync.native(folder)
   return paths.map(path => {
-    const outside = () => new Error(`${path} is outside your folder. Attach only files inside your folder; name a file your owner sent in your chat by its id.`)
+    const outside = () => new Error(`${path} is outside your folder. Attach only files inside your folder; name a file your owner sent in your chat, or one you showed them there, by its id.`)
     let fd: number
     // Never waiting on the open: a named pipe with no writer held the proposal forever (re-check of #2103). A regular
     // file reads the same without blocking, and anything else is refused below before a byte is read.

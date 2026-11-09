@@ -4,7 +4,7 @@ import { createSuperTab, visibleState, type Actor, type SuperTabState } from './
 import { projectOf } from './projects.js'
 import { canChat, legacyAsks, steers, switched } from './boardRights.js'
 import { openTasks } from './dispatch.js'
-import { PM_SCHEDULE_TEXT, pmScheduleText, sweepDue } from './pmSchedule.js'
+import { sweepDue } from './pmSchedule.js'
 import { owedLines } from './inbox.js'
 import { holdOf } from './pulse.js'
 
@@ -94,6 +94,50 @@ describe('a project\'s Board settings', () => {
     // A person who left the Swarm keeps nothing.
     f.state.people.splice(f.state.people.findIndex(person => person.id === 'c'), 1)
     expect(canChat(f.state, project, 'c')).toBe(false)
+  })
+})
+
+describe('Board rights after a person leaves', () => {
+  // Task #4216: owning a project and being listed in it end with the membership (#3073); Can chat and the decider's seat end too.
+  const leaveAndReturn = (f: ReturnType<typeof boardFixture>, person: Actor & { kind: 'person' }) => {
+    f.run({ type: 'member.remove', userId: person.userId }, swarmOwner)
+    const invited = f.run({ type: 'invite.create', email: person.email, role: 'collaborator', conversationId: f.app.conversationId }, swarmOwner)
+    f.run({ type: 'invite.accept', inviteId: invited.inviteId as string }, person)
+  }
+
+  it('gives a person who left and was invited back no Can chat and no decider seat', () => {
+    const f = boardFixture()
+    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
+    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
+    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'd' })
+    leaveAndReturn(f, granted as Actor & { kind: 'person' })
+    leaveAndReturn(f, member as Actor & { kind: 'person' })
+    expect(f.project().canChat).toBeUndefined()
+    expect(f.project().decider).toBeUndefined()
+    expect(canChat(f.state, f.project(), 'c')).toBe(false)
+    expect(steers(f.state, f.project(), 'd')).toBe(false)
+    expect(() => f.run({ type: 'message.send', conversationId: f.app.conversationId, text: 'Back', replyTo: null, recipientIds: [] }, granted))
+      .toThrow(expect.objectContaining({ code: 'CHAT_NOT_ALLOWED' }))
+  })
+
+  it('clears a right kept from before this fix when its person comes back', () => {
+    const f = boardFixture()
+    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
+    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
+    // Stored as a Swarm that lost them before the fix shipped: gone from the people, still named in the project.
+    f.state.people.splice(f.state.people.findIndex(person => person.id === 'c'), 1)
+    const invited = f.run({ type: 'invite.create', email: 'c@example.com', role: 'collaborator', conversationId: f.app.conversationId }, swarmOwner)
+    f.run({ type: 'invite.accept', inviteId: invited.inviteId as string }, granted)
+    expect(canChat(f.state, f.project(), 'c')).toBe(false)
+    expect(steers(f.state, f.project(), 'c')).toBe(false)
+  })
+
+  it('keeps the rights of those who stay', () => {
+    const f = boardFixture()
+    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
+    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
+    leaveAndReturn(f, member as Actor & { kind: 'person' })
+    expect(f.project()).toMatchObject({ canChat: ['c'], decider: 'c' })
   })
 })
 
@@ -199,6 +243,17 @@ describe('pause and resume', () => {
     expect(lines(f, id).join('\n')).toMatch(/paused[\s\S]*Wait for the release[\s\S]*resumed/i)
   })
 
+  // Review of #3310 at c91dc2489 (task #3595): a pause reason was stored and posted as written. A person's text is redacted.
+  it('redacts a credential in a pause reason, in the task and its line', () => {
+    const f = boardFixture()
+    const id = task(f)
+    const token = ['ghp', 'Q7mZ2xK9pL4vR8nT1wB6yC3dF5hJ0aE2sG7u'].join('_')
+    f.run({ type: 'work.pause', conversationId: id, paused: true, reason: `Rotate ${token} first` })
+    expect(group(f, id).paused!.reason).toContain('[credential removed]')
+    expect(JSON.stringify(f.state)).not.toContain(token)
+    expect(lines(f, id).join('\n')).not.toContain(token)
+  })
+
   it('refuses a member, the PM and any other agent, in every project', () => {
     const f = boardFixture()
     const id = task(f)
@@ -237,23 +292,16 @@ describe('pause and resume', () => {
   })
 })
 
-describe('the PM text in a switched project', () => {
-  const INBOX_LINE = /Answer each person's message once|Your inbox lists every unanswered message/
-
-  it('drops the inbox lines, and a person\'s message there owes the PM nothing', () => {
+describe('the PM\'s owed asks in a switched project', () => {
+  it('a person\'s message there owes the PM nothing', () => {
     const f = boardFixture()
     f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
     const ask = () => f.run({ type: 'message.send', conversationId: f.app.conversationId, text: 'Can you look at this?', replyTo: null, recipientIds: [f.pm] }, granted)
-    // Not switched: today's text, and the ask is owed.
-    expect(pmScheduleText(f.project())).toBe(PM_SCHEDULE_TEXT)
+    // Not switched: the ask is owed.
     ask()
     expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/Owed asks/)
 
     f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    const text = pmScheduleText(f.project())
-    expect(PM_SCHEDULE_TEXT).toMatch(INBOX_LINE)
-    expect(text).not.toMatch(INBOX_LINE)
-    expect(text).toContain('Keep a standing crew')
     // The ask from before the switch stays until its card exists (legacyAsks); a new one is never owed.
     expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/before this project switched/)
     const before = f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0

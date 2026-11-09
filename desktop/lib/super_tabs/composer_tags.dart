@@ -70,6 +70,10 @@ List<SuperTabComposerChoice> superTabTagChoices(
   if (snapshot == null) return const [];
   final project = snapshot.projectFor(group.id);
   bool reads(SuperTabPerson person) => switch (group) {
+    // A person's chat with an agent of theirs: they and the agent alone read
+    // it (backend projects.ts readsAgentChat), with or without an audience
+    // sent, so nobody else is offered (audit finding 12 of task #4211).
+    _ when group.isAgentChat => false,
     SuperTabConversation(:final audience?) => audience.contains(person.id),
     _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
     _ =>
@@ -115,22 +119,6 @@ List<SuperTabComposerChoice> superTabTagChoices(
         kind: 'agent',
       ),
   ].take(superTabCompletionLimit).toList();
-}
-
-/// [value] with `@` typed at its caret, in place of any selection, as @ Tag
-/// types it: after a space where the caret follows a word, so the tag list
-/// opens there ([superTabTagAtCaret]).
-TextEditingValue superTabTagPrompt(TextEditingValue value) {
-  final text = value.text;
-  final selection = value.selection.isValid
-      ? value.selection
-      : TextSelection.collapsed(offset: text.length);
-  final before = text.substring(0, selection.start);
-  final at = before.isEmpty || RegExp(r'\s$').hasMatch(before) ? '@' : ' @';
-  return TextEditingValue(
-    text: before + at + text.substring(selection.end),
-    selection: TextSelection.collapsed(offset: before.length + at.length),
-  );
 }
 
 /// [value] with the tag typed at [at] replaced by [token] and a space, the

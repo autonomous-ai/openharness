@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { activeWork, createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { stepsOf } from './steps.js'
 import { SEED_RULES } from './policy.js'
 
@@ -18,7 +18,7 @@ function fixture() {
   }
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const contribution = { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }
-  const add = (harnessId: string, group: string, roleName?: string) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
+  const add = (harnessId: string, group: string, roleName?: string, machineId = 'host') => run({ type: 'agent.add', conversationId: group, machineId, harnessId,
     name: harnessId, configuration: opus, lead: false, ...roleName ? { roleName } : {} } as Command, owner, contribution).result.agentId as string
   const lead = run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'pm', name: 'pm', configuration: opus, lead: true }, owner, contribution).result.agentId as string
   const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.', checks: [{ description: 'Signs in offline', independent: true }], priority: 'P2', requesterId: 'owner' }, as(lead)).result.conversationId as string
@@ -33,6 +33,21 @@ function fixture() {
 }
 
 describe('a handed task opens its review steps', () => {
+  // Task #3964 (review of PR #3436): the Ready that hands out review steps follows the project's machine rules too.
+  it('hands no review step to a Reviewer on a machine where no Reviewer runs, and gives it to one elsewhere', () => {
+    const rules = { projectRules: { revision: 1, rules: { ...SEED_RULES, machines: [{ machineIds: ['host'], why: 'Its Codex defaults to a local model', noReviews: true as const }] } } }
+    const alone = fixture()
+    alone.add('rev-local', alone.task, 'Reviewer')
+    alone.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(alone.steps()).toEqual([{ name: 'Review', agent: null, status: null }])
+    const f = fixture()
+    f.add('rev-local', f.task, 'Reviewer')
+    const elsewhere = f.run({ type: 'agent.add', conversationId: f.task, machineId: 'other', harnessId: 'rev-other', name: 'rev-other', configuration: opus,
+      lead: false, roleName: 'Reviewer' } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    f.ready(['docs/a.md'], 'abc1234', true, rules)
+    expect(f.steps()).toEqual([{ name: 'Review', agent: elsewhere, status: 'working' }])
+  })
+
   it('a pull request touching sign-in code opens two security reviews, each to a different free Reviewer, never the Engineer', () => {
     const f = fixture()
     const a = f.add('rev-a', f.task, 'Reviewer'), b = f.add('rev-b', f.task, 'Reviewer')
@@ -48,6 +63,36 @@ describe('a handed task opens its review steps', () => {
     // Task #3540: the verdict it asks for counts only at the head and base it names (#3394).
     expect(step.brief).toContain('at the pull request head (whole commit id) and base branch you read')
     expect(step.checks).toHaveLength(1)
+  })
+
+  it('puts each PR history result in both security briefs and refreshes active and finished steps', () => {
+    const f = fixture()
+    f.add('rev-a', f.task, 'Reviewer'); f.add('rev-b', f.task, 'Reviewer')
+    const head = 'a'.repeat(40), next = 'b'.repeat(40)
+    const history = (head: string, productionLines: number) => ({ head, planFirst: 'pass' as const, testBeforeCode: 'pass' as const,
+      productionLines, totalLines: productionLines + 7, commits: 3, merges: 0, missingTests: [] })
+    const ready = (at: string, lines: number) => f.ready(['backend/src/routes/auth.ts'], at, true, { pullRequestFiles: {
+      urls: [PR], head: at, files: ['backend/src/routes/auth.ts'], heads: [{ url: PR, head: at, base: 'main', history: history(at, lines) }] } })
+    ready(head, 12)
+    const [first, second] = stepsOf(f.state, f.task)
+    for (const step of [first!, second!]) {
+      expect(step.brief).toContain('Plan first: pass')
+      expect(step.brief).toContain('Test before code: pass')
+      expect(step.brief).toContain('12 production lines')
+      expect(step.brief).toContain('does not prove a test failed')
+    }
+    first!.brief += '\nKeep this manual instruction.'
+    f.run({ type: 'work.status', conversationId: first!.id, assignmentId: first!.assignment!.id, status: 'done', result: 'No' } as Command, f.as(first!.assignment!.agentId))
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing' } as Command, f.as(f.dev))
+    ready(next, 30)
+    expect(stepsOf(f.state, f.task).find(s => s.id === first!.id)!.brief).toContain('Keep this manual instruction.')
+    for (const step of stepsOf(f.state, f.task)) {
+      expect(step.brief).toContain('30 production lines')
+      expect(step.brief).not.toContain('12 production lines')
+      expect(step.brief).toContain(next)
+      expect(step.brief).not.toContain(head)
+      expect(step.brief!.match(/PR history checks/g)).toHaveLength(1)
+    }
   })
 
   it('a docs pull request opens one read', () => {
@@ -97,6 +142,66 @@ describe('a handed task opens its review steps', () => {
     expect(f.group(first!.id).assignment!.agentId).toBe(firstAgent)
     expect(f.group(first!.id).assignment!.status).toBe('working')
     expect(f.group(second!.id).assignment!.agentId).toBe([a, b].find(id => id !== firstAgent))
+  })
+
+  /** A sign-in Ready with Reviewers a, b and c free: Security review 2's reviewer finishes it, and Security review 1 is cancelled. */
+  const otherDone = () => {
+    const f = fixture()
+    const ids = ['rev-a', 'rev-b', 'rev-c'].map(name => f.add(name, f.task, 'Reviewer'))
+    f.ready(['backend/src/routes/auth.ts'])
+    const [one, two] = stepsOf(f.state, f.task)
+    const first = one!.assignment!.agentId, second = two!.assignment!.agentId
+    const third = ids.find(id => id !== first && id !== second)!
+    f.run({ type: 'work.status', conversationId: two!.id, assignmentId: two!.assignment!.id, status: 'done', result: 'Ready to merge: Yes' } as Command, f.as(second))
+    return { f, one: one!.id, two: two!.id, first, second, third }
+  }
+
+  // Task #4534 (#3542): a cancelled Security review 1 went back out at the next head to Security review 2's reviewer.
+  it('a security review cancelled and handed out again at a new head never goes to the other one\'s reviewer', () => {
+    const { f, one, two, first, second, third } = otherDone()
+    f.run({ type: 'work.cancel', conversationId: one, assignmentId: f.group(one).assignment!.id, reason: 'Not independent' } as Command, f.as(f.lead))
+    // Its first reviewer and the third are busy elsewhere now.
+    for (const id of [first, third]) {
+      const other = f.run({ type: 'conversation.create', title: `Other ${id}`, brief: 'Other work.', checks: [{ description: 'Done', independent: false }],
+        priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
+      f.run({ type: 'work.assign', conversationId: other, agentId: id }, f.as(f.lead))
+    }
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing' } as Command, f.as(f.dev))
+    f.tick(60_000)
+    f.ready(['backend/src/routes/auth.ts'], 'def5678')
+    const security1 = stepsOf(f.state, f.task).filter(s => s.step === 'Security review 1').map(s => activeWork(s) ? s.assignment!.agentId : null)
+    expect(security1).not.toContain(second)
+    expect(f.group(two).assignment).toMatchObject({ agentId: second, status: 'working' })
+  })
+
+  it('refuses a step to the other security review\'s reviewer and to the task\'s builder, naming who may take it', () => {
+    const { f, one, second, third } = otherDone()
+    f.run({ type: 'work.cancel', conversationId: one, assignmentId: f.group(one).assignment!.id, reason: 'Moving it' } as Command, f.as(f.lead))
+    const assign = (agentId: string) => f.run({ type: 'work.assign', conversationId: one, agentId } as Command, f.as(f.lead))
+    expect(() => assign(second)).toThrow(expect.objectContaining({ code: 'REVIEW_NOT_INDEPENDENT', message: expect.stringContaining('rev-') }))
+    expect(() => assign(f.dev)).toThrow(expect.objectContaining({ code: 'STEP_BUILDER' }))
+    expect(() => assign(third)).not.toThrow()
+    expect(f.group(one).assignment).toMatchObject({ agentId: third, status: 'working' })
+  })
+
+  // Task #4534: Ownrev6 held Security review 1 of #3545 after doing review 2, said so, and only a cancel by the PM moved it.
+  it('a security review stuck on the other one\'s reviewer moves to a free Reviewer without a cancel', () => {
+    const { f, one, second, third } = otherDone()
+    // As before #4534: the other review's reviewer holds this one, and reports that it cannot take it.
+    const held = f.group(one).assignment!
+    Object.assign(held, { agentId: second })
+    f.run({ type: 'work.status', conversationId: one, assignmentId: held.id, status: 'blocked', result: 'I did Security review 2: give this to another Reviewer' } as Command, f.as(second))
+    const moved = f.run({ type: 'work.assign', conversationId: one, agentId: third } as Command, f.as(f.dev))
+    expect(f.group(one).assignment).toMatchObject({ agentId: third, status: 'working' })
+    expect(moved.messages.some(m => m.recipients.includes(second) && /moved to rev-/.test(m.text))).toBe(true)
+    expect(f.state.agents.find(a => a.id === second)!.workDecision).toBe('awaiting')
+  })
+
+  it('a blocked step whose reviewer is independent stays its reviewer\'s', () => {
+    const { f, one, first, third } = otherDone()
+    f.run({ type: 'work.status', conversationId: one, assignmentId: f.group(one).assignment!.id, status: 'blocked', result: 'Waiting on CI' } as Command, f.as(first))
+    expect(() => f.run({ type: 'work.assign', conversationId: one, agentId: third } as Command, f.as(f.dev))).toThrow(expect.objectContaining({ code: 'WORK_ACTIVE' }))
+    expect(f.group(one).assignment!.agentId).toBe(first)
   })
 
   // Review of #3227 (Digest): a second Ready at the same head re-assigned a review that had passed there, and cleared its verdict.
@@ -186,6 +291,71 @@ describe('a handed task opens its review steps', () => {
     expect(stepsOf(f.state, f.task).find(s => s.step === 'Test on a Linux machine')!.brief).toContain('a Linux machine')
   })
 
+
+  const machine = (machineId: string, os: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
+    scope: 'swarm', engines: ['claude'], maxAgents: 8, paused: false,
+    observation: { generation: 'g1', receivedAt: 999_000, sessionKind: 'computer', resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+      readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+      quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })
+
+  it.each(['desktop/lib/super_tabs/view.dart', 'cli/src/services/process.ts'])('routes %s to an independent Windows Tester on Ready', file => {
+    const f = fixture()
+    f.add('rev', f.task, 'Reviewer')
+    f.add('mac-tst', f.task, 'Tester')
+    const win = f.add('win-tst', f.task, 'Tester', 'win')
+    const prior = f.add('prior-builder', f.task, 'Tester', 'win')
+    // A former builder with the Tester role must still be excluded.
+    f.group(f.task).ledger!.runs!.push({ agentId: prior } as never)
+    f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
+    f.ready([file])
+    const step = stepsOf(f.state, f.task).find(s => s.step === 'Test on Windows')
+    expect(step?.assignment).toMatchObject({ agentId: win, status: 'working' })
+    expect(step?.checks[0]?.independent).toBe(true)
+    expect(step?.brief).toContain('docs/windows-rules.md')
+    expect(step?.brief).toMatch(/no .*window.*(?:flash|moment)/i)
+    expect(step?.brief).toMatch(/recording/i)
+    expect(step?.brief).toContain('signed build')
+    expect(step?.brief).toContain("person's Windows session")
+    // A second Ready must not duplicate or move the active Windows step.
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'CI rerun' }, f.as(f.dev))
+    f.ready([file])
+    expect(stepsOf(f.state, f.task).filter(s => s.step === 'Test on Windows').map(s => [s.id, s.assignment?.agentId])).toEqual([[step!.id, win]])
+  })
+
+  it('leaves Windows open when its only Windows Tester built the task', () => {
+    const f = fixture()
+    f.add('rev', f.task, 'Reviewer'); f.add('mac-tst', f.task, 'Tester'); f.add('unknown-tst', f.task, 'Tester', 'unknown')
+    const prior = f.add('prior-builder', f.task, 'Tester', 'win')
+    f.group(f.task).ledger!.runs!.push({ agentId: prior } as never)
+    f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
+    const effects = f.ready(['desktop/lib/view.dart'])
+    expect(f.steps().find(s => s.name === 'Test on Windows')).toEqual({ name: 'Test on Windows', agent: null, status: null })
+    expect(effects.messages.some(m => m.recipients.includes(f.lead) && m.text.includes('Test on Windows'))).toBe(true)
+    expect(f.group(f.task).assignment?.status).toBe('review')
+  })
+
+  it.each(['docs/windows-rules.md', 'backend/src/superTabs/steps.ts', 'cli/src/team/script.ts'])('does not open Windows for %s', file => {
+    const f = fixture()
+    f.add('win-tst', f.task, 'Tester', 'win')
+    f.state.machines = [machine('win', 'Windows')] as never
+    f.ready([file])
+    expect(f.steps().some(s => s.name === 'Test on Windows')).toBe(false)
+  })
+
+  it('keeps an existing Windows step when a later Ready adds a Mac test', () => {
+    const f = fixture()
+    const win = f.add('win-tst', f.task, 'Tester', 'win'), mac = f.add('mac-tst', f.task, 'Tester')
+    f.state.machines = [machine('host', 'macOS'), machine('win', 'Windows')] as never
+    const onlyWindows = { ...SEED_RULES, reviews: { ...SEED_RULES.reviews, test: [{ where: 'Desktop on Windows', paths: ['desktop/**'] }] } }
+    f.ready(['desktop/lib/view.dart'], 'abc1234', true, { projectRules: { revision: 1, rules: onlyWindows } })
+    const step = stepsOf(f.state, f.task).find(s => s.step === 'Test on Windows')
+    expect(step?.assignment?.agentId).toBe(win)
+    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'More changes' }, f.as(f.dev))
+    f.ready(['desktop/lib/view.dart'], 'def5678')
+    expect(stepsOf(f.state, f.task).filter(s => s.step === 'Test on Windows').map(s => s.id)).toEqual([step!.id])
+    expect(f.steps().find(s => s.name === 'Test')?.agent).toBe(mac)
+  })
+
   it('with nobody free, the step stays open and the PM is told once; the Ready itself goes through', () => {
     const f = fixture()
     const effects = f.ready(['backend/src/routes/auth.ts'])
@@ -229,5 +399,50 @@ describe('a handed task opens its review steps', () => {
     expect(stepsOf(f.state, f.task)).toHaveLength(1)
     expect(stepsOf(f.state, step.id)).toHaveLength(0)
     expect(a).toBeTruthy()
+  })
+})
+
+// Task #3774 (Ken's routing rule, restored 11-06: "A Tester runs where the change runs: the machine comes before the model, and a
+// mid-strength model is enough for most testing"). On 11-06 four Linux test steps waited for an Opus Tester while Sonnet Testers
+// sat idle on the same machine.
+describe('a test step\'s Tester runs a mid-strength model or stronger, whatever the engineer runs', () => {
+  const sonnet: AgentConfiguration = { ...opus, model: 'sonnet' }
+  function linux() {
+    const f = fixture()
+    const join = (name: string, roleName: string, configuration: AgentConfiguration) => f.run({ type: 'agent.add', conversationId: f.task, machineId: 'linux1',
+      harnessId: name, name, configuration, lead: false, roleName } as Command, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
+    /** The Linux machine as its report lists it, once its agents joined. */
+    const listed = () => { f.state.machines = [{ machineId: 'linux1', name: 'linux1', contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
+      scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
+      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os: 'Linux' }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+        readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
+        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never }
+    return Object.assign(f, { join, listed })
+  }
+
+  it('gives an Opus-built task\'s Linux test step to an idle Sonnet Tester; its review still refuses a Sonnet Reviewer', () => {
+    const f = linux()
+    const tester = f.join('sonnet-tst', 'Tester', sonnet)
+    f.join('sonnet-rev', 'Reviewer', sonnet)
+    f.listed()
+    const effects = f.ready(['cli/src/superTabs/host.ts'])
+    expect(f.steps()).toEqual(expect.arrayContaining([{ name: 'Review', agent: null, status: null },
+      { name: 'Test on a Linux machine', agent: tester, status: 'working' }]))
+    // The notice names the rule it applied to the step left open.
+    const told = effects.messages.find(m => m.recipients.includes(f.lead) && /no free reviewer/i.test(m.text))!
+    expect(told.text).toContain('Review')
+    expect(told.text).toContain('at least as strong as its engineer')
+  })
+
+  it('never gives a test step to a grid model or a weaker one, and says the rule it applied', () => {
+    const f = linux()
+    const grid = f.join('grid-tst', 'Tester', sonnet)
+    f.state.agents.find(a => a.id === grid)!.gridModel = 'kimi k3'
+    f.join('haiku-tst', 'Tester', { ...opus, model: 'haiku', effort: 'auto' })
+    f.listed()
+    const effects = f.ready(['cli/src/superTabs/host.ts'])
+    expect(f.steps().find(s => s.name === 'Test on a Linux machine')).toMatchObject({ agent: null })
+    const told = effects.messages.find(m => m.recipients.includes(f.lead) && /no free reviewer/i.test(m.text))!
+    expect(told.text).toMatch(/Test on a Linux machine.*mid-strength model or stronger/s)
   })
 })

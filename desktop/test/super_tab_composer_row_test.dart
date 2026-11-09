@@ -10,8 +10,9 @@ import 'support/fake_voice_recorder.dart';
 import 'support/super_tab_fixture.dart';
 
 /// Huy and Scholes, 11-04: the Desktop and web composer is the phone's. One
-/// rounded box, the text on top and one row under it: + (attach), @ Tag, the
-/// New session chip, the mic and send. Also send is a small checkbox under a
+/// rounded box, the text on top and one row under it: the paperclip (attach,
+/// anh Dee 11-07, #4467, where + was), the New session chip, the mic and
+/// send; an @ typed tags (River, 11-07: no @ button on Desktop). Also send is a small checkbox under a
 /// thread's box. The mic shows only with a recorder (River, 11-04: recording
 /// is its own task), so nobody sees a button that does nothing.
 void main() {
@@ -117,48 +118,35 @@ void main() {
     );
     Finder send() => find.byTooltip('Send message');
 
-    testWidgets('holds +, @ Tag and New session under the text, and send at '
-        'the row\'s right end', (tester) async {
-      await show(tester);
-      for (final text in ['One line', fiveLines]) {
-        await tester.enterText(key('super-message-composer'), text);
+    testWidgets(
+      'holds the paperclip and New session in the pill on the text\'s line, '
+      'and send beside the pill (#4529)',
+      (tester) async {
+        await show(tester);
+        await tester.enterText(key('super-message-composer'), 'One line');
         await tester.pumpAndSettle();
         final field = tester.getRect(key('super-message-composer'));
         final surface = tester.getRect(key('super-message-composer-surface'));
         final plus = tester.getRect(attach());
-        final tag = tester.getRect(key('super-composer-tag'));
         final session = tester.getRect(key('super-chat-new-session'));
         final arrow = tester.getRect(send());
-        expect(key('super-message-composer-actions'), findsOneWidget);
-        for (final button in [plus, tag, session, arrow]) {
-          expect(button.top, greaterThanOrEqualTo(field.bottom), reason: text);
+        expect(plus.right, lessThanOrEqualTo(field.left));
+        expect(session.left, greaterThanOrEqualTo(field.right));
+        expect(session.right, lessThanOrEqualTo(surface.right));
+        expect(arrow.left, greaterThanOrEqualTo(surface.right));
+        for (final button in [plus, session, arrow]) {
+          expect(button.center.dy, closeTo(field.center.dy, 4));
         }
-        expect(plus.left, lessThan(tag.left));
-        expect(tag.left, lessThan(session.left));
-        expect(session.right, lessThan(arrow.left));
-        // Send keeps the box's bottom-right corner however long the message
-        // (Scholes, 11-03), the box's inset from its edges.
         expect(
-          surface.right - arrow.right,
-          lessThanOrEqualTo(grid.AppDesktop.groupGap),
+          find.descendant(
+            of: attach(),
+            matching: find.byIcon(AppIcons.paperclip),
+          ),
+          findsOneWidget,
         );
-        expect(
-          surface.bottom - arrow.bottom,
-          lessThanOrEqualTo(grid.AppDesktop.groupGap),
-        );
-      }
-      expect(
-        find.descendant(of: attach(), matching: find.byIcon(AppIcons.plus)),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: key('super-composer-tag'),
-          matching: find.byIcon(AppIcons.atSign),
-        ),
-        findsOneWidget,
-      );
-    });
+        expect(key('super-composer-tag'), findsNothing);
+      },
+    );
 
     testWidgets('shows no mic without a recorder, and no Also send', (
       tester,
@@ -168,15 +156,17 @@ void main() {
       expect(key('super-thread-also-send'), findsNothing);
     });
 
-    testWidgets('puts the mic left of send, and a click starts a take for the '
-        'chat', (tester) async {
+    testWidgets('puts the mic where send goes while there is nothing to '
+        'send, and a click starts a take for the chat', (tester) async {
       final recorder = FakeVoiceRecorder();
       await show(tester, recorder: recorder);
       final mic = tester.getRect(key('super-composer-mic'));
-      expect(mic.right, lessThanOrEqualTo(tester.getRect(send()).left));
+      expect(send(), findsNothing);
       expect(
         mic.left,
-        greaterThan(tester.getRect(key('super-chat-new-session')).right),
+        greaterThanOrEqualTo(
+          tester.getRect(key('super-message-composer-surface')).right,
+        ),
       );
       await tester.tap(key('super-composer-mic'));
       await tester.pump();
@@ -192,17 +182,11 @@ void main() {
       );
     });
 
-    testWidgets('@ Tag types @ at the caret and opens the tag list', (
-      tester,
-    ) async {
+    testWidgets('an @ typed opens the tag list', (tester) async {
       await show(tester);
-      await tester.enterText(key('super-message-composer'), 'hi');
-      await tester.pump();
-      await tester.tap(key('super-composer-tag'));
+      await tester.enterText(key('super-message-composer'), 'hi @');
       await tester.pumpAndSettle();
       final field = tester.widget<TextField>(key('super-message-composer'));
-      expect(field.controller!.text, 'hi @');
-      expect(field.controller!.selection.baseOffset, 4);
       expect(key('super-composer-completions'), findsOneWidget);
       expect(focusedIn(tester, key('super-message-composer')), isTrue);
       // Enter picks from the list, as for an @ typed.
@@ -212,23 +196,29 @@ void main() {
       expect(field.controller!.text.length, greaterThan(4));
     });
 
-    testWidgets('Tab goes from the text to +, @ Tag, New session, the mic and '
-        'send, in the row\'s order', (tester) async {
+    testWidgets('Tab goes from the text to New session and send, in the row\'s '
+        'order; the paperclip is the stop before the text', (tester) async {
       await show(tester, recorder: FakeVoiceRecorder());
       await tester.enterText(key('super-message-composer'), 'Ready');
       await tester.pump();
       expect(focusedIn(tester, key('super-message-composer')), isTrue);
-      for (final next in [
-        attach(),
-        key('super-composer-tag'),
-        key('super-chat-new-session'),
-        key('super-composer-mic'),
-        send(),
-      ]) {
+      // With text, send stands in the mic's place.
+      for (final next in [key('super-chat-new-session'), send()]) {
         await tester.sendKeyEvent(LogicalKeyboardKey.tab);
         await tester.pump();
         expect(focusedIn(tester, next), isTrue, reason: '$next');
       }
+      // The paperclip, before the text in the row, is the stop before it.
+      await tester.tap(key('super-message-composer'));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+      expect(focusedIn(tester, attach()), isTrue);
       // The draft's save runs out.
       await tester.pump(const Duration(seconds: 1));
     });
@@ -240,43 +230,45 @@ void main() {
       matching: key('new-harness-attach'),
     );
 
-    testWidgets('holds +, @ Tag and New session under the text, send at the '
-        'right end, and Also send on its own line under the box', (
-      tester,
-    ) async {
-      await show(tester, thread: 'message-3');
-      await tester.enterText(key('super-thread-composer'), fiveLines);
-      await tester.pumpAndSettle();
-      final field = tester.getRect(key('super-thread-composer'));
-      final surface = tester.getRect(key('super-thread-composer-surface'));
-      final plus = tester.getRect(attach());
-      final tag = tester.getRect(key('super-thread-tag'));
-      final session = tester.getRect(key('super-thread-new-session'));
-      final send = tester.getRect(key('super-thread-send'));
-      for (final button in [plus, tag, session, send]) {
-        expect(button.top, greaterThanOrEqualTo(field.bottom));
-        expect(button.bottom, lessThanOrEqualTo(surface.bottom));
-      }
-      expect(plus.left, lessThan(tag.left));
-      expect(tag.left, lessThan(session.left));
-      expect(session.right, lessThan(send.left));
-      expect(
-        find.descendant(of: attach(), matching: find.byIcon(AppIcons.plus)),
-        findsOneWidget,
-      );
-      // Also send is under the box, whatever room the row has.
-      final also = tester.getRect(key('super-thread-also-send'));
-      expect(also.top, greaterThanOrEqualTo(surface.bottom));
-      expect(
-        find.descendant(
-          of: key('super-thread-also-line'),
-          matching: key('super-thread-also-send'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('Also send to the main chat'), findsOneWidget);
-      expect(key('super-thread-mic'), findsNothing);
-    });
+    testWidgets(
+      'holds the paperclip and New session under the text, send at the '
+      'right end, and Also send on its own line under the box',
+      (tester) async {
+        await show(tester, thread: 'message-3');
+        await tester.enterText(key('super-thread-composer'), fiveLines);
+        await tester.pumpAndSettle();
+        final field = tester.getRect(key('super-thread-composer'));
+        final surface = tester.getRect(key('super-thread-composer-surface'));
+        final plus = tester.getRect(attach());
+        final session = tester.getRect(key('super-thread-new-session'));
+        final send = tester.getRect(key('super-thread-send'));
+        for (final button in [plus, session, send]) {
+          expect(button.top, greaterThanOrEqualTo(field.bottom));
+          expect(button.bottom, lessThanOrEqualTo(surface.bottom));
+        }
+        expect(plus.left, lessThan(session.left));
+        expect(session.right, lessThan(send.left));
+        expect(
+          find.descendant(
+            of: attach(),
+            matching: find.byIcon(AppIcons.paperclip),
+          ),
+          findsOneWidget,
+        );
+        // Also send is under the box, whatever room the row has.
+        final also = tester.getRect(key('super-thread-also-send'));
+        expect(also.top, greaterThanOrEqualTo(surface.bottom));
+        expect(
+          find.descendant(
+            of: key('super-thread-also-line'),
+            matching: key('super-thread-also-send'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('Also send to the main chat'), findsOneWidget);
+        expect(key('super-thread-mic'), findsNothing);
+      },
+    );
 
     testWidgets('names the project chat in Also send', (tester) async {
       await show(tester, chat: 'lead', thread: 'message-1');
@@ -303,14 +295,10 @@ void main() {
       expect(key('super-thread-voice-row'), findsOneWidget);
     });
 
-    testWidgets('@ Tag types @ at the caret and opens the tag list', (
-      tester,
-    ) async {
+    testWidgets('an @ typed opens the tag list', (tester) async {
       await show(tester, chat: 'lead', thread: 'message-1');
-      await tester.tap(key('super-thread-tag'));
+      await tester.enterText(key('super-thread-composer'), '@');
       await tester.pumpAndSettle();
-      final field = tester.widget<TextField>(key('super-thread-composer'));
-      expect(field.controller!.text, '@');
       expect(key('super-thread-completions'), findsOneWidget);
     });
   });

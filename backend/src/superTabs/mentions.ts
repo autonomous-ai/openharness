@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, agentOnly, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { canReadGroup, canReadProject, groupProject, projectAgent, projectOf, projectsOf } from './projects.js'
-import { isBuddyChat, isSwarmBuddyChat } from './buddies.js'
+import { agentProjectId, canReadGroup, canReadProject, groupProject, projectAgent, projectOf, projectsOf } from './projects.js'
+import { isBuddy, isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import { deliveredCopies } from './pageReads.js'
 import { shownNameOf } from './personNames.js'
@@ -90,13 +90,16 @@ export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<s
 /** The agents of [group] that [text] names by `@Name` (task #2963): its display name or name in any case, matched only when
  *  exactly one agent there goes by it and no person's username is the same, so a person's tag stays a tag. [names] is the
  *  Swarm's usernames by person (usernames.ts swarmUsernames). A Buddy chat names no one this way: its sessions hear their own
- *  threads alone (buddySessions.ts). */
+ *  threads alone (buddySessions.ts). In a project's chat, its channel (Swarm v4, anh Dee 2026-11-08), every agent of the
+ *  project goes by its name, joined or not: agents there talk to each other by name, as lampOS's did in its issues. */
 export function agentsNamedIn(state: SuperTabState, group: Conversation, text: string, names: ReadonlyMap<string, string>): string[] {
   if (isBuddyChat(group)) return []
   const people = new Set([...names.values()].map(name => name.toLowerCase()))
   const tokens = tagTokens(text).filter(token => !token.includes('@') && !people.has(token))
   if (!tokens.length) return []
-  const members = state.agents.filter(a => group.agentIds.includes(a.id))
+  const project = projectsOf(state).find(p => p.leadConversationId === group.id)
+  const members = state.agents.filter(a => group.agentIds.includes(a.id)
+    || (project && !isBuddy(a) && a.workDecision !== 'stop' && agentProjectId(state, a) === project.id))
   return [...new Set(tokens.flatMap(token => {
     const matches = members.filter(a => a.displayName?.toLowerCase() === token || a.name.toLowerCase() === token)
     return matches.length === 1 ? [matches[0]!.id] : []
@@ -188,6 +191,18 @@ async function bringBackUnfollowed(tx: Tx, tabId: string, messages: MessageDraft
   const answer = await tx.$runCommandRaw({ update: 'SuperTabThreadMark', updates: [{ q: { _id: { $in: ids }, tabId, follow: false },
     u: { $set: { follow: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] }) as { writeErrors?: unknown[] }
   if (answer.writeErrors?.length) throw new Error('The database refused some thread follows')
+}
+
+/** A stuck line fixed, or its task ended (stuck.ts, task #3915): its tags still waiting resolve as `fixed`. One update per person
+ *  on the `[tabId, conversationId, personId]` index, at most MAX_MENTIONS a line. */
+export async function resolveTags(tx: Tx, tabId: string, lines: ReadonlyArray<{ conversationId: string; messageId: string; personIds: readonly string[] }>,
+  now: number): Promise<void> {
+  for (const line of lines) {
+    for (const personId of line.personIds) {
+      await tx.superTabMention.updateMany({ where: { tabId, conversationId: line.conversationId, personId, messageId: line.messageId, ...waiting },
+        data: { resolvedAt: new Date(now), resolvedBy: 'fixed' } })
+    }
+  }
 }
 
 /** Any post by the tagged person in that conversation answers every earlier tag there, in a thread or not. */

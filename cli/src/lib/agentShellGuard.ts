@@ -34,7 +34,7 @@ export function claudeShellGuardArgs(platform: NodeJS.Platform = process.platfor
   const hook = Array.isArray(quoted)
     ? { type: 'command', command: quoted[0], args: quoted.slice(1), timeout: TIMEOUT }
     : { type: 'command', command: quoted, timeout: TIMEOUT }
-  return ['--settings', JSON.stringify({ hooks: { PreToolUse: [{ matcher: CLAUDE_MATCHER, hooks: [hook] }] } })]
+  return ['--settings', JSON.stringify({ disableAllHooks: false, hooks: { PreToolUse: [{ matcher: CLAUDE_MATCHER, hooks: [hook] }] } })]
 }
 
 /** The guard as Codex runs it and hashes it: every tool, a POSIX line, or on Windows a PowerShell one. */

@@ -35,11 +35,11 @@ ConversationServer _buddyChat() {
       (server.state['conversations'] as List)[1] as Map<String, dynamic>
         ..['kind'] = 'buddy'
         ..['buddyOwnerId'] = 'owner'
-        ..['title'] = "phamngochuy.1989's Buddy";
+        ..['title'] = 'Rowan';
   (server.state['agents'] as List).add({
     'id': 'buddy-main',
-    'name': "phamngochuy.1989's Buddy",
-    'displayName': "phamngochuy.1989's Buddy",
+    'name': 'Rowan',
+    'displayName': 'Rowan',
     'machineId': 'mac',
     'harnessId': 'h-main',
     'contributorId': 'owner',
@@ -117,9 +117,9 @@ void main() {
     await unmountPhoneSuperTab(tester, c);
   });
 
-  // Huy and Scholes, 11-04: a wide window lays the composer out as the phone
-  // does, the field on top and its actions on a row under it.
-  testWidgets('a wider window has the phone\'s row under the field', (
+  // anh Dee's mockup (11-07, #4529): a wide window draws the pill, the field
+  // on one line and send beside it; the phone keeps its row under the field.
+  testWidgets('a wider window has the pill, send beside the field', (
     tester,
   ) async {
     final (_, c) = await mountPhoneSuperTab(
@@ -128,9 +128,11 @@ void main() {
       desktop: true,
     );
     expect(_actions, findsOneWidget);
+    await tester.enterText(_field, 'Ready');
+    await tester.pump();
     final field = tester.getRect(_field), send = tester.getRect(_send);
-    expect(send.top, greaterThanOrEqualTo(field.bottom));
-    expect(send.right, greaterThan(field.center.dx));
+    expect(send.left, greaterThanOrEqualTo(field.right));
+    expect(send.center.dy, closeTo(field.center.dy, 4));
     await unmountPhoneSuperTab(tester, c);
   });
 
@@ -156,7 +158,8 @@ void main() {
         server: _buddyChat(),
         initial: 'offline',
       );
-      expect(find.text('Message Buddy'), findsOneWidget);
+      // A Buddy goes by a real, short name now (task #4568), so the phone names it too.
+      expect(find.text('Message Rowan'), findsOneWidget);
       expect(tester.widget<TextField>(_field).decoration!.hintMaxLines, 1);
       expect(
         tester.getRect(_session).top,

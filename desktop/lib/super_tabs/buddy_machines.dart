@@ -204,7 +204,8 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
     final fitted = widget.fitNames
         ? AppSelectField.fitWidth(
                 context,
-                labels: [for (final m in widget.machines) m.name],
+                // The prompt too, shown when no machine can be picked.
+                labels: [label, for (final m in widget.machines) m.name],
                 textStyle: style,
               ) +
               grid.AppControl.iconSize
@@ -340,7 +341,7 @@ class BuddyMachineAdder {
 /// Buddy now: none is signed in to their account, all are offline, or new work
 /// is paused on those that are not.
 const kBuddyNoMachine =
-    'Your Buddy runs on one of your own computers. Open Harness on one, '
+    'Your agent runs on one of your own computers. Open Harness on one, '
     'signed in to your account.';
 const kBuddyAllOffline =
     'Your machines are offline. Open Harness on one of them to start your '

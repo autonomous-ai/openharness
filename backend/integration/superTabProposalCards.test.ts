@@ -1,0 +1,294 @@
+import { randomUUID } from 'node:crypto'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
+import type { PrismaClient } from '@prisma/client'
+import type { AuthUser } from '../src/lib/ssoAuth.js'
+import { SuperTabStore } from '../src/superTabs/store.js'
+import { commandSchema } from '../src/superTabs/commands.js'
+import type { Conversation } from '../src/superTabs/model.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
+import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
+import { runTimeCheckPass } from '../src/superTabs/timeChecks.js'
+import { planDatabase, profiled, reads, plan } from './plans.test-support.js'
+
+let replica: MongoMemoryReplSet, db: PrismaClient
+const owner: AuthUser = { sub: '540000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
+const peer: AuthUser = { sub: '540000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
+const config = { engine: 'codex', model: 'fixture', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
+const DAY = 86_400_000
+beforeAll(async () => {
+  ({ replica, db } = await planDatabase('proposal_cards'))
+  await listNamedIndexes(db)
+  for (const u of [owner, peer]) await db.user.create({ data: { id: u.sub, externalId: `fixture-${u.sub}`, email: u.email, autonomousEnv: 'prod' } })
+  await db.machine.create({ data: { machineId: 'proposal-mac', userId: owner.sub, apiKey: 'fixture-proposal-mac', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+})
+afterAll(async () => { await db?.$disconnect(); await replica?.stop() })
+
+async function fixture() {
+  let now = Date.now()
+  const store = new SuperTabStore(db, () => now, null, { readCache: null })
+  const tab = (await store.create(owner, randomUUID(), 'Proposal cards', 'public')).id
+  const execute = (command: unknown, user = owner, asAgentId?: string, operationId = randomUUID()) =>
+    store.execute(user, tab, { operationId, command: commandSchema.parse(command) }, asAgentId)
+  const invitation = await execute({ type: 'invite.create', email: peer.email, role: 'viewer', conversationId: 'lead' })
+  await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId }, peer)
+  const pm = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'proposal-mac', harnessId: randomUUID(), name: 'PM', configuration: config, lead: true })).result.agentId)
+  // #3819 owns the switch command; this test isolates its agreed stored input.
+  const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${tab}:head` } })
+  const data = head.data as unknown as { projects: Array<{ boardMode?: true }> }
+  data.projects[0]!.boardMode = true
+  await db.swarmHead.update({ where: { id: head.id }, data: { data: data as never, version: head.version + 1 } })
+  const create = async (user = peer, priority = 'P2') => String((await execute({ type: 'proposal.create', projectId: 'lead', title: 'Keep drafts', text: 'Keep offline drafts',
+    goal: 'Preserve work', why: 'Reconnect loses drafts', doneWhen: 'Draft returns', evidence: ['Network-off reproduction'], priority }, user)).result.conversationId)
+  const card = async (id: string) => (await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: tab, key: id } } })).data as unknown as Conversation
+  return { store, tab, pm, execute, create, card, clock: { get now() { return now }, set now(value: number) { now = value } } }
+}
+
+describe('durable proposal cards', () => {
+  it('persists personal Review decisions, enforces direct identity before replay, and reads only changed task summaries', async () => {
+    const f = await fixture()
+    const read = new SwarmReads(f.store)
+    await f.execute({ type: 'member.approvalMode', mode: 'review' }, peer)
+    const initial = await read.firstLoad(peer, f.tab)
+    expect(initial.personalTasks).toMatchObject({ approvalMode: 'review', reset: true, upserts: [], removed: [] })
+    f.clock.now += 100
+    const id = String((await f.execute({ type: 'conversation.create', title: 'Own task', requesterId: peer.sub, priority: 'P2',
+      task: { goal: 'Keep edits', changes: 'Restore drafts', constraints: 'No login reads', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Restores draft', independent: false }] }, owner, f.pm)).result.conversationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ personId: peer.sub, state: 'proposal' })
+    f.clock.now += 100
+    const changed = await read.changes(peer, f.tab, initial.cursor)
+    expect(changed).toMatchObject({ reload: false, personalTasks: { reset: false, upserts: [{ id, status: 'proposal', canApprove: true }] } })
+    const decision = { type: 'task.reject', conversationId: id, reason: 'Do later' }, operationId = randomUUID()
+    await expect(f.execute(decision, owner, f.pm, operationId)).rejects.toThrow()
+    await f.execute(decision, peer, undefined, operationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ state: 'rejected', reason: 'Do later' })
+    await expect(f.execute(decision, owner, undefined, operationId)).rejects.toThrow()
+    f.clock.now = Date.now() + 60_000 // Existing cursors intentionally overlap writes by thirty seconds.
+    const latest = await read.firstLoad(peer, f.tab)
+    expect(latest.personalTasks!.upserts).toContainEqual(expect.objectContaining({ id, status: 'rejected', reason: 'Do later', canApprove: false }))
+    f.clock.now += 100
+    expect(await read.changes(peer, f.tab, latest.cursor)).toMatchObject({ personalTasks: { upserts: [], removed: [] } })
+    const actorRead = await read.firstLoad(owner, f.tab, f.pm)
+    expect(actorRead.personalTasks).toBeUndefined()
+    // Revocation must invalidate a cursor before any private rows can be served again.
+    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await read.changes(peer, f.tab, latest.cursor)).toMatchObject({ reload: true })
+    expect((await read.firstLoad(peer, f.tab)).personalTasks!.upserts).toEqual([])
+  })
+
+  it('keeps legacy Buddy delivery, carries its person gate to one task, and rejects conversion after the mirror is dormant', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: false })
+    await f.execute({ type: 'member.approvalMode', mode: 'review' })
+    const added = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
+    const startId = String(added.result.startId), chatId = String(added.result.conversationId)
+    const host = (command: unknown) => f.store.execute(owner, f.tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, 'proposal-mac')
+    await host({ type: 'agent.startDispatch', startId })
+    const buddyId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    await host({ type: 'agent.startSettled', startId, warning: null })
+    const text = 'Keep offline drafts'
+    const ask = await f.execute({ type: 'message.send', conversationId: chatId, text, recipientIds: [buddyId], replyTo: null })
+    const sent = await f.execute({ type: 'buddy.propose', conversationId: chatId, projectId: 'lead', ownerMessageId: ask.result.messageId,
+      text, goal: text, scope: 'Drafts', priority: 'normal' }, owner, buddyId)
+    const messageId = String(sent.result.messageId)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.pm, messageId } })).toBe(1)
+    const create = { type: 'conversation.create', title: text, priority: 'P2', proposalMessageId: messageId,
+      task: { goal: text, changes: 'Restore drafts', constraints: 'No login', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Draft returns', independent: false }] }
+    const id = String((await f.execute(create, owner, f.pm)).result.conversationId)
+    expect((await f.card(id)).taskApproval).toMatchObject({ state: 'proposal', personId: owner.sub })
+    const { legacyProposalId } = await import('../src/superTabs/proposalCards.js')
+    const mirrorId = legacyProposalId('lead', messageId)
+    const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: mirrorId } } })
+    await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, data: { ...(row.data as object), dormant: true }, version: { increment: 1 } } })
+    await expect(f.execute(create, owner, f.pm)).rejects.toThrow()
+    expect((await new SwarmReads(f.store).firstLoad(owner, f.tab)).personalTasks!.upserts.map(r => r.id)).toEqual([id])
+  })
+  it('keeps Auto approve automatic, then hands an approved Review choice through the normal store assignment', async () => {
+    const f = await fixture(), read = new SwarmReads(f.store)
+    const create = () => f.execute({ type: 'conversation.create', title: 'Keep drafts', requesterId: owner.sub, priority: 'P2',
+      task: { goal: 'Keep drafts', changes: 'Restore', constraints: 'No login', owns: ['backend/src/superTabs/'] },
+      checks: [{ description: 'Draft returns', independent: false }] }, owner, f.pm)
+    const auto = String((await create()).result.conversationId)
+    expect((await f.card(auto)).taskApproval).toBeUndefined()
+    expect((await read.firstLoad(owner, f.tab)).personalTasks).toMatchObject({ approvalMode: 'autoApprove', upserts: [{ id: auto, status: 'planned' }] })
+    const worker = String((await f.execute({ type: 'agent.add', conversationId: auto, machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'member.approvalMode', mode: 'review' })
+    const review = String((await create()).result.conversationId)
+    await expect(f.execute({ type: 'work.assign', conversationId: review, agentId: worker }, owner, f.pm)).rejects.toThrow()
+    await f.execute({ type: 'task.suggest', conversationId: review, agentId: worker }, owner, f.pm)
+    const approve = { type: 'task.approve', conversationId: review }, operation = randomUUID()
+    await f.execute(approve, owner, undefined, operation)
+    await f.execute(approve, owner, undefined, operation)
+    expect((await f.card(review))).toMatchObject({ assignment: null, taskApproval: { state: 'approved', suggestedAgentId: worker } })
+    await f.execute({ type: 'work.assign', conversationId: review, agentId: worker }, owner, f.pm)
+    expect((await f.card(review)).assignment).toMatchObject({ agentId: worker, status: 'working' })
+    expect((await read.firstLoad(owner, f.tab)).personalTasks!.upserts).toContainEqual(expect.objectContaining({ id: review, status: 'working', agent: { id: worker, name: expect.any(String) } }))
+  })
+  it('turns verified unanswered original messages into cards once on switch, preserving words and ownership', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: false })
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Keep these original words', recipientIds: [f.pm], replyTo: null })
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    const { legacyProposalId } = await import('../src/superTabs/proposalCards.js')
+    const id = legacyProposalId('lead', String(sent.result.messageId))
+    expect((await f.card(id)).proposal).toMatchObject({ text: 'Keep these original words', legacyMessageId: sent.result.messageId,
+      senders: [{ personId: owner.sub }] })
+    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
+    expect(await db.swarmGroup.count({ where: { tabId: f.tab, key: id } })).toBe(1)
+    expect((await f.card('lead')).owed ?? []).toHaveLength(0)
+  })
+
+  it('tells senders the PM was excluded and persists only the recipients that will receive a chat post', async () => {
+    const f = await fixture()
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Follow-up', brief: 'Resolve the question', checks: [{ description: 'Question answered', independent: false }] })).result.conversationId)
+    const worker = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'proposal-mac', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId)
+    const question = await f.execute({ type: 'message.send', conversationId: group, text: 'Which work should we keep?', recipientIds: [worker], replyTo: null }, owner, f.pm)
+    for (const asAgent of [undefined, worker]) {
+      const sent = await f.execute({ type: 'message.send', conversationId: group, text: 'Keep the offline draft work', recipientIds: [f.pm], replyTo: String(question.result.messageId) }, owner, asAgent)
+      expect(sent.result.reachedNoAgent).toEqual(expect.any(String))
+      expect(sent.result.notReached).toContain('PM')
+      expect(sent.result.notReached).toContain('proposal card')
+      const row = await db.superTabMessage.findUniqueOrThrow({ where: { id: String(sent.result.messageId) } })
+      expect(row.recipientIds).toEqual([])
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id } })).toBe(0)
+    }
+    const partial = await f.execute({ type: 'message.send', conversationId: group, text: 'For both', recipientIds: [f.pm, worker], replyTo: null })
+    expect(partial.result.notReached).toContain('PM')
+    expect(partial.result).not.toHaveProperty('reachedNoAgent')
+    expect((await db.superTabMessage.findUniqueOrThrow({ where: { id: String(partial.result.messageId) } })).recipientIds).toEqual([worker])
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: String(partial.result.messageId) } })).map(d => d.agentId)).toEqual([worker])
+  })
+
+  it('writes no decided notice in the sending person’s private Buddy chat, nor delivers one to their Buddy (task #4558)', async () => {
+    const f = await fixture()
+    const added = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
+    const startId = String(added.result.startId)
+    const host = (command: unknown) => f.store.execute(owner, f.tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, 'proposal-mac')
+    await host({ type: 'agent.startDispatch', startId })
+    const buddyId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    await host({ type: 'agent.startSettled', startId, warning: null })
+    const id = await f.create(owner)
+    await f.execute({ type: 'proposal.decide', conversationId: id, decision: 'no', reason: 'Outside positioning' }, owner, f.pm)
+    const delivered = await f.store.deliveries(owner, f.tab, buddyId)
+    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(added.result.conversationId) } })
+    expect(notices.filter(m => (m.source as { kind?: string } | null)?.kind === 'proposal-notice')).toEqual([])
+    expect(delivered.filter(d => notices.some(m => m.id === d.messageId && (m.author as { id?: string }).id !== buddyId))).toEqual([])
+  })
+
+  it('keeps a dormant card loaded when its person has a dormant default Buddy chat', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
+    const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
+    await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
+    const id = await f.create(owner)
+    for (const key of [id, String(second.result.conversationId)]) {
+      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
+      await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, version: { increment: 1 },
+        data: { ...(row.data as object), dormant: true } } })
+    }
+    await f.execute({ type: 'proposal.decide', conversationId: id, decision: 'no', reason: 'Outside positioning' }, owner, f.pm)
+    expect((await f.card(id)).proposal!.decision).toMatchObject({ kind: 'no', reason: 'Outside positioning' })
+    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
+    expect(notices.some(m => (m.source as { moment?: string } | null)?.moment === 'decided')).toBe(false)
+  })
+
+  it('marks a dormant proposal overdue on its card, with no notice in the dormant default Buddy chat (task #4558)', async () => {
+    const f = await fixture()
+    await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } })
+    const second = await f.execute({ type: 'buddy.create', machineId: 'proposal-mac', engine: 'codex', name: 'Research' })
+    await f.execute({ type: 'buddy.default', conversationId: second.result.conversationId })
+    const id = await f.create(owner)
+    for (const key of [id, String(second.result.conversationId)]) {
+      const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key } } })
+      await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, version: { increment: 1 },
+        data: { ...(row.data as object), dormant: true } } })
+    }
+    f.clock.now += 31 * 60_000
+    await runTimeCheckPass(db, f.store, f.clock.now)
+    expect((await f.card(id)).proposal!.overdue).toBe(true)
+    const notices = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: String(second.result.conversationId) } })
+    expect(notices.some(m => (m.source as { kind?: string } | null)?.kind === 'proposal-overdue')).toBe(false)
+  })
+
+  it('delivers urgent proposals first on both a full poll and its fast repeat', async () => {
+    const f = await fixture(), low = await f.create(), urgent = await f.create(owner, 'P0')
+    for (let i = 0; i < 2; i++) {
+      const deliveries = await f.store.deliveries(owner, f.tab, f.pm)
+      expect(deliveries.filter(d => [low, urgent].includes(d.conversationId)).map(d => d.conversationId)).toEqual([urgent, low])
+    }
+  })
+
+  it('does not hide a new P0 behind the bounded page of older nonurgent inputs', async () => {
+    const f = await fixture(), low = await f.create()
+    const row = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: f.tab, conversationId: low, agentId: f.pm } })
+    await db.superTabDelivery.createMany({ data: Array.from({ length: 105 }, (_, i) => ({ ...row, id: randomUUID(), createdAt: new Date(f.clock.now - i - 1000) })) })
+    const urgent = await f.create(owner, 'P0')
+    const prof = await profiled(db, async () => expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent))
+    const priority = plan(reads(prof, 'SuperTabDelivery', ['inputPriority']))
+    expect(priority).toEqual([expect.objectContaining({ plan: expect.stringContaining('IXSCAN { tabId: 1, agentId: 1, status: 1, inputPriority: 1, createdAt: 1 }') })])
+    expect(priority[0]!.docsExamined).toBeLessThanOrEqual(110)
+    console.info('Proposal priority read:', priority)
+    expect((await f.store.deliveries(owner, f.tab, f.pm))[0]?.conversationId).toBe(urgent)
+  })
+
+  it('withholds queued ordinary chat after switching and still delivers a proposal', async () => {
+    const f = await fixture()
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } })
+    const data = head.data as any
+    delete data.projects[0].boardMode
+    await db.swarmHead.update({ where: { id: head.id }, data: { data, version: { increment: 1 } } })
+    const chat = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Old ordinary chat', recipientIds: [f.pm], replyTo: null })
+    data.projects[0].boardMode = true
+    await db.swarmHead.update({ where: { id: head.id }, data: { data, version: { increment: 1 } } })
+    const id = await f.create()
+    const deliveries = await f.store.deliveries(owner, f.tab, f.pm)
+    expect(deliveries.some(d => d.messageId === chat.result.messageId)).toBe(false)
+    expect(deliveries.some(d => d.conversationId === id)).toBe(true)
+  })
+
+  it('persists viewer proposals and answers through the real store and changed-parts read', async () => {
+    const f = await fixture(), read = new SwarmReads(f.store)
+    const before = await read.firstLoad(peer, f.tab)
+    const id = await f.create()
+    const question = await f.execute({ type: 'proposal.ask', conversationId: id, personId: peer.sub,
+      question: 'Seven days?', defaultAnswer: 'Seven days', deadline: f.clock.now + 60_000 }, owner, f.pm)
+    const answered = await f.execute({ type: 'proposal.answer', conversationId: id, questionId: question.result.questionId, text: 'Fourteen days' }, peer)
+    expect(answered.result.applied).toBe(true)
+    expect((await f.card(id)).proposal!.questions[0]!.answer!.text).toBe('Fourteen days')
+    const changes = await read.changes(peer, f.tab, before.cursor)
+    expect(changes.groups.some(g => g.key === id && !g.deleted && 'data' in g && g.data?.proposal?.text === 'Keep offline drafts')).toBe(true)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.pm, messageId: answered.result.messageId as string } })).toBe(1)
+  })
+
+  it('applies questions after long inactivity including dormant cards, using the due index', async () => {
+    const { dueProposalCards } = await import('../src/superTabs/proposalDue.js')
+    const f = await fixture(), id = await f.create(), deadline = f.clock.now + 30 * DAY
+    await f.execute({ type: 'proposal.ask', conversationId: id, personId: peer.sub, question: 'Wait?', defaultAnswer: 'Proceed', deadline }, owner, f.pm)
+    const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: id } } })
+    await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, lastActivityAt: new Date(f.clock.now - 60 * DAY), data: { ...(row.data as object), dormant: true } } })
+    f.clock.now = deadline
+    const prof = await profiled(db, () => dueProposalCards(db, deadline, 200))
+    const due = plan(reads(prof, 'SwarmGroup', ['proposalDueAt']))
+    expect(due).toEqual([expect.objectContaining({ plan: 'IXSCAN { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 }' })])
+    expect(due[0]!.docsExamined).toBeLessThanOrEqual(due[0]!.returned ?? 0)
+    await runTimeCheckPass(db, f.store, deadline)
+    expect((await f.card(id)).proposal!.questions[0]!.answer).toMatchObject({ text: 'Proceed', defaulted: true })
+    await runTimeCheckPass(db, f.store, deadline + 1)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: id, text: 'Proceed' } })).toBe(1)
+  })
+
+  it('guards answer races and denies receipt replay after private-project revocation', async () => {
+    const f = await fixture(), id = await f.create(), deadline = f.clock.now + 1000
+    const q = await f.execute({ type: 'proposal.ask', conversationId: id, personId: peer.sub, question: 'Keep?', defaultAnswer: 'Yes', deadline }, owner, f.pm)
+    const answer = { type: 'proposal.answer', conversationId: id, questionId: q.result.questionId, text: 'No' }
+    const results = await Promise.all([f.execute(answer, peer), f.execute({ ...answer, text: 'Maybe' }, peer)])
+    expect(results.map(r => r.result.applied).sort()).toEqual([false, true])
+    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [peer.sub] })
+    const op = randomUUID()
+    await f.execute({ ...answer, text: 'Visible late comment' }, peer, undefined, op)
+    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    await expect(f.execute({ ...answer, text: 'Visible late comment' }, peer, undefined, op)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})

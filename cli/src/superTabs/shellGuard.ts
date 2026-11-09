@@ -22,11 +22,13 @@ const PREFIX = 'Harness shell guard:'
 export const GUARD_REASONS = {
   killByName: `${PREFIX} stop only processes you started, by the process id you recorded; never by name or pattern `
     + '(pkill, killall, kill $(pgrep …), taskkill /IM).',
-  killAll: `${PREFIX} kill -1 signals every process this account can reach, every other agent's work on a shared machine; `
+  killAll: `${PREFIX} nonpositive kill targets can signal other agents' process groups or every process this account can reach; `
     + 'stop only processes you started, by the process id you recorded.',
   systemWide: `${PREFIX} no sudo and no system-wide installs on a shared machine; put the tools you need in your session folder.`,
   fixedTmp: `${PREFIX} a fixed name in /tmp can be read or planted by every account; make a folder with `
     + 'mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX" and write inside it.',
+  macMktemp: `${PREFIX} on a Mac, mktemp with no template ignores TMPDIR and writes to a folder every app of this account `
+    + 'shares, outside your own; name one in your temporary folder: mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX".',
   liveWorktree: (path: string, pid: number) => `${PREFIX} process ${pid} still works in a worktree in ${path}; never remove a `
     + 'worktree a live process uses.',
   worktreeUnknown: (path: string) => `${PREFIX} could not tell whether a live process uses the worktree ${path}, so it is not `
@@ -62,6 +64,7 @@ export function shellRefusal(command: string, facts: GuardFacts): string | null 
   if (killsByName(commands)) return GUARD_REASONS.killByName
   if (commands.some(killsAll)) return GUARD_REASONS.killAll
   if (commands.some((simple) => fixedTmp(simple, facts))) return GUARD_REASONS.fixedTmp
+  if (facts.platform === 'darwin' && commands.some(mktempIgnoringTmpdir)) return GUARD_REASONS.macMktemp
   return liveWorktree(commands, facts)
 }
 
@@ -158,6 +161,7 @@ function programWords(words: string[]): string[] {
  */
 function split(text: string, nested: string[]): Simple[] {
   const out: Simple[] = []
+  const variables = new Map<string, string>()
   let words: string[] = [], targets: string[] = []
   let word = '', inWord = false, redirect = false
   const heredocs: { delimiter: string; strip: boolean }[] = []
@@ -167,13 +171,30 @@ function split(text: string, nested: string[]): Simple[] {
     if (!inWord) return
     if (pendingHeredoc) { heredocs.push({ delimiter: word, strip: pendingHeredoc.strip }); pendingHeredoc = null }
     else if (redirect) { targets.push(word); redirect = false }
-    else words.push(word)
+    else {
+      // Only leading shell assignments and export declarations set values; an echo argument never does.
+      const assignment = word.includes('=') && /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(word)
+      if (assignment && words.every((value) => value === 'export' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(value))) {
+        if (/[$`]/.test(assignment[2])) variables.delete(assignment[1])
+        else variables.set(assignment[1], assignment[2])
+      }
+      words.push(word)
+    }
     word = ''; inWord = false
   }
   const endCommand = () => {
     endWord()
     if (words.length || targets.length) out.push({ words, targets })
     words = []; targets = []; redirect = false
+  }
+
+  // Expand at the lexical position, so single quotes and escaped dollars remain literal and reassignments keep order.
+  const variableAt = (at: number): { value: string; end: number } | null => {
+    if (text[at] !== '$') return null
+    const match = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/.exec(text.slice(at))
+    if (!match) return null
+    const value = variables.get(match[1] ?? match[2])
+    return value === undefined ? null : { value, end: at + match[0].length }
   }
 
   let i = 0
@@ -211,11 +232,15 @@ function split(text: string, nested: string[]): Simple[] {
         if (text[i] === '\\' && '"\\$`\n'.includes(text[i + 1] ?? '')) { word += text[i + 1]; i += 2; continue }
         const sub = substitution(text, i)
         if (sub) { nested.push(sub.inner); word += text.slice(i, sub.end); i = sub.end; continue }
+        const variable = text[i] === '$' && variables.size ? variableAt(i) : null
+        if (variable) { word += variable.value; i = variable.end; continue }
         word += text[i]; i++
       }
       i++
       continue
     }
+    const variable = text[i] === '$' && variables.size ? variableAt(i) : null
+    if (variable) { word += variable.value; inWord = true; i = variable.end; continue }
     const sub = substitution(text, i)
     if (sub) { nested.push(sub.inner); word += text.slice(i, sub.end); inWord = true; i = sub.end; continue }
     if ((c === '<' || c === '>') && text[i + 1] === '(') {
@@ -358,22 +383,18 @@ function killsByName(commands: Simple[]): boolean {
   return kills && looksUp
 }
 
-/**
- * `kill … -1`: a target of -1 signals every process the account may signal (POSIX kill(2)), on a shared Team account every
- * other agent's work (Rowan's security review, 11-06). The first word after `kill` that starts with `-` is the signal
- * (`kill -1 4242` sends SIGHUP to 4242), unless it is `--`; every word after it is a target. A negative group id other than
- * -1 is a process group the agent started, by its id, and passes.
- */
+/** Negative and zero targets reach process groups or the whole account, not a single recorded process.
+ *  A bare negative argument is refused even where a shell interprets it as a signal with a missing target. */
 function killsAll({ words }: Simple): boolean {
   if (programName(words[0]) !== 'kill') return false
-  // A bare `kill -1` is a usage error to a shell's kill, but a kill program may take -1 as its target: never useful, so refused.
-  if (words.length === 2 && words[1] === '-1') return true
   let at = 1
   if (words[at] === '-s' || words[at] === '-n') at += 2
   else if (words[at] === '-l' || words[at] === '-L') return false
   else if (words[at]?.startsWith('-') && words[at] !== '--') at += 1
   if (words[at] === '--') at += 1
-  return words.slice(at).includes('-1')
+  const targets = words.slice(at)
+  return (!targets.length && /^-\d+$/.test(words[1] ?? ''))
+    || targets.some((word) => /^-?\d+$/.test(word) && Number(word) <= 0)
 }
 
 const TMP_ROOTS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp']
@@ -388,6 +409,21 @@ function fixedTmp({ words, targets }: Simple, facts: GuardFacts): boolean {
   // `cd /tmp` and then a plain name writes a fixed name there.
   if ((program === 'cd' || program === 'pushd') && words[1] && TMP_ROOTS.includes(words[1].replace(/\/+$/, ''))) return true
   return words.some((word) => tmpPathRefused(word, facts))
+}
+
+/** A mktemp that names no template and no folder (`-p`, `--tmpdir`): macOS's then writes in the account's own temporary
+ *  folder, whatever TMPDIR says (the Mac test of #3506). `-t` takes a prefix, not a folder. */
+function mktempIgnoringTmpdir({ words }: Simple): boolean {
+  if (programName(words[0]) !== 'mktemp') return false
+  for (let at = 1; at < words.length; at++) {
+    const word = words[at]
+    if (word === '--tmpdir' || word.startsWith('--tmpdir=')) return false
+    if (!word.startsWith('-')) return false
+    // A cluster such as -dt or -dp: its last letter may take the next word as its value.
+    if (!word.startsWith('--') && word.includes('p')) return false
+    if (!word.startsWith('--') && word.endsWith('t')) at++
+  }
+  return true
 }
 
 /** Whether [word] names a path in /tmp whose top folder is not one only this account can open. */

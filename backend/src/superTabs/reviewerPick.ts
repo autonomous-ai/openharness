@@ -1,7 +1,7 @@
 /**
  * Who may take a handed task's review, security review or test step (task #3401, anh Dee's Swarm redesign, 2026-11-05): a
- * free agent of the task's project that never worked on the task, runs no grid model, is at least as strong as its engineer,
- * and gave no verdict at this head. The project instructions' rules that the server now keeps: a Reviewer is never the
+ * free agent of the task's project that never worked on the task, runs no grid model, is at least as strong as its engineer
+ * (a test step's Tester: a mid-strength model or stronger, task #3774), and gave no verdict at this head. The project instructions' rules that the server now keeps: a Reviewer is never the
  * Engineer of the same task (Roles, Reviewer), two security reviews are independent (Rules for every agent), a model on the
  * grid is never offered for a review (route).
  */
@@ -9,17 +9,29 @@ import { isBuddy } from './buddies.js'
 import { MODEL_CATALOG, namedDefault } from './catalog.js'
 import { roleNameOf } from './instructions.js'
 import { activeWork, workerIndex, type Agent, type CheckVerdict, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject } from './projects.js'
+import { agentProjectId, groupProject, onTeamAccount } from './projects.js'
 import { agentTarget, modelMatches } from './rules.js'
 import { canStart, standing } from './reviewSeats.js'
-import { stepsOf } from './steps.js'
-import { reportsOs, type StepKind, type StepOs } from './reviewTable.js'
+import { stepName, stepsOf } from './steps.js'
+import { reportsOs, stepOs, type StepKind, type StepOs } from './reviewTable.js'
 
 /** The agents that built [task]: its assignee and every agent its ledger says ran it. */
 export function builtBy(task: Conversation): Set<string> {
   const ids = new Set<string>()
   if (task.assignment) ids.add(task.assignment.agentId)
   for (const run of task.ledger?.runs ?? []) if (run.agentId) ids.add(run.agentId)
+  return ids
+}
+
+/** The agents that hold, finished or judged a security review of [task] other than [stepId], at any head (task #4534): the two
+ *  security reviews are independent, so none of them takes this one. The step's own reviewer may take it again at a new head. */
+export function otherSecurityReviewers(state: SuperTabState, task: Conversation, stepId: string | undefined): Set<string> {
+  const ids = new Set<string>()
+  for (const step of stepsOf(state, task.id)) {
+    if (step.id === stepId || !/security/i.test(stepName(step))) continue
+    if (step.assignment && (activeWork(step) || step.assignment.status === 'done')) ids.add(step.assignment.agentId)
+    for (const check of step.checks) for (const verdict of check.verdicts ?? []) if (verdict.by.startsWith('agent:')) ids.add(verdict.by.slice('agent:'.length))
+  }
   return ids
 }
 
@@ -40,6 +52,17 @@ export const strengthOf = (state: SuperTabState, agent: Agent): number | null =>
 
 /** The strongest the catalog rates: what an engineer of unknown strength is taken to be, so its reviewer is never weaker. */
 const TOP_STRENGTH = Math.max(...MODEL_CATALOG.models.map(row => row.strength))
+/** A test step's bar, whatever the engineer runs (task #3774, Ken's routing rule: "A Tester runs where the change runs: the machine
+ *  comes before the model, and a mid-strength model is enough for most testing"): the catalog's middle strength, Sonnet's and
+ *  above (Sol, Opus). On 11-06 four Linux test steps waited for an Opus Tester while Sonnet Testers sat idle on that machine. */
+export const TEST_STRENGTH = 2
+
+/** The rule [kind]'s pick applies to a model, as the PM's notice names it when a step stays open (commands.ts openReviewSteps). */
+export const STRENGTH_RULE: Record<StepKind, string> = {
+  review: 'runs a model at least as strong as its engineer and off the grid',
+  security: 'runs a model at least as strong as its engineer and off the grid',
+  test: 'runs a mid-strength model or stronger (Sonnet, Sol, Opus) off the grid, on the step\'s machine',
+}
 
 /** Roles with work of their own that never take a step (project instructions, Roles): the PM, its Guide and Integrator, a Buddy.
  *  By role name, and by the agent's own name too: on the live Swarm the Guides carry the role Reviewer and the Integrator none
@@ -56,22 +79,27 @@ const atHead = (verdict: CheckVerdict & { head?: string }, head: string | null) 
  * The agents that may take a [kind] step of [task] at [head], best first: the step's own role (Reviewer, Tester) before any
  * other free agent, then the cheaper of equal standing, then by id. Excluded: anyone that built the task; a grid model, an
  * unknown model or one weaker than the engineer; anyone busy, coordinating a conversation, a Buddy, stopping, or of another
- * project; anyone holding another open step of this task; anyone with a verdict at this head on the task or its steps.
+ * project; anyone holding another open step of this task; anyone with a verdict at this head on the task or its steps; for a
+ * security review, anyone that held, did or judged the task's other one (otherSecurityReviewers, for [stepId], the step it fills).
  */
-export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null, now: number, os?: StepOs): Agent[] {
+export function reviewerCandidates(state: SuperTabState, task: Conversation, kind: StepKind, head: string | null, now: number, os?: StepOs,
+  stepId?: string): Agent[] {
   const projectId = groupProject(state, task).id
   const index = workerIndex(state)
   const built = builtBy(task)
   const engineer = task.assignment ? state.agents.find(a => a.id === task.assignment!.agentId) : undefined
-  const bar = (engineer && strengthOf(state, engineer)) ?? TOP_STRENGTH
+  // A review or security review: at least the engineer's strength. A test: mid-strength or more, whoever built it.
+  const bar = kind === 'test' ? TEST_STRENGTH : (engineer && strengthOf(state, engineer)) ?? TOP_STRENGTH
   const steps = stepsOf(state, task.id)
   const holding = new Set(steps.filter(step => activeWork(step)).map(step => step.assignment!.agentId))
   const judged = new Set([task, ...steps].flatMap(group => group.checks.flatMap(check => check.verdicts ?? []))
     .filter(verdict => atHead(verdict, head)).map(verdict => verdict.by))
+  const otherSecurity = kind === 'security' ? otherSecurityReviewers(state, task, stepId) : new Set<string>()
   const ranked = state.agents.flatMap(agent => {
     if (built.has(agent.id) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
-    if (isBuddy(agent) || agent.workDecision === 'stop' || agentProjectId(state, agent) !== projectId) return []
-    if (judged.has(`agent:${agent.id}`)) return []
+    // Nor a Team account's agent, which takes no new work (task #4120).
+    if (isBuddy(agent) || agent.workDecision === 'stop' || onTeamAccount(state, agent) || agentProjectId(state, agent) !== projectId) return []
+    if (judged.has(`agent:${agent.id}`) || otherSecurity.has(agent.id)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []
     // Only the step's own role, Reviewer or Tester, with no other agent standing in (task #3602: #3576's Test went to an Engineer).
@@ -87,4 +115,16 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     return [{ agent, rank: 0, cost: row.cost }]
   })
   return ranked.sort((a, b) => a.rank - b.rank || a.cost - b.cost || a.agent.id.localeCompare(b.agent.id)).map(entry => entry.agent)
+}
+
+/** The agents that may take [step] now, as reviewerCandidates ranks them: its kind by its name, at its task's newest pull
+ *  request head, and on the OS its name names (task #3926). None when its task is not loaded. */
+export function stepCandidates(state: SuperTabState, step: Conversation, now: number): Agent[] {
+  const task = state.conversations.find(g => g.id === step.reviewOf)
+  if (!task) return []
+  const name = stepName(step)
+  const kind: StepKind = /test/i.test(name) ? 'test' : /security/i.test(name) ? 'security' : 'review'
+  const latest = task.pullRequestUrls?.at(-1)
+  const head = latest ? task.pullRequestHeads?.[latest]?.head ?? null : null
+  return reviewerCandidates(state, task, kind, head, now, stepOs(step), step.id)
 }

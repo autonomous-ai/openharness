@@ -96,8 +96,9 @@ const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS)
 const scorecardQuery = z.object({ projectId: id, scope: z.literal('all').optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
-  .refine(query => query.scope === undefined || query.period !== undefined, 'All projects is read by period.')
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
+/** An older page of the person's Tasks feed (task #4203): the `olderCursor` a first load or an earlier page gave. */
+const personalTasksQuery = z.object({ before: cursor.optional() }).strict()
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
 const etag = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
@@ -125,6 +126,8 @@ const threadsQuery = z.object({ read: z.string().regex(/^[1-9][0-9]{0,2}$/).tran
   .refine(n => n <= READ_THREADS_ASKED_MAX, `At most ${READ_THREADS_ASKED_MAX}.`).optional() }).strict()
 // The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
 const proposalsQuery = z.object({ projectId: id }).strict()
+/** The Cmd-N and join project list's query (superTabs/projectList.ts): the project the person was invited to, if any. */
+const projectListQuery = z.object({ invitedTo: id.optional() }).strict()
 // The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
 const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
@@ -673,6 +676,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
     { preHandler: [validateParams(tabParams), validateQuery(proposalsQuery)] },
     (req, reply) => respond(reply, () => store.proposals(req.user!, req.params.tabId, req.query.projectId)))
+  // The projects a person may pick a main project from (superTabs/projectList.ts, task #4540), read when Cmd-N or Join opens.
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof projectListQuery> }>('/api/super-tabs/:tabId/project-list',
+    { preHandler: [validateParams(tabParams), validateQuery(projectListQuery)] },
+    (req, reply) => respond(reply, () => store.projectList(req.user!, req.params.tabId, req.query.invitedTo)))
   // A person's Activity (superTabs/activity.ts): replies to their messages and reactions to them, read when its digest moves.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/activity',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
@@ -697,6 +704,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personalTasksQuery> }>('/api/super-tabs/:tabId/personal-tasks',
+    { preHandler: [validateParams(tabParams), validateQuery(personalTasksQuery)] },
+    (req, reply) => respond(reply, () => reads.personalTasks(req.user!, req.params.tabId, req.query.before)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof dormantQuery> }>('/api/super-tabs/:tabId/groups',
     { preHandler: [validateParams(tabParams), validateQuery(dormantQuery)] },
     (req, reply) => respond(reply, () => reads.dormant(req.user!, req.params.tabId, { projectId: req.query.projectId, before: req.query.before }, req.query.asAgentId)))
@@ -876,6 +886,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/rules',
     { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.projectRules(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
+  // Its machine rules alone, from the newest revision: what the route applies (task #3964).
+  app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/machine-rules',
+    { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
+    (req, reply) => respond(reply, () => store.projectMachineRules(req.user!, req.params.tabId, req.params.projectId, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof decisionParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions/:decisionId',
     { preHandler: [validateParams(decisionParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecision(req.user!, req.params.tabId, req.params.decisionId, req.query.asAgentId)))

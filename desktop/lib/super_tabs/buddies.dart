@@ -11,6 +11,8 @@ import 'private_project_lock.dart';
 import 'controller.dart';
 import 'buddy_machines.dart';
 import 'buddy_model.dart';
+import 'buddy_engine.dart';
+import 'buddy_restart.dart' show readerBuddy;
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -311,50 +313,128 @@ Future<void> confirmRemoveBuddy(
   SuperTabController c,
   String projectId, {
   String? conversationId,
-}) async {
-  final remove = await showAppDialog<bool>(
+}) {
+  final chat = conversationId == null
+      ? null
+      : c.snapshot?.conversation(conversationId);
+  final buddy = chat == null
+      ? readerBuddy(c, projectId)
+      : chat.agentIds
+            .map((id) => c.snapshot?.agent(id))
+            .whereType<SuperTabAgent>()
+            .where((a) => a.isMainBuddy)
+            .firstOrNull;
+  return showAppDialog<void>(
     context: context,
     builder: (context) => _BuddyDialogScope(
       controller: c,
       projectId: projectId,
-      child: AlertDialog(
-        title: const Text('Remove Buddy?'),
-        content: Text(
-          'Its session stops. Your chat stays, and adding a Buddy here again '
-          'picks it up.',
-          style: DesktopChrome.text(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
-          ),
-        ],
+      child: _RemoveBuddyDialog(
+        controller: c,
+        projectId: projectId,
+        conversationId: conversationId,
+        // Named as the dialog opens: once removed, the Buddy is gone.
+        name: buddy == null ? null : buddy.displayName ?? buddy.name,
       ),
     ),
   );
-  if (remove == true) {
-    await c.removeBuddy(projectId, conversationId: conversationId);
+}
+
+class _RemoveBuddyDialog extends StatefulWidget {
+  const _RemoveBuddyDialog({
+    required this.controller,
+    required this.projectId,
+    required this.conversationId,
+    required this.name,
+  });
+  final SuperTabController controller;
+  final String projectId;
+  final String? conversationId;
+
+  /// The Buddy's shown name; null when it is not known.
+  final String? name;
+
+  @override
+  State<_RemoveBuddyDialog> createState() => _RemoveBuddyDialogState();
+}
+
+class _RemoveBuddyDialogState extends State<_RemoveBuddyDialog> {
+  SuperTabController get c => widget.controller;
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _remove() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final removed = await c.removeBuddy(
+      widget.projectId,
+      conversationId: widget.conversationId,
+    );
+    if (!mounted) return;
+    if (removed) {
+      Navigator.pop(context);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = c.operationError ?? "Couldn't remove the Buddy. Try again.";
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final name = widget.name;
+    return PopScope(
+      canPop: !_busy,
+      child: AlertDialog(
+        title: Text('Remove ${name ?? 'your Buddy'}?'),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${name ?? 'Your Buddy'} stops. Your chat stays, and your '
+                'next Buddy here picks it up.',
+                style: DesktopChrome.text(),
+              ),
+              if (_error case final error?) ...[
+                const SizedBox(height: 12),
+                Text(
+                  error,
+                  key: const ValueKey('super-buddy-remove-error'),
+                  style: DesktopChrome.control(
+                    color: grid.AppPalette.dangerFill,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _busy ? null : () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: grid.dangerButtonStyle(),
+            onPressed: _busy ? null : () => unawaited(_remove()),
+            child: Text(_busy ? 'Removing…' : 'Remove'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
-/// What the reader's Buddy is called until they name it, as the backend
-/// names it: "ken's Buddy".
-String buddyDefaultName(SuperTabController c) {
-  final email = c.snapshot?.people
-      .where((p) => p.id == c.accountId)
-      .firstOrNull
-      ?.email;
-  return "${(email ?? '').split('@').first}'s Buddy";
-}
-
 /// Rename the reader's Buddy in [projectId] (mockup confirmed by Diego,
-/// 10-29): the name everyone in the Swarm sees; empty goes back to
-/// [buddyDefaultName]. The backend checks the name and says why it refuses.
+/// 10-29): the name everyone in the Swarm sees; empty gives it a fresh real
+/// name (task #4568). The backend checks the name and says why it refuses.
 Future<void> showRenameBuddy(
   BuildContext context,
   SuperTabController c,
@@ -422,14 +502,19 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
 
   /// The backend's limit: a longer name is refused there anyway.
   static const _maxLength = 32;
-  late final _name = TextEditingController(
-    text:
-        (widget.conversationId == null
-                ? c.buddyChat(widget.projectId)
-                : c.snapshot?.conversation(widget.conversationId!))
-            ?.buddyName ??
-        '',
-  );
+  late final _chat = widget.conversationId == null
+      ? c.buddyChat(widget.projectId)
+      : c.snapshot?.conversation(widget.conversationId!);
+  late final _name = TextEditingController(text: _chat?.buddyName ?? '');
+
+  /// The name it goes by now, as its chat's header shows it.
+  String? get _shown => switch ((_chat, c.snapshot)) {
+    (final chat?, final snapshot?) => switch (superTabChatBuddy(c, chat)) {
+      final agent? => snapshot.agentName(agent.id, fallback: agent.name),
+      null => chat.buddyName,
+    },
+    _ => null,
+  };
   bool _busy = false;
   String? _error;
 
@@ -464,9 +549,9 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final fallback = buddyDefaultName(c);
+    final shown = _shown;
     return AlertDialog(
-      title: const Text('Rename your Buddy'),
+      title: Text(shown == null ? 'Rename your agent' : 'Rename $shown'),
       content: SizedBox(
         width: 440,
         // Scrolls in a short window or at large text, as Add a Buddy does.
@@ -486,20 +571,23 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
                 autofocus: true,
                 enabled: !_busy,
                 maxLength: _maxLength,
-                decoration: InputDecoration(
-                  hintText: fallback,
-                  counterText: '',
-                ),
+                decoration: InputDecoration(hintText: shown, counterText: ''),
                 onSubmitted: (_) => _submit(),
               ),
               const SizedBox(height: 4),
               Text(
-                'Leave it empty to go back to "$fallback".',
+                'Leave it empty for a new name.',
                 style: DesktopChrome.control(color: DesktopChrome.muted),
               ),
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
-                Text(error, style: DesktopChrome.control()),
+                Text(
+                  error,
+                  // The Buddy card's error colour.
+                  style: DesktopChrome.control(
+                    color: grid.AppPalette.dangerFill,
+                  ),
+                ),
               ],
             ],
           ),
@@ -523,15 +611,32 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
 /// terminal, and, while it is down, a way to start it again. Before its
 /// agent is there, how its start is going (backend: the start carries the
 /// add's progress and failure).
+/// The Buddy that [chat] is with: the reader's own main Buddy in the Swarm's one Buddy chat, else its project's.
+SuperTabAgent? superTabChatBuddy(
+  SuperTabController c,
+  SuperTabConversation chat,
+) => chat.isSwarmBuddyChat && c.snapshot!.buddyCap != null
+    ? chat.agentIds
+          .map(c.snapshot!.agent)
+          .whereType<SuperTabAgent>()
+          .where((a) => a.isMainBuddy && a.buddyOf == c.accountId)
+          .firstOrNull
+    : c.buddy(chat.projectId);
+
 class SuperTabBuddyBar extends StatelessWidget {
   const SuperTabBuddyBar({
     super.key,
     required this.controller,
     required this.chat,
     this.app,
+    this.line = true,
   });
   final SuperTabController controller;
   final SuperTabConversation chat;
+
+  /// The bar's line of engine, model, machine and who reads the chat. Off under the middle chat's one-row header,
+  /// which carries the pickers and nothing else (anh Dee, #4204); the limit and Start again rows stay.
+  final bool line;
 
   /// For the Start bar's Add this Mac, as Add a Buddy has it (#2105).
   final AppNotifier? app;
@@ -622,7 +727,11 @@ class SuperTabBuddyBar extends StatelessWidget {
   /// a copy ([SuperTabController.newestFirst]), so the scan stops at this
   /// Buddy's newest system line.
   bool _mustStartAgain(SuperTabController c, SuperTabAgent agent) {
-    if (!chat.isSwarmBuddyChat || agent.modelRequest != null) return false;
+    if (!chat.isSwarmBuddyChat ||
+        agent.modelRequest != null ||
+        agent.switchRequest != null) {
+      return false;
+    }
     final conversation = c.snapshot?.conversation(chat.id);
     if (conversation == null ||
         c.hasNewer(chat.id) ||
@@ -687,7 +796,7 @@ class SuperTabBuddyBar extends StatelessWidget {
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final c = controller;
-    final agent = c.buddy(chat.projectId);
+    final agent = superTabChatBuddy(c, chat);
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
     final machine = buddyMachineName(c, agent.machineId, app: app);
@@ -698,7 +807,10 @@ class SuperTabBuddyBar extends StatelessWidget {
         ? 'only you can read this chat'
         : '${buddyPersonName(c, agent.machineOwnerId)} can see its terminal';
     final where = [
-      '${buddyEngineName(agent.engine)} on $machine',
+      if (chat.isSwarmBuddyChat && buddyEngineCapable(c.snapshot!, agent))
+        machine
+      else
+        '${buddyEngineName(agent.engine)} on $machine',
       if (project != null) '#${project.name}',
       // The one Buddy for the whole Swarm (spec 2026-10-31-one-buddy-per-swarm).
       if (chat.isSwarmBuddyChat) 'reads all your projects',
@@ -707,6 +819,17 @@ class SuperTabBuddyBar extends StatelessWidget {
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
     final offer = agent.downSince == null && _mustStartAgain(c, agent);
     final held = offer ? _restartHeld(c, agent, machine) : null;
+    final limited =
+        chat.isSwarmBuddyChat &&
+        agent.gridModel == null &&
+        agent.downSince == null &&
+        agent.switchRequest == null &&
+        agent.modelRequest == null &&
+        agent.limitedUntil?.isAfter(DateTime.now()) == true &&
+        buddyEngineCapable(c.snapshot!, agent);
+    if (!line && !limited && !offer && agent.downSince == null) {
+      return const SizedBox.shrink();
+    }
     return Padding(
       key: const ValueKey('super-buddy-bar'),
       padding: _padding,
@@ -716,7 +839,9 @@ class SuperTabBuddyBar extends StatelessWidget {
         children: [
           // The one Buddy switches between its person's subscription and a
           // model shared in the Swarm (task #2354); a project's Buddy cannot.
-          if (chat.isSwarmBuddyChat)
+          if (!line)
+            const SizedBox.shrink()
+          else if (chat.isSwarmBuddyChat)
             BuddyModelLine(
               controller: c,
               agent: agent,
@@ -746,6 +871,25 @@ class SuperTabBuddyBar extends StatelessWidget {
             )
           else
             Text(where, style: DesktopChrome.metadata()),
+          if (limited)
+            Row(
+              key: const ValueKey('super-buddy-engine-limit'),
+              children: [
+                Expanded(
+                  child: Text(
+                    'Limit reached.',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+                BuddyEnginePicker(
+                  controller: c,
+                  agent: agent,
+                  limitAction: true,
+                ),
+              ],
+            ),
           if (offer)
             Row(
               key: const ValueKey('super-buddy-start-again'),
@@ -904,7 +1048,7 @@ class _BuddyStartState extends State<_BuddyStart> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            'Start your Buddy to brainstorm here',
+            'Start your agent to brainstorm here',
             style: DesktopChrome.control(medium: true),
           ),
           const SizedBox(height: 8),

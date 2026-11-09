@@ -1,3 +1,4 @@
+import { personalTasksFor, personalTasksPage, type PersonalTasks } from './personalTasks.js'
 /**
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
@@ -28,7 +29,7 @@ import { canReadGroup, canReadProject, projectsOf, readConversation, readProject
 import { isBuddyReader } from '../buddies.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
-import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/read.js'
+import { profileNames, readableWeek, recentDormantGroups, weeklyBoard } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
@@ -59,7 +60,7 @@ export const SWARM_ROW_READS_MS = 3_000
 const MAX_SWARM_ROW_READS = 2_000
 type SwarmRow = { format: number | null; deletedAt: Date | null }
 type SwarmRowRead = { at: number; read: Promise<SwarmRow | null> }
-type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>, joiningTeams: string[]]
+type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>]
 
 /** The conversations the reader can read now, a dormant one read by id included. */
 function readableGroups(read: Read): Set<string> {
@@ -89,6 +90,11 @@ function stamped(derived: Derived, held?: string) {
   const etag = derivedEtag(derived)
   return held === etag ? { derived: marksOf(derived), derivedEtag: etag, derivedUnchanged: true as const } : { derived, derivedEtag: etag }
 }
+
+/** Tasks feed reads (parts/load.ts loadFeed) held at the Swarm's main stamp, which every conversation write moves: a first load of a
+ *  Swarm that did not change asks Mongo for nothing. The rows are shared; each reader's own checks run on every read. */
+const feedRead = (tx: PrismaClient, cached: CacheView, tabId: string): Parameters<typeof personalTasksPage>[0] => (ids, projects, before) =>
+  cached.get(tabId, `feed:${JSON.stringify([ids, projects, before ?? null])}`, 'main', () => parts.loadFeed(tx, tabId, ids, projects, before))
 
 /** A change poll's light base (parts/light.ts): the same for every reader of a Swarm, so one load per stamp serves them all. */
 const LIGHT = { groups: 'working' } as const
@@ -133,6 +139,8 @@ export class SwarmReads {
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
         ...(this.options.githubApp ? { githubApp: true as const } : {}), steps: true as const, ...view.parts,
+        // The feed's newest page (task #4203): its history is read by its own index, not from the loaded working set.
+        ...read.actor.kind === 'person' ? { personalTasks: await personalTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -214,12 +222,29 @@ export class SwarmReads {
         ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra), taggedRows)
-      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
+      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined, from.since)
       // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
+        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor) } : {},
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
+    })
+  }
+
+  /** The person's Tasks feed page older than `before`, a first load's or an earlier page's `olderCursor` (task #4203). A person's
+   *  read only: an agent has no feed. */
+  async personalTasks(user: AuthUser, tabId: string, before?: string): Promise<PersonalTasks> {
+    const t0 = this.now()
+    return this.read(user, tabId, async (tx, cached) => {
+      const loaded = await readParts(tx, cached, tabId)
+      const state = parts.reassemble(loaded, { share: true })
+      const actor = await this.store.actor(tx, user, state)
+      author(state, actor)
+      const [teamMachines, otherWorkspaceMachines, machineVersions] = await this.machineLookups(state)
+      const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle })
+      return await personalTasksPage(feedRead(tx, cached, tabId), view, actor, before)
+        ?? fail('NOT_FOUND', 'Only a member has a Tasks feed.', 404)
     })
   }
 
@@ -506,21 +531,34 @@ export class SwarmReads {
   async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName, allProjects = false): Promise<Leaderboard> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), start = readableWeek(week, now)
-    return this.read(user, tabId, async (tx, cached) => {
+    const began = performance.now()
+    const result = await this.read(user, tabId, async (tx, cached) => {
       const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
       const actor = await this.store.actor(tx, user, state)
       readProject(state, actor, projectId)
       // Every project this reader reads, by the same check as the one asked for; what they may not read is never loaded.
       const readable = allProjects ? projectsOf(state).filter(p => canReadProject(state, actor, p)).map(p => p.id) : undefined
-      const dormant = await recentDormantGroups(tx, cached, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
-      const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
-      // Names change rarely and show on a board: read on the secondary (task #2970).
-      const names = await profileNames(this.store.replica, state.people.map(p => p.id))
-      // Which machines the reader sees, with the daily rows no other read carries.
-      const machines = (visibleState(state, actor, now).machines ?? [])
-        .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
-      return leaderboard({ state, groups, machines, projectId, week: start, now, period, allProjects: readable, names })
+      const load = async () => {
+        const dormant = await recentDormantGroups(tx, cached, tabId, readable ?? projectId, now - LEDGER_WEEKS * WEEK_MS)
+        const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
+        // Names change rarely and show on a board: read on the secondary (task #2970).
+        const names = await profileNames(this.store.replica, state.people.map(p => p.id))
+        const visible = visibleState(state, actor, now)
+        // Count only agents this reader sees, keeping ownership before presentation redaction (Buddy rows).
+        const agentIds = new Set(visible.agents.map(a => a.id))
+        const visibleAgents = state.agents.filter(a => agentIds.has(a.id))
+        const machines = (visible.machines ?? [])
+          .map(m => ({ ...m, lentDays: state.machines?.find(own => own.machineId === m.machineId)?.lentDays }))
+        return leaderboard({ state, groups, machines, visibleAgents, projectId, week: start, now, period, allProjects: readable, names })
+      }
+      // Access is resolved afresh above, even when the aggregate is held. Include the current audience in the key.
+      return allProjects && !period
+        ? weeklyBoard(cached, tabId, JSON.stringify([actor, readable]), projectId, start, now, load)
+        : load()
     })
+    const elapsedMs = performance.now() - began
+    if (allProjects && !period && elapsedMs > 100) logger.warn('[weekly-leaderboard] slow read', { elapsedMs: Math.round(elapsedMs) })
+    return result
   }
 
   /** The stored scorecard days (scorecard/rows.ts) of one project, or of every project the reader reads (`allProjects`),
@@ -627,13 +665,13 @@ export class SwarmReads {
     const loaded = await loader(cached, tabId, opts)
     const state = parts.reassemble(loaded, { share: true })
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [[teamMachines, otherWorkspaceMachines, machineVersions, joiningTeams], counts, newest] = await Promise.all([
+    const [[teamMachines, otherWorkspaceMachines, machineVersions], counts, newest] = await Promise.all([
       this.machineLookups(state),
       actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0, waitingRows), decisionsWaiting(tx, tabId, state, actor),
         activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
-    const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, joiningTeams, teamAccountsIdle: this.store.teamAccountsIdle,
+    const view = readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
       ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
         decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state)
     // People count a chat unread by its newest main row; agents keep no read marks.
@@ -645,7 +683,7 @@ export class SwarmReads {
    *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
    *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
   private machineLookups(state: SuperTabState): Promise<MachineReads> {
-    if (!state.machines?.length) return Promise.resolve([[], [], {}, []])
+    if (!state.machines?.length) return Promise.resolve([[], [], {}])
     const now = this.now()
     const key = JSON.stringify([state.id, state.environment, state.workspaceId ?? null, state.machines.map(m => m.machineId).sort()])
     const kept = this.machineReads.get(key)
@@ -654,9 +692,8 @@ export class SwarmReads {
       if (now >= entry.at && now - entry.at < MACHINE_READS_MS) break
       this.machineReads.delete(old)
     }
-    const entry = { at: now, read: Promise.all([this.store.machineFacts(this.db, state), this.store.otherWorkspaceMachines(this.db, state),
-      this.store.joiningTeams(this.db, state)])
-      .then(([facts, other, joining]): MachineReads => [facts.team, other, facts.versions, joining]) }
+    const entry = { at: now, read: Promise.all([this.store.machineFacts(this.db, state), this.store.otherWorkspaceMachines(this.db, state)])
+      .then(([facts, other]): MachineReads => [facts.team, other, facts.versions]) }
     this.machineReads.delete(key)
     this.machineReads.set(key, entry)
     // A failed lookup is never reused.

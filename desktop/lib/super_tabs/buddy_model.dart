@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../core/runtime_model_name.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
+import 'buddy_engine.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
@@ -51,11 +53,101 @@ String _sharer(SuperTabSnapshot snapshot, String machineId) =>
     'a member';
 
 /// Who serves [offer], as the server's lines say it (backend buddyModel.ts).
-String _servers(BuddyModelOffer offer) {
+String buddyModelServers(BuddyModelOffer offer) {
   final servers = offer.servedBy.join(', ');
   return offer.servedBy.every((s) => s.endsWith("'s saved API"))
       ? servers
       : 'served by $servers';
+}
+
+/// The name of [model] as the Buddy's lines say it: the offer's, else the last reading that served it (a model gone
+/// quiet), else its id.
+String buddyModelName(
+  SuperTabSnapshot snapshot,
+  String model, {
+  required List<BuddyModelOffer> offers,
+  required DateTime now,
+}) =>
+    offers.where((o) => o.model == model).firstOrNull?.name ??
+    superTabLocalModelRows(
+      snapshot,
+      now: now,
+      freshFor: null,
+    ).where((r) => r.model == model).firstOrNull?.name ??
+    model;
+
+/// Whether a Swarm Buddy's model choices wait: the reader cannot write, something is saving, or a switch is under way.
+bool buddyModelBusy(SuperTabController c, SuperTabAgent agent) =>
+    !c.canWrite ||
+    c.saving ||
+    c.hasPendingAction ||
+    agent.switchRequest != null;
+
+/// The model rows of a Swarm Buddy's menus: [subscription] first for the bar's picker (the top bar's engine rows say
+/// it there), then the models shared in this Swarm with who serves each. A refusal shows under the chat's composer,
+/// as the bar's other Buddy actions' do (`SuperTabController.composerError`).
+List<Widget> buddyModelMenuRows({
+  required SuperTabController controller,
+  required SuperTabAgent agent,
+  required String machine,
+  required MenuController menu,
+  required List<BuddyModelOffer> offers,
+  required bool phone,
+  required bool busy,
+  bool subscription = true,
+}) {
+  final current = agent.gridModel;
+  final pool = controller.snapshot!.pool(agent.machineId);
+  void pick(String? model) {
+    menu.close();
+    if (model == current) return;
+    unawaited(controller.switchBuddyModel(model));
+  }
+
+  Widget row(AppMenuItem item) => fingerTarget(enabled: phone, item);
+  Widget words(String text) => Padding(
+    padding: const EdgeInsets.symmetric(
+      horizontal: grid.AppDesktop.groupGap,
+      vertical: grid.AppDesktop.menuInset,
+    ),
+    child: Text(text, style: DesktopChrome.metadata()),
+  );
+  return [
+    if (subscription)
+      row(
+        AppMenuItem(
+          icon: current == null ? AppIcons.check : null,
+          label: 'Your subscription',
+          note: buddyEngineLabel(agent.engine),
+          onPressed: busy ? null : () => pick(null),
+        ),
+      ),
+    // A Buddy-only machine never joins the Swarm's grid (backend
+    // read/hostRows.ts), so nothing shared reaches a Buddy there: the line
+    // says who fixes it. With nothing shared, nothing is said (rule 7).
+    if (agent.engine == 'claude' &&
+        (pool == null || pool['buddyOnly'] == true || offers.isNotEmpty)) ...[
+      if (subscription) const AppMenuDivider(),
+      words('SHARED IN THIS SWARM'),
+      if (pool == null || pool['buddyOnly'] == true)
+        words("Add $machine to the Swarm's Machines to use shared models.")
+      else
+        for (final offer in offers)
+          row(
+            AppMenuItem(
+              icon: offer.model == current ? AppIcons.check : null,
+              label: offer.name,
+              // Under the name: a list of servers would be cut short beside it.
+              detail: buddyModelServers(offer),
+              onPressed: busy ? null : () => pick(offer.model),
+            ),
+          ),
+      const AppMenuDivider(),
+      words(
+        'What your Buddy reads and writes goes to the machine or API that serves the model you pick.',
+      ),
+    ],
+  ];
 }
 
 /// The Buddy bar's line with the model picker first (task #2354): the
@@ -90,146 +182,115 @@ class _BuddyModelLineState extends State<BuddyModelLine> {
 
   SuperTabController get c => widget.controller;
 
-  /// A refusal shows under the chat's composer, as the bar's other Buddy
-  /// actions' do (`SuperTabController.composerError`).
-  void _pick(String? model) {
-    _menu.close();
-    if (model == widget.agent.gridModel) return;
-    unawaited(c.switchBuddyModel(model));
-  }
-
   @override
   Widget build(BuildContext context) {
     final snapshot = c.snapshot!;
     final agent = widget.agent;
     final now = DateTime.now();
-    final offers = buddyModelOffers(snapshot, now: now);
+    final offers = agent.engine == 'claude'
+        ? buddyModelOffers(snapshot, now: now)
+        : <BuddyModelOffer>[];
     final current = agent.gridModel;
     final on = offers.where((o) => o.model == current).firstOrNull;
-    // A model gone quiet is still named by the last reading that served it.
     String nameOf(String model) =>
-        offers.where((o) => o.model == model).firstOrNull?.name ??
-        superTabLocalModelRows(
-          snapshot,
-          now: now,
-          freshFor: null,
-        ).where((r) => r.model == model).firstOrNull?.name ??
-        model;
+        buddyModelName(snapshot, model, offers: offers, now: now);
     final request = agent.modelRequest;
     final phone = workspaceIsCompact(context);
-    final busy = !c.canWrite || c.saving || c.hasPendingAction;
+    final busy = buddyModelBusy(c, agent);
     final after = [
       if (request == null && current != null)
-        on == null ? 'not served now' : _servers(on),
+        on == null ? 'not served now' : buddyModelServers(on),
       widget.rest,
     ].join(' · ');
+    final label = current == null ? _subscriptionModel(agent) : nameOf(current);
     final picker = request != null
         ? Text(
             request.gridModel == null
                 ? 'Switching to your subscription…'
                 : 'Switching to ${request.name ?? nameOf(request.gridModel!)}…',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: DesktopChrome.metadata(),
           )
-        : _anchor(
-            label: current == null ? 'Your subscription' : nameOf(current),
-            offers: offers,
-            phone: phone,
-            busy: busy,
-          );
-    return Text.rich(
-      TextSpan(
-        children: [
-          WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: KeyedSubtree(
-              key: const ValueKey('super-buddy-model'),
-              child: picker,
-            ),
-          ),
-          TextSpan(text: ' · $after'),
-        ],
-      ),
-      style: DesktopChrome.metadata(),
-    );
-  }
-
-  Widget _anchor({
-    required String label,
-    required List<BuddyModelOffer> offers,
-    required bool phone,
-    required bool busy,
-  }) {
-    final current = widget.agent.gridModel;
-    final pool = c.snapshot!.pool(widget.agent.machineId);
-    Widget row(AppMenuItem item) => fingerTarget(enabled: phone, item);
-    Widget words(String text) => Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: grid.AppDesktop.groupGap,
-        vertical: grid.AppDesktop.menuInset,
-      ),
-      child: Text(text, style: DesktopChrome.metadata()),
-    );
-    return AppDropdown(
-      controller: _menu,
-      // Wide enough for a model and its servers; the longer lines wrap.
-      width: 320,
-      maxHeight: 520,
-      children: [
-        row(
-          AppMenuItem(
-            icon: current == null ? AppIcons.check : null,
-            label: 'Your subscription',
-            note: 'Claude Code',
-            onPressed: () => _pick(null),
-          ),
-        ),
-        const AppMenuDivider(),
-        words('SHARED IN THIS SWARM'),
-        // A Buddy-only machine never joins the Swarm's grid (backend
-        // read/hostRows.ts), so nothing shared reaches a Buddy there.
-        if (pool == null || pool['buddyOnly'] == true)
-          words(
-            "Add ${widget.machine} to the Swarm's Machines to use shared models.",
+        // Only Claude switches to a shared model: on its subscription, any other engine's menu would hold the one row
+        // already chosen (#4445).
+        : current == null && agent.engine != 'claude'
+        ? Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(color: DesktopChrome.foreground),
           )
-        else if (offers.isEmpty)
-          words('Nobody shares a model in this Swarm yet.')
-        else
-          for (final offer in offers)
-            row(
-              AppMenuItem(
-                icon: offer.model == current ? AppIcons.check : null,
-                label: offer.name,
-                // Under the name: a list of servers would be cut short beside it.
-                detail: _servers(offer),
-                onPressed: () => _pick(offer.model),
+        : AppDropdown(
+            controller: _menu,
+            // Wide enough for a model and its servers; the longer lines wrap.
+            width: 320,
+            maxHeight: 520,
+            children: buddyModelMenuRows(
+              controller: c,
+              agent: agent,
+              machine: widget.machine,
+              menu: _menu,
+              offers: offers,
+              phone: phone,
+              busy: busy,
+            ),
+            builder: (context, menu, _) => fingerTarget(
+              enabled: phone,
+              InkWell(
+                borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+                onTap: busy
+                    ? null
+                    : () => menu.isOpen ? menu.close() : menu.open(),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: DesktopChrome.metadata(
+                          color: DesktopChrome.foreground,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      AppIcons.chevronDown,
+                      size: AppIcons.inlineSize,
+                      color: DesktopChrome.muted,
+                    ),
+                  ],
+                ),
               ),
             ),
-        const AppMenuDivider(),
-        words(
-          'What your Buddy reads and writes goes to the machine or API that serves the model you pick.',
-        ),
-      ],
-      builder: (context, menu, _) => fingerTarget(
-        enabled: phone,
-        InkWell(
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          onTap: busy ? null : () => menu.isOpen ? menu.close() : menu.open(),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                label,
-                style: DesktopChrome.metadata(color: DesktopChrome.foreground),
-              ),
-              Icon(
-                AppIcons.chevronDown,
-                size: AppIcons.inlineSize,
-                color: DesktopChrome.muted,
-              ),
-            ],
+          );
+    // Text.rich scales inline widgets as well as the Text they contain.
+    // Ordinary children scale once and wrap naturally on a narrow header.
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (buddyEngineCapable(snapshot, agent)) ...[
+          BuddyEnginePicker(
+            key: const ValueKey('super-buddy-engine'),
+            controller: c,
+            agent: agent,
           ),
-        ),
-      ),
+          Text(' · ', style: DesktopChrome.metadata()),
+        ],
+        KeyedSubtree(key: const ValueKey('super-buddy-model'), child: picker),
+        Text(' · $after', style: DesktopChrome.metadata()),
+      ],
     );
   }
 }
+
+/// The model a Buddy on its own subscription runs, as people know it ("Opus 5.5"); while its configuration names none
+/// but the engine's default, the subscription it runs on.
+String _subscriptionModel(SuperTabAgent agent) =>
+    switch (agent.configuration['model']) {
+      final String id when id.isNotEmpty && id != 'default' => modelDisplayName(
+        id,
+      ),
+      _ => 'Your subscription',
+    };

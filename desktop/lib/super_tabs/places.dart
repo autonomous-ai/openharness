@@ -2,10 +2,9 @@ import 'package:flutter/foundation.dart';
 
 import 'controller.dart';
 
-/// The Swarm's three pages in the sidebar, each one thing (anh Dee, 11-05,
-/// task #2996): what waits on the reader's answer, the tags of them, and the
-/// threads they follow.
-enum SwarmPage { decisions, mentions, threads }
+/// The Swarm's sidebar pages: answers, the weekly Desktop leaderboard,
+/// tags, followed threads, and the Desktop's grid of projects (task #4466).
+enum SwarmPage { decisions, leaderboard, mentions, threads, projects }
 
 /// A place the reader was in a Swarm: one of its pages, or a chat with the
 /// thread open beside it ([root]) or none.

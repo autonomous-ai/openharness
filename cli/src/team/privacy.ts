@@ -10,7 +10,7 @@
  * time. Each probe must be refused with EACCES or EPERM. Reading it, or any other answer (a missing file means the
  * folder above it was searchable), fails the check, and the first failing item is what the machine reports.
  */
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { TeamConfig } from './config.js'
@@ -151,7 +151,7 @@ export function enginesOf(value: unknown): TeamEngines | undefined {
   for (const engine of ['claude', 'codex'] as const) {
     const e = v[engine] as Record<string, unknown> | undefined
     if (!e || typeof e !== 'object' || typeof e.installed !== 'boolean' || (typeof e.signedIn !== 'boolean' && e.signedIn !== null)) return undefined
-    result[engine] = { installed: e.installed, signedIn: e.signedIn as boolean | null, ...(e.relayed === true ? { relayed: true } : {}) }
+    result[engine] = { installed: e.installed, signedIn: e.signedIn as boolean | null }
   }
   return result
 }
@@ -178,7 +178,7 @@ const statusChildArgs = (path: string): string[] => ['-e', STATUS_CHILD_SOURCE, 
 /** No window, and none of this process's settings, NODE_OPTIONS among them. */
 const statusChildOptions = () => ({ windowsHide: true, env: process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {} })
 
-/** For `harness team status` and setup, which wait for their answer. The daemon uses readTeamStatusOffThread. */
+/** For `harness team status` and setup, which wait for their answer. */
 function readStatusInChild(path: string, deadlineMs: number): string {
   const result = spawnSync(process.execPath, statusChildArgs(path), { ...statusChildOptions(), timeout: deadlineMs, maxBuffer: STATUS_MAX_BYTES + 1,
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
@@ -186,49 +186,9 @@ function readStatusInChild(path: string, deadlineMs: number): string {
   return result.stdout
 }
 
-let statusChildRunning = false
-export function resetStatusChild(): void { statusChildRunning = false }
-
-export interface StatusReadOptions { platform?: NodeJS.Platform; deadlineMs?: number; spawn?: typeof spawn; log?: (line: string) => void }
-
 /**
- * The status as the owner's daemon reads it about once a minute, never waiting on the file (audit W4). One child at a time: while a
- * killed one has not gone, a read answers no status, as an unreadable file does, rather than start another for the same stall.
- */
-export async function readTeamStatusOffThread(path: string, options: StatusReadOptions = {}): Promise<TeamStatus | null> {
-  if ((options.platform ?? process.platform) !== 'win32') return readTeamStatus(path)
-  if (statusChildRunning) return null
-  statusChildRunning = true
-  const log = options.log ?? ((line: string) => console.log(`[team] ${line}`))
-  const text = await new Promise<string | null>((resolve) => {
-    const chunks: Buffer[] = []
-    let size = 0
-    let child: ChildProcess
-    try {
-      child = (options.spawn ?? spawn)(process.execPath, statusChildArgs(path), { ...statusChildOptions(), stdio: ['ignore', 'pipe', 'ignore'] })
-    } catch { statusChildRunning = false; resolve(null); return }
-    const timer = setTimeout(() => {
-      log(`the status file ${path} did not answer in ${options.deadlineMs ?? STATUS_READ_DEADLINE_MS} ms; reading on without it`)
-      child.kill()
-      resolve(null)
-    }, options.deadlineMs ?? STATUS_READ_DEADLINE_MS)
-    timer.unref?.()
-    child.stdout?.on('data', (chunk: Buffer) => {
-      size += chunk.length
-      if (size > STATUS_MAX_BYTES) { child.kill(); resolve(null) } else chunks.push(chunk)
-    })
-    const done = (code: number | null) => { statusChildRunning = false; clearTimeout(timer); resolve(code === 0 ? Buffer.concat(chunks).toString('utf8') : null) }
-    child.once('error', () => done(null))
-    child.once('close', done)
-    child.unref?.()
-    ;(child.stdout as (NodeJS.ReadableStream & { unref?: () => void }) | null)?.unref?.()
-  })
-  return text === null ? null : readTeamStatus(path, () => text)
-}
-
-/**
- * The status file, which the Team account may replace with anything, and which the owner's daemon reads about once a minute
- * (superTabs/service.ts). A FIFO there blocked a plain read for good and stopped the owner's Swarm service at every restart; a
+ * The status file, which the Team account may replace with anything, and which the owner reads (`harness team status`,
+ * setup). A FIFO there blocked a plain read for good and stopped the owner's Swarm service at every restart; a
  * link to /dev/zero would run until memory is gone (audit M5). So: never through a link, never waiting on a FIFO, a plain file
  * only, and never more than the limit, whatever fstat said a moment ago. As ./handoff.ts reads its code. Throws otherwise.
  */
@@ -345,7 +305,7 @@ export class TeamPrivacyObserver {
         if (!signedIn) {
           try {
             this.deps.writeStatus(config.statusFile, { signIn: { state: 'signed-out', at: now,
-              detail: 'The Team sign-in is no longer available. Run harness team setup --sign-in-again.' } })
+              detail: 'The Team sign-in is no longer available.' } })
             this.signedIn = signedIn
           } catch { /* Try the status write again at the next observation; privacy is checked independently. */ }
         } else this.signedIn = signedIn

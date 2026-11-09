@@ -1,9 +1,10 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TeamConfig } from '../team/config.js'
-import { agentTmpEnv, agentTmpFolder, agentTmpRoot, agentTmpState, buddyTmpEnv, buddyTmpFolder, buddyTmpOf, buddyTmpParent, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, sweepBuddyTmp, type AgentTmpDeps } from './agentTmp.js'
+import { agentTmpFolder, agentTmpLaunch, agentTmpRoot, agentTmpState, buddyTmpEnv, buddyTmpFolder, buddyTmpOf, buddyTmpParent, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, sweepTmpFolders, type AgentTmpDeps } from './agentTmp.js'
 
 const made: string[] = []
 afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true }); resetAgentTmpSweep() })
@@ -14,38 +15,65 @@ const deps = (dataDir: string, over: Partial<AgentTmpDeps> = {}): AgentTmpDeps =
   platform: 'darwin', dataDir, config: () => config, user: () => 'owner-placeholder', log: vi.fn(), now: () => 1_000_000_000_000, ...over,
 })
 
+const none = { env: {}, args: [] }
+
 describe('who gets the private temporary folder', () => {
-  it('an owner\'s engine agent on a computer with a Team account, in a 0700 folder', () => {
+  // Task #4395: since #4215 an agent starts in its owner's own settings, which on the Mac Studio block reads outside the working
+  // directories, and since v3 there is no Team computer, so agents used the system's folder and stopped at Claude Code's
+  // question for their own mktemp file (Authorder, 11-07). Each Swarm agent gets a folder of its own, added to the engine's
+  // working directories: Claude Code reads an added folder's own skills and settings, so one shared folder would let an
+  // agent plant them for the others.
+  it('a Swarm agent, with no Team account here: a 0700 folder of its own as TMPDIR, added to Claude Code\'s and Codex\'s working directories', () => {
     const data = scratch()
-    const env = agentTmpEnv('claude', undefined, deps(data))
-    expect(env).toEqual({ TMPDIR: agentTmpFolder(data) })
-    expect(statSync(env.TMPDIR!).mode & 0o777).toBe(0o700)
+    const launch = agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { config: () => null }))
+    const folder = launch.env.TMPDIR!
+    expect(folder.startsWith(`${realpathSync(agentTmpFolder(data))}/`)).toBe(true)
+    expect(statSync(folder).mode & 0o777).toBe(0o700)
+    expect(statSync(agentTmpFolder(data)).mode & 0o777).toBe(0o700)
+    // Joined to its flag: Claude Code's takes several values and would swallow what follows it.
+    expect(launch).toEqual({ env: { TMPDIR: folder }, args: [`--add-dir=${folder}`] })
+    expect(agentTmpLaunch('codex', { role: 'coordinator', key: 'one' }, deps(data, { platform: 'linux', config: () => null })))
+      .toEqual({ env: { TMPDIR: folder }, args: [`--add-dir=${folder}`] })
+    // The same agent's relaunch finds the same folder; another agent has its own, in the same workspace too: a person's
+    // Regular agents all start in that person's home folder (security review of #3506). On a Mac too, only that folder is
+    // added, never the account's own temporary folder, which every agent and app of the account shares.
+    const another = agentTmpLaunch('claude', { role: 'agent', key: 'two' }, deps(data, { config: () => null })).env.TMPDIR
+    expect(another).not.toBe(folder)
+    expect(another!.startsWith(`${realpathSync(agentTmpFolder(data))}/`)).toBe(true)
   })
 
-  it('a Swarm role other than Buddy too, on Linux too', () => {
+  it('an engine that takes no such folder gets the folder alone', () => {
     const data = scratch()
-    expect(agentTmpEnv('codex', 'dev', deps(data, { platform: 'linux' }))).toEqual({ TMPDIR: agentTmpFolder(data) })
+    const launch = agentTmpLaunch('opencode', { role: 'agent', key: 'one' }, deps(data, { config: () => null }))
+    expect(launch.args).toEqual([])
+    expect(launch.env.TMPDIR!.startsWith(`${realpathSync(agentTmpFolder(data))}/`)).toBe(true)
   })
 
-  it('nobody else: a Buddy, whose guard closes the data folder; a person\'s terminal; Windows; the Team account; a computer with no Team account', () => {
+  it('nobody else gets an added folder: a Buddy, whose guard closes the data folder; a terminal; a person\'s own session; Windows', () => {
     const data = scratch()
-    expect(agentTmpEnv('claude', 'buddy', deps(data))).toEqual({})
-    expect(agentTmpEnv('terminal', undefined, deps(data))).toEqual({})
-    expect(agentTmpEnv('claude', undefined, deps(data, { platform: 'win32' }))).toEqual({})
-    expect(agentTmpEnv('claude', undefined, deps(data, { user: () => 'harnessteam' }))).toEqual({})
-    expect(agentTmpEnv('claude', undefined, deps(data, { config: () => null }))).toEqual({})
+    expect(agentTmpLaunch('claude', { role: 'buddy', key: 'one' }, deps(data))).toEqual(none)
+    expect(agentTmpLaunch('terminal', { role: 'agent', key: 'one' }, deps(data))).toEqual(none)
+    expect(agentTmpLaunch('claude', undefined, deps(data, { config: () => null }))).toEqual(none)
+    expect(agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { platform: 'win32' }))).toEqual(none)
     expect(existsSync(agentTmpFolder(data))).toBe(false)
+  })
+
+  it('a person\'s own session on a computer with a Team account keeps the shared folder, with nothing added', () => {
+    const data = scratch()
+    expect(agentTmpLaunch('claude', undefined, deps(data))).toEqual({ env: { TMPDIR: agentTmpFolder(data) }, args: [] })
+    expect(agentTmpLaunch('claude', undefined, deps(data, { user: () => 'harnessteam' }))).toEqual(none)
   })
 
   it('a config that cannot be read counts as no Team account, and the agent still starts', () => {
     const data = scratch()
-    expect(agentTmpEnv('claude', undefined, deps(data, { config: () => { throw new Error('unreadable') } }))).toEqual({})
+    expect(agentTmpLaunch('claude', undefined, deps(data, { config: () => { throw new Error('unreadable') } }))).toEqual(none)
   })
 
-  it('is a root for what agents drop only where it is in use', () => {
+  it('is a root for what agents drop wherever agents are given it, never on Windows', () => {
     const data = scratch()
     expect(agentTmpRoot(deps(data))).toBe(agentTmpFolder(data))
-    expect(agentTmpRoot(deps(data, { config: () => null }))).toBeNull()
+    expect(agentTmpRoot(deps(data, { config: () => null }))).toBe(agentTmpFolder(data))
+    expect(agentTmpRoot(deps(data, { platform: 'win32' }))).toBeNull()
   })
 })
 
@@ -58,11 +86,12 @@ describe('the folder itself', () => {
     expect(statSync(folder).mode & 0o777).toBe(0o700)
   })
 
-  it('refuses a link in its place, and the agent falls back to the system\'s folder, saying so', () => {
+  it('refuses a link in its place, and the agent falls back to the system\'s folder with nothing added, saying so', () => {
     const data = scratch(), elsewhere = scratch()
     symlinkSync(elsewhere, agentTmpFolder(data))
     const d = deps(data)
-    expect(agentTmpEnv('claude', undefined, d)).toEqual({})
+    expect(agentTmpLaunch('claude', undefined, d)).toEqual(none)
+    expect(agentTmpLaunch('claude', { role: 'agent', key: 'one' }, d)).toEqual(none)
     expect(d.log).toHaveBeenCalledWith(expect.stringContaining('private temporary folder'))
     chmodSync(elsewhere, 0o755)
     expect(statSync(elsewhere).mode & 0o777).toBe(0o755)
@@ -151,23 +180,39 @@ describe('what deletes it', () => {
     const data = scratch(), folder = agentTmpFolder(data)
     mkdirSync(folder, { mode: 0o700 })
     writeFileSync(join(folder, 'stale'), 'x')
-    expect(agentTmpEnv('claude', undefined, deps(data, { config: () => null, now: () => LATER }))).toEqual({})
+    expect(agentTmpLaunch('claude', undefined, deps(data, { config: () => null, now: () => LATER }))).toEqual(none)
     await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
+  })
+
+  // Task #4395: each agent's folder is its TMPDIR while it runs, however quiet, as a Buddy's is: what is in it goes after 7
+  // days, the folder itself only once it has been empty for 30.
+  it('keeps a quiet agent\'s own folder, sweeping what is in it', async () => {
+    const data = scratch()
+    const mine = agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { config: () => null })).env.TMPDIR!
+    writeFileSync(join(mine, 'stale'), 'x')
+    await sweepTmpFolders(agentTmpFolder(data), Date.now() + 8 * DAY)
+    expect(existsSync(join(mine, 'stale'))).toBe(false)
+    expect(existsSync(mine)).toBe(true)
+    await sweepTmpFolders(agentTmpFolder(data), Date.now() + 31 * DAY)
+    expect(existsSync(mine)).toBe(false)
+    // Its next launch makes it again.
+    expect(agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { config: () => null })).env.TMPDIR).toBe(mine)
+    expect(existsSync(mine)).toBe(true)
   })
 
   it('sweeps from a launch at most once a day', async () => {
     const data = scratch(), folder = agentTmpFolder(data)
     let now = LATER - DAY - 1
     const d = deps(data, { now: () => now })
-    agentTmpEnv('claude', undefined, d)
+    agentTmpLaunch('claude', undefined, d)
     writeFileSync(join(folder, 'stale'), 'x')
     // The day's sweep already ran: this launch starts none, though the file's 7 days are nearly up.
     now = LATER - DAY / 2
-    agentTmpEnv('claude', undefined, d)
+    agentTmpLaunch('claude', undefined, d)
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(existsSync(join(folder, 'stale'))).toBe(true)
     now = LATER
-    agentTmpEnv('claude', undefined, d)
+    agentTmpLaunch('claude', undefined, d)
     await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
   })
 
@@ -255,7 +300,7 @@ describe('a Buddy\'s private temporary folder', () => {
     writeFileSync(join(folder, 'stale'), 'x')
     const later = Date.now() + 8 * DAY
     writeFileSync(join(folder, 'fresh'), 'x'); utimesSync(join(folder, 'fresh'), new Date(later), new Date(later))
-    expect(await sweepBuddyTmp(buddyTmpParent(data), later)).toBe(1)
+    expect(await sweepTmpFolders(buddyTmpParent(data), later)).toBe(1)
     expect(existsSync(join(folder, 'stale'))).toBe(false)
     expect(existsSync(join(folder, 'fresh'))).toBe(true)
     expect(existsSync(folder)).toBe(true)
@@ -263,9 +308,9 @@ describe('a Buddy\'s private temporary folder', () => {
 
   it('removes a Buddy\'s folder only when empty and idle for 30 days', async () => {
     const data = dataIn(), folder = buddyTmpOf('/work/one', deps(data))!
-    await sweepBuddyTmp(buddyTmpParent(data), Date.now() + 8 * DAY)
+    await sweepTmpFolders(buddyTmpParent(data), Date.now() + 8 * DAY)
     expect(existsSync(folder)).toBe(true)
-    await sweepBuddyTmp(buddyTmpParent(data), Date.now() + 31 * DAY)
+    await sweepTmpFolders(buddyTmpParent(data), Date.now() + 31 * DAY)
     expect(existsSync(folder)).toBe(false)
   })
 
@@ -274,11 +319,11 @@ describe('a Buddy\'s private temporary folder', () => {
     writeFileSync(join(target, 'kept'), 'x')
     mkdirSync(buddyTmpParent(data), { recursive: true, mode: 0o700 })
     symlinkSync(target, join(buddyTmpParent(data), 'link'))
-    await sweepBuddyTmp(buddyTmpParent(data), Date.now() + 40 * DAY)
+    await sweepTmpFolders(buddyTmpParent(data), Date.now() + 40 * DAY)
     expect(existsSync(join(target, 'kept'))).toBe(true)
     const other = join(scratch(), 'parent')
     symlinkSync(target, other)
-    expect(await sweepBuddyTmp(other, Date.now() + 40 * DAY)).toBe(0)
+    expect(await sweepTmpFolders(other, Date.now() + 40 * DAY)).toBe(0)
     expect(existsSync(join(target, 'kept'))).toBe(true)
   })
 
@@ -286,7 +331,57 @@ describe('a Buddy\'s private temporary folder', () => {
     const data = dataIn(), folder = buddyTmpOf('/work/one', deps(data))!
     writeFileSync(join(folder, 'stale'), 'x')
     resetAgentTmpSweep()
-    agentTmpEnv('claude', undefined, deps(data, { config: () => null, now: () => Date.now() + 8 * DAY }))
+    agentTmpLaunch('claude', undefined, deps(data, { config: () => null, now: () => Date.now() + 8 * DAY }))
     await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
+  })
+})
+
+describe('a script written to the folder runs as it would in the system\'s', () => {
+  // The data folder is under ~/.harness/cli, whose package.json says "type": "module". An extensionless script a spec wrote
+  // to TMPDIR (the fake grid) loaded as an ES module and died on require, so specs failed for agents and passed in CI (#4356).
+  const DAY = 24 * 60 * 60_000
+  const inModulePackage = () => { const root = scratch(); writeFileSync(join(root, 'package.json'), '{"type":"module"}'); return join(root, 'data') }
+  const runs = (folder: string) => {
+    const script = join(folder, 'fake-grid')
+    writeFileSync(script, "#!/usr/bin/env node\nconst { join } = require('node:path')\nprocess.stdout.write(join('a', 'b'))\n")
+    return execFileSync(process.execPath, [script], { encoding: 'utf8' })
+  }
+
+  it('an extensionless require() script in an agent\'s folder runs', () => {
+    expect(runs(agentTmpLaunch('claude', undefined, deps(inModulePackage())).env.TMPDIR!)).toBe(join('a', 'b'))
+  })
+
+  // Task #4395: each Swarm agent's own folder is in the shared parent, whose marker covers it.
+  it('in a Swarm agent\'s own folder too, by the marker in their parent', () => {
+    const data = inModulePackage()
+    const folder = agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { config: () => null })).env.TMPDIR!
+    expect(runs(folder)).toBe(join('a', 'b'))
+    expect(existsSync(join(folder, 'package.json'))).toBe(false)
+    expect(existsSync(join(agentTmpFolder(data), 'package.json'))).toBe(true)
+  })
+
+  it('in a Buddy\'s folder too', () => {
+    expect(runs(buddyTmpOf('/work/one', deps(inModulePackage()))!)).toBe(join('a', 'b'))
+  })
+
+  it('keeps a package.json already there', () => {
+    const data = inModulePackage(), folder = agentTmpFolder(data)
+    mkdirSync(folder, { recursive: true, mode: 0o700 })
+    writeFileSync(join(folder, 'package.json'), '{"type":"commonjs","name":"kept"}')
+    agentTmpLaunch('claude', undefined, deps(data))
+    expect(readFileSync(join(folder, 'package.json'), 'utf8')).toContain('kept')
+  })
+
+  it('no sweep deletes the folders\' own package.json however old; a tool\'s goes like any file', async () => {
+    const data = inModulePackage(), folder = agentTmpFolder(data), parent = buddyTmpParent(data)
+    agentTmpLaunch('claude', undefined, deps(data))
+    const buddy = buddyTmpOf('/work/one', deps(data))!
+    writeFileSync(join(buddy, 'package.json'), '{"type":"module"}')
+    const later = Date.now() + 8 * DAY
+    expect(await sweepTmpFolders(folder, later)).toBe(0)
+    expect(await sweepTmpFolders(parent, later)).toBe(1)
+    expect(existsSync(join(folder, 'package.json'))).toBe(true)
+    expect(existsSync(join(parent, 'package.json'))).toBe(true)
+    expect(existsSync(join(buddy, 'package.json'))).toBe(false)
   })
 })

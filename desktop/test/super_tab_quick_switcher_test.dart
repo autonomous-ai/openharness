@@ -601,6 +601,67 @@ void main() {
 
   final shots = Platform.environment['SWARM_QUICK_SWITCHER_SHOTS'];
   setUpAll(() => loadCaptureFonts(shots));
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'finds a Regular agent by name and opens its own chat (audit #4211, 11): ${brightness.name}',
+      (tester) async {
+        final previous = grid.AppTheme.brightness.value;
+        grid.AppTheme.brightness.value = brightness;
+        addTearDown(() => grid.AppTheme.brightness.value = previous);
+        final (f, c) = await setup(tester);
+        // A v3 Regular agent: no project, its person's chat with it named by the server.
+        (f.connection.server.state['agents'] as List).add({
+          'id': 'wren',
+          'name': 'Builder',
+          'displayName': 'Wren',
+          'projectId': '',
+          'machineId': 'm1',
+          'harnessId': 'wren-harness',
+          'contributorId': c.accountId,
+          'kind': 'regular',
+          'chatId': 'agent-chat-wren',
+          'configuration': {'engine': 'claude', 'model': 'opus'},
+        });
+        (f.connection.server.state['conversations'] as List).add({
+          ...conversationFixture('agent-chat-wren', 'Wren'),
+          'kind': 'agent-chat',
+          'agentIds': ['wren'],
+        });
+        f.connection.server.revision++;
+        await c.refresh();
+        await tester.pump();
+        await open(tester);
+        final query = find.byKey(const ValueKey('swarm-quick-query'));
+        await tester.enterText(query, 'Wren');
+        await tester.pump();
+        expect(
+          find.byKey(
+            const ValueKey('swarm-quick-conversation:agent-chat-wren'),
+          ),
+          findsOneWidget,
+        );
+        // One row for the agent, and picking it opens its chat, not a details card.
+        expect(
+          find.byKey(const ValueKey('swarm-quick-agent:wren')),
+          findsNothing,
+        );
+        // The agent's chat, and the reader's Buddy chat too, both read as the person's agent (task #4568).
+        expect(find.text('Your agent'), findsWidgets);
+        await captureWindow(
+          tester,
+          shots,
+          'cmdk-agent-found-${brightness.name}',
+        );
+        await key(tester, LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'agent-chat-wren');
+        await close(tester, f, c);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+  }
+
   for (final brightness in Brightness.values) {
     testWidgets(
       'switcher in ${brightness.name}, empty state and enlarged type',

@@ -26,7 +26,7 @@ const cut = (text: string, max: number): string => {
   return `${text.slice(0, /[\uD800-\uDBFF]/.test(text[max - 1]!) ? max - 1 : max)}…`
 }
 
-/** Each line of [text] set off with "> ", so a header it fakes ("Message abc from River:") never starts a line of the delivery
+/** Each line of [text] set off with "> ", so a header it fakes ("@River, to you:") never starts a line of the delivery
  *  (security review 2 of #2570), at every break a reader may see as one: U+2028, U+2029 and U+0085 too (security review 1). */
 export const setOff = (text: string): string => text.split(/\r\n|[\n\r\v\f\u0085\u2028\u2029]/).map(line => line ? `> ${line}` : '>').join('\n')
 
@@ -54,15 +54,6 @@ export function placeLine(state: Json, groupId: string): string {
 }
 const taskWords = (task: Json): string =>
   `task ${typeof task.number === 'number' ? `#${task.number} ` : ''}${JSON.stringify(String(task.title ?? ''))}`
-
-/** Whether [authorId], the project's coordinator, wrote in a task or step [groupId] that [agentId] holds (task #3057, Ken 11-05).
- *  A post there that names no one reaches no agent, so the reader needs no --to to answer it; the delivery's sample reply
- *  command used to carry --to the sender, and agents copied it into their acknowledgements to the PM. */
-export function coordinatorInOwnTask(state: Json, groupId: string, authorId: string, agentId: string): boolean {
-  if (!isCoordinator(state, authorId)) return false
-  const group = list(state.conversations).find(c => c.id === groupId)
-  return !!group && (isStep(group) || typeof group.number === 'number') && object(group.assignment).agentId === agentId
-}
 
 const and = (items: string[]): string => items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
 

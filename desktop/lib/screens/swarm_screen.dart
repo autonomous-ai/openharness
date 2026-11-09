@@ -85,11 +85,7 @@ import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
-import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
-import '../super_tabs/join_machine.dart';
-import '../super_tabs/join_machine_note.dart';
-import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
@@ -125,7 +121,6 @@ import '../widgets/session_work_dialog.dart';
 import '../widgets/web_download_button.dart';
 import '../widgets/workspace_share_button.dart';
 import '../widgets/workspace_account_button.dart';
-import '../widgets/workspace_store_button.dart';
 import '../widgets/grid_model_picker.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import '../store/store_mark.dart';
@@ -330,8 +325,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   bool _deviceRevealInFlight = false;
   StreamSubscription<void>? _modelsRequests;
   StreamSubscription<String>? _superTabClosures;
-  StreamSubscription<String>? _teamSetupAsks;
-  StreamSubscription<SwarmJoinedMachine>? _joinedMachines;
   // The one Swarm notice: whether it exists (queued or shown), whether it
   // is on screen, and the closed tab its Reopen restores.
   int _superTabNoticeSerial = 0;
@@ -514,9 +507,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// clears first ([_onNative]). A titlebar dropdown is an overlay, not a
   /// cover: the titlebar stays as it is, and a click there closes it.
   _TitlebarCover get _titlebarCover {
-    // The Harness Team account's setup holds the whole window
-    // (TeamAccountSetupLock): menus, shortcuts and the row wait with it.
-    if (app.teamSetupLocked) return _TitlebarCover.modal;
     if (_spokenPaletteOpen) return _TitlebarCover.modal;
     if (settingsPageOnTop.value != null) return _TitlebarCover.settingsPage;
     if (!_routeIsCurrent || _dialogOpen) return _TitlebarCover.modal;
@@ -909,14 +899,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
       }
     });
     _superTabClosures = app.superTabClosures.listen(_offerSuperTabReopen);
-    // The Harness Team account, explained before macOS asks for the password (super_tabs/team_account_setup.dart).
-    _teamSetupAsks = app.teamSetupAsks.listen((_) {
-      if (mounted) unawaited(showTeamAccountSetup(context, app, asked: true));
-    });
-    // This computer, added to a Swarm as its person joined it (super_tabs/join_machine.dart).
-    _joinedMachines = app.joinedMachines.listen((note) {
-      if (mounted) showJoinedMachineNote(context, app.superTabs.open, note);
-    });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -1073,8 +1055,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.modelManager.setPanelVisible(false);
     _modelsRequests?.cancel();
     _superTabClosures?.cancel();
-    _teamSetupAsks?.cancel();
-    _joinedMachines?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
@@ -2509,9 +2489,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// closes every open dropdown first ([dismissTransientMenus]); a row click
   /// pops the Settings page first; a modal still drops it ([_actOnNative]).
   Future<void> _onNative(MethodCall call) async {
-    // Held with the window ([_titlebarCover]): a row or key equivalent that
-    // AppKit sent before it greyed out does nothing either.
-    if (app.teamSetupLocked) return;
     var action = call;
     final args = call.arguments is Map ? call.arguments as Map : const {};
     // AppKit wraps the row's clicks while its menus are off, which, with the
@@ -2541,8 +2518,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Future<void> _actOnNative(MethodCall call) async {
     if (mounted && call.method == 'keymapCommand') {
       final command = (call.arguments as Map?)?['command'];
-      if (command is String && dispatchSwarmQuickSwitcherCommand(command))
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) {
         return;
+      }
     }
 
     if (mounted && call.method == 'keymapPending') {
@@ -3868,11 +3846,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     String? task,
     String? superTabConversationId,
     bool newSwarmProject = false,
+    bool newSwarmAgent = false,
     HarnessPlacement? placement,
     _NewHarnessSource source = _NewHarnessSource.workspace,
     bool Function()? stillCurrent,
   }) async {
     if (!newSwarmProject &&
+        !newSwarmAgent &&
         _newHarnessEmbedded &&
         _newHarness != null &&
         source == _NewHarnessSource.workspace &&
@@ -3884,6 +3864,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final search = source == _NewHarnessSource.workspace ? _search : null;
+    // Nothing but "a new agent here": Cmd-N, File ▸ New Agent, search.
+    final plain =
+        source == _NewHarnessSource.workspace &&
+        !newSwarmProject &&
+        superTabConversationId == null &&
+        (split ?? search?.split) == null &&
+        (placement ?? search?.placement) == null &&
+        engine == null &&
+        folder == null &&
+        projectName == null &&
+        (search == null || _superTabAddTarget == null);
     // A pane never lands in the store tab: New Harness from there goes to
     // the empty starter tab (or a fresh one), the way New Tab does.
     placement ??= search?.placement;
@@ -3895,6 +3886,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final superTab = app.swarms
         .where((s) => s.id == target && s.isSuperTab)
         .firstOrNull;
+    // Where the left pane offers + New agent, a plain new agent is that one
+    // (audit 1.3.89 finding 11), and a reader it is hidden from gets nothing.
+    final board = superTab?.superTabId == null || kIsWeb
+        ? null
+        : app.superTabs.peek(superTab!.superTabId!);
+    if (plain && board != null) {
+      if (!board.canWrite) return;
+      newSwarmAgent = true;
+    }
     final conversation =
         superTabConversationId ??
         (superTab?.superTabId == null
@@ -3983,8 +3983,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         integration = await SuperTabLaunch.open(
           app,
           superTab,
-          newSwarmProject ? 'new-project' : conversation,
+          newSwarmProject
+              ? 'new-project'
+              : newSwarmAgent
+              ? 'new-agent'
+              : conversation,
           newProject: newSwarmProject,
+          newAgent: newSwarmAgent,
         );
       } catch (failure) {
         _showPaneActionHint(failure.toString());
@@ -5048,11 +5053,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     // Paint hints only; the keymap still owns every shortcut and input event.
     _tabShortcutHints.value = showsTabShortcutHints(HardwareKeyboard.instance);
     // Off, this is not here at all: every key goes where it went before.
-    // Nor while the Harness Team account's setup holds the window
-    // (TeamAccountSetupLock): this handler hears keys whatever has focus.
-    if (event is! KeyDownEvent ||
-        _zoo.daemons == DaemonsSwitch.off ||
-        app.teamSetupLocked) {
+    if (event is! KeyDownEvent || _zoo.daemons == DaemonsSwitch.off) {
       return false;
     }
     _noteWindowInput();
@@ -8451,6 +8452,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           app: app,
                                           onNewProject: () => unawaited(
                                             _newAgent(newSwarmProject: true),
+                                          ),
+                                          // + New agent (task #4196): Cmd-N,
+                                          // with Member or Lead.
+                                          onNewAgent: () => unawaited(
+                                            _newAgent(newSwarmAgent: true),
                                           ),
                                           onNewSwarm: () =>
                                               _newTab(superTab: true),

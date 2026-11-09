@@ -12,6 +12,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { QUIET_CHECK_MS, runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // Task #3385 (anh Dee's Swarm redesign, 11-05): the stall, idle and lost-task follow-ups run in the backend worker, so they
 // keep running while the PM is down. Before, only the PM's own poll ran them: with the PM hung, five people's asks waited 3 to
@@ -56,8 +57,9 @@ async function swarm() {
   const generations = new Map<string, string>()
   for (const machineId of ['lead-host', 'test-host']) generations.set(machineId, (await poolRows(timed, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
   const harness = { lead: randomUUID(), worker: randomUUID() }
+  // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
   const add = async (conversationId: string, machineId: string, harnessId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+    conversationId, machineId, harnessId, name, configuration: config, lead }, host)).result.agentId)
   const lead = await add('lead', 'lead-host', harness.lead, 'Lead', true)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
@@ -100,25 +102,6 @@ describe('the time checks with the PM down', () => {
     expect(await f.rows('work-stalled')).toHaveLength(1)
   })
 
-  it('tell the PM of an agent left idle for 15 minutes, once, with no PM poll', async () => {
-    const f = await swarm()
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Done elsewhere' })
-    // Its host took the cancel notice, as a running host does.
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.worker, status: 'queued' }, data: { status: 'delivered' } })
-    f.clock.now += 14 * MINUTE
-    await f.workerBeat()
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.rows('idle')).toEqual([])
-    f.clock.now += MINUTE + 1_000
-    await f.workerBeat()
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.rows('idle')).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [f.lead], text: 'Worker has had no open task for 15 minutes.' })])
-    f.clock.now += 10 * MINUTE
-    await f.workerBeat()
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.rows('idle')).toHaveLength(1)
-  })
-
   it('lose the task of a worker whose machine went silent, and tell the PM, with no report and no PM poll', async () => {
     const f = await swarm()
     await f.workerBeat()
@@ -129,6 +112,37 @@ describe('the time checks with the PM down', () => {
     expect((await f.rows('work-lost')).map(r => r.text)).toContainEqual(expect.stringContaining('Worker lost its task "Ship the parser"'))
   })
 
+  // Task #3915: a task whose agent went down and nobody took tells its PM and its people within the checks' 5 minutes, once,
+  // in a line that tags them (their Needs you), and the tag resolves when someone takes it.
+  it('flag a task nobody took 10 minutes after its agent went down, once, tagging its requester, and clear it when taken', async () => {
+    const f = await swarm()
+    await f.workerBeat()
+    f.clock.now += 2 * MINUTE + 5_000
+    await f.timed.runTimeChecks(f.tab)
+    const stuck = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'asc' } }))
+      .filter(m => /stuck/i.test(m.text))
+    expect(await stuck()).toEqual([])
+    f.clock.now += 10 * MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    f.clock.now += 5 * MINUTE
+    await f.timed.runTimeChecks(f.tab)
+    const told = await stuck()
+    expect(told).toEqual([expect.objectContaining({ recipientIds: [f.lead], text: expect.stringContaining('Worker went down') })])
+    const tag = () => db.superTabMention.findMany({ where: { tabId: f.tab, messageId: told[0]!.id } })
+    expect(await tag()).toEqual([expect.objectContaining({ personId: owner.sub, conversationId: f.group, resolvedAt: null })])
+    const taker = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'lead-host', harnessId: randomUUID(), name: 'Taker',
+      configuration: config, lead: false }, host)).result.agentId)
+    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: taker })
+    f.clock.now += MINUTE
+    // Its tag resolves on the `[tabId, conversationId, personId]` index, examining only that person's tags there (backend AGENTS.md 3).
+    const entries = await profiled(db, () => f.timed.runTimeChecks(f.tab))
+    expect((await stuck()).map(m => m.text)).toEqual([told[0]!.text, 'No longer stuck: this task has an agent again.'])
+    expect(await tag()).toEqual([expect.objectContaining({ resolvedBy: 'fixed' })])
+    const resolve = reads(entries, 'SuperTabMention', ['messageId', 'personId'])
+    expect(resolve).toHaveLength(1)
+    expect(plan(resolve)).toEqual([expect.objectContaining({ plan: expect.stringMatching(/IXSCAN.*conversationId/), docsExamined: 1 })])
+  })
+
   it('are no longer run by the PM\'s poll', async () => {
     const f = await swarm()
     await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
@@ -137,6 +151,44 @@ describe('the time checks with the PM down', () => {
     await f.timed.deliveries(host, f.tab, f.lead)
     expect(await f.rows('work-stalled')).toEqual([])
     expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.liveness).toBeUndefined()
+  })
+})
+
+// Swarm v4 (anh Dee 2026-11-09): every agent has one 1:1 chat with its person, an agent from before v4 too (agentChats.ts).
+describe('every agent\'s 1:1 chat', () => {
+  it('is opened by the checks for an agent that has none, once, for its person alone', async () => {
+    const f = await swarm()
+    const before = (await f.timed.read(owner, f.tab)).state
+    expect(before.agents.find(a => a.id === f.worker)!.chatId).toBeUndefined()
+    await f.timed.runTimeChecks(f.tab)
+    const state = (await f.timed.read(host, f.tab)).state
+    const chatId = state.agents.find(a => a.id === f.worker)!.chatId!
+    expect(state.conversations.find(c => c.id === chatId)).toMatchObject({ kind: 'agent-chat', agentIds: [f.worker] })
+    // Its person's alone: the Swarm's owner does not read it.
+    expect((await f.timed.read(owner, f.tab)).state.conversations.some(c => c.id === chatId)).toBe(false)
+    await f.timed.runTimeChecks(f.tab)
+    expect((await f.timed.read(host, f.tab)).state.conversations.filter(c => c.kind === 'agent-chat' && c.agentIds.includes(f.worker))).toHaveLength(1)
+  })
+})
+
+// Swarm v4 (anh Dee 2026-11-09): only its person stops an agent; the stops the v3 rules asked for are withdrawn once.
+describe('the stops from before v4', () => {
+  it('are withdrawn once by the checks, with the session record that refused messages to the agent', async () => {
+    const f = await swarm()
+    const helper = String((await f.execute({ type: 'agent.add', conversationId: f.group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Helper', configuration: config, lead: false }, host)).result.agentId)
+    await f.execute({ type: 'agent.release', agentId: helper, decision: 'stop' })
+    const stopped = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!
+    expect(stopped.workDecision).toBe('stop')
+    await f.timed.runTimeChecks(f.tab)
+    const freed = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!
+    expect(freed.workDecision).toBeUndefined()
+    expect(await db.superTabSessionScope.findMany({ where: { stopReleaseId: stopped.releaseId! } })).toEqual([])
+    expect(await db.superTabRun.findMany({ where: { id: helper, tabId: f.tab } })).toEqual([])
+    // Once: a stop its person asks for after it stands.
+    await f.execute({ type: 'agent.release', agentId: helper, decision: 'stop' })
+    await f.timed.runTimeChecks(f.tab)
+    expect((await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === helper)!.workDecision).toBe('stop')
   })
 })
 

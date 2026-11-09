@@ -62,8 +62,9 @@ async function swarm() {
   const generations = new Map<string, string>()
   for (const machineId of ['lead-host', 'test-host']) generations.set(machineId, (await poolRows(timed, host, machineId)).find(p => p.tabId === tab)!.machine.generation)
   const harness = { lead: randomUUID(), worker: randomUUID() }
+  // Added by the host, whose machines they run on: an agent is its own person's, on their own computer (task #4120).
   const add = async (conversationId: string, machineId: string, harnessId: string, name: string, lead = false) => String((await execute({ type: 'agent.add',
-    conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
+    conversationId, machineId, harnessId, name, configuration: config, lead }, host)).result.agentId)
   const lead = await add('lead', 'lead-host', harness.lead, 'Lead', true)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
@@ -94,115 +95,6 @@ async function swarm() {
   return { timed, tab, execute, lead, group, worker, harness, observe, member, lines, add, started, delivered,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
-
-// Dee, 2026-11-06: idle decisions run on the server; the coordinator's notice is informational.
-describe('an agent left idle', () => {
-  it('gets a host-confirmed idle stop after 15 minutes, with one informational notice to its coordinator', async () => {
-    const f = await swarm()
-    f.clock.now += 14 * MINUTE
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.lines()).toEqual([])
-    f.clock.now += MINUTE + 1_000
-    await f.timed.runTimeChecks(f.tab)
-    const lines = await f.lines()
-    expect(lines).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [f.lead], text: 'Worker has had no open task for 15 minutes.',
-      source: { kind: 'idle', agentId: f.worker } })])
-    // It waits for the coordinator's next digest (noticeDigest.ts).
-    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: lines[0]!.id } })).map(d => d.status)).toEqual(['gathered'])
-    const member = await f.member()
-    expect(member.workDecision).toBe('stop')
-    expect(member.idleStop).toEqual({ previous: 'awaiting' })
-    expect(member.releaseId).toEqual(expect.any(String))
-    expect((await rosterRows(f.timed, host, 'test-host')).find(r => r.agent.id === f.worker)!.agent.releaseId).toBe(member.releaseId)
-    // The same idle spell is told once, however many polls follow.
-    f.clock.now += 30 * MINUTE
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.lines()).toHaveLength(1)
-  })
-
-  it('is told to the coordinator alone: no person or other agent reads it', async () => {
-    const f = await swarm()
-    f.clock.now += 15 * MINUTE + 1_000
-    await f.timed.runTimeChecks(f.tab)
-    const [line] = await f.lines()
-    const page = async (user: AuthUser, conversationId: string, query: { messageId?: string } = {}, asAgentId?: string) =>
-      (await f.timed.messages(user, f.tab, conversationId, query, asAgentId)).messages.map(m => m.id)
-    expect(await page(host, 'lead', {}, f.lead)).toContain(line!.id)
-    for (const user of [owner, host]) {
-      expect(await page(user, 'lead')).not.toContain(line!.id)
-      expect(await page(user, 'lead', { messageId: line!.id })).toEqual([])
-    }
-    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: line!.id } })).map(d => d.agentId)).toEqual([f.lead])
-  })
-
-  it('is told whatever its host says of its folder, and not while a message waits for it', async () => {
-    const f = await swarm()
-    f.clock.now += 20 * MINUTE
-    await f.observe('test-host', [f.harness.worker], { harnessUncommitted: { [f.harness.worker]: true } })
-    // Written straight into the queue, as a delivery from a moment ago that its host has not picked up yet.
-    const waiting = await db.superTabDelivery.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: f.group, messageId: randomUUID(), agentId: f.worker,
-      machineId: 'test-host', machineOwnerId: host.sub, assignmentId: null, membershipGeneration: 'g', authorKind: 'person', authorId: owner.sub, authorGeneration: 'g' } })
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.lines()).toEqual([])
-    await db.superTabDelivery.update({ where: { id: waiting.id }, data: { status: 'delivered' } })
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.lines()).toHaveLength(1)
-  })
-
-  it('is not told of while it belongs to a task with active work, and is once that work ends', async () => {
-    const f = await swarm()
-    const reviewed = String((await f.execute({ type: 'conversation.create', title: 'Parser v2', brief: 'More parsing',
-      checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
-    const builderHarness = randomUUID()
-    const builder = await f.add(reviewed, 'test-host', builderHarness, 'Builder')
-    const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
-    // The worker checks it, as a Reviewer or a Tester linked to it does.
-    await f.execute({ type: 'conversation.agent', conversationId: reviewed, agentId: f.worker, present: true, lead: false })
-    await f.delivered()
-    const told = async () => (await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === f.worker)
-    f.clock.now += 20 * MINUTE
-    // The Builder's session is at work: its machine's report keeps its task's lease (liveness.ts).
-    await f.observe('test-host', [f.harness.worker, builderHarness], { harnessProgress: { [builderHarness]: f.clock.now } })
-    await f.timed.runTimeChecks(f.tab)
-    expect(await told()).toEqual([])
-    await f.execute({ type: 'work.cancel', conversationId: reviewed, assignmentId: work, reason: 'Dropped' })
-    await f.delivered()
-    f.clock.now += 15 * MINUTE + 1_000
-    await f.timed.runTimeChecks(f.tab)
-    expect(await told()).toHaveLength(1)
-  })
-
-  it('keeps a Reviewer by role without loading its dormant finished tasks', async () => {
-    const f = await swarm()
-    const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser', brief: 'Review it', reviewOf: f.group,
-      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
-    const reviewer = await f.add(review, 'test-host', randomUUID(), 'Reviewer')
-    await f.started(reviewer, { role: 'reviewer' })
-    const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
-    await f.execute({ type: 'work.cancel', conversationId: review, assignmentId: verdict, reason: 'Verdict given' })
-    await f.execute({ type: 'conversation.archive', conversationId: review, archived: true })
-    await f.delivered()
-    // Asleep, though active 10 minutes ago: the coordinator's poll reads no asleep group, so the Reviewer is idle from its start.
-    f.clock.now += 20 * MINUTE
-    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: review } })
-    const recent = new Date(f.clock.now - 10 * MINUTE)
-    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, lastActivityAt: recent,
-      data: { ...part.data as object, dormant: true, lastActivityAt: recent.toISOString() } } })
-    await f.timed.runTimeChecks(f.tab)
-    const named = (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!
-    expect((await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === reviewer)).toEqual([])
-    expect(named.workDecision).toBe('keep')
-  })
-
-  it('stops idle Engineers whether or not the owner turned archiving off', async () => {
-    const f = await swarm()
-    await f.execute({ type: 'tab.tidy', enabled: false })
-    f.clock.now += 20 * MINUTE
-    await f.timed.runTimeChecks(f.tab)
-    expect(await f.lines()).toHaveLength(1)
-    expect((await f.member()).workDecision).toBe('stop')
-  })
-})
 
 describe('a finished group', () => {
   const PR = 'https://github.com/acme/app/pull/7'

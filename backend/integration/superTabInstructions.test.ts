@@ -12,14 +12,15 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
-import type { Command } from '../src/superTabs/commands.js'
+import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import { appendRouting, FIRST_INSTRUCTIONS, instructionsHash } from '../src/superTabs/instructions.js'
 import { stableId } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { rosterRows } from './hostRows.test-support.js'
-import { PM_SCHEDULE_TEXT } from '../src/superTabs/pmSchedule.js'
+import { SEED_RULES } from '../src/superTabs/policy.js'
+import { plan, profiled, reads } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // Project instructions, phase 2 (docs/plans/2026-10-30-project-instructions-plan.md): the document, its revisions, the
@@ -36,6 +37,18 @@ const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.c
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
   store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+/** [user]'s own Buddy, on a machine of theirs: it writes the server's notices in their private chat, where only they and it post
+ *  (task #4558). */
+async function ownBuddy(tab: string, user: AuthUser) {
+  const machineId = `${user.email.split('@')[0]}-mac`
+  await db.machine.upsert({ where: { machineId }, update: {}, create: { machineId, userId: user.sub, apiKey: `fixture-${randomUUID()}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  const added = await run(tab, { type: 'buddy.create', machineId, engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } }, user)
+  const startId = String(added.result.startId)
+  const onHost = (command: unknown) => store.execute(user, tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, machineId)
+  await onHost({ type: 'agent.startDispatch', startId })
+  await onHost({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })
+  await onHost({ type: 'agent.startSettled', startId, warning: null })
+}
 async function invite(tab: string) {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
@@ -135,10 +148,61 @@ describe('project instructions storage', () => {
 
 // Task #3151: a save that drops a person's rule is refused, and goes through on that person's own message, read by the store,
 // which tells them in their Buddy chats.
+describe('configured rule approvals through the store', () => {
+  it('uses the saved decider and linked accounts, while refusing absent, agent and stale approvals', async () => {
+    const { tab, lead } = await withLead()
+    await invite(tab)
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: String(invitation.result.inviteId) }, host)
+    for (const account of [owner, host, peer]) await ownBuddy(tab, account)
+    await run(tab, { type: 'rules.set', projectId: 'lead', baseRevision: 0, rules: { ...structuredClone(SEED_RULES),
+      instructionApprovals: { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub, host.sub] }] } }, summary: 'Explicit approval authority' })
+    const text = '# Rules\n\n- Always test before merging (Ken, 2026-11-04).'
+    await run(tab, save(1, text))
+    const drop = (revision: number, approvals: string[] = []) => run(tab, { ...save(revision, '# Rules\n'), askedBy: owner.sub, approvals } as Command, host, lead)
+    const message = async (user: AuthUser, asAgentId?: string) => String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'I approve removing this rule.', replyTo: null, recipientIds: [] }, user, asAgentId)).result.messageId)
+    await expect(drop(2)).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const agent = await message(host, lead)
+    await expect(drop(2, [agent])).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const stale = await message(peer)
+    const saved = await db.superTabInstructions.findFirstOrThrow({ where: { tabId: tab, projectId: 'lead' } })
+    await db.superTabMessage.update({ where: { id: stale }, data: { createdAt: new Date(saved.updatedAt.getTime() - 1) } })
+    await expect(drop(2, [stale])).rejects.toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    const decider = await message(peer)
+    const entries = await profiled(db, async () => expect((await drop(2, [decider])).result.revision).toBe(3))
+    const policyReads = plan(reads(entries, 'SuperTabProjectRules', ['tabId', 'projectId']))
+    expect(policyReads.length).toBeGreaterThan(0)
+    for (const read of policyReads) {
+      expect(read.plan).toContain('IXSCAN')
+      expect(read.docsExamined).toBe(1)
+      expect(read.returned).toBe(1)
+    }
+    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'approved by peer' } } })
+    // Dee's approval tells the decider and both affected author accounts, through each person's two private Buddy chats, each
+    // line written by that person's own Buddy (task #4558).
+    expect(notices).toHaveLength(6)
+    for (const account of [owner, host, peer]) {
+      const visible = new Set((await store.read(account, tab)).state.conversations.map(c => c.id))
+      expect(notices.filter(n => visible.has(n.conversationId))).toHaveLength(2)
+    }
+    for (const notice of notices) {
+      expect(notice.text).toContain('Always test before merging')
+      expect(notice.text).not.toContain('as you approved')
+    }
+    for (const [index, account] of [owner, host].entries()) {
+      const revision = 4 + index * 2
+      await run(tab, save(revision - 1, text))
+      const approval = await message(account)
+      expect((await drop(revision, [approval])).result.revision).toBe(revision + 1)
+    }
+  })
+})
+
 describe('a person\'s rules in a save', () => {
   it('refuses the PM\'s drop, then saves it on the person\'s own approval and tells them privately', async () => {
     const { tab, lead } = await withLead()
     await invite(tab)
+    await ownBuddy(tab, peer)
     const rule = 'A bug that reaches stable is promoted back within the hour (peer, 2026-11-04).'
     expect((await run(tab, save(1, `# Rules\n\n- ${rule}\n- Tests run first (owner, 4 Nov).`), peer)).result.revision).toBe(2)
     const asLead = (approvals?: string[]) => store.execute(host, tab, { operationId: randomUUID(), command: { ...save(2, '# Rules\n\n- Tests run first (owner, 4 Nov).',
@@ -389,7 +453,9 @@ describe('reading the instructions', () => {
 
 // An older client's saves (project instructions, phase 4, decision 3): a rule lands in the Routing section as a new revision;
 // a policy, a skill set or a role is answered and kept nowhere.
-describe('the built-in PM schedule beside the instructions', () => {
+// Task #4673 (anh Dee, 11-07): an agent reads its project's instructions and nothing the Swarm adds. The coordinator's read
+// carried a built-in schedule beside the document, and its roster row that text's hash.
+describe('the instructions read, with no built-in text', () => {
   const doc = (tab: string, asAgentId?: string) => `/api/super-tabs/${tab}/projects/lead/instructions${asAgentId ? `?asAgentId=${asAgentId}` : ''}`
   const withWorker = async () => {
     const { tab, lead } = await withLead()
@@ -398,34 +464,28 @@ describe('the built-in PM schedule beside the instructions', () => {
     return { tab, lead, worker }
   }
 
-  it('is in the coordinator\'s read alone, and the document read is unchanged', async () => {
+  it('gives every reader the document alone, the coordinator included', async () => {
     const { tab, lead, worker } = await withWorker()
-    const asLead = (await get(host, doc(tab, lead))).json().data
-    expect(asLead.builtIn).toBe(PM_SCHEDULE_TEXT)
-    expect(asLead).toMatchObject({ revision: 1, text: INSTRUCTIONS_TEMPLATE, hash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
-    for (const [user, as] of [[host, worker], [owner]] as Array<[AuthUser, string?]>) {
+    for (const [user, as] of [[host, lead], [host, worker], [owner]] as Array<[AuthUser, string?]>) {
       const answer = await get(user, doc(tab, as))
       expect(answer.statusCode, answer.body).toBe(200)
+      expect(answer.json().data).toMatchObject({ revision: 1, text: INSTRUCTIONS_TEMPLATE, hash: instructionsHash(INSTRUCTIONS_TEMPLATE) })
       expect(answer.json().data).not.toHaveProperty('builtIn')
     }
   })
 
-  it('moves the coordinator\'s roster row by its hash; no other agent\'s row carries one', async () => {
+  it('names no built-in hash on any roster row, the coordinator\'s included', async () => {
     const { tab, lead, worker } = await withWorker()
     const rows = (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab) as Array<{ agent: { id: string }; instructions: Record<string, unknown> }>
-    expect(rows.find(r => r.agent.id === lead)!.instructions.builtInHash).toBe(instructionsHash(PM_SCHEDULE_TEXT))
-    expect(rows.find(r => r.agent.id === worker)!.instructions).not.toHaveProperty('builtInHash')
+    for (const id of [lead, worker]) expect(rows.find(r => r.agent.id === id)!.instructions).not.toHaveProperty('builtInHash')
   })
 
-  it('refuses a save holding the built-in section, and takes the document as read', async () => {
+  it('takes a save holding the old built-in heading as the project\'s own text', async () => {
     const { tab, lead } = await withLead()
     const read = (await get(host, doc(tab, lead))).json().data
-    await expect(run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: `${read.text}\n\n${read.builtIn}`, summary: 'Copied',
-      askedBy: owner.sub }, host, lead)).rejects.toMatchObject({ code: 'INSTRUCTIONS_BUILT_IN' })
-    expect((await get(owner, doc(tab))).json().data.revision).toBe(1)
-    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: `${read.text}\nOne more line.`, summary: 'One more line',
-      askedBy: owner.sub }, host, lead)
-    expect((await get(owner, doc(tab))).json().data.revision).toBe(2)
+    await run(tab, { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: `${read.text}\n\n## Built-in PM schedule (from the Swarm)\n\nOur own jobs.`,
+      summary: 'Our schedule', askedBy: owner.sub }, host, lead)
+    expect((await get(owner, doc(tab))).json().data).toMatchObject({ revision: 2, text: expect.stringContaining('Our own jobs.') })
   })
 })
 

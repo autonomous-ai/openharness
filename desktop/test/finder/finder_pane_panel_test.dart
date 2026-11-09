@@ -28,7 +28,7 @@ void main() {
             return grid.BrightnessScope(
               child: Scaffold(
                 body: FinderPanePanel(
-                  root: '/r',
+                  root: fakePath(),
                   files: files,
                   git: git,
                   onFixedWidth: widths.add,
@@ -91,7 +91,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('finder-code-editor')), findsOneWidget);
     final title = find.descendant(
-      of: tab('/r/lib/main.dart'),
+      of: tab(fakePath('lib/main.dart')),
       matching: find.text('main.dart'),
     );
     expect(tester.widget<Text>(title).style?.fontStyle, FontStyle.italic);
@@ -124,7 +124,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(files.writes['/r/lib/main.dart'], contains('x'));
+    expect(files.writes[fakePath('lib/main.dart')], contains('x'));
     expect(find.byKey(const ValueKey('finder-tab-dirty')), findsNothing);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
@@ -146,7 +146,7 @@ void main() {
     expect(find.text('Unsaved changes'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('finder-dialog-Don’t Save')));
     await tester.pumpAndSettle();
-    expect(tab('/r/README.md'), findsNothing);
+    expect(tab(fakePath('README.md')), findsNothing);
     expect(files.writes, isEmpty);
   });
 
@@ -208,8 +208,8 @@ void main() {
     );
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
-    expect(files.texts.containsKey('/r/notes.md'), isTrue);
-    expect(tab('/r/notes.md'), findsOneWidget);
+    expect(files.texts.containsKey(fakePath('notes.md')), isTrue);
+    expect(tab(fakePath('notes.md')), findsOneWidget);
   });
 
   testWidgets('with no file open it asks only for its file list\'s width', (

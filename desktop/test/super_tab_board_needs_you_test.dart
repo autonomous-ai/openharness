@@ -91,6 +91,9 @@ void main() {
       ),
     );
     await _settle(tester);
+    // A project's Board opens from the Projects grid (task #4466).
+    await tester.tap(find.byKey(const ValueKey('super-projects')));
+    await tester.pump();
     await tester.tap(_key('super-group-lead'));
     await _settle(tester);
     return (c, server);

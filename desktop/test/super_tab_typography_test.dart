@@ -10,7 +10,8 @@ import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
 import 'support/super_tab_phone.dart';
 
-/// Task #2312 (Huy, 2026-11-03): the Swarm's text at Slack desktop's sizes, weights and line heights, in the system font.
+/// Task #2312 (Huy, 2026-11-03): the Swarm's text in the system font. Task #4467 (anh Dee, 11-07): three sizes, 14 chat,
+/// 13 names, 12 details; the name in semibold, the time in tertiary ink.
 
 /// The style a [RichText] draws [text] in: its spans' styles, merged from the root down to the span holding it.
 TextStyle? styleOf(WidgetTester tester, String text) {
@@ -40,20 +41,23 @@ TextStyle? _within(InlineSpan span, String text, TextStyle above) {
 double lineOf(TextStyle style) => style.fontSize! * style.height!;
 
 void main() {
-  testWidgets('a message body reads at 15 px on 22 px lines', (tester) async {
+  testWidgets('a message body reads at 14 px on 20 px lines', (tester) async {
     final server = ConversationServer()
       ..append('Shipped the search field. It wraps when the line runs long.');
     await showView(tester, server);
     final body = styleOf(tester, 'Shipped the search field')!;
-    expect(body.fontSize, 15);
-    expect(lineOf(body), closeTo(22, 0.01));
+    expect(body.fontSize, 14);
+    expect(lineOf(body), closeTo(20, 0.01));
     expect(body.fontWeight ?? FontWeight.w400, FontWeight.w400);
   });
 
   testWidgets(
-    'the sender is named at 15 px in the heaviest weight, the time at 12 px',
+    'another sender is named over their bubble at 13 px, plain, in '
+    'secondary ink; your own bubble carries no name',
     (tester) async {
-      final server = ConversationServer()..append('Shipped');
+      final server = ConversationServer()
+        ..append('Shipped')
+        ..append('Thanks', agent: true);
       await showView(tester, server);
       final row = find.byType(SuperTabMessageRow);
       final texts = tester
@@ -61,15 +65,11 @@ void main() {
             find.descendant(of: row, matching: find.byType(Text)),
           )
           .toList();
-      // The reader's own message: its author reads You.
-      final name = texts.firstWhere((t) => t.data == 'You');
-      expect(name.style!.fontSize, 15);
-      expect(name.style!.fontWeight, FontWeight.w900);
-      final time = texts.firstWhere(
-        (t) => RegExp(r'^\d{1,2}:\d{2}').hasMatch(t.data ?? ''),
-      );
-      expect(time.style!.fontSize, 12);
-      expect(time.style!.color, DesktopChrome.muted);
+      expect(texts.where((t) => t.data == 'You'), isEmpty);
+      final name = texts.firstWhere((t) => t.data == 'Lead');
+      expect(name.style!.fontSize, 13);
+      expect(name.style!.fontWeight, FontWeight.w400);
+      expect(name.style!.color, DesktopChrome.muted);
     },
   );
 
@@ -82,7 +82,7 @@ void main() {
       );
     await showView(tester, server);
     for (final text in ['a listed item', 'a quoted line', 'bold words']) {
-      expect(styleOf(tester, text)!.fontSize, 15, reason: text);
+      expect(styleOf(tester, text)!.fontSize, 14, reason: text);
     }
     expect(styleOf(tester, 'bold words')!.fontWeight, FontWeight.w700);
     expect(styleOf(tester, 'the code')!.fontFamily, AppFonts.mono);
@@ -103,7 +103,7 @@ void main() {
     expect(body!.fontSize, 14);
   });
 
-  testWidgets('the thread view heads at 15 px in the heaviest weight, and its '
+  testWidgets('the thread view heads as a name, 13 px semibold, and its '
       'replies read as the chat does', (tester) async {
     final server = ConversationServer()..threads = true;
     server.append('Should we do thread replies?');
@@ -115,14 +115,14 @@ void main() {
     c.openThread('message-1');
     await tester.pumpAndSettle();
     final header = tester.widget<Text>(find.text('Thread'));
-    expect(header.style!.fontSize, 15);
-    expect(header.style!.fontWeight, FontWeight.w900);
+    expect(header.style!.fontSize, 13);
+    expect(header.style!.fontWeight, FontWeight.w600);
     final reply = styleOf(tester, 'Yes, like Slack.')!;
-    expect(reply.fontSize, 15);
-    expect(lineOf(reply), closeTo(22, 0.01));
+    expect(reply.fontSize, 14);
+    expect(lineOf(reply), closeTo(20, 0.01));
   });
 
-  testWidgets('the composer writes at 15 px on 22 px lines', (tester) async {
+  testWidgets('the composer writes at 14 px on 20 px lines', (tester) async {
     await showView(tester, ConversationServer());
     final field = tester.widget<EditableText>(
       find.descendant(
@@ -130,8 +130,8 @@ void main() {
         matching: find.byType(EditableText),
       ),
     );
-    expect(field.style.fontSize, 15);
-    expect(lineOf(field.style), closeTo(22, 0.01));
+    expect(field.style.fontSize, 14);
+    expect(lineOf(field.style), closeTo(20, 0.01));
   });
 
   testWidgets('sidebar items read at 15 px on rows 28 px apart, a project 32', (

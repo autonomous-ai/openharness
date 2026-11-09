@@ -396,7 +396,7 @@ void main() {
       await showView(tester, swarm());
       await tester.tap(notificationsEntry());
       await tester.pumpAndSettle();
-      expect(find.text('Nothing needs you'), findsOneWidget);
+      expect(find.text('All clear'), findsOneWidget);
     });
   });
 
@@ -731,6 +731,82 @@ void main() {
     });
   });
 
+  group('a person’s own Buddy’s questions (task #4525)', () {
+    /// Peer's Buddy asks in its chat: a question, then a line waiting for
+    /// their Send, as the backend lists them.
+    ConversationServer buddyAsks() {
+      final server = swarm()
+        ..ask(['Keep the old flag?', 'Drop the old flag from the CLI.']);
+      for (final d in server.decisions) {
+        d['askerName'] = 'Buddy';
+        d['conversationId'] = 'buddy-peer-lead';
+        d['fromBuddy'] = true;
+        d['pmTakesOver'] = false;
+      }
+      server.decisions.last
+        ..['send'] = true
+        ..['options'] = ['Send', 'Not now']
+        ..['unblocks'] = 'Posts this in the web-project chat as you.';
+      return server;
+    }
+
+    testWidgets('a Buddy’s question offers no Let PM decide', (tester) async {
+      await showView(tester, buddyAsks());
+      await openPmChat(tester);
+      expect(inPanel('Keep the old flag?'), findsOneWidget);
+      expect(letPmDecide('decision-1'), findsNothing);
+      expect(notNow('decision-1'), findsOneWidget);
+    });
+
+    testWidgets(
+      'a line waiting to be sent shows its words with Send and Not now, and Send answers it',
+      (tester) async {
+        final server = buddyAsks();
+        await showView(tester, server);
+        await openPmChat(tester);
+        expect(inPanel('Drop the old flag from the CLI.'), findsOneWidget);
+        expect(inPanel('Send'), findsOneWidget);
+        expect(inPanel('Send · Recommended'), findsNothing);
+        // Its own Not now answers it; no second one that only folds it.
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-decision-decision-2')),
+            matching: find.text('Not now'),
+          ),
+          findsOneWidget,
+        );
+        expect(notNow('decision-2'), findsNothing);
+        expect(letPmDecide('decision-2'), findsNothing);
+
+        await tester.tap(option('decision-2', 0));
+        await tester.pumpAndSettle();
+        expect(server.posts.last['command'], {
+          'type': 'decision.answer',
+          'decisionId': 'decision-2',
+          'choice': 0,
+        });
+      },
+    );
+
+    testWidgets(
+      'the Decisions list shows a send line whole, with no Recommended',
+      (tester) async {
+        final server = buddyAsks();
+        final words = List.filled(
+          12,
+          'Drop the old flag from the CLI.',
+        ).join(' ');
+        server.decisions.last['question'] = words;
+        await showView(tester, server);
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        expect(find.text('Send · Recommended'), findsNothing);
+        final shown = tester.widget<Text>(find.text(words));
+        expect(shown.maxLines, isNull);
+      },
+    );
+  });
+
   testWidgets('screenshots for review', (tester) async {
     final server = swarm()
       ..ask([
@@ -785,6 +861,36 @@ void main() {
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
         await shot(tester, 'pm-decided-$name');
+      },
+      skip: shots == null,
+    );
+    testWidgets(
+      'screenshots of a Buddy’s question and Send line, ${brightness.name}',
+      (tester) async {
+        final server = swarm()
+          ..ask([
+            'Keep the old flag a week?',
+            'Drop the old --legacy-sync flag from the CLI; nothing uses it since 0.5.',
+          ]);
+        for (final d in server.decisions) {
+          d['askerName'] = 'Buddy';
+          d['conversationId'] = 'buddy-peer-lead';
+          d['fromBuddy'] = true;
+          d['pmTakesOver'] = false;
+        }
+        server.decisions.first['options'] = ['Keep it', 'Drop it'];
+        server.decisions.first['unblocks'] = 'The cleanup';
+        server.decisions.last
+          ..['send'] = true
+          ..['options'] = ['Send', 'Not now']
+          ..['unblocks'] = 'Posts this in the web-project chat as you.';
+        final name = brightness.name;
+        await showView(tester, server, brightness: brightness);
+        await openPmChat(tester);
+        await shot(tester, 'buddy-decisions-$name');
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await shot(tester, 'buddy-decisions-list-$name');
       },
       skip: shots == null,
     );

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import type { ContributedMachine } from './machines.js'
-import { builtBy, reviewerCandidates, strengthOf } from './reviewerPick.js'
+import { builtBy, reviewerCandidates, stepCandidates, strengthOf } from './reviewerPick.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const opus: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -103,6 +103,24 @@ describe('reviewerCandidates', () => {
     expect(f.pick('security', head).sort()).toEqual(['bare', 'prefix'])
   })
 
+  // Task #4534: Ownrev6 did Security review 2 of #3542 and of #3545, then was handed Security review 1 at the next head.
+  it('never offers one security review to the agent that did or judged the other; its own it may take again', () => {
+    const f = fixture()
+    const did = f.add('did', f.task, opus, { roleName: 'Reviewer' }), judged = f.add('judged', f.task, opus, { roleName: 'Reviewer' })
+    f.add('free', f.task, opus, { roleName: 'Reviewer' })
+    const open = (name: string) => f.run({ type: 'conversation.create', title: name, reviewOf: f.task, step: name, brief: 'Read it.', checks: [] } as Command,
+      f.as(f.lead)).result.conversationId as string
+    const one = open('Security review 1'), two = open('Security review 2')
+    f.run({ type: 'work.assign', conversationId: two, agentId: did }, f.as(f.lead))
+    f.run({ type: 'work.status', conversationId: two, assignmentId: f.group(two).assignment!.id, status: 'done', result: 'Ready to merge: Yes' } as Command, f.as(did))
+    // A verdict on the other step at an older head counts too: the two reviews are of one change.
+    f.group(two).checks = [{ id: 'c', description: 'Reviewed', independent: true, evidence: null, passedBy: null,
+      verdicts: [{ by: `agent:${judged}`, passed: true, evidence: 'Yes', at: 5, head: 'fff0000' }] } as never]
+    const names = (step: string) => stepCandidates(f.state, f.group(step), f.now).map(a => a.name).sort()
+    expect(names(one)).toEqual(['free'])
+    expect(names(two)).toEqual(['did', 'free', 'judged'])
+  })
+
   it('is never busy, a PM, a Buddy, or holding another step of this task', () => {
     const f = fixture()
     const busy = f.add('busy', f.task, opus, { roleName: 'Reviewer' })
@@ -179,5 +197,18 @@ describe('reviewerCandidates', () => {
     const otherLead = f.state.projects!.find(p => p.name === 'Other')!.leadConversationId
     f.add('away', otherLead, opus, { roleName: 'Reviewer' })
     expect(f.pick()).toEqual([])
+  })
+
+  // Task #3774: a test step's Tester needs a mid-strength model or stronger, whatever the engineer runs; a review keeps its bar.
+  it('takes a Sonnet Tester for an Opus engineer\'s test step, never for its review', () => {
+    const f = fixture()
+    f.add('s-tst', f.task, sonnet, { roleName: 'Tester' })
+    f.add('s-rev', f.task, sonnet, { roleName: 'Reviewer' })
+    const grid = f.add('g-tst', f.task, opus, { roleName: 'Tester' })
+    f.state.agents.find(a => a.id === grid)!.gridModel = 'kimi k3'
+    f.add('h-tst', f.task, { ...opus, model: 'haiku', effort: 'auto' }, { roleName: 'Tester' })
+    expect(f.pick('test')).toEqual(['s-tst'])
+    expect(f.pick('review')).toEqual([])
+    expect(f.pick('security')).toEqual([])
   })
 })

@@ -4,24 +4,24 @@
  * unanswered for 3-10 h: nothing tracked what the PM owed, and the idle checks ran only on the PM's poll.
  *
  * An owed ask is a person's message that reached the PM, kept on its conversation (`Conversation.owed`) until the PM answers
- * it in its place (a reply in its thread, or an answer right below it), gives it a verdict reaction, or opens a task from it.
+ * it in its place (a reply in its thread, or an answer right below it), explicitly reacts, or opens a task from it.
+ * A project agent explicitly entrusted with an ask by the PM may also settle that ask by replying in its thread.
  * Nothing here refuses anything: a settle that finds nothing does nothing.
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
 import { heldView, type HeldReason } from './heldReason.js'
-import { isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
+import { fail, isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, type SwarmProject } from './projects.js'
 import { unconfirmedNote } from './processNotes.js'
+import { noteTaskLines, type LinesBefore } from './statusCard.js'
 import { switched } from './boardRights.js'
 
 /** One person's message to the PM not settled yet: its id, who wrote it, when, and the root of the thread it is in (its own
- *  id for a top-level message). */
-export interface OwedAsk { id: string; personId: string; at: number; thread: string }
+ *  id for a top-level message). `delegatedTo` is the one project agent the PM entrusted with answering this ask. */
+export interface OwedAsk { id: string; personId: string; at: number; thread: string; delegatedTo?: string }
 
 /** At most this many asks are kept per conversation, the newest: a growth bound, far above what a PM leaves unanswered. */
 export const MAX_OWED = 50
-/** The reactions that answer an ask (reactions.ts): a verdict. Eyes says the PM saw it, and it still owes the answer. */
-export const VERDICT_REACTIONS: ReadonlySet<string> = new Set(['check', 'thumbs_up', 'rocket', 'tada'])
 
 /** The project [group] belongs to, or none for a conversation outside every project (the removed Leads chat, a person's one
  *  Buddy chat). Never throws: the pulse is never a reason for a command to fail. */
@@ -41,7 +41,7 @@ const counted = (group: Conversation): boolean => !group.audience && !group.kind
 
 /** Records [message] as owed when a person wrote it and it reached [group]'s PM. */
 export function owe(state: SuperTabState, group: Conversation, message: { id: string; author: Author; recipients: readonly string[]; thread: string | null; source?: unknown }, now: number): void {
-  if (message.author.kind !== 'person' || message.source || !counted(group)) return
+  if (message.author.kind !== 'person' || (message.source && (message.source as { kind?: string }).kind !== 'buddy-proposal') || !counted(group)) return
   const project = projectOfGroup(state, group)
   const pm = project && pmOf(state, project)
   // A project switched to the Board way of working owes its PM no chat messages (boardRights.ts, task #3819).
@@ -63,16 +63,38 @@ const byPm = (state: SuperTabState, group: Conversation, agentId: string): boole
   return !!project && pmOf(state, project) === agentId
 }
 
-/** The PM's post in [group]: a reply in a thread ([thread], its root) settles every ask in that thread; an answer right below a
- *  message ([answers]) settles that message. */
-export function settleReply(state: SuperTabState, group: Conversation, agentId: string, place: { answers: string | null; thread: string | null }): void {
-  if (!group.owed || !byPm(state, group, agentId)) return
-  settle(group, ask => ask.id === place.answers || (!!place.thread && ask.thread === place.thread))
+/** A PM's post in the Guide's task explicitly names the project-chat ask and one recipient. Free text and role names never
+ *  confer this authority: membership routing remains the PM's judgment. Kept with the bounded ask until it is settled. */
+export function handoffAsk(state: SuperTabState, group: Conversation, agentId: string | null, messageId: string, recipients: readonly string[]): void {
+  const project = projectOfGroup(state, group)
+  if (!project || !agentId || pmOf(state, project) !== agentId) fail('ASK_HANDOFF_PM', 'Only the project PM can hand off an owed ask.', 403)
+  const target = recipients.length === 1 ? state.agents.find(a => a.id === recipients[0]) : undefined
+  if (!target || target.id === agentId || isBuddy(target) || agentProjectId(state, target) !== project.id) {
+    fail('ASK_HANDOFF_AGENT', 'Name exactly one project agent for the handoff.', 400)
+  }
+  const chat = state.conversations.find(c => c.id === project.leadConversationId)
+  const ask = chat?.owed?.find(a => a.id === messageId)
+  if (!ask) fail('ASK_NOT_OWED', 'This ask is no longer owed in the project chat.', 409)
+  ask.delegatedTo = target.id
 }
 
-/** The PM's verdict reaction on [messageId] settles it. */
-export function settleReaction(state: SuperTabState, group: Conversation, agentId: string, messageId: string, emoji: string, on: boolean): void {
-  if (!on || !VERDICT_REACTIONS.has(emoji) || !group.owed || !byPm(state, group, agentId)) return
+/** The PM's post in [group]: a reply in a thread ([thread], its root) settles every ask in that thread; an answer right below a
+ *  message ([answers]) settles that message. An entrusted project agent settles only its named ask, in that ask's thread. */
+export function settleReply(state: SuperTabState, group: Conversation, agentId: string, place: { answers: string | null; thread: string | null }): void {
+  if (!group.owed) return
+  if (byPm(state, group, agentId)) {
+    settle(group, ask => ask.id === place.answers || (!!place.thread && ask.thread === place.thread))
+  } else if (place.thread && group.owed.some(ask => ask.delegatedTo === agentId && ask.thread === place.thread)) {
+    const target = state.agents.find(a => a.id === agentId)
+    if (target && !isBuddy(target) && agentProjectId(state, target) === projectOfGroup(state, group)?.id) {
+      settle(group, ask => ask.delegatedTo === agentId && ask.thread === place.thread)
+    }
+  }
+}
+
+/** The PM's explicit reaction on [messageId] settles it. Automatic receipt eyes never call this command path (#3663). */
+export function settleReaction(state: SuperTabState, group: Conversation, agentId: string, messageId: string, on: boolean): void {
+  if (!on || !group.owed || !byPm(state, group, agentId)) return
   settle(group, ask => ask.id === messageId)
 }
 
@@ -91,7 +113,7 @@ export function settleRequest(state: SuperTabState, project: SwarmProject, agent
 
 /** When each rule turns the strip red (anh Dee's brief), sent with the pulse so no app holds a threshold. */
 export interface PulseLimits { askMinutes: number; idleMinutes: number; lostMinutes: number }
-export const PULSE_LIMITS: PulseLimits = { askMinutes: 15, idleMinutes: 10, lostMinutes: 10 }
+export const PULSE_LIMITS: PulseLimits = { askMinutes: 5, idleMinutes: 10, lostMinutes: 10 }
 
 /** A project's pulse. `redAt`: when each rule turns red (0: already, by its nature), null while it cannot. */
 export interface Pulse {
@@ -211,7 +233,7 @@ export const PULSE_LIST_MAX = 50
  * and on the PM's sweep, so the board reddens on time without anyone's poll. Writes only on a change. When Working fell to 0
  * while work waits is kept in it (`idleSince`) from one run to the next.
  */
-export function recordPulse(state: SuperTabState, now: number, only?: string): void {
+export function recordPulse(state: SuperTabState, now: number, only?: string, before?: LinesBefore): void {
   // The asks of a person who left the Swarm are owed to nobody, however they left.
   const people = new Set(state.people.map(p => p.id))
   for (const group of state.conversations) if (group.owed?.some(ask => !people.has(ask.personId))) settle(group, ask => !people.has(ask.personId))
@@ -224,6 +246,9 @@ export function recordPulse(state: SuperTabState, now: number, only?: string): v
     if (!chat) continue
     const pulse = projectPulse(state, project, now, PULSE_LIMITS, index, chat.pulse?.idleSince ?? null)
     if (JSON.stringify(pulse) !== JSON.stringify(chat.pulse)) chat.pulse = pulse
+    // Each task's status line (statusCard.ts), on the task, written only where this pass moved it (task #4419): a command and the
+    // Lead's sweep give the lines from before they changed anything.
+    if (before) noteTaskLines(state, project, index, now, dayOf(now), before)
   }
 }
 
@@ -259,7 +284,7 @@ export function projectPulse(state: SuperTabState, project: SwarmProject, now: n
     lost: { count: counts.lost.length, since: lostAt, conversationIds: counts.lost.map(l => l.id).slice(0, PULSE_LIST_MAX) },
     held: { count: counts.held.length, withoutReason, list: counts.held.slice(0, PULSE_LIST_MAX) },
     idleSince,
-    process: (note => note ? { noteId: note.id } : null)(unconfirmedNote(project)),
+    process: (note => note ? { noteId: note.id } : null)(unconfirmedNote(state, project)),
     redAt: {
       asks: oldest ? oldest.at + limits.askMinutes * MINUTE : null,
       idle: idleSince === null ? null : idleSince + limits.idleMinutes * MINUTE,

@@ -2,44 +2,17 @@
 // second contribution, its pool naming the Mac as `hostMachineId`, and the Swarm shows the Mac alone. Its agents read as
 // on the Mac; teammates read the account's availability, which runs while the owner is away from the Mac; the only new
 // words are one line when teammates' agents cannot run there.
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/ws/local_cli_discovery.dart';
 
-import 'support/capture.dart';
-import 'support/rename_connection.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
 const _offlineAge = 10 * 60 * 1000;
-
-/// This Mac's daemon, answering what it remembers of its Harness Team account
-/// setup (`teamSetupStatus`); no socket is opened.
-class _TeamDaemon extends RenameConnection {
-  Map<String, dynamic> status = {'ok': true, 'state': 'none'};
-  final asked = <Map<String, dynamic>>[];
-
-  @override
-  Future<Map<String, dynamic>> request(
-    String type, {
-    Map<String, dynamic> payload = const {},
-    Duration timeout = const Duration(seconds: 20),
-  }) {
-    if (type == 'super_tabs' && payload['action'] == 'teamSetup') {
-      asked.add(Map.of(payload));
-      return Future.value({'ok': true, 'state': 'exists'});
-    }
-    if (type == 'super_tabs' && payload['action'] == 'teamSetupStatus') {
-      asked.add(Map.of(payload));
-      return Future.value(status);
-    }
-    return super.request(type, payload: payload, timeout: timeout);
-  }
-}
 
 Map<String, dynamic> _pool(
   String id, {
@@ -122,7 +95,50 @@ String? _problemText(WidgetTester tester, String id) =>
     tester.widget<Text>(_problem(id)).data;
 
 void main() {
-  setUpAll(() => loadCaptureFonts(Platform.environment['TEAM_RESTART_SHOTS']));
+  testWidgets('Manage names this computer by its local port, in mono', (
+    tester,
+  ) async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    app.machineStates['m']!.localOnly = true;
+    app.machineStates['m']!.localEndpoint = LocalCliEndpoint(
+      computerId: 'test-computer',
+      wsUri: Uri.parse('ws://127.0.0.1:18473'),
+      protocolVersion: 1,
+      terminalProtocolVersion: 1,
+    );
+    final server = _swarm();
+    server.state['machines'] = [_pool('m', contributor: 'owner')];
+    final c = server.controller();
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(
+            controller: c,
+            app: app,
+            manage: true,
+            ticks: false,
+            onAddAgent: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final metadata = tester.widget<Text>(
+      find.byKey(const ValueKey('machines-metadata-m')),
+    );
+    expect(
+      metadata.textSpan!.toPlainText(),
+      contains('This machine · m · port 18473'),
+    );
+    final identity = (metadata.textSpan! as TextSpan).children!
+        .whereType<TextSpan>()
+        .first;
+    expect(identity.style!.fontFamily, grid.AppType.monoFamily);
+    await _unmount(tester, c);
+  });
+
   testWidgets(
     'a Mac and its Harness Team account are one row, with every agent of both under it',
     (tester) async {
@@ -252,7 +268,6 @@ void main() {
             "Teammates' agents paused: privacy check out of date",
         'PRIVACY_UNCHECKED':
             "Teammates' agents paused: privacy not checked yet",
-        'TEAM_ACCOUNT_REQUIRED': "Teammates' agents paused: not set up",
       };
       for (final MapEntry(key: code, value: line) in reasons.entries) {
         final server = _swarm();
@@ -269,275 +284,23 @@ void main() {
     },
   );
 
-  testWidgets('without a Harness Team account the Mac\'s own refusal says so', (
+  // Swarm v3 makes no Team accounts (#4120): a Mac without one is short of nothing, so its row says nothing of it
+  // (#4289), for teammates and its owner alike.
+  testWidgets('a Mac without a Harness Team account says nothing of one', (
     tester,
   ) async {
     final server = _swarm();
     server.state['machines'] = [
       _pool('mac', teamWork: _refused('TEAM_ACCOUNT_REQUIRED')),
     ];
-    final c = await _mount(tester, server);
-    expect(_problemText(tester, 'mac'), "Teammates' agents paused: not set up");
-    await _unmount(tester, c);
-  });
-
-  testWidgets(
-    'on this Mac\'s own row, its person can set the Harness Team account up there; nobody else, nowhere else',
-    (tester) async {
-      final app = createApp(connected: true)..teamAccountHereForTest = true;
-      app.machineStates['m']!.localOnly = true;
-      Future<bool> button({
-        String account = 'owner',
-        String id = 'm',
-        String code = 'TEAM_ACCOUNT_REQUIRED',
-      }) async {
-        final server = _swarm();
-        server.state['machines'] = [
-          _pool(
-            id,
-            contributor: account == 'peer' ? 'owner' : 'owner',
-            teamWork: _refused(code),
-          ),
-        ];
-        final c = server.controller(account: account);
-        await c.refresh();
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SuperTabMachines(
-                controller: c,
-                app: app,
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        final shown = find
-            .byKey(ValueKey('super-machine-team-setup-$id'))
-            .evaluate()
-            .isNotEmpty;
-        await _unmount(tester, c);
-        return shown;
-      }
-
-      expect(await button(), isTrue);
-      // A teammate reads the Mac's line, never its button; another Mac's row has none; nor a privacy refusal.
-      expect(await button(account: 'peer'), isFalse);
-      expect(await button(id: 'other'), isFalse);
-      expect(await button(code: 'PRIVACY_CHECK_FAILED'), isFalse);
-      app.teamAccountHereForTest = false;
-      expect(await button(), isFalse);
-      app.dispose();
-    },
-  );
-
-  testWidgets(
-    'an offline Team account offers its local owner Restart through the standard setup flow',
-    (tester) async {
-      final shots = Platform.environment['TEAM_RESTART_SHOTS'];
-      final previousBrightness = grid.AppTheme.brightness.value;
-      addTearDown(() => grid.AppTheme.brightness.value = previousBrightness);
-      final daemon = _TeamDaemon()..status = {'ok': true, 'state': 'exists'};
-      final app = createApp(connectionForTest: (_) => daemon, connected: true)
-        ..teamAccountHereForTest = true;
-      app.machineStates['m']!.localOnly = true;
-      Future<void> mount({
-        String account = 'owner',
-        String id = 'm',
-        bool hostOffline = false,
-        Brightness brightness = Brightness.light,
-      }) async {
-        grid.AppTheme.brightness.value = brightness;
-        final server = _swarm();
-        server.state['machines'] = [
-          _pool(id, contributor: 'owner', age: hostOffline ? _offlineAge : 0),
-          _pool(
-            '$id-team',
-            contributor: 'owner',
-            host: id,
-            age: _offlineAge,
-            teamWork: _refused('MACHINE_OFFLINE'),
-          ),
-        ];
-        final c = server.controller(account: account);
-        await c.refresh();
-        await tester.pumpWidget(
-          MaterialApp(
-            debugShowCheckedModeBanner: false,
-            theme: grid.buildAppTheme(brightness: brightness),
-            home: Scaffold(
-              body: SuperTabMachines(
-                controller: c,
-                app: app,
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        final button = find.byKey(ValueKey('super-machine-team-setup-$id'));
-        if (account == 'owner' && id == 'm' && !hostOffline) {
-          expect(
-            _problemText(tester, id),
-            "Teammates' agents paused: Harness Team account offline",
-          );
-          expect(
-            find.descendant(of: button, matching: find.text('Restart')),
-            findsOneWidget,
-          );
-          expect(tester.widget(button), isA<OutlinedButton>());
-          await captureWindow(tester, shots, 'team-offline-${brightness.name}');
-          await tester.tap(button);
-          await tester.pumpAndSettle();
-          await tester.tap(
-            find.byKey(const Key('team-account-setup-continue')),
-          );
-          await tester.pumpAndSettle();
-          expect(daemon.asked.where((a) => a['action'] == 'teamSetup').last, {
-            'action': 'teamSetup',
-            'reason': 'manual',
-            'restart': true,
-          });
-          await tester.tap(find.byKey(const Key('team-account-setup-done')));
-          await tester.pumpAndSettle();
-        } else {
-          expect(button, findsNothing);
-        }
-        await _unmount(tester, c);
-      }
-
-      await mount();
-      await mount(brightness: Brightness.dark);
-      await mount(account: 'peer');
-      await mount(id: 'remote');
-      await mount(hostOffline: true);
-      app.dispose();
-    },
-  );
-
-  // Scholes, 2026-10-29: a Mac whose person cancelled the password prompt, or whose setup failed, said only "not set up".
-  testWidgets(
-    'this Mac\'s row says why it has no Harness Team account, for its person alone, with Set up to try again',
-    (tester) async {
-      final daemon = _TeamDaemon();
-      final app = createApp(connectionForTest: (_) => daemon, connected: true)
-        ..teamAccountHereForTest = true;
-      app.machineStates['m']!.localOnly = true;
-      Future<String?> line(
-        Map<String, dynamic> status, {
-        String account = 'owner',
-      }) async {
-        daemon.status = status;
-        final server = _swarm();
-        server.state['machines'] = [
-          _pool(
-            'm',
-            contributor: 'owner',
-            teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
-          ),
-        ];
-        final c = server.controller(account: account);
-        await c.refresh();
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SuperTabMachines(
-                controller: c,
-                app: app,
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        final text = _problemText(tester, 'm');
-        if (account == 'owner') {
-          expect(
-            find.byKey(const ValueKey('super-machine-team-setup-m')),
-            findsOneWidget,
-          );
-        }
-        await _unmount(tester, c);
-        return text;
-      }
-
-      expect(
-        await line({'ok': true, 'state': 'declined'}),
-        "Teammates' agents paused: setup was cancelled",
-      );
-      expect(
-        await line({
-          'ok': true,
-          'state': 'failed',
-          'detail': 'launchd would not start it.',
-        }),
-        "Teammates' agents paused: setup failed: launchd would not start it",
-      );
-      expect(
-        await line({'ok': true, 'state': 'running'}),
-        "Teammates' agents paused: setting up",
-      );
-      expect(
-        await line({'ok': true, 'state': 'none'}),
-        "Teammates' agents paused: not set up",
-      );
-      // A daemon from before it could say, and one that cannot answer: as before.
-      expect(
-        await line({'error': 'INVALID_REQUEST'}),
-        "Teammates' agents paused: not set up",
-      );
-      // A teammate reads the Mac's own line from the Swarm; this Mac's daemon is never asked for them.
-      final before = daemon.asked.length;
-      expect(
-        await line({'ok': true, 'state': 'declined'}, account: 'peer'),
-        "Teammates' agents paused: not set up",
-      );
-      expect(daemon.asked.length, before);
-      app.dispose();
-    },
-  );
-
-  // Local Team account run, 2026-10-28: after `harness team remove` its pool stays listed, and the Mac's owner read
-  // "Harness Team account offline" with no way to set one up again.
-  testWidgets(
-    'a removed Harness Team account leaves its Mac a Mac without one: not set up, and Set up for its owner',
-    (tester) async {
-      final app = createApp(connected: true)..teamAccountHereForTest = true;
-      app.machineStates['m']!.localOnly = true;
-      final server = _swarm();
-      server.state['machines'] = [
-        _pool(
-          'm',
-          contributor: 'owner',
-          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
-        ),
-        _pool(
-          'm-team',
-          contributor: 'owner',
-          host: 'm',
-          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
-        ),
-      ];
-      final c = server.controller(account: 'owner');
-      await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SuperTabMachines(controller: c, app: app, onAddAgent: (_) {}),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(_problemText(tester, 'm'), "Teammates' agents paused: not set up");
-      expect(
-        find.byKey(const ValueKey('super-machine-team-setup-m')),
-        findsOneWidget,
-      );
+    for (final account in ['peer', 'owner']) {
+      final c = await _mount(tester, server, account: account);
+      expect(_row('mac'), findsOneWidget);
+      expect(_problem('mac'), findsNothing, reason: account);
+      expect(find.textContaining('not set up'), findsNothing, reason: account);
       await _unmount(tester, c);
-      app.dispose();
-    },
-  );
+    }
+  });
 
   // Local Team account run, 2026-10-28 (group #646, item 5): a teammate's Lead computer, never added to the Swarm, read
   // "Unavailable machine" with an empty dot. Named by its owner, as the Swarm knows no name for it.

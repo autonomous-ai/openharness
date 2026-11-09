@@ -16,6 +16,8 @@ import { stateDifference } from '../src/superTabs/migration/verify.js'
 import { visibleState, type Author, type SuperTabState } from '../src/superTabs/model.js'
 import { setLegacyProgress, writeLegacySwarm, type LegacyMessage } from '../scripts/swarm-parts/legacy.js'
 import { NOW, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
+import { seedProjectProcesses } from '../src/superTabs/migration/projectProcesses.js'
+import { profiled, reads } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -49,6 +51,8 @@ async function legacySwarm(edit: (state: SuperTabState, s: ReturnType<typeof ric
   delete web.pullRequestUrls
   web.lastMessageSequence = 30
   state.conversations.find(c => c.id === 'lead')!.lastMessageSequence = 40
+  // A Swarm from before the PM's own chat (Swarm v4), which a rollback refuses as private: these Swarms predate it.
+  state.conversations = state.conversations.filter(c => c.kind !== 'agent-chat')
   edit(state, s)
   const author: Author = { kind: 'person', id: 'owner', name: 'owner@example.com', membershipGeneration: 'tab' }
   const message = (conversationId: string, sequence: number, text: string, at: number): LegacyMessage =>
@@ -59,6 +63,53 @@ async function legacySwarm(edit: (state: SuperTabState, s: ReturnType<typeof ric
   return { s, tabId, state, messages }
 }
 const partCount = (tabId: string) => db.swarmHead.count({ where: { tabId } })
+
+describe('seeding project processes', () => {
+  const tabId = 'c51479bd73b59e58176ad9e4', id = `${tabId}:head`
+  async function head() {
+    const data = { ...richSwarm().state, id: tabId, projects: ['harness', 'lamp', 'scout', 'harness-gtm', 'other'].map(name => ({
+      id: `seed-${name}`, name, ownerId: 'owner', leadConversationId: `chat-${name}`, visibility: 'public', members: [], updateMinutes: 5,
+    })) }
+    await db.swarmHead.upsert({ where: { id }, create: { id, tabId, key: 'head', version: 3, changedAt: new Date(NOW), ordinal: 0,
+      groupCounter: 100, visibilityEpoch: 2, sequenceBase: 50, data: data as never },
+    update: { data: data as never, version: 3, deleted: false } })
+    return db.swarmHead.findUniqueOrThrow({ where: { id } })
+  }
+
+  it('previews without writing, reads only the indexed head, then fills it once with its counters intact', async () => {
+    const before = await head()
+    const entries = await profiled(db, async () => {
+      expect(await seedProjectProcesses(db, { apply: false })).toMatchObject({ applied: false, held: [], changed: [
+        { projectId: 'seed-harness', process: 'full' }, { projectId: 'seed-lamp', process: 'full' },
+        { projectId: 'seed-scout', process: 'simple' }, { projectId: 'seed-harness-gtm', process: 'simple' },
+      ] })
+    })
+    const queried = reads(entries, 'SwarmHead', ['_id'])
+    expect(queried.length).toBeGreaterThan(0)
+    for (const query of queried) {
+      expect(query.planSummary).toMatch(/IXSCAN|IDHACK|EXPRESS_IXSCAN/)
+      expect(query.docsExamined).toBeLessThanOrEqual(1)
+    }
+    expect(entries.some(e => /\.(SwarmGroup|SwarmAgent|SwarmMember)$/.test(e.ns))).toBe(false)
+    expect(await db.swarmHead.findUniqueOrThrow({ where: { id } })).toEqual(before)
+    expect(await seedProjectProcesses(db, { apply: true })).toMatchObject({ applied: true, held: [] })
+    const after = await db.swarmHead.findUniqueOrThrow({ where: { id } })
+    expect(after).toMatchObject({ version: 4, groupCounter: 100, visibilityEpoch: 2, sequenceBase: 50,
+      data: { projects: expect.arrayContaining([expect.objectContaining({ id: 'seed-scout', process: 'simple' })]) } })
+    expect(await seedProjectProcesses(db, { apply: true })).toMatchObject({ applied: false, changed: [] })
+    expect(await db.swarmHead.findUniqueOrThrow({ where: { id } })).toEqual(after)
+  })
+
+  it('writes nothing when a seed target is missing, and refuses a deleted head', async () => {
+    const before = await head(), data = before.data as unknown as SuperTabState
+    data.projects = data.projects!.filter(p => p.name !== 'lamp')
+    await db.swarmHead.update({ where: { id }, data: { data: data as never } })
+    expect(await seedProjectProcesses(db, { apply: true })).toMatchObject({ applied: false, changed: [], held: [{ name: 'lamp', reason: 'missing' }] })
+    expect((await db.swarmHead.findUniqueOrThrow({ where: { id } })).version).toBe(3)
+    await db.swarmHead.update({ where: { id }, data: { deleted: true } })
+    await expect(seedProjectProcesses(db, { apply: true })).rejects.toMatchObject({ code: 'PROCESS_SEED_UNAVAILABLE' })
+  })
+})
 
 describe('migrating one Swarm to parts (design 6.1.2)', () => {
   it('splits a legacy Swarm into parts that reassemble into its state, fences the row and keeps the old state', async () => {

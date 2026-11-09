@@ -431,15 +431,17 @@ void main() {
       },
     );
 
-    testWidgets('with no model shared, it says nobody shares one yet', (
+    // Empty means empty (anh Dee's rule 7, #4465): no heading or words for models nobody shares.
+    testWidgets('with no model shared, it shows only the subscription', (
       tester,
     ) async {
       final c = await show(tester, swarm(localModels: false));
       await open(tester);
-      expect(find.text('SHARED IN THIS SWARM'), findsOneWidget);
+      expect(find.text('SHARED IN THIS SWARM'), findsNothing);
+      expect(find.textContaining('Nobody shares'), findsNothing);
       expect(
-        find.text('Nobody shares a model in this Swarm yet.'),
-        findsOneWidget,
+        find.textContaining('What your Buddy reads and writes'),
+        findsNothing,
       );
       expect(find.byType(AppMenuItem), findsOneWidget);
       await close(tester, c);
@@ -460,6 +462,10 @@ void main() {
   group("the contributor's models", () {
     testWidgets('name the Buddies that run on each model', (tester) async {
       final server = swarm(gridModel: 'kimi-k3');
+      // A Buddy goes by its own name (task #4568), never "<person>'s Buddy".
+      (server.state['agents'] as List).cast<Map>().firstWhere(
+        (a) => a['id'] == 'wren',
+      )['displayName'] = 'Wren';
       final c = server.controller(account: 'owner');
       await c.refresh();
       await tester.pumpWidget(
@@ -475,10 +481,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Kimi K3'), findsOneWidget);
-      expect(find.text("Used by ken.tran's Buddy"), findsOneWidget);
+      expect(find.text('Used by Wren'), findsOneWidget);
       // One line, under the model the Buddy runs on alone.
       expect(
-        tester.getTopLeft(find.text("Used by ken.tran's Buddy")).dy,
+        tester.getTopLeft(find.text('Used by Wren')).dy,
         greaterThan(tester.getTopLeft(find.text('Kimi K3')).dy),
       );
       expect(find.textContaining('Used by'), findsOneWidget);

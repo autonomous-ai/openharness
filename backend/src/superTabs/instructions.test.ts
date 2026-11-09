@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
+import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { appendRouting, instructionsHash, legacyRoleName, MAX_INSTRUCTIONS_BYTES, roleNameOf, routingSummary, summarySchema } from './instructions.js'
 import type { SwarmProject } from './projects.js'
 import { INSTRUCTIONS_TEMPLATE, TEMPLATE_WORKFLOW } from './instructionsTemplate.js'
@@ -444,8 +445,13 @@ describe('an instructions save keeps the rules people gave', () => {
     expect(f.run(save(2, doc(reworded, merged), { askedBy: 'owner' }), as(lead), stored(doc(leo, merged), 2)).result.revision).toBe(3)
   })
 
-  it('lets a drop approved by the rule\'s person go through, and tells that person in one private line', () => {
+  it('lets a drop approved by the rule\'s person go through, and their own Buddy tells them in one private line', () => {
+    // With no Buddy, no line: only they and their own agent post in their private chat (task #4558); the history records it.
+    const bare = pm()
+    expect(bare.f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'] }), as(bare.lead),
+      { ...stored(), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] }).messages).toEqual([])
     const { f, lead } = pm()
+    giveOwnBuddy(f.state, 'peer')
     const effects = f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'] }), as(lead),
       { ...stored(), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] })
     expect(effects.result.revision).toBe(2)
@@ -453,6 +459,7 @@ describe('an instructions save keeps the rules people gave', () => {
     expect(notices.length).toBeGreaterThan(0)
     for (const notice of notices) {
       expect(notice.recipients).toEqual([])
+      expect(notice.author).toMatchObject({ kind: 'agent', id: 'peer-buddy' })
       expect(notice.text.split('\n')).toHaveLength(1)
       expect(notice.text).toContain('A bug that reaches stable')
       const chat = f.state.conversations.find(c => c.id === notice.conversationId)!
@@ -716,7 +723,7 @@ describe('role names and the coordinator\'s name', () => {
     expect(f.state.agents.find(a => a.id === tester)!.roleName).toBe('Tester')
     expect(f.state.agents.find(a => a.id === plain)).not.toHaveProperty('roleName')
     expect(() => f.add('long', group, false, { roleName: 'x'.repeat(41) })).toThrow()
-    const contribution = { machineOwnerId: 'host-owner', contributorId: 'owner', hostGrant: null }
+    const contribution = { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }
     const request = { conversationId: group, machineId: 'host', engine: 'claude', name: 'Designer', cwd: '/repo', worktree: true, roleName: 'Designer',
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     const startId = f.run({ type: 'agent.start', request }, owner, { contribution }).result.startId as string

@@ -19,11 +19,12 @@ it('lets a start ask for the three role kinds and two skill modes, and nothing e
   for (const mode of ['light', 7, null]) expect(SWARM_LAUNCH.mode(mode), String(mode)).toBe(false)
 })
 
-it('writes the role\'s skill into the project folder and tells the engine where to read it', () => {
+// Swarm v4: no skill file and no launch line; the engine starts plain and reads only the repo's own files.
+it('tells the engine nothing at launch', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'swarm-launch-'))
   folders.push(cwd)
   const { instructions } = SWARM_LAUNCH.prepare(cwd, { role: 'agent', fallback: 'review', key: 'harness-claude-1' })
-  expect(instructions).toContain('swarm-review/SKILL.md')
+  expect(instructions).toBe('')
   expect(() => SWARM_LAUNCH.prepare(cwd, { role: 'agent', fallback: 'review', key: '' })).toThrow('A Swarm skill needs a role and session key')
 })
 

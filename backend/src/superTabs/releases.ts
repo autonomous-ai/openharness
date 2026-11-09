@@ -1,3 +1,4 @@
+import { shippedNotice } from './buddyNews.js'
 /**
  * Releases scheduled by the Swarm (task #3405, anh Dee's Swarm redesign, 2026-11-05: the server does the routine). A merge
  * recorded on a task puts it on its project's release list; the worker (releaseWatch.ts) reads GitHub for each component's
@@ -10,6 +11,7 @@ import { localNow } from './digest.js'
 import { activeWork, nextConversationNumber, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, projectsOf, type SwarmProject } from './projects.js'
 import { SEED_RULES, type ProjectRules } from './policy.js'
+import { processOf, taskProcess } from './process.js'
 
 /** The release window, pace and backend pause: the project rules record's own (policy.ts, task #3393), which people edit
  *  without a release. The store reads each project's record when it settles (store.ts settleReleases). */
@@ -84,7 +86,10 @@ export interface ReleaseStep { groupId: string; at: number; endedAt?: number }
 export interface ReleaseLedger { pending: PendingRelease[]; last?: Partial<Record<ReleaseComponentId, VerifiedRelease>>; steps?: Partial<Record<ReleaseComponentId, ReleaseStep>>
   /** Tasks the cap pushed off the list with no other merge left on it: the merge's write may not hold them, so the next settle
    *  loads them and clears their `releasing` (review of #3267). */
-  leaving?: string[] }
+  leaving?: string[]
+  /** When each component's release may next open (nextReleaseAt): 0 for now, absent for one left to people. Written by the settle
+   *  only when it changes, and sent to readers in `derived.releaseTimes` for the board's Merged cards (task #3827). */
+  nextAt?: Partial<Record<ReleaseComponentId, number>> }
 
 /** The groups a settle of [ledger] loads: the tasks waiting, the open release steps, the tasks leaving. */
 export const ledgerGroupIds = (ledger: ReleaseLedger): string[] =>
@@ -110,12 +115,42 @@ export function releaseDue(ledger: ReleaseLedger, component: ReleaseComponentId,
   return !last || now - last.at >= rules.releasePace.backendEveryMinutes * 60_000
 }
 
+const minutesOf = (time: string): number => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
+/** Minutes from the clock time [from] to the next [to], 0 to 1439. */
+const minutesUntil = (from: string, to: string): number => (minutesOf(to) - minutesOf(from) + 1440) % 1440
+
+/**
+ * When a release of [component] may next open, as the board's Merged cards say it (task #3827): 0 when it may now (so the read
+ * does not change with the clock), else the minute it may, in ms; null for the apps when the pace leaves them to people. It is
+ * [releaseDue] without the waiting change and the open step: a merged task waits by definition. The backend's pace counts from
+ * its last verified release, and every component waits for the window, the backend also for its pause to end. The clock's own
+ * minutes carry it past a boundary; a zone that shifts its clock may need another look, so a few rounds settle it.
+ */
+export function nextReleaseAt(ledger: ReleaseLedger, component: ReleaseComponentId, now: number, rules: ReleaseRules): number | null {
+  if (component !== 'backend' && !rules.releasePace.appsAfterVisibleBatch) return null
+  let at = now
+  if (component === 'backend') {
+    const last = ledger.last?.backend
+    if (last) at = Math.max(at, last.at + rules.releasePace.backendEveryMinutes * 60_000)
+  }
+  const pause = component === 'backend' ? rules.releasePace.backendPause : null
+  for (let round = 0; round < 4; round++) {
+    const time = clock(rules, at)
+    if (!within(time, rules.releaseWindow)) at += minutesUntil(time, rules.releaseWindow.start) * 60_000
+    else if (pause && within(time, pause)) at += minutesUntil(time, pause.end) * 60_000
+    else break
+  }
+  at -= at % 60_000
+  return at <= now ? 0 : at
+}
+
 /** Whether every release [entry] needs carries it: none for a change that only tests or documents. */
 export const shipped = (entry: PendingRelease): boolean => !!entry.components && entry.components.every(c => !!entry.shippedIn?.[c])
 
 /** Puts [group]'s merge of [url] at [mergedAt] on [project]'s release list, in the merge record's own write. The same merge
  *  recorded again adds nothing; a later merge of the same task waits on its own. Returns the entries the cap pushed out. */
-export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing'>, url: string, mergedAt: number): PendingRelease[] {
+export function notePendingRelease(project: SwarmProject, group: Pick<Conversation, 'id' | 'releasing' | 'process' | 'number'>, url: string, mergedAt: number): PendingRelease[] {
+  if (taskProcess(project, group) === 'simple') return []
   const ledger = project.releases ??= { pending: [] }
   if (ledger.pending.some(e => e.groupId === group.id && e.url === url)) return []
   // Releasing from its merge on; its parts are known once the worker reads its pull request's files.
@@ -244,6 +279,18 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     else delete group.releasing
   }
 
+
+  // Shipped once a verified release holds all of it (task #4217: a merge alone is not shipped): a proposal's card says so, and only
+  // there (task #4558); a task's requester's Buddy hears it, by an id the release fixes, so a settle retried tells nobody twice.
+  if (lead) for (const id of new Set(outcome.shipped)) {
+    const group = state.conversations.find(c => c.id === id)
+    if (!group || group.releasing) continue
+    const sender = { kind: 'agent' as const, id: lead.id, name: lead.name, membershipGeneration: lead.membershipGeneration }
+    const once = stableId(group.id, 'shipped', String(group.released!.at))
+    const news = shippedNotice(state, group, sender, once)
+    if (news) outcome.messages.push(news)
+  }
+
   for (const component of RELEASE_COMPONENTS) {
     const step = ledger.steps?.[component.id]
     if (!step || !ended(state.conversations.find(c => c.id === step.groupId))) continue
@@ -251,14 +298,31 @@ export function settleReleases(state: SuperTabState, projectId: string, facts: R
     if (now - step.endedAt >= STEP_GRACE_MS) delete ledger.steps![component.id]
   }
 
-  const due = RELEASE_COMPONENTS.filter(c => releaseDue(ledger, c.id, now, rules))
-  if (!due.length || state.paused) return outcome
+  const nextAt: Partial<Record<ReleaseComponentId, number>> = {}
+  for (const component of RELEASE_COMPONENTS) {
+    const at = nextReleaseAt(ledger, component.id, now, rules)
+    if (at !== null) nextAt[component.id] = at
+  }
+  if (JSON.stringify(ledger.nextAt) !== JSON.stringify(nextAt)) ledger.nextAt = nextAt
+
+  // A return to Full applies to new work only. Keep the old pending history for verified releases, but open no new
+  // release step for a task the switch made Simple. The ledger is bounded by PENDING_MAX.
+  const tasks = new Map(state.conversations.map(group => [group.id, group]))
+  const scheduled = { ...ledger, pending: ledger.pending.filter(entry => taskProcess(project, tasks.get(entry.groupId) ?? {}) === 'full') }
+  const due = RELEASE_COMPONENTS.filter(c => releaseDue(scheduled, c.id, now, rules))
+  if (!due.length || state.paused || processOf(project) === 'simple') return outcome
   const id = stableId('release-step', state.id, projectId, due.map(c => c.id).join(','), String(now))
   if (state.conversations.some(c => c.id === id)) return outcome
   const integrator = integratorOf(state, projectId)
-  const waiting = [...new Set(due.flatMap(c => waitingFor(ledger, c.id).map(e => e.groupId)))].map(groupId => named(state, groupId))
+  const waitingIds = [...new Set(due.flatMap(c => waitingFor(scheduled, c.id).map(e => e.groupId)))]
+  const waiting = waitingIds.map(groupId => named(state, groupId))
+  // Each task merged while its Windows test step waited for a Windows machine owes a person's Windows check, which the Windows
+  // rules ask for on the signed build (osSteps.ts, task #4410, River's ruling 11-07): listed here, for whoever records it.
+  const owed = waitingIds.filter(groupId => state.conversations.find(c => c.id === groupId)?.waitingWindowsStep).map(groupId => named(state, groupId))
   const names = joined(due.map(c => c.name)), window = rules.releaseWindow
   const brief = [`Release ${names}: ${waiting.length} merged ${waiting.length === 1 ? 'task waits' : 'tasks wait'} for it (${waiting.join('; ')}).`,
+    ...owed.length ? [`Windows check owed on the signed build: ${owed.join('; ')}. No Windows machine took ${owed.length === 1
+      ? 'its test step: record it here.' : 'their test steps: record each here.'}`] : [],
     `Release between ${window.start} and ${window.end} (${window.timeZone}), applying the merged pull requests' rollout notes first, and verify each release is live.`,
     'The Swarm marks those tasks shipped once each tag\'s release workflow succeeds, and says so here.'].join('\n')
   const number = nextConversationNumber(state)

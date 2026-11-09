@@ -115,8 +115,7 @@ Agent _agent(
   'terminal': {'available': true},
 });
 
-/// The Swarm's server, with this Mac's Team account as the host of the
-/// starts it records: it starts each at once, fails it with [hostFails], or
+/// The Swarm's server, with this Mac as the host of the starts it records: it starts each at once, fails it with [hostFails], or
 /// leaves it waiting while [hostStarts] is false.
 class _Server extends ConversationServer {
   bool hostStarts = true;
@@ -329,38 +328,27 @@ void main() {
   });
 
   group('where the new agent runs', () {
-    test('this Mac\'s Team account in the Swarm: import is offered', () async {
+    // Swarm v3 (#4120, #4289): a new agent runs on its own person's computer,
+    // as them; a Team account takes no new agent.
+    test('this Mac in the Swarm: import is offered, with no Team account',
+        () async {
       final f = await fixture();
+      expect(importUnavailable(f.app, f.c), isNull);
+      f.server.state['machines'] = <dynamic>[f.macPool];
+      await f.c.refresh();
       expect(importUnavailable(f.app, f.c), isNull);
     });
 
-    test('no Team account for this Mac in the Swarm says how to set one up, '
-        'and starts nowhere else', () async {
-      final f = await fixture();
-      f.server.state['machines'] = <dynamic>[f.macPool];
-      await f.c.refresh();
-      expect(importUnavailable(f.app, f.c), kImportNeedsTeamAccount);
-      // A Team account of another Mac is not this Mac's.
-      f.server.state['machines'] = <dynamic>[
-        f.macPool,
-        {...f.teamPool, 'hostMachineId': 'laptop'},
-      ];
-      await f.c.refresh();
-      expect(importUnavailable(f.app, f.c), kImportNeedsTeamAccount);
-    });
-
-    test('a Team account that takes no work says why', () async {
+    test('a Team account that takes no work does not hold import back',
+        () async {
       final f = await fixture();
       f.teamPool['teamWork'] = {
         'allowed': false,
-        'code': 'PRIVACY_CHECK_FAILED',
-        'reason': 'Its Team account failed the privacy check.',
+        'code': 'TEAM_ACCOUNTS_REMOVED',
+        'reason': 'Harness Team accounts are gone.',
       };
       await f.c.refresh();
-      expect(
-        importUnavailable(f.app, f.c),
-        'Its Team account failed the privacy check.',
-      );
+      expect(importUnavailable(f.app, f.c), isNull);
     });
 
     test('this Mac not in the Swarm says to add it', () async {
@@ -629,7 +617,7 @@ void main() {
     });
 
     test('opens a conversation, shares both files in it, starts the agent '
-        'in this Mac\'s Team account and sends the files to it alone', () async {
+        'on this Mac, as its person, and sends the files to it alone', () async {
       final (f, agent, handoff) = await prepared();
       final import = AgentImport();
 
@@ -676,10 +664,10 @@ void main() {
         'type': 'agent.start',
         'request': {
           'conversationId': conversation,
-          'machineId': 'team-m',
+          'machineId': 'm',
           'engine': 'codex',
           'name': 'fix-fix',
-          'cwd': '/Users/Shared/harness-team/swarm/tab/lead',
+          'cwd': '/Users/owner/.harness/swarm/tab/lead',
           'roleName': 'Engineer',
           'worktree': true,
           'model': 'gpt-5.6-sol',
@@ -710,12 +698,12 @@ void main() {
       expect(f.daemon.calls.first.$3['action'], 'swarmListed');
     });
 
-    test('a project whose repository is the Team account\'s own folder starts '
-        'there', () async {
+    test('a project whose repository is this Mac\'s own folder starts there',
+        () async {
       final (f, agent, handoff) = await prepared();
       (f.server.state['projects'] as List).first['repository'] = {
-        'machineId': 'team-m',
-        'cwd': '/Users/Shared/harness-team/code/openharness',
+        'machineId': 'm',
+        'cwd': '/Users/owner/code/openharness',
       };
       await f.c.refresh();
       await importAgent(
@@ -727,7 +715,8 @@ void main() {
         progress: AgentImport(),
       );
       final start = f.server.commands[1].$2['request'] as Map;
-      expect(start['cwd'], '/Users/Shared/harness-team/code/openharness');
+      expect(start['machineId'], 'm');
+      expect(start['cwd'], '/Users/owner/code/openharness');
     });
 
     Matcher failedAt(ImportStep step, [Object? words]) => isA<ImportFailure>()
@@ -866,7 +855,7 @@ void main() {
         'id': 'agent-new',
         'projectId': 'lead',
         'name': 'fix-fix',
-        'machineId': 'team-m',
+        'machineId': 'm',
         'harnessId': 'h-new',
         'contributorId': 'owner',
         'configuration': {'engine': 'codex'},
@@ -906,9 +895,9 @@ void main() {
       expect(f.server.commands[2].$1, f.server.commands[3].$1);
     });
 
-    test('no Team account for this Mac starts nothing anywhere', () async {
+    test('this Mac not in the Swarm starts nothing anywhere', () async {
       final (f, agent, handoff) = await prepared();
-      f.server.state['machines'] = <dynamic>[f.macPool];
+      f.server.state['machines'] = <dynamic>[f.teamPool];
       await f.c.refresh();
       await expectLater(
         importAgent(
@@ -919,7 +908,7 @@ void main() {
           handoff,
           progress: AgentImport(),
         ),
-        throwsA(failedAt(ImportStep.conversation, kImportNeedsTeamAccount)),
+        throwsA(failedAt(ImportStep.conversation, kImportNeedsThisComputer)),
       );
       expect(f.server.posts, isEmpty);
       expect(f.server.uploads, isEmpty);
@@ -1271,25 +1260,17 @@ void main() {
       expect(find.text("What openharness's members will read"), findsNothing);
     }, variant: mac);
 
-    testWidgets('no Team account for this Mac says how to set one up', (
-      tester,
-    ) async {
+    testWidgets('this Mac not in the Swarm says to add it, and offers no '
+        'Harness Team setup', (tester) async {
       final f = await roster(tester);
       f.app.teamAccountHereForTest = true;
-      f.server.state['machines'] = <dynamic>[f.macPool];
+      f.server.state['machines'] = <dynamic>[f.teamPool];
       await tester.runAsync(f.c.refresh);
       await tester.pumpAndSettle();
       await openImport(tester);
-      expect(find.text(kImportNeedsTeamAccount), findsOneWidget);
+      expect(find.text(kImportNeedsThisComputer), findsOneWidget);
+      expect(find.textContaining('Team'), findsNothing);
       expect(find.textContaining('fix-fix'), findsNothing);
-      await tester.tap(find.text('Set up Harness Team'));
-      await tester.pumpAndSettle();
-      expect(
-        find.textContaining(
-          RegExp(r'^Set up Harness Team on this (Mac|computer)$'),
-        ),
-        findsOneWidget,
-      );
       expect(f.server.posts, isEmpty);
     }, variant: mac);
   });

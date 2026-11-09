@@ -1,5 +1,5 @@
 /**
- * The parts a machine's full report last read, held in this process at their exact version (B3, #2597). Every reading
+ * The parts a command or a machine's full report last read, held in this process at their exact version (B3, #2597). Every reading
  * re-read the Swarm's machine parts and its running and Lead conversations whole (prod, 2026-11-04: 1.57 GB an hour, the
  * route with the most database time), though between two reports most of them had not changed. A read here first asks
  * MongoDB, in the report's own transaction, only for each selected part's columns that every write moves (`version`,
@@ -11,8 +11,8 @@ import type { Prisma } from '@prisma/client'
 import { sizeOf } from '../cache.js'
 import { recordCache } from '../cacheStats.js'
 import { ms, rawPartRow } from './light.js'
-import { groupsBy, type GroupIndex } from './indexed.js'
-import { partId, type PartRow } from './write.js'
+import { groupsBy, readBy, type GroupIndex } from './indexed.js'
+import { delegate, partId, type PartRow } from './write.js'
 
 type Transaction = Prisma.TransactionClient
 type Where = Record<string, unknown>
@@ -29,7 +29,15 @@ function columnsOf(row: Record<string, unknown>): string {
   return `${Number(row.version)}|${date(row.changedAt)}|${date(row.readAt)}|${row.dormant ? 1 : 0}`
 }
 const byKey = (rows: PartRow[]) => rows.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
-const COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1, readAt: 1, dormant: 1 }
+/** The kinds held whole by key besides groups, and their collections. */
+export type HeldKind = 'member' | 'agent' | 'machine' | 'progress'
+const COLLECTION = { member: 'SwarmMember', agent: 'SwarmAgent', machine: 'SwarmMachine', progress: 'SwarmProgress' } as const
+/** Each kind's `swarm cache` entry. */
+const ENTRY = { member: 'held-members', agent: 'held-agents', machine: 'held-machines', progress: 'held-progress', group: 'held-groups' } as const
+/** Each kind's columns, every one in its held index (parts/indexed.ts), so a listing reads no document: only a machine has a
+ *  readAt, and none of them is ever dormant. */
+const COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1 }
+const MACHINE_COLUMNS = { ...COLUMNS, readAt: 1 }
 /** A group's columns: it has no readAt, and every other one is in the held index (parts/indexed.ts `held`), so a listing of the
  *  awake ones through it reads no document. */
 const GROUP_COLUMNS = { _id: 0, key: 1, version: 1, changedAt: 1, dormant: 1 }
@@ -55,7 +63,7 @@ export class HeldParts {
     return held.value
   }
 
-  /** @internal */ holds(tab: Tab, kind: 'machine' | 'group'): boolean {
+  /** @internal */ holds(tab: Tab, kind: HeldKind | 'group'): boolean {
     for (const id of tab.parts.keys()) if (id.startsWith(`${kind}:`)) return true
     return false
   }
@@ -94,34 +102,32 @@ export class HeldParts {
 /** The process's held parts: machine reports'. */
 export const HELD = new HeldParts()
 /** Commands' (parts/load.ts loadActive), apart from the reports': each read lets go of what it did not select, and a report
- *  selects only running work and Lead conversations, where a command selects every awake conversation. */
+ *  selects only running work and Lead conversations, where a command selects every awake conversation and every live agent,
+ *  machine, member and progress part (task #4368). */
 export const COMMAND_HELD = new HeldParts()
 
 export class HeldRead {
   constructor(private readonly owner: HeldParts, private readonly tab: Tab, private readonly at: number) {}
 
-  /** The Swarm's live machine parts, as `findMany({ where: { tabId, deleted: false } })` returns them, in key order. */
-  async machines(tx: Transaction): Promise<PartRow[]> {
+  /** The Swarm's live parts of `kind`, as `findMany({ where: { tabId, deleted: false } })` returns them, in key order. */
+  async parts(tx: Transaction, kind: HeldKind): Promise<PartRow[]> {
     const { tabId } = this.tab
-    const all = () => tx.swarmMachine.findMany({ where: { tabId, deleted: false } }) as unknown as Promise<PartRow[]>
+    const all = () => delegate(tx, kind).findMany({ where: { tabId, deleted: false } }) as unknown as Promise<PartRow[]>
     // Holding none of them, the whole read alone, as before.
-    if (!this.owner.holds(this.tab, 'machine')) return byKey(this.kept('machine', await all(), 'cold'))
-    const listed = await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false } }, { $project: COLUMNS }] }) as unknown as
-      Array<Record<string, unknown>>
+    if (!this.owner.holds(this.tab, kind)) return byKey(this.kept(kind, await all(), 'cold'))
+    const listed = await readBy(tx, COLLECTION[kind], 'held', [{ $match: { tabId, deleted: false } }, { $project: kind === 'machine' ? MACHINE_COLUMNS : COLUMNS }])
     const rows = new Map<string, PartRow>()
     const changed: string[] = []
     for (const row of listed) {
-      const value = this.owner.take(this.tab, `machine:${row.key as string}`, columnsOf(row), this.at)
+      const value = this.owner.take(this.tab, `${kind}:${row.key as string}`, columnsOf(row), this.at)
       if (value) rows.set(row.key as string, value as PartRow)
       else changed.push(row.key as string)
     }
-    if (!changed.length) recordCache('held-machines', 'hit')
+    if (!changed.length) recordCache(ENTRY[kind], 'hit')
     else {
-      // However many changed, one read by id: one `findUnique` each was a top slow shape on prod (task #3119). Raw, so the ids
-      // are a plain `$in` on `_id`.
-      const read = (await tx.swarmMachine.aggregateRaw({ pipeline: [{ $match: { _id: { $in: changed.map(key => partId(tabId, key)) }, deleted: false } }] }) as
-        unknown as Array<Record<string, unknown>>).map(rawPartRow)
-      for (const row of this.kept('machine', read, 'parts')) rows.set(row.key, row)
+      // However many changed, one read by id: one `findUnique` each was a top slow shape on prod (task #3119).
+      const read = (await readBy(tx, COLLECTION[kind], 'id', [{ $match: { _id: { $in: changed.map(key => partId(tabId, key)) }, deleted: false } }])).map(rawPartRow)
+      for (const row of this.kept(kind, read, 'parts')) rows.set(row.key, row)
     }
     return byKey([...rows.values()])
   }
@@ -142,16 +148,16 @@ export class HeldRead {
       if (value) rows.set(row.key as string, value as Record<string, unknown>)
       else changed.push(row.key as string)
     }
-    if (!changed.length) recordCache('held-groups', 'hit')
+    if (!changed.length) recordCache(ENTRY.group, 'hit')
     else for (const row of this.kept('group', await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: changed } } }]), 'parts')) rows.set(row.key as string, row)
     return listed.flatMap(row => rows.has(row.key as string) ? [rows.get(row.key as string)!] : [])
   }
 
-  /** Holds the parts just read whole, and counts them (`swarm cache`, entries `held-machines` and `held-groups`). */
-  private kept<T extends { key: string } | Record<string, unknown>>(kind: 'machine' | 'group', rows: T[], reason: 'cold' | 'parts'): T[] {
+  /** Holds the parts just read whole, and counts them (`swarm cache`, entries `held-machines`, `held-groups` and the like). */
+  private kept<T extends { key: string } | Record<string, unknown>>(kind: HeldKind | 'group', rows: T[], reason: 'cold' | 'parts'): T[] {
     let bytes = 0
     for (const row of rows) bytes += this.owner.keep(this.tab, `${kind}:${(row as { key: string }).key}`, columnsOf(row as Record<string, unknown>), row, this.at)
-    recordCache(kind === 'machine' ? 'held-machines' : 'held-groups', 'full', { bytes, parts: rows.length, reason })
+    recordCache(ENTRY[kind], 'full', { bytes, parts: rows.length, reason })
     return rows
   }
 

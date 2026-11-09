@@ -18,10 +18,11 @@ export const REMOVED_KEEP_MS = 30 * 24 * 60 * 60_000
  *  one stopped for a moment before it is back (security reviews of #2569). */
 export const STOPPED_REMOVE_MS = 30_000
 
-/** Whether [target] could ever leave this way: not a coordinator, a Buddy, crew (its host reopens it in place, crew.ts), one
- *  kept or being stopped. */
+/** Whether [target] could ever leave this way: not a coordinator, a Buddy, a Regular agent, crew (its host reopens it in place,
+ *  crew.ts), one kept or being stopped. A Regular agent is its person's, as a Buddy is: removed, it never came back, since its own
+ *  chat made it confidential and it has no project to restore into (task #4218). Its person stops it. */
 const removable = (state: SuperTabState, target: Agent): boolean =>
-  !isBuddy(target) && !isCrew(target) && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
+  !isBuddy(target) && !target.regular && !isCrew(target) && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
 
 /** Whether [report] proves [target]'s session stopped: listed stopped and, for a reservation a resume renewed, stopped in that
  *  very generation, since an older host lists the earlier run stopped and cannot say which. */
@@ -47,7 +48,7 @@ export function sessionClosed(state: SuperTabState, target: Agent, now: number):
  * not listed for DOWN_REMOVE_MS while the machine's other sessions still run. The last reading must be fresh and not list
  * them running either, so one report after a silence never removes anyone, and a report whose running list is empty never
  * removes by time (a fault in the host's listing would empty a whole machine). Never a coordinator (a project's end is the
- * only removal that takes one), a Buddy (its owner stops it), an agent someone chose to keep: it stays, shown as closed, or
+ * only removal that takes one), a Buddy or a Regular agent (its person stops it), an agent someone chose to keep: it stays, shown as closed, or
  * one being stopped: its host closes it and takes it out (commands.ts agent.remove). Whether a task is still held is judged by
  * removeClosedAgents, after the loss of tasks.
  */
@@ -144,7 +145,7 @@ export function restoreRefusal(state: SuperTabState, record: RemovedSession, mac
     const held = productManagerOn(state, record.machineId)
     if (held && held !== project.id) return 'team-other-project'
   }
-  return teamWorkCheck(state, record.machineId, agent.contributorId, project, now, facts.teamMachines, facts.otherWorkspaceMachines) ? 'team-work' : null
+  return teamWorkCheck(state, record.machineId, agent.contributorId, project) ? 'team-work' : null
 }
 
 /**

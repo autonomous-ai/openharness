@@ -142,8 +142,9 @@ void main() {
   });
 
   group('the chat', () {
-    testWidgets("a task's and a proposal's name start where a message's text "
-        'does', (tester) async {
+    testWidgets("a proposal sent in your name is your own bubble, on the "
+        "right with your message; an agent's task line is on the left "
+        '(#4529)', (tester) async {
       final server = swarm();
       server.messages
         ..add(_said(1, 'A plain message.'))
@@ -154,12 +155,17 @@ void main() {
           'source': {'kind': 'buddy-proposal', 'personId': 'owner'},
         });
       await showView(tester, server);
-      final text = tester.getTopLeft(find.text('A plain message.')).dx;
-      expect(
-        tester.getTopLeft(find.text('Windows credential fix · working')).dx,
-        text,
+      Rect bubble(String text) => tester.getRect(
+        find
+            .ancestor(
+              of: find.textContaining(text),
+              matching: find.byKey(const ValueKey('swarm-bubble')),
+            )
+            .first,
       );
-      expect(tester.getTopLeft(find.text('Goal: Activity read fix')).dx, text);
+      final mine = bubble('A plain message.');
+      expect(bubble('Goal: Activity read fix').right, mine.right);
+      expect(bubble('Windows credential fix').left, lessThan(mine.left));
     });
   });
 
@@ -343,7 +349,12 @@ void main() {
       await tester.tap(_key('super-manage'));
       await tester.pumpAndSettle();
       final heading = tester.getTopLeft(find.text('Manage').last).dx;
-      expect(tester.getTopLeft(find.text('Machines')).dx, heading);
+      // The Machines screen has its own title too; this is the tab's.
+      final machinesTab = find.descendant(
+        of: _key('super-manage-tab-machines'),
+        matching: find.text('Machines'),
+      );
+      expect(tester.getTopLeft(machinesTab).dx, heading);
       await tester.tap(_key('super-manage-tab-swarm'));
       await tester.pumpAndSettle();
       expect(tester.getTopLeft(find.text('Name')).dx, heading);

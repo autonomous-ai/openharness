@@ -586,18 +586,17 @@ void main() {
     await tester.pump();
     await tester.pump();
     final entry = find.byKey(const ValueKey('super-machine-entry-m'));
-    expect(
-      find.descendant(of: entry, matching: find.text('offline')),
-      findsNothing,
+    // Manage's row says when a machine that is not online was last seen (task #3974's mockup).
+    final lastSeen = find.descendant(
+      of: entry,
+      matching: find.textContaining('last seen', findRichText: true),
     );
+    expect(lastSeen, findsNothing);
 
     await app.handleEventForTest('m', {'type': 'node_status', 'online': false});
     await tester.pump();
     expect(find.byKey(const ValueKey('super-machine-m')), findsOneWidget);
-    expect(
-      find.descendant(of: entry, matching: find.text('offline')),
-      findsOneWidget,
-    );
+    expect(lastSeen, findsOneWidget);
     await disposeSidebar(tester, controller);
   });
 

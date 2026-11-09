@@ -36,6 +36,20 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(planner.select([path])[0], {"desktop", "mobile"})
         self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
 
+    def test_a_desktop_change_on_main_keeps_backends_result_only_when_backend_reads_none_of_it(self):
+        # Task #4511: no backend test reads buddies.dart since #3013 (11-04); declaring it reran backend after every
+        # Update branch that brought a Buddy change.
+        for path in ["desktop/lib/super_tabs/buddies.dart", "desktop/lib/super_tabs/view.dart"]:
+            with self.subTest(path=path):
+                self.assertFalse(planner.reads("backend", path))
+        for path in ["desktop/lib/super_tabs/attachment_upload.dart", "desktop/lib/measurement/setup_transport.dart",
+                     "mobile/integration_test/push_e2e/reply_push.apns"]:
+            with self.subTest(path=path):
+                self.assertTrue(planner.reads("backend", path))
+        for path in ["backend/src/superTabs/processNotes.ts", "backend/src/superTabs/machineRules.cases.json"]:
+            with self.subTest(path=path):
+                self.assertTrue(planner.reads("cli", path))
+
     def test_every_desktop_file_the_phone_tests_read_selects_mobile(self):
         # The phone's tests name what they read as '../desktop/<path>', an import of '../../desktop/<path>', or (the parity
         # test's copies and model) the desktop side 'lib/super_tabs/<file>.dart', which only Desktop has.
@@ -873,6 +887,7 @@ class MainPlannerTests(unittest.TestCase):
         (self.root / "scripts").mkdir(exist_ok=True)
         (self.root / "scripts/ci-plan.py").write_text(planner_source)
         (self.root / "scripts/record-ci-validation.py").write_text((scripts / "record-ci-validation.py").read_text())
+        (self.root / "scripts/local-checks.py").write_text((scripts / "local-checks.py").read_text())
         self.git("add", "-A")
         self.git("commit", "-qm", "main")
         return self.git("rev-parse", "HEAD")
@@ -992,6 +1007,16 @@ class CrossReadTests(unittest.TestCase):
         self.addCleanup(lambda: (planner.NOT_READS.clear(), planner.NOT_READS.update(original)))
         planner.NOT_READS["backend/src/fixture.test.ts"] = ("owned-code strings in a fixture", {"cli/src/lib/"})
         self.assertEqual(planner.undeclared_reads(self.root, "backend"), [])
+
+    def test_a_data_folder_covers_the_paths_under_it_but_never_a_relative_read(self):
+        # Task #4511: backend tests hold owned paths ('desktop/lib/c.dart') as task data; every Desktop change on main
+        # then refused backend's reuse at merge, though nothing opened those files.
+        self.write("backend/src/fixture.test.ts", "work(['cli/src/lib/a.ts', 'desktop/lib/devices/x.dart']); "
+                                                   "readFileSync(new URL('../../cli/src/lib/a.ts', import.meta.url))")
+        original = dict(planner.NOT_READS)
+        self.addCleanup(lambda: (planner.NOT_READS.clear(), planner.NOT_READS.update(original)))
+        planner.NOT_READS["backend/src/fixture.test.ts"] = ("test data: owned paths", {"cli/", "desktop/"})
+        self.assertEqual(planner.undeclared_reads(self.root, "backend"), [("backend/src/fixture.test.ts", "cli/src/lib/a.ts")])
 
     def test_every_cross_read_in_this_repository_is_declared(self):
         repository = Path(__file__).resolve().parents[2]
