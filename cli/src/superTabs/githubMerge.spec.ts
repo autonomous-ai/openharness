@@ -115,6 +115,20 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     }
   })
 
+  // Every agent of a person posts as that person's GitHub login, the login that opened its pull request: an unsigned READ-OK from
+  // it may be the author's own, so it never counts, and a reader on that login signs. Another login's unsigned READ-OK is that
+  // person's (the lead's decision, 2026-11-10).
+  it('takes no unsigned READ-OK from the login that opened the pull request, a signed one from a teammate on it, and another login\'s', async () => {
+    for (const [said, merges] of [[comment('READ-OK f6edb44'), 0], [comment('**READ-OK f6edb44**'), 0], [comment('READ-OK f6edb44', { user: { login: 'DeeHW' } }), 0],
+      [comment('Juno, 14:20: READ-OK f6edb44'), 1], [comment('READ-OK f6edb44', { user: { login: 'kenmore' } }), 1]] as const) {
+      const f = setup()
+      f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+      f.github.repo.comments.set(4, [said])
+      await f.merger.tick()
+      expect(f.merges(), String(said.body) + ' by ' + JSON.stringify(said.user)).toHaveLength(merges)
+    }
+  })
+
   it('counts a reader who signs its name two ways once for TWO READS', async () => {
     const f = setup()
     f.github.repo.pulls = [pull({ body: 'Closes #2\n\nTWO READS: it changes the default voice.' })]
