@@ -20,7 +20,7 @@ const OTHER_ACCOUNT_LINE = 'From another account:'
 const TITLE_MAX = 40
 const STEP_MAX = 20
 
-/** Notices nobody waits on within minutes. Not `pair-loop`, `buddy-proposal`, `update-request`, `digest-request` (throttled
+/** Notices nobody waits on within minutes. Not `pair-loop`, `buddy-proposal`, `update-request` (throttled
  *  already, with instructions of their own): each delivers at once, as any kind not listed does. A `terminal-alert` and an
  *  `agent-only` row are gathered only in the forms `gatheredNotice` names. */
 export const DIGEST_KINDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-lost', 'work-resumed', 'idle', 'review-failed', 'review-capacity', 'overlap', 'note-removed'])

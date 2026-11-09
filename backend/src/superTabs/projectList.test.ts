@@ -47,7 +47,7 @@ function swarm() {
 const pulse = (waiting: number, members: number): Pulse => ({ pmId: null,
   asks: { count: 0, oldestAt: null, personId: null, list: [] }, working: { count: 0, crew: members, agentIds: [] },
   nextUp: { count: waiting, conversationIds: [] }, lost: { count: 0, since: null, conversationIds: [] },
-  held: { count: 0, withoutReason: 0, list: [] }, idleSince: null, process: null,
+  held: { count: 0, withoutReason: 0, list: [] }, idleSince: null,
   redAt: { asks: null, idle: null, lost: null, held: null }, limits: { askMinutes: 5, idleMinutes: 10, lostMinutes: 10 } })
 
 const names = (list: ReturnType<typeof projectList>) => list.projects.map(p => p.name)

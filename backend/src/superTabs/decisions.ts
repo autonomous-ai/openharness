@@ -532,22 +532,6 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Acto
   }) }
 }
 
-/** How many of a project's open decisions wait in each conversation for each person, for its digest (digest.ts
- *  decisionLines): never what they ask. Every open one is read, so every one counts, however many there are, and private
- *  ones filtered out later never crowd out shared ones (review of #1772). Counted here, reading only who and where:
- *  groupBy on this model once panicked the Prisma engine on Mongo (review of #1855). */
-export async function waitingInProject(tx: Tx, tabId: string, projectId: string): Promise<Array<{ conversationId: string; personId: string; count: number }>> {
-  const rows = await tx.superTabDecision.findMany({ where: { tabId, projectId, ...waiting }, select: { conversationId: true, personId: true } })
-  const counts = new Map<string, { conversationId: string; personId: string; count: number }>()
-  for (const { conversationId, personId } of rows) {
-    const key = JSON.stringify([conversationId, personId])
-    const entry = counts.get(key)
-    if (entry) entry.count++
-    else counts.set(key, { conversationId, personId, count: 1 })
-  }
-  return [...counts.values()]
-}
-
 /** A person's open decisions: how many, and a digest of which. A client reads its list again when the digest moves, as
  *  when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Read on every poll, so
  *  only each one's id and conversation, and each quiet conversation's access fields: never what they ask, nor a brief. Not

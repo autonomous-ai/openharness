@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, waitingInProject, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 import { giveOwnBuddy } from './ownBuddy.test-support.js'
 
@@ -346,23 +346,6 @@ describe('reading a typed answer', () => {
     const tx = { superTabDecision: { findMany: async () => [row] } } as unknown as Prisma.TransactionClient
     const read = await listDecisions(tx, 'tab', s.state, asAgent(s.worker), 'answered')
     expect(read.decisions).toEqual([expect.objectContaining({ id: 'decision-1', choice: null, note: 'Use the Mac Studio', answer: 'Use the Mac Studio' })])
-  })
-})
-
-// groupBy on SuperTabDecision once panicked the Prisma engine on Mongo: the digest counts the open decisions it reads instead.
-describe('the decisions waiting in a project', () => {
-  it('counts each conversation and person\'s open decisions without groupBy, reading only who and where', async () => {
-    const asked: unknown[] = []
-    const rows = [{ conversationId: 'c1', personId: 'owner' }, { conversationId: 'c2', personId: 'peer' }, { conversationId: 'c1', personId: 'owner' },
-      { conversationId: 'c1', personId: 'peer' }, { conversationId: 'c1', personId: 'owner' }]
-    const tx = { superTabDecision: {
-      groupBy: async () => { throw new Error('groupBy on SuperTabDecision') },
-      findMany: async (args: unknown) => { asked.push(args); return rows },
-    } } as unknown as Prisma.TransactionClient
-    expect(await waitingInProject(tx, 'tab', 'web')).toEqual([{ conversationId: 'c1', personId: 'owner', count: 3 },
-      { conversationId: 'c2', personId: 'peer', count: 1 }, { conversationId: 'c1', personId: 'peer', count: 1 }])
-    expect(asked).toEqual([{ where: { tabId: 'tab', projectId: 'web', OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] },
-      select: { conversationId: true, personId: true } }])
   })
 })
 
