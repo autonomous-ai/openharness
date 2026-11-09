@@ -12,7 +12,6 @@ import { SuperTabHostError } from './host.js'
 import { createSwarmAgents } from './inCore/agents.js'
 import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
 import { PM_HOMES } from './teamDaemon.js'
-import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { recordCleanupClose } from './cleanupCloses.js'
@@ -1772,14 +1771,6 @@ describe('contributed machine executor', () => {
       f.step(60_000); await f.machine.tick()
       expect(failures(f)).toEqual([])
     })
-  })
-
-  it('a lead queues a contributed start without connecting to that computer', async () => {
-    const open = vi.fn()
-    const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host', engine: 'claude' } } }))
-    const reply = await startAgent({ startId: 'start' }, scoped, { port: 14001, machineId: 'lead', dataDir: '/fixture' }, open)
-    expect(reply).toMatchObject({ ok: true, queued: true, startId: 'start', machineId: 'host' })
-    expect(open).not.toHaveBeenCalled()
   })
 
   describe('how soon a change is seen', () => {

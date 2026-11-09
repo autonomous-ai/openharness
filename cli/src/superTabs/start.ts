@@ -5,7 +5,7 @@ import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { admission, quotaOf, type Requirements } from './capacity.js'
-import { groupSkillMode, identifier, object } from './host.js'
+import { identifier, object } from './host.js'
 import { BUDDY_SKILL_USE, isSwarmSkillMode, wireRole, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
 import { agentFolderFor, prepareAgentFolder, temporaryFolder } from './agentFolder.js'
@@ -70,14 +70,12 @@ const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_RE
 /** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
  *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
 export function leadPrompt(tabId: string, chat: string, roleName: string): string {
-  return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${roleLine(roleName)}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the conversation with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. ${INSTRUCTIONS_LINE(tabId)} Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${roleLine(roleName)}Read the conversation with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
-/** Workflow lives in the project's instructions, not in this prompt (project instructions, phase 3). */
-const INSTRUCTIONS_LINE = (tabId: string) => `Read your role in the project's instructions: harness super-tab --tab ${tabId} instructions.`
 /** The role the project's document names for this agent, when the backend's start request carries it. */
 const roleLine = (roleName: string) => roleName ? `You are joining this project's Swarm as its ${roleName}. ` : ''
 function workerPrompt(tabId: string, chat: string, roleName: string): string {
-  return `You are joining a shared Super Tab. ${roleLine(roleName)}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the conversation with harness super-tab --tab ${tabId} messages ${chat}. Reply in that conversation using harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. ${INSTRUCTIONS_LINE(tabId)} Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+  return `You are joining a shared Super Tab. ${roleLine(roleName)}Read the conversation with harness super-tab --tab ${tabId} messages ${chat}. Reply in that conversation using harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
 const buddyProposalOffer = `When your discussion has a clear goal, why it matters and how to know it is done, check the project for an existing proposal or task; point to a match instead of duplicating it. Otherwise offer without waiting to be asked: "Want me to propose this to <project>?" Then show the exact proposal as a quoted line after "I'll post this as you:". Send only after your owner says yes to that proposal. One offer per idea; never repeat an ignored or declined offer.`
@@ -159,31 +157,6 @@ export async function inspectCapacity(target: Daemon, request: Json) {
   return { capacity, engine, quota, ...admission(capacity, engine, quota, requirements, !!request.codexHome || !!request.gridModel) }
 }
 
-/** What the start reads from the Swarm about the project whose group the agent joins:
- *
- * - its skills, so the agent starts on that text and is never moved to it at once. A project from before modes, or a
- *   state this start cannot read, is orchestration; the host moves a running agent to its project's mode
- *   (superTabs/host.ts) if that guess is wrong.
- * - whether the agent does another person's project work (the project's owner is not the machine's owner) on a server
- *   with the Harness GitHub App, and whom that work is for. Then git and gh in the session use the app's token for its
- *   task instead of the machine owner's GitHub login (lib/swarmGitHub.ts, docs/swarm-github-app.md). A person's own
- *   agents, a server without the app, and a state this start cannot read launch as before.
- */
-export async function projectFacts(scoped: ScopedRequest, conversationId: unknown, machineOwnerId: unknown):
-  Promise<{ mode: SwarmSkillMode; github: { requester: string } | null }> {
-  const answer = object(object(await scoped({ action: 'status' }).catch(() => ({}))).value)
-  const state = object(answer.state)
-  const group = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(group => group.id === conversationId)
-  const mode = groupSkillMode(state, group)
-  // A Swarm from before projects is one project, its owner's.
-  const project = Array.isArray(state.projects) ? state.projects.map(object).find(p => p.id === (group?.projectId ?? 'lead')) : { ownerId: state.ownerId }
-  const ownerId = project?.ownerId
-  const requester = (Array.isArray(state.people) ? state.people.map(object) : []).find(p => p.id === ownerId)?.email
-  const github = answer.githubApp === true && group && identifier(ownerId) && identifier(machineOwnerId) && ownerId !== machineOwnerId
-    && typeof requester === 'string' && requester ? { requester } : null
-  return { mode, github }
-}
-
 /** What an agent doing another person's project work is told about git and gh. It names nobody: each task's message says
  *  whom that task's pull requests are for (backend projects.ts `requestedByLine`), so an agent reused for another person's
  *  task never names the one before (security review 2 of #2492). */
@@ -193,37 +166,6 @@ export const githubPromptLine = () => `git and gh here use a Harness GitHub App 
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
  *  before the flags does not name the field, and agent_create would silently drop a model it does not know. */
 const launchesWithModel = (capacity: Json, engine: unknown) => Array.isArray(capacity.launchModel) && capacity.launchModel.includes(engine)
-
-/** Starts through the ordinary native launch protocol, with its durable receipt.
- * This CLI owns no machine credential and does not change legacy spawn settings.
- * Every invocation resumes the backend intent before it may open a native pane.
- *
- * A start that fails before its agent exists is reported, never left unsaid (the round-device group, 2026-10-27: a
- * contributed host failed it in preparation, and the agent had been told only "queued"): a queued start is watched for a
- * short while. Since the project instructions (phase 4, decision 18) it is moved nowhere: until then this client started it
- * once more on the route's next machine by itself. The agent that made it decides what next, and the backend's failure
- * notice tells the coordinator too, with the model it asked for. */
-export async function startAgent(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon = openDaemon,
-  pause: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<Json> {
-  const result = await startOnce(input, scoped, where, open)
-  // The host settles its own queued starts.
-  if (input.hostDispatch === true) return result
-  return result.queued === true && input.action === 'start' ? watchQueued(result, scoped, pause) : result
-}
-
-const WATCH_READS = 10, WATCH_EVERY_MS = 2_000
-/** A contributed machine's host readies a queued start on its next pass (5 s apart, machines.ts): the agent reads its
- *  receipt for about 20 s, so a start its host fails in preparation is known before the agent moves on. Later failures
- *  are delivered by the backend (agent.startFailed); resuming the start reads its receipt. */
-async function watchQueued(queued: Json, scoped: ScopedRequest, pause: (ms: number) => Promise<void>): Promise<Json> {
-  for (let read = 0; read < WATCH_READS; read++) {
-    await pause(WATCH_EVERY_MS)
-    const start = requireSuccess(await scoped({ action: 'startStatus', startId: queued.startId }))
-    if (start.error && !start.harnessId) return { error: 'START_FAILED', startId: queued.startId, detail: start.error }
-    if (start.dispatched || start.harnessId) break
-  }
-  return queued
-}
 
 /**
  * Names a Team-written start's checkout untrusted in its own Codex home (task #3009). The home names no project so that the
@@ -243,37 +185,19 @@ export function untrustCheckout(home: string, checkout: string): void {
   if (tables.length) appendFileSync(file, `${config && !config.endsWith('\n') ? '\n' : ''}${tables.map(table => `${table}\ntrust_level = "untrusted"\n`).join('')}`, { mode: 0o600 })
 }
 
-/** How a backend from before `heavy` (backend superTabs/commands.ts startRequestSchema) refuses it, word for word. */
-export const HEAVY_REFUSED = 'command.request: Unrecognized key: "heavy"'
-export const HEAVY_NOT_RECORDED = 'This server cannot record that the start runs heavy work, so routes in the next minutes will not count it on its machine. Update the Harness server.'
-
-async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon): Promise<Json> {
-  let startId = input.startId
+/**
+ * Starts through the ordinary native launch protocol, with its durable receipt. Only a contributed machine's own host runs it,
+ * for a start the Swarm queued for it (machines.ts): this CLI owns no machine credential and does not change legacy spawn
+ * settings. Every invocation resumes the backend intent before it may open a native pane.
+ *
+ * A start that fails before its agent exists is reported to the Swarm, never left unsaid (the round-device group, 2026-10-27:
+ * a contributed host failed it in preparation, and the agent had been told only "queued"), and moved nowhere (project
+ * instructions, phase 4, decision 18): the coordinator decides what next, and the backend's failure notice tells it too,
+ * with the model it asked for.
+ */
+export async function startAgent(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon = openDaemon): Promise<Json> {
+  const startId = input.startId
   let routed: unknown
-  let heavyWarning: string | undefined
-  if (input.action === 'start') {
-    // The routing decision belongs to the command, not to the machine-side request.
-    const { routeDecisionId, overrideReason, ...request } = object(input.request)
-    routed = routeDecisionId
-    const submit = (request: Json) => scoped({ action: 'command', operationId: input.operationId,
-      command: { type: 'agent.start', request, ...(routeDecisionId ? { routeDecisionId } : {}), ...(overrideReason ? { overrideReason } : {}) } })
-    // Swarm v3 (task #4215): an agent starts with its owner's own permission settings, so the start names no mode, whatever
-    // the caller sent; the backend refuses one.
-    const { permissionMode: _mode, ...own } = request
-    let sent: Json = own
-    let reply = await submit(sent)
-    // A backend from before heavy work was recorded refuses that field in its body check, before it records anything: that
-    // refusal alone sends the start again without it. A timeout or any other refusal may have started an agent, so it never
-    // does (Lead, 10-31).
-    if (reply.error === 'VALIDATION_ERROR' && reply.detail === HEAVY_REFUSED && sent.heavy !== undefined) {
-      const { heavy: _heavy, ...plain } = sent
-      sent = plain
-      heavyWarning = HEAVY_NOT_RECORDED
-      reply = await submit(sent)
-    }
-    const result = requireSuccess(reply)
-    startId = object(result.result).startId
-  }
   if (!identifier(startId)) throw new Error('The start has no durable receipt. Do not create an agent without it.')
   const start = requireSuccess(await scoped({ action: 'startStatus', startId }))
   routed ??= start.routeDecisionId
@@ -286,17 +210,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       command: { type: 'agent.startFailed', startId, error: detail } }))
     return { error: 'SWARM_ENGINE', startId, detail }
   }
-  if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId,
-    ...(heavyWarning ? { heavyWarning } : {}) }
-  // Contributed capacity is executed by its owner. A collaborator receives no
-  // machine credentials and cannot issue arbitrary commands to that computer.
-  // Its machine reports it preparing (backend liveness.ts): the backend waits up to 15 minutes, and so should the Lead.
-  if (start.poolGeneration && input.hostDispatch !== true) return start.preparing === true
-    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(heavyWarning ? { heavyWarning } : {}),
-      detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' }
-    : { ok: true, queued: true, startId, machineId: request.machineId,
-      ...(heavyWarning ? { heavyWarning } : {}),
-      detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
+  if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId }
   const target = await open(where, request.machineId)
   /** What the agent runs now, and its frame, as the frame says; null when the frame cannot say. */
   const seenNow = async (agentId: string, engine: string, ms = 10_000) => {
@@ -459,11 +373,10 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // CLI takes (lead, dev, buddy, and review for an older client's Reviewer, which keeps its swarm-review file).
       const role = wireRole({ role: buddy ? 'buddy' : lead ? 'coordinator' : 'agent', ...(reviewer ? { fallback: 'review' as const } : {}) })
       const hosted = input.hostDispatch === true ? object(input.github) : null
-      const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
-      const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
+      const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : 'orchestration'
       // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session and
       // uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
-      const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
+      const github = buddy ? null : hosted && typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null
       // The role's name from the project's document, when the backend's start request has it; one line, bounded.
       const roleName = typeof request.roleName === 'string' ? request.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
       // Anh Dee's agent model (task #4698): a Member sets its project up once in its folder; a helper starts from that setup.
@@ -688,6 +601,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       engineVersion: text(last.frame.engineVersion)?.slice(0, 160) ?? null } : null
     return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
       ...(settledConfiguration ? { configuration: settledConfiguration } : {}),
-      ...(heavyWarning ? { heavyWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
+      ...(modelWarning ? { modelWarning } : {}) }
   } finally { target.close() }
 }

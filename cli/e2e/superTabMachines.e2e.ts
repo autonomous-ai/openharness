@@ -1,10 +1,9 @@
-/** Two accounts with no machine share. The owner executes a tab-scoped queue;
+/** Two accounts with no machine share. The owner's host executes a tab-scoped queue of starts the Swarm made;
  * Mongo integration tests cover authorization, while this exercises real native receipts. */
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
-import { superTabCommand } from '../src/superTabs/command.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
@@ -19,7 +18,7 @@ afterEach(async () => {
   await relay?.close(); relay = undefined
 })
 
-it.each(['project', 'swarm'])('queues a teammate start with %s capacity and resumes the same native receipt', async scope => {
+it.each(['project', 'swarm'])('runs a start queued for a teammate\'s machine with %s capacity, from its owner\'s host', async scope => {
   const backend = await FakeBackend.start(); relay = backend
   const specs = [
     { machineId: 'd1'.repeat(16), computerId: 'pool-lead-fixture', name: 'Lead fixture', token: 'fixture-lead-token', account: 'lead', email: 'lead@example.com' },
@@ -66,12 +65,6 @@ it.each(['project', 'swarm'])('queues a teammate start with %s capacity and resu
     if (path.includes('/starts/')) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
       const c = body.command
-      if (c.type === 'agent.start') {
-        expect(caller.account).toBe('lead')
-        const startId = `start-${body.operationId}`
-        if (!starts.has(startId)) starts.set(startId, { id: startId, poolGeneration: generation, creationId: `super-${startId}`, request: c.request, dispatched: false, harnessId: null })
-        return { data: { result: { startId } } }
-      }
       if (c.type === 'agent.configuration') return { data: { result: {} } }
       throw new Error(`Unexpected caller operation ${c.type}`)
     }
@@ -101,22 +94,14 @@ it.each(['project', 'swarm'])('queues a teammate start with %s capacity and resu
   agents.push({ id: leadId, machineId: leadMachine.machineId, harnessId: lead.agent.id })
   await onB.request('super_tabs', { action: 'wake' }, 30000)
   await until('owner reports contributed capacity', () => observations > 0, 45000)
-  async function run(args: string[]) {
-    let answer: Record<string, any> = {}
-    const code = await superTabCommand(['--tab', 'pool-tab', '--agent', leadId, ...args], { where: () => ({ port: a.port, dataDir: a.dataDir, machineId: leadMachine.machineId, harnessPane: true }), print: line => { answer = JSON.parse(line) } })
-    return { code, answer }
-  }
   const request = { conversationId: 'lead', machineId: memberMachine.machineId, engine: 'codex', name: 'Pool builder', cwd: project, worktree: false,
     requirements: { memoryBytes: 0, diskBytes: 1, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
-  const queued = await run(['start', 'pool-builder', JSON.stringify(request)])
-  expect(queued.answer, JSON.stringify(queued)).toMatchObject({ ok: true, queued: true })
-  const joined = await until('owner completes the queued native receipt', async () => {
-    const answer = (await run(['resume', queued.answer.startId])).answer
-    return answer.harnessId ? answer : null
-  }, 90000, 500)
+  // The Swarm queues the start for the member's machine, and its host runs it on a pass of its own (superTabs/machines.ts).
+  const startId = 'start-pool-builder'
+  starts.set(startId, { id: startId, poolGeneration: generation, creationId: `super-${startId}`, request, dispatched: false, harnessId: null })
+  await until('owner completes the queued native receipt', () => starts.get(startId)!.harnessId || null, 90000, 500)
   expect((await onB.request('agents_list')).agents).toHaveLength(1)
   expect((await onA.request('agents_list')).agents).toHaveLength(1)
-  expect((await run(['start', 'pool-builder', JSON.stringify(request)])).answer.harnessId).toBe(joined.harnessId)
   expect((await onB.request('shared_machines', { action: 'get' })).emails).not.toContain(leadMachine.email)
   generation = ''
 })

@@ -8,6 +8,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { object } from '../src/superTabs/wire.js'
 import { retainedHarnesses } from '../src/superTabs/retention.js'
+import { startAgent } from '../src/superTabs/start.js'
 import { screenFor } from '../src/engines/screens.js'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
@@ -40,7 +41,6 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const agents: Array<Record<string, any>> = []
   const starts = new Map<string, Record<string, any>>()
   const posts: Array<Record<string, any>> = []
-  const tasks: Array<Record<string, any>> = []
   const pending = new Map<string, Record<string, any>>()
   const assignments: Array<Record<string, string>> = []
   const stopReceipts: Array<Record<string, any>> = []
@@ -82,29 +82,10 @@ it('starts either engine once, posts to its captured group and delivers shared i
       expect(agents.some(agent => agent.id === url.searchParams.get('asAgentId'))).toBe(true)
       return { data: { messages: [{ id: url.searchParams.get('messageId'), text: 'Should the offline queue survive restart?' }] } }
     }
-    if (path.startsWith(`/api/super-tabs/${TAB}/starts/`)) return { data: starts.get(path.split('/').at(-1)!) }
     if (path.endsWith('/commands')) {
       const command = object(body.command)
-      if (command.type === 'agent.start') {
-        const startId = `start-${body.operationId}`
-        if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request: command.request, dispatched: false, harnessId: null })
-        return { data: { result: { startId } } }
-      }
       if (command.type === 'agent.stopLease') return { data: { result: { expiresAt: Date.now() + 120_000, durationMs: 120_000 } } }
-      const start = starts.get(String(command.startId))
-      if (command.type === 'agent.startDispatch') {
-        if (start!.dispatched) throw new Error('Duplicate dispatch')
-        start!.dispatched = true
-      } else if (command.type === 'agent.started') {
-        start!.harnessId = command.harnessId
-        const id = idFor(String(command.harnessId))
-        if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration,
-          ...(command.startedSession ? { startedSession: { ...object(command.startedSession), creationId: start!.creationId } } : {}) })
-        return { data: { result: { agentId: id } } }
-      } else if (command.type === 'conversation.create') {
-        tasks.push(body)
-        if (command.task) return { status: 400, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } }
-      } else if (command.type === 'message.send') posts.push(command)
+      if (command.type === 'message.send') posts.push(command)
       else if (command.type === 'agent.configuration') {
         const agent = agents.find(a => a.id === body.asAgentId)!
         if ((agent.configurationVersion ?? null) !== command.previousVersion) throw new Error('Stale configuration')
@@ -117,7 +98,6 @@ it('starts either engine once, posts to its captured group and delivers shared i
         expect(agents[index]).toMatchObject({ workDecision: 'stop', releaseId: command.releaseId })
         agents.splice(index, 1)
       }
-      else if (command.type === 'agent.startFailed') start!.error = command.error
       else throw new Error(`Unexpected command ${command.type}`)
       revision++
       return { data: { result: {} } }
@@ -155,29 +135,43 @@ it('starts either engine once, posts to its captured group and delivers shared i
       print: text => { answer = JSON.parse(text) } })
     return { code, answer }
   }
-  const task = { goal: 'Keep drafts', changes: 'Persist edits', constraints: 'No dependencies', owns: ['cli/src/superTabs'] }
-  const taskCommand = { type: 'conversation.create', title: 'Drafts', task, checks: [{ description: 'Draft survives restart', independent: false }] }
-  expect((await run(['command', 'missing-task', JSON.stringify({ ...taskCommand, task: undefined })])).answer).toMatchObject({ error: 'TASK_REQUIRED' })
-  expect(tasks).toHaveLength(0)
-  const defined = await run(['command', 'define-task', JSON.stringify(taskCommand)])
-  expect(defined.code, JSON.stringify(defined.answer)).toBe(0)
-  expect(tasks).toHaveLength(2)
-  expect(tasks[0]).toMatchObject({ operationId: 'define-task', command: { task } })
-  expect(tasks[1].operationId).toBe('define-task')
-  expect(tasks[1].command).not.toHaveProperty('task')
-  for (const part of ['Goal:', 'Changes:', 'Constraints:', 'Owns:', 'Keep drafts', 'cli/src/superTabs']) expect(tasks[1].command.brief).toContain(part)
+  // What the Swarm answers a host's start commands (superTabs/machines.ts runs them itself): its record of the start, and the agent it joins.
+  const startReceipt = (command: Record<string, any>) => {
+    const start = starts.get(String(command.startId))!
+    if (command.type === 'agent.startDispatch') {
+      if (start.dispatched) throw new Error('Duplicate dispatch')
+      start.dispatched = true
+    } else if (command.type === 'agent.started') {
+      start.harnessId = command.harnessId
+      const id = idFor(String(command.harnessId))
+      if (!agents.some(a => a.id === id)) agents.push({ id, harnessId: command.harnessId, machineId: ME.machineId, configuration: command.configuration,
+        ...(command.startedSession ? { startedSession: { ...object(command.startedSession), creationId: start.creationId } } : {}) })
+      return { result: { agentId: id } }
+    } else if (command.type === 'agent.startFailed') start.error = command.error
+    else throw new Error(`Unexpected start command ${command.type}`)
+    revision++
+    return { result: {} }
+  }
+  // A start the Swarm queued for this machine, run as its host runs one: the native creation on this daemon, and the receipts the
+  // Swarm would take. The same start again resumes the same native receipt.
+  async function startHere(startId: string, request: Record<string, unknown>) {
+    if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request, dispatched: false, harnessId: null })
+    const answer = await startAgent({ tabId: TAB, startId, hostDispatch: true }, async input => ({ ok: true,
+      value: input.action === 'startStatus' ? structuredClone(starts.get(startId)) : startReceipt(object(input.command)) }), where)
+    return { code: answer.error ? 1 : 0, answer }
+  }
   for (const engine of ['claude', 'codex']) {
     const request = { conversationId: 'feature', machineId: ME.machineId, engine, name: `Builder ${engine}`,
-      cwd, worktree: false, permissionMode: 'auto', requirements: { memoryBytes: 0, diskBytes: 1,
+      cwd, worktree: false, requirements: { memoryBytes: 0, diskBytes: 1,
         maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false } }
-    let started = await run(['start', engine, JSON.stringify(request)])
+    let started = await startHere(`start-${engine}`, request)
     if (started.answer.error === 'START_PENDING') started = await until('native creation to finish', async () => {
-      const result = await run(['resume', `start-${engine}`])
+      const result = await startHere(`start-${engine}`, request)
       return result.answer.error === 'START_PENDING' ? null : result
     }, 60_000, 500)
     expect(started.code, JSON.stringify(started.answer)).toBe(0)
     expect(started.answer.harnessId).toBeTruthy()
-    const same = await run(['start', engine, JSON.stringify(request)])
+    const same = await startHere(`start-${engine}`, request)
     expect(same.answer.harnessId).toBe(started.answer.harnessId)
     const target = idFor(started.answer.harnessId)
     const posted = await run(['post', 'feature', `${engine} ready`, `hello-${engine}`], target)
@@ -291,11 +285,12 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const reads = deliveryReads
   await until('further host polls without replay', () => deliveryReads > reads + 3 || null, 10_000, 250)
   expect(readFileSync(join(d.root, 'submitted-prompts'), 'utf8')).not.toContain('do-not-replay-without-journal')
-  const refused = await run(['start', 'refused-config', JSON.stringify({
+  const refusedRequest = {
     conversationId: 'feature', machineId: ME.machineId, engine: 'claude', name: 'Refused builder',
     cwd, worktree: false, codexHome: join(d.root, 'unused-codex-home'), requirements: { memoryBytes: 0, diskBytes: 1,
       maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false },
-  })])
+  }
+  const refused = await startHere('start-refused-config', refusedRequest)
   expect(refused.code, JSON.stringify(refused.answer)).toBe(1)
   expect(refused.answer).toMatchObject({ error: 'START_FAILED', detail: expect.stringContaining('codexHome') })
   expect(starts.get('start-refused-config')!.error).toContain('before starting an agent')
@@ -303,7 +298,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
   expect(await client.request('agent_create_status', { creationId })).toMatchObject({ creationId, state: 'cancelled' })
   // Even a delayed valid create cannot revive the cancelled request.
   expect(await client.request('agent_create', { engine: 'claude', cwd, creationId }, 30_000)).toMatchObject({ creationId, state: 'cancelled' })
-  expect((await run(['resume', 'start-refused-config'])).answer).toMatchObject({ error: 'START_FAILED' })
+  expect((await startHere('start-refused-config', refusedRequest)).answer).toMatchObject({ error: 'START_FAILED' })
   const listed = await client.request('agents_list')
   expect(listed.agents).toHaveLength(3)
   const worker = listed.agents.find((a: Record<string, any>) => a.id === starts.get('start-claude')!.harnessId)
