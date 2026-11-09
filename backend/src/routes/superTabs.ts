@@ -11,13 +11,12 @@ import { validateBody, validateParams, validateQuery } from '../middlewares/vali
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
 import { PERIODS } from '../superTabs/leaderboard/rolling.js'
-import { fail, SuperTabError } from '../superTabs/model.js'
+import { fail, stableId, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
 import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
 import { redisReportMemory } from '../superTabs/machineReports.js'
 import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
-import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema, teamAccountRequired } from '../superTabs/machines.js'
 import { repositoryReachOf } from '../superTabs/repositoryReach.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
@@ -105,6 +104,8 @@ const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().
   held: z.record(id, etag).refine(held => Object.keys(held).length <= 500, 'At most 500 Swarms.').optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
+/** What a retired terminal recording needs of an older host's observation: the two words its id is made of. */
+const nativeObservation = z.object({ turnId: id, kind: z.enum(['prompt', 'answer', 'gap']) })
 const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
@@ -237,13 +238,6 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   }
 }
 
-/** A terminal recording's host stops recording for good on a 409 (cli superTabs/native.ts). A duplicate key that outlived
- *  every transaction retry is not the recording's fault, so it answers busy, which the host retries. */
-function busyOnDuplicate(error: unknown): never {
-  if ((error as { code?: unknown } | null)?.code === 'P2002') fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
-  throw error
-}
-
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
  *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
 /** Full-state reads of clients from before Swarms were stored by parts (design 4.11): every old client reads one of them
@@ -252,7 +246,7 @@ function busyOnDuplicate(error: unknown): never {
  * The body limit of the routes hosts and agents call every second or every turn (roadmap 2.8), in place of Fastify's 1 MiB:
  * a body is parsed whole on the event loop before its schema is checked. Each route's largest valid body, from its schema's
  * limits with free text in three-byte characters (routes/superTabs.test.ts): host changes with 500 held Swarms 116 KB, a
- * recorded turn 48 KB, a delivery ack or stop receipt 6 KB. Commands and machine readings keep the default: a task at its
+ * delivery ack or stop receipt 6 KB. Commands and machine readings keep the default: a task at its
  * schema's limits reaches 700 KB.
  */
 export const HOT_BODY_LIMIT = 128 * 1024
@@ -563,15 +557,16 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
-  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof openNativeSchema> }>('/api/super-tabs/:tabId/native',
-    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(tabParams), validateBody(openNativeSchema)] },
-    (req, reply) => respond(reply, () => store.native.open(req.user!, req.params.tabId, req.body)))
-  app.get<{ Params: z.infer<typeof nativeParams> }>('/api/super-tabs/:tabId/native/:contextId',
-    { preHandler: validateParams(nativeParams) },
-    (req, reply) => respond(reply, () => store.native.read(req.user!, req.params.tabId, req.params.contextId)))
-  app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeEventSchema> }>('/api/super-tabs/:tabId/native/:contextId',
-    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(nativeParams), validateBody(nativeEventSchema)] },
-    (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body).catch(busyOnDuplicate)))
+  // Terminal recording is gone with Swarm v4, but an older Desktop still opens a terminal's context and an older host still reads and
+  // records into it: each is answered ok and ignored, to everyone, naming no Swarm. A host drops an observation once it is
+  // acknowledged by the id it makes of it (cli superTabs/native.ts eventId), so that one is answered with it: without it, a journal
+  // from before would send the same observation again, for ever. A Team session reaches these on its own list (lib/teamSession.ts).
+  const recordingGone = (_req: unknown, reply: FastifyReply) => sendSuccess(reply, { ok: true, ignored: true })
+  app.post('/api/super-tabs/:tabId/native', { bodyLimit: HOT_BODY_LIMIT, preHandler: validateParams(tabParams) }, recordingGone)
+  app.get('/api/super-tabs/:tabId/native/:contextId', { preHandler: validateParams(nativeParams) }, recordingGone)
+  app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeObservation> }>('/api/super-tabs/:tabId/native/:contextId',
+    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(nativeParams), validateBody(nativeObservation)] },
+    (req, reply) => sendSuccess(reply, { ok: true, ignored: true, eventId: stableId('native-event', req.params.contextId, req.body.turnId, req.body.kind) }))
   app.get('/api/super-tabs/routing-policy', (req, reply) => respond(reply, () => store.accountPolicy(req.user!)))
   app.post<{ Body: z.infer<typeof savePolicy> }>('/api/super-tabs/routing-policy', { preHandler: validateBody(savePolicy) },
     (req, reply) => respond(reply, () => store.saveAccountPolicy(req.user!, req.body.revision, req.body.policy)))

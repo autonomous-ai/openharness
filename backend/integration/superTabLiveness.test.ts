@@ -1446,29 +1446,6 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
   })
 
-  // A terminal's turn reaches the Lead only while its typist may still use that terminal's machine (native.ts allowsDelivery),
-  // which no Swarm write records either (review of #2055). Only a recording gap on its task reaches it (project instructions,
-  // phase 4: a typed prompt names no one).
-  it('withholds a held terminal turn on the next poll once its typist\'s share of the machine is revoked', async () => {
-    const f = await swarm()
-    const { contextId } = await f.timed.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
-    await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_1', kind: 'gap', previousEventId: null, text: '',
-      truncated: false, interrupted: false, gap: { incidentId: 'restart_1', reason: 'recording_restarted', detectedAt: f.clock.now + 1_000 } })
-    const turn = (await f.timed.deliveries(host, f.tab, f.lead)).find(r => r.nativeContextId === contextId)!
-    await f.timed.delivery(host, f.tab, f.lead, turn.id, { type: 'claim', claimId: 'claim-1' })
-    await f.timed.delivery(host, f.tab, f.lead, turn.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_user' })
-    f.clock.now += 1_000
-    expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).toContain(turn.id)
-    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
-    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [] } })
-    try {
-      f.clock.now += 1_000
-      expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).not.toContain(turn.id)
-    } finally {
-      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: share.emails } })
-    }
-  })
-
   // #2022: one write's deliveries share a creation time; the held answer keeps each conversation's tied rows in its order too.
   it('returns tied held deliveries in their conversation\'s order, without loading the Swarm', async () => {
     const counted = counting()
@@ -1608,19 +1585,6 @@ describe('the push for a new delivery', () => {
     heard.length = 0
     await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
     expect(heard).toEqual([0])
-  })
-
-  it('names the Lead\'s machine for a gap in a worker\'s terminal recording, and none for a typed prompt', async () => {
-    const { waiting, hooks } = announcing()
-    const f = await swarm({ hooks })
-    const { contextId } = await f.timed.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
-    waiting.length = 0
-    const typed = await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_1', kind: 'prompt', previousEventId: null, text: 'Typed by hand',
-      truncated: false, interrupted: false }) as { eventId: string }
-    expect(waiting).toEqual([])
-    await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_2', kind: 'gap', previousEventId: typed.eventId, text: '',
-      truncated: false, interrupted: false, gap: { incidentId: 'restart_1', reason: 'recording_restarted', detectedAt: f.clock.now + 1_000 } })
-    expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
   })
 
   // Spec 2026-11-02 poll cost, Part 3.2: a held delivery is read only every 30 s, so ending it must say so at once.

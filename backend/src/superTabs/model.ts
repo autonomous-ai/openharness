@@ -819,7 +819,7 @@ export interface MessageDraft {
   recipients: string[]
   /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
   buddyRecipients?: string[]
-  /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
+  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma, type PrismaClient } from '@prisma/client'
 
@@ -69,7 +70,7 @@ describe('Super Tab route failures', () => {
     app = Fastify()
     app.setErrorHandler(errorHandler)
     app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    const store = { hostGrids: async () => { throw thrown }, native: { append: async () => { throw thrown } } }
+    const store = { hostGrids: async () => { throw thrown } }
     await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
     await app.ready()
   })
@@ -95,16 +96,6 @@ describe('Super Tab route failures', () => {
     const res = await app.inject({ method: 'GET', url: '/api/super-tabs/grids' })
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
-  })
-
-  it('answers a terminal recording\'s duplicate key as busy, so the host keeps recording and retries', async () => {
-    // The host stops a recording for good on a 409 (cli superTabs/native.ts); a duplicate that outlived every retry is
-    // not the recording's fault.
-    thrown = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' })
-    const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload: { turnId: 'turn-1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false } })
-    expect(res.statusCode).toBe(503)
-    expect(res.headers['retry-after']).toBe('2')
-    expect(res.json().error.code).toBe('SWARM_BUSY')
   })
 })
 
@@ -142,6 +133,50 @@ describe('a command Swarm v4 no longer has, over HTTP', () => {
       payload: { operationId: 'op-1', command: { type: 'project.digest', ...OLD_PAYLOADS['project.digest'] } } })
     expect(host.statusCode).toBe(403)
     expect(queries).toEqual([])
+  })
+})
+
+// Terminal recording is gone with Swarm v4, but an older Desktop still opens a terminal's context and an older host still reads it and
+// records into it. Each is answered ok and ignored, to everyone, and nothing is read. A host drops an observation once it is
+// acknowledged by the id it makes of it (cli superTabs/native.ts eventId): so that one carries the same id, and a journal from before
+// drains instead of being sent again for ever.
+describe('the retired terminal recording', () => {
+  let app: FastifyInstance
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    // A store, reads and host reads that fail on any call: the answers must not touch them.
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+  /** The id the CLI's recorder makes of an observation (cli superTabs/native.ts eventId). */
+  const recorderId = (contextId: string, turnId: string, kind: string) =>
+    createHash('sha256').update(JSON.stringify(['native-event', contextId, turnId, kind])).digest('hex').slice(0, 24)
+  const observation = (kind: string) => ({ turnId: 'turn-1', kind, previousEventId: null, text: 'hi', truncated: false, interrupted: false })
+
+  it('answers the open and the read ok and ignored, whatever the Swarm, and reads nothing', async () => {
+    for (const tab of ['tab-1', 'tab-2']) {
+      const opened = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/native`, payload: { operationId: 'op-1', conversationId: 'lead', agentId: 'agent-1' } })
+      expect(opened.statusCode).toBe(200)
+      expect(opened.json()).toEqual({ success: true, data: { ok: true, ignored: true } })
+      const read = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/native/ctx-1` })
+      expect(read.statusCode).toBe(200)
+      expect(read.json()).toEqual({ success: true, data: { ok: true, ignored: true } })
+    }
+  })
+
+  it.each(['prompt', 'answer', 'gap'])('acknowledges a %s by the id its host makes of it', async kind => {
+    const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload: observation(kind) })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ success: true, data: { ok: true, ignored: true, eventId: recorderId('ctx-1', 'turn-1', kind) } })
+  })
+
+  it('still refuses an observation that names no turn or no kind', async () => {
+    for (const payload of [{ kind: 'prompt' }, { turnId: 'turn-1' }, { turnId: 'turn-1', kind: 'typed' }]) {
+      expect((await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload })).statusCode, JSON.stringify(payload)).toBe(400)
+    }
   })
 })
 
@@ -231,7 +266,7 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
     app.setErrorHandler(errorHandler)
     app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
     const handled = (name: string) => async () => { reached.push(name); return {} }
-    const store = { native: { append: handled('native'), open: handled('open') }, delivery: handled('delivery'), stopped: handled('stopped') }
+    const store = { delivery: handled('delivery'), stopped: handled('stopped') }
     await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: { changes: handled('changes') } as never })
     await app.ready()
   })
@@ -244,8 +279,6 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
   const largest = {
     changes: { url: '/api/super-tabs/hosts/m1/changes', name: 'changes',
       body: { cursor: 'c'.repeat(512), full: false, held: Object.fromEntries(Array.from({ length: 500 }, (_, n) => [id(n), 'e'.repeat(64)])) } },
-    native: { url: '/api/super-tabs/tab-1/native/ctx-1', name: 'native',
-      body: { turnId: id(3), kind: 'answer', previousEventId: id(4), text: text(16_000), truncated: false, interrupted: false } },
     delivery: { url: '/api/super-tabs/tab-1/agents/agent-1/deliveries/delivery-1', name: 'delivery',
       body: { type: 'ack', claimId: id(4), receipt: text(2000), uncertain: false } },
     stopped: { url: '/api/super-tabs/tab-1/stopped', name: 'stopped', body: { assignmentId: id(2), receipt: text(2000) } },

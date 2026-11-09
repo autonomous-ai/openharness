@@ -60,7 +60,7 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { accountOf, wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { taskProcess } from './process.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
@@ -109,7 +109,6 @@ import { touchesFor } from './parts/touches.js'
 import { freeze, readHostStamp, stampOwed, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
 import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, recordHolds, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
-import { revokeNativeContexts, SuperTabNativeStore } from './native.js'
 import { activeMember, addMember, hasWorkspaceAccess, latestRemovalAt, listWorkspaces, memberId, removedFromWorkspace, WORKSPACE_ACCESS_REVOKED, workspaceForNewSwarm, requireWorkspaceAccess, requireWorkspaceRole, SwarmWorkspaces } from './workspaceStore.js'
 import { WORKSPACE_LABEL, workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { STATUS_LABELS, activeWork, handed, occupiesAgent, actorKey, agent, agentOnly, appendCodePullRequestUrls, appendPullRequestUrls, codePullRequests, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker, SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type Person, type SuperTabState, projectPullRequestUrl } from './model.js'
@@ -235,8 +234,7 @@ function namedFor(command: Command): Named {
     'askedIn' in command ? command.askedIn?.conversationId : undefined,
     // The code tasks an instructions save's rules moved into, merged ones gone quiet included (ruleGuard.ts; #3392).
     ...command.type === 'instructions.save' ? command.tasks ?? [] : []].filter((id): id is string => !!id)
-  // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too: their terminal
-  // contexts are revoked from the groups the command loaded (native.ts revokeNativeContexts).
+  // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too.
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
     projectIds: command.type === 'project.delete' || command.type === 'project.sharing' || command.type === 'project.closeTab' ? [command.projectId] : [] }
 }
@@ -515,7 +513,7 @@ export interface HostsChanged { tabId: string; machineIds: string[]; lastChanged
  *  what the caller's filter says with `in`. */
 export interface DeliveriesEnding {
   where?: { id?: string; agentId?: string; messageId?: string; assignmentId?: string }
-  matches?: (row: { agentId: string; conversationId: string; assignmentId: string | null; nativeContextId: string | null;
+  matches?: (row: { agentId: string; conversationId: string; assignmentId: string | null;
     authorKind: string; authorId: string; authorGeneration: string }) => boolean
 }
 
@@ -730,7 +728,6 @@ async function machineRulesOf(tx: Transaction, tabId: string, projectId: string)
 export class SuperTabStore {
   /** Where lag-tolerant reads go (SuperTabStoreHooks.replica); the store's own client without one. */
   readonly replica: PrismaClient
-  readonly native: SuperTabNativeStore
   readonly workspaces: SwarmWorkspaces
   /** Where avatars are kept, whose links member reads carry (read/service.ts); null when avatar uploads are off. */
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
@@ -750,17 +747,6 @@ export class SuperTabStore {
     this.autoJoins = hooks.autoJoins ?? localAutoJoinMemory(now)
     this.reports = hooks.reports ?? localReportMemory(now)
     this.machineKeys = hooks.machineKeys ?? activeMachineKeysOf
-    this.native = new SuperTabNativeStore({
-      transaction: body => transaction(db, body),
-      load: (tx, user, tabId, groupIds) => this.load(tx, user, tabId, { groupIds }),
-      save: (tx, loaded, next, stamp, touches) => this.save(tx, loaded as Loaded, next, stamp, touches),
-      stamp: () => clock.next(),
-      agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
-      contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
-      teamHost: (tx, user) => this.teamHost(tx, user),
-      workspaceAccess: (tx, state, userId) => requireWorkspaceAccess(tx, state, userId),
-      announce: (tx, waiting) => this.announce(tx, waiting),
-    })
     this.workspaces = new SwarmWorkspaces(db, {
       transaction: body => transaction(db, body),
       leave: (person, tabId, operationId) => this.executeOnce(person, tabId, { operationId, command: { type: 'member.remove', userId: person.sub } },
@@ -2215,7 +2201,7 @@ export class SuperTabStore {
       if (command.type === 'project.sharing' && command.visibility === 'private') {
         await makeProjectPrivate(tx, effects.state, command.projectId)
       }
-      const watchersLost = await revokeNativeContexts(tx, original, effects.state, (holds, end) => this.endDeliveries(tx, tabId, holds, end))
+      const lostSight = watchersLost(original, effects.state)
       // Rule (b) for claims (design D10): a change to who a conversation's deliveries may reach writes those delivery rows,
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
@@ -2367,7 +2353,7 @@ export class SuperTabStore {
       if (deleted) await deleteRules(tx, tabId, deleted)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
       // A deleted Swarm's observer sockets, on any instance, check again and close (deletion.ts).
-      if (this.hooks.accessChanged && (watchersLost.length || command.type === 'swarm.delete')) {
+      if (this.hooks.accessChanged && (lostSight.length || command.type === 'swarm.delete')) {
         const told = this.hooks.accessChanged
         afterCommit(tx, () => told(tabId))
       }
@@ -3734,7 +3720,7 @@ export class SuperTabStore {
    */
   async endDeliveries(tx: Transaction, tabId: string, holds: DeliveriesEnding, end: () => Promise<{ count: number }>): Promise<{ count: number }> {
     const rows = await tx.superTabDelivery.findMany({ where: { tabId, status: 'claimed', ...holds.where },
-      select: { machineId: true, agentId: true, conversationId: true, assignmentId: true, nativeContextId: true, authorKind: true, authorId: true, authorGeneration: true } })
+      select: { machineId: true, agentId: true, conversationId: true, assignmentId: true, authorKind: true, authorId: true, authorGeneration: true } })
     const claimed = holds.matches ? rows.filter(holds.matches) : rows
     const ended = await end()
     if (ended.count) {
@@ -4483,9 +4469,8 @@ export class SuperTabStore {
           }
         }
         if (removedIds.length) {
-          const watchersLost = await revokeNativeContexts(tx, loaded.state, state)
           const told = this.hooks.accessChanged
-          if (told && watchersLost.length) afterCommit(tx, () => told(tabId))
+          if (told && watchersLost(loaded.state, state).length) afterCommit(tx, () => told(tabId))
         }
         return { version }
       }
@@ -4715,7 +4700,6 @@ export class SuperTabStore {
         ? (await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source : knownSource
       if (!pmAcceptsMessage(state, delivery.agentId, source)) return false
     }
-    if (delivery.nativeContextId && !await this.native.allowsDelivery(tx, state, delivery.nativeContextId)) return false
     if (delivery.authorKind !== 'agent') return true
     try { await this.agentGrant(tx, state, agent(state, delivery.authorId)); return true }
     catch (error) { if (error instanceof SuperTabError) return false; throw error }
@@ -4744,9 +4728,8 @@ export class SuperTabStore {
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
       // revokes moves the stamp; what no Swarm write records (a Workspace, a machine, a share) is checked again each time.
-      // A turn typed into a terminal rests on its typist's access too (native.ts allowsDelivery): it takes the full poll.
       const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
-      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen) && !open.some(d => d.nativeContextId)) {
+      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen)) {
         return (await this.heldDeliveries(user, agentId, open, seen)).map(d => withTurnEnd(d, this.now()))
       }
     }
@@ -4997,11 +4980,8 @@ export class SuperTabStore {
       // A compacted delivery (deliveryCompaction.ts) is checked as its row was: finished, it is refused or resolved as before.
       const delivery = live ?? await compactedDelivery(tx, tabId, agentId, deliveryId)
       await this.row(tx, user, tabId)
-      // A native message may be delivered to its Lead in a different conversation from the terminal it came from.
-      const context = delivery?.nativeContextId ? await tx.superTabNativeContext.findFirst({
-        where: { id: delivery.nativeContextId, tabId }, select: { agentId: true } }) : null
       const parts = await loadDeliveryParts(tx, tabId, delivery ? [delivery.conversationId] : [],
-        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : [], ...context ? [context.agentId] : []], context?.agentId, agentId)
+        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : []], agentId)
       const state = reassemble(parts, { share: true })
       parkLaterConversations(state)
       author(state, await this.actor(tx, user, state, agentId), true)
