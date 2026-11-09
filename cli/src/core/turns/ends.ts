@@ -42,8 +42,9 @@ interface OpenTurn {
   prompt: string
   /** The number this turn is told by. */
   turnId: number
-  /** A turn whose words are not kept whole: one the daemon picked up at attach, whose first part it never saw, or an engine's whose
-   *  texts are not whole messages. What is seen of it is no answer. */
+  /** A turn whose words are not kept: one the daemon picked up at attach, whose first part it never saw; one that began before anyone
+   *  could ask for them (`hearing`); or an engine's whose texts are not whole messages. Named all the same, and answered from the
+   *  transcript. */
   partial: boolean
   /** What its agent has said since its last tool call, and what it said before them: the answer is the first, and the second
    *  only when the turn said nothing after its tools, as the recaps read a turn (engines/claude/normalize.ts). */
@@ -75,8 +76,9 @@ export function createTurnEnds(deps: TurnEndsDeps) {
   const done = new Map<string, Array<{ prompt: string; turnId: number; answer: string }>>()
   let turns = 0
   /** The services that hear turn ends and have connected in this core's life. Until one has, or something here listens, nobody can
-   *  ask what a turn said, so none is kept: a machine that never opens the Swarm pays nothing for it, and a Swarm process that
-   *  goes and comes back still has the turns that began while it was away. */
+   *  ask what a turn said, so what it says is not kept (a machine that never opens the Swarm pays nothing per text for it), and a
+   *  Swarm process that goes and comes back still has the turns that began while it was away. A turn is named either way: it may
+   *  end after one connects, and a daemon that restarted in the middle of one picks it up before its Swarm process is back. */
   const hearing = new Set<string>()
   const wanted = (): boolean => hearing.size > 0 || listeners.size > 0
   return {
@@ -90,22 +92,24 @@ export function createTurnEnds(deps: TurnEndsDeps) {
       return () => { listeners.delete(listener) }
     },
     /** A turn began in [sessionId]: live, or ([partial]) one whose words are not kept whole: one the daemon found open at attach, which
-     *  a restart interrupted, or an engine's whose texts are not whole messages (`WHOLE_TEXT_ENGINES`). */
+     *  a restart interrupted, or an engine's whose texts are not whole messages (`WHOLE_TEXT_ENGINES`). Its words are kept only if
+     *  someone can ask for them from its start. */
     started(sessionId: string, userMessage: string, partial: boolean): void {
-      if (!wanted()) return
       open.delete(sessionId)
-      open.set(sessionId, { prompt: promptHash(userMessage), turnId: ++turns, partial, now: none(), before: none() })
+      open.set(sessionId, { prompt: promptHash(userMessage), turnId: ++turns, partial: partial || !wanted(), now: none(), before: none() })
       trim(open)
     },
     /** Its agent said [content] in the turn running in [sessionId]. */
     said(sessionId: string, content: string): void {
-      const turn = open.get(sessionId), text = content.slice(0, ANSWER_KEEP_MAX).trim()
-      if (turn && text) add(turn.now, text)
+      const turn = open.get(sessionId)
+      if (!turn || turn.partial) return
+      const text = content.slice(0, ANSWER_KEEP_MAX).trim()
+      if (text) add(turn.now, text)
     },
     /** Its agent called a tool of its own: what it said until now was narration. */
     worked(sessionId: string): void {
       const turn = open.get(sessionId)
-      if (!turn) return
+      if (!turn || turn.partial) return
       for (const part of turn.now.parts) add(turn.before, part)
       turn.now.parts.length = 0
       turn.now.size = 0
@@ -116,14 +120,14 @@ export function createTurnEnds(deps: TurnEndsDeps) {
       const turn = open.get(event.sessionId)
       if (!turn) return
       open.delete(event.sessionId)
-      if (!turn.partial) {
-        const kept = done.get(event.sessionId) ?? []
-        done.delete(event.sessionId)
-        kept.push({ prompt: turn.prompt, turnId: turn.turnId, answer: (turn.now.parts.length ? turn.now : turn.before).parts.join('\n\n').slice(0, ANSWER_KEEP_MAX) })
-        if (kept.length > TURNS_KEPT) kept.shift()
-        done.set(event.sessionId, kept)
-        trim(done)
-      }
+      // A turn whose words were not kept is kept without an answer, so that an earlier turn asked the same words is not given the
+      // transcript's last turn, which may be this one's (answerOf).
+      const kept = done.get(event.sessionId) ?? []
+      done.delete(event.sessionId)
+      kept.push({ prompt: turn.prompt, turnId: turn.turnId, answer: (turn.now.parts.length ? turn.now : turn.before).parts.join('\n\n').slice(0, ANSWER_KEEP_MAX) })
+      if (kept.length > TURNS_KEPT) kept.shift()
+      done.set(event.sessionId, kept)
+      trim(done)
       const told: TurnEnd = { ...event, prompt: turn.prompt, turnId: turn.turnId }
       for (const listener of listeners) {
         try { listener(told) } catch (error) {
