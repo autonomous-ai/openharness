@@ -61,7 +61,6 @@ import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
-import { WORKSPACE_ACCESS_REVOKED } from '../superTabs/workspaceStore.js'
 
 describe('Super Tab route failures', () => {
   let app: FastifyInstance
@@ -203,6 +202,43 @@ describe('the retired scorecard read', () => {
   })
 })
 
+// Workspaces, the level above Swarms, are gone with Swarm v4: a Swarm is the org already, and no client calls their routes, so none
+// is registered. A new Swarm names no Workspace to be in. integration/superTabNotAvailable.test.ts runs the real store.
+describe('the Workspace routes Swarm v4 removed', () => {
+  let app: FastifyInstance
+  let created: unknown[][]
+  beforeEach(async () => {
+    created = []
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const store = { create: async (...args: unknown[]) => { created.push(args.slice(1)); return { id: 'tab-1', revision: 0 } } }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('registers none of the thirteen', () => {
+    const retired: Array<['GET' | 'POST', string]> = [
+      ['GET', '/api/super-tabs/workspaces'], ['POST', '/api/super-tabs/workspaces'], ['GET', '/api/super-tabs/workspace-invitations'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId'], ['GET', '/api/super-tabs/workspaces/:workspaceId/members'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/invitations'], ['POST', '/api/super-tabs/workspaces/:workspaceId/invitations/revoke'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/accept'], ['POST', '/api/super-tabs/workspaces/:workspaceId/members/:userId'],
+      ['POST', '/api/super-tabs/workspaces/:workspaceId/members/:userId/remove'], ['POST', '/api/super-tabs/workspaces/:workspaceId/transfer'],
+      ['POST', '/api/super-tabs/:tabId/workspace-visibility'], ['POST', '/api/super-tabs/:tabId/workspace-join']]
+    for (const [method, url] of retired) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
+  })
+
+  it('makes a Swarm without naming a Workspace, and refuses a body that still names one', async () => {
+    const made = await app.inject({ method: 'POST', url: '/api/super-tabs', payload: { operationId: 'op-1', name: 'Acme' } })
+    expect(made.statusCode).toBe(200)
+    expect(created).toEqual([['op-1', 'Acme', undefined]])
+    const named = await app.inject({ method: 'POST', url: '/api/super-tabs', payload: { operationId: 'op-2', name: 'Acme', workspaceId: 'w1' } })
+    expect(named.statusCode).toBe(400)
+    expect(created).toHaveLength(1)
+  })
+})
+
 // One answer for anything the caller cannot reach, on the routes a person's app calls (Huy, 10-30): the route only maps the
 // store's refusal, so a fake store throws each kind. integration/superTabNotAvailable.test.ts runs the real store.
 describe('the person routes\' one not-available answer', () => {
@@ -222,11 +258,10 @@ describe('the person routes\' one not-available answer', () => {
   const ask = (url: string, method: 'GET' | 'POST' = 'GET') => app.inject({ method, url,
     payload: method === 'POST' ? { operationId: 'op-1', command: { type: 'message.send', conversationId: 'c1', text: 'hi', replyTo: null, recipientIds: [] } } : undefined })
 
-  it('answers missing, not a member, out of the Workspace and a refused link alike, and logs which it was', async () => {
+  it('answers missing, not a member and a refused link alike, and logs which it was', async () => {
     const warn = vi.spyOn(logger, 'warn')
     const refusals = [new SuperTabError('NOT_FOUND', 'This Super Tab is unavailable.', 404),
       new SuperTabError('FORBIDDEN', 'You no longer have access to this Super Tab.', 403, true),
-      new SuperTabError(WORKSPACE_ACCESS_REVOKED, 'You are no longer in this Swarm\'s Workspace.', 403),
       new SuperTabError('JOIN_UNAVAILABLE', 'This Swarm link is unavailable for this account.', 404),
       new SuperTabError('NOT_FOUND', 'This conversation is unavailable.', 404)]
     for (const refusal of refusals) {

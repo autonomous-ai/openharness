@@ -2,7 +2,7 @@
 
 Status: spec for Ken's confirmation · 2026-11-03 · requested by Ken.
 Builds on Swarm sharing (`backend/src/superTabs/sharing.ts`, `desktop/lib/super_tabs/sharing.dart`) and Workspaces
-(`docs/plans/2026-10-27-swarm-workspaces.md`).
+(removed with Swarm v4: a Swarm is the org, so the Workspace parts below no longer apply).
 
 ## Why
 

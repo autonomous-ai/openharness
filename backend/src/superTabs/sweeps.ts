@@ -25,7 +25,8 @@ export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
     await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 })
   }
-  // Workspaces (workspaceStore.ts): a removed person's row, a finished removal and a deleted Workspace 30 days on, an invitation when it expires.
+  // The Workspace rows Swarm v4 removed keep expiring until their collections are dropped (a production write, with the owner's go):
+  // a removed person's row, a finished removal and a deleted Workspace 30 days on, an invitation when it expires.
   for (const collection of ['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval']) {
     await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 })
   }
@@ -204,12 +205,11 @@ export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
     activity: await activityRows(db, now), chatSettings: await chatSettings(db, now), reminders: await reminderRows(db, now) }
 }
 
-/** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals
- *  did not all run (workspaceStore.ts SwarmWorkspaces.finishRemovals); it needs the store, so the worker passes it in. */
-export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000, finishWorkspaceRemovals?: () => Promise<number>): () => void {
+/** Runs the sweeps every hour in the singleton worker. */
+export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000): () => void {
   // The worker names indexes as servers do: listed before each pass, so a pass after the schema push names them.
   const run = () => void listNamedIndexes(db).catch(error => logger.warn('[swarm-sweeps] listing indexes failed', { error: error instanceof Error ? error.message : String(error) }))
-    .then(() => sweepSwarms(db)).then(async result => ({ ...result, workspaceRemovalsPending: await finishWorkspaceRemovals?.() }))
+    .then(() => sweepSwarms(db))
     .then(result => logger.info('[swarm-sweeps] done', result))
     .catch(error => logger.warn('[swarm-sweeps] failed', { error: error instanceof Error ? error.message : String(error) }))
   run()
