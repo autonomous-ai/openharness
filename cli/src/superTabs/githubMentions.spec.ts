@@ -19,12 +19,19 @@ const PIP: WatchedAgent = { tabId: 'tab', agentId: 'pip', chat: 'chat-pip', name
 function fakeGitHub() {
   const comments: Json[] = [], lineComments: Json[] = [], issues: Json[] = [], reviews = new Map<number, Json[]>()
   const calls: string[] = []
-  const state = { signedOut: false, missing: new Set<string>() }
+  const state = { signedOut: false, missing: new Set<string>(), files: new Map<string, string>(), labels: [] as Json[] }
   const get: GitHubGet = async (path, etag) => {
     calls.push(path)
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
     const url = new URL(`https://api.github.com${path}`)
     if (state.missing.has(url.pathname.split('/').slice(2, 4).join('/'))) return { status: 404, etag: null, body: null, resetAt: null }
+    const file = /^\/repos\/acme\/app\/contents\/(.+)$/.exec(url.pathname)
+    if (file) {
+      const text = state.files.get(decodeURIComponent(file[1]!))
+      return text === undefined ? { status: 404, etag: null, body: null, resetAt: null }
+        : { status: 200, etag: null, body: { encoding: 'base64', content: Buffer.from(text).toString('base64') }, resetAt: null }
+    }
+    if (url.pathname === '/repos/acme/app/labels') return { status: 200, etag: null, body: state.labels, resetAt: null }
     const since = url.searchParams.get('since') ?? ''
     const labels = url.searchParams.get('labels'), wanted = url.searchParams.get('state')
     const body = url.pathname.endsWith('/issues/comments') ? comments.filter(c => String(c.updated_at) >= since)
@@ -55,8 +62,9 @@ function setup(agents: WatchedAgent[] = [PIP], file = join(root, `memory-${files
   const relay = vi.fn(async (_tabId: string, _operationId: string, _command: Json) => ({}))
   const log = vi.fn()
   const watched = vi.fn(async () => agents)
-  const make = () => new GitHubMentions({ watched, get: github.get, relay, file, now: () => clock.now, log })
-  return { github, clock, relay, log, watched, file, make, mentions: make(), relayed: () => relay.mock.calls.map(([, , command]) => command) }
+  const tell = vi.fn(async (_agent: WatchedAgent, _operationId: string, _text: string) => ({}))
+  const make = () => new GitHubMentions({ watched, get: github.get, relay, tell, file, now: () => clock.now, log })
+  return { github, clock, relay, tell, log, watched, file, make, mentions: make(), relayed: () => relay.mock.calls.map(([, , command]) => command) }
 }
 
 describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () => {
@@ -182,6 +190,37 @@ describe('GitHub news for this computer\'s v4 agents (githubMentions.ts)', () =>
     expect(f.relayed()).toEqual([expect.objectContaining({ event: 'task', on: 'issue', number: 13, text: 'Task 13', url: 'https://github.com/acme/app/issues/13' })])
   })
 
+  it('with its first task in a repository, has the agent ask its person what to focus on there, once', async () => {
+    const f = setup()
+    f.github.state.labels = [{ name: 'part:mobile' }, { name: 'bug' }, { name: 'part:api' }]
+    await f.mentions.tick()
+    f.github.issues.push(issue(13, 10, ['builder:pip']))
+    await f.mentions.tick()
+    expect(f.relayed()).toEqual([expect.objectContaining({ event: 'task', number: 13 })])
+    expect(f.tell).toHaveBeenCalledTimes(1)
+    const [agent, operationId, text] = f.tell.mock.calls[0]!
+    expect(agent).toMatchObject({ agentId: 'pip', chat: 'chat-pip' })
+    expect(operationId).toMatch(/^works-on-[0-9a-f]{40}$/)
+    expect(text).toContain('which area of acme/app you should focus on (its areas so far: api, mobile; or anything)')
+    expect(text).toContain('make "Works on: <their answer>" the first line of agents/Pip.md in acme/app')
+    // A second task asks nothing more, after a restart too.
+    f.clock.now += 20_000
+    f.github.issues.push(issue(14, 30, ['builder:pip']))
+    await f.mentions.tick()
+    await f.make().tick()
+    expect(f.tell).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks nothing when the agent\'s instructions already say what it works on', async () => {
+    const f = setup()
+    f.github.state.files.set('agents/Pip.md', 'Works on: anything\n')
+    await f.mentions.tick()
+    f.github.issues.push(issue(13, 10, ['builder:pip']))
+    await f.mentions.tick()
+    expect(f.relayed()).toHaveLength(1)
+    expect(f.tell).not.toHaveBeenCalled()
+  })
+
   it('asks again with ETags, and a restart relays nothing twice', async () => {
     const f = setup()
     await f.mentions.tick()
@@ -277,6 +316,12 @@ describe('whom it reads for (watchedAgents)', () => {
       roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }), row({ id: 'old', regular: false }), row({ id: 'gone', harnessId: 'h-gone' }),
         row({ id: 'stopping' }, { stopRequested: true }), row({ id: 'theirs', machineOwnerId: 'ken' })] })
     expect(watched).toEqual([{ tabId: 'tab', agentId: 'pip', chat: 'chat-pip', names: ['Pip'], label: 'builder:pip', repos: ['acme/app'] }])
+  })
+
+  // The assigner and Desktop name an agent by the name people see; a stored name can be its engine's ("Claude Code").
+  it('watches the label of the name people see, and still hears its stored name', async () => {
+    const watched = await watchedAgents({ me: 'dee', live: () => true, read, roster: async () => [row({ name: 'Claude Code', displayName: 'Faye' })] })
+    expect(watched).toEqual([expect.objectContaining({ names: ['Faye', 'Claude Code'], label: 'builder:faye' })])
   })
 
   it('reads for nobody while no one is signed in here', async () => {

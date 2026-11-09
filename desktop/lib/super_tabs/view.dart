@@ -154,16 +154,16 @@ class SuperTabView extends StatefulWidget {
     this.paneStore,
     this.github,
     this.instructions,
-    this.board = false,
+    this.board = true,
   });
   final SuperTabController controller;
 
   /// Where pane widths are remembered; the app's local store when null.
   final LocalKeyValueStore? paneStore;
 
-  /// Desktop's layout of task #3787 (anh Dee): a project opens its Board with the person's Buddy beside it, the left
-  /// rail has no Buddy entry and no Threads, and a chat is one flat list (old thread replies inline in time order, a
-  /// reply quoting its message). The web keeps today's layout for now.
+  /// Swarm v4's layout (anh Dee, 2026-11-08), the default: a project's channel that only agents post in, the person's
+  /// own agents in the left pane, their chats and a task's thread beside it. Only the browser still passes false, for
+  /// the v3 layout, until the web moves to v4 (anh Dee, 2026-11-09).
   final bool board;
   final VoidCallback onInvite;
   final ValueChanged<SuperTabConversation> onAddAgent;
@@ -1072,9 +1072,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return KeyEventResult.ignored;
   }
 
-  /// The region the view sits in (the quick switcher's) with the unread chat
-  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
-  /// Move pane only while the chat has focus.
+  /// The region the view sits in, if any, with the unread chat keys added, so
+  /// the keymap runs them: listed, rebindable, and ahead of Move pane only
+  /// while the chat has focus.
   Widget _unreadKeys(Widget child) {
     final region = KeymapRegion.of(context);
     return KeymapRegion(
@@ -5718,7 +5718,7 @@ class _SuperTabViewState extends State<SuperTabView>
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && widget.board && _agentsOnly(group))
-          // It holds the chat's focus in the composer's place, so the chat's keys (find, unread, the switcher) work.
+          // It holds the chat's focus in the composer's place, so the chat's keys (find and unread) work.
           Focus(
             focusNode: _focus,
             child: GestureDetector(

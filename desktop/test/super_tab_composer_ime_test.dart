@@ -188,7 +188,7 @@ void main() {
       testBox('$name survives a controller update', (tester) async {
         final server = await show(
           tester,
-          ConversationServer()..append('Which build?'),
+          ConversationServer.chat()..append('Which build?'),
         );
         final id = shown.selectedId;
         await replay(
@@ -208,7 +208,7 @@ void main() {
     ) async {
       final server = await show(
         tester,
-        ConversationServer()..append('Which build?'),
+        ConversationServer.chat()..append('Which build?'),
       );
       final id = shown.selectedId;
       await tester.tap(mainBox);
@@ -233,7 +233,7 @@ void main() {
     ) async {
       final server = await show(
         tester,
-        ConversationServer()..append('Which build?'),
+        ConversationServer.chat()..append('Which build?'),
       );
       final id = shown.selectedId;
       await tester.tap(mainBox);
@@ -261,7 +261,7 @@ void main() {
 
   group('thread reply box', () {
     ConversationServer threaded() {
-      final server = ConversationServer()..threads = true;
+      final server = ConversationServer.chat()..threads = true;
       server.append('Should we do thread replies?');
       server.append('Yes, like Slack.');
       server.messages.last

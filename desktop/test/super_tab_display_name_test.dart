@@ -114,7 +114,7 @@ void main() {
     final picker = find.byKey(const ValueKey('super-composer-completions'));
 
     ConversationServer server({bool named = true}) {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       server.state['people'] = [
         {'id': 'owner', 'email': 'river@autonomous.ai', 'role': 'owner'},
         {
