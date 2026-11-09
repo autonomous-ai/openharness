@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 
 import 'support/capture.dart';
@@ -22,6 +24,27 @@ void main() {
   Future<void> look(WidgetTester tester, String name) =>
       captureWindow(tester, shots, 'channel-$name');
 
+  /// The row of the message whose text holds [text].
+  Finder rowOf(String text) => find.ancestor(
+    of: find.textContaining(text),
+    matching: find.byType(SuperTabMessageRow),
+  );
+
+  /// The texts that draw `@name` as a tag, in its own colour, not as plain text.
+  Finder tag(String name) => find.byWidgetPredicate((w) {
+    if (w is! Text || w.textSpan == null) return false;
+    var found = false;
+    w.textSpan!.visitChildren((span) {
+      if (span is TextSpan &&
+          span.text == name &&
+          span.style?.backgroundColor == grid.AppSurface.accentWash) {
+        found = true;
+      }
+      return !found;
+    });
+    return found;
+  });
+
   testWidgets(
     'a person who opens the Swarm for the first time lands in the project\'s channel, where its agents talk',
     (tester) async {
@@ -29,17 +52,32 @@ void main() {
       swarmV4Talk(server);
       final c = await openSwarmV4(tester, server);
       expect(c.selectedId, 'channel');
-      expect(find.textContaining('free: Pip'), findsOneWidget);
-      expect(find.textContaining('can you read #12?'), findsOneWidget);
-      expect(find.textContaining('Reading #12 now'), findsOneWidget);
-      // Each post says who wrote it.
-      expect(
-        find.descendant(
-          of: find.byType(SuperTabMessageRow),
-          matching: find.text('Pip'),
-        ),
-        findsWidgets,
-      );
+      expect(rowOf('free: Pip'), findsOneWidget);
+      expect(rowOf('can you read #12?'), findsOneWidget);
+      expect(rowOf('Reading #12 now'), findsOneWidget);
+      // Each run of posts by one agent is signed once, above its first bubble, and its face stands by its last.
+      for (final (first, last, author) in [
+        ('Plan for today', 'Plan for today', 'Faye'),
+        ('free: Pip', 'can you read #12?', 'Pip'),
+        ('Reading #12 now', 'Reading #12 now', 'Juno'),
+      ]) {
+        expect(
+          find.descendant(of: rowOf(first), matching: find.text(author)),
+          findsOneWidget,
+          reason: '$author signs "$first"',
+        );
+        expect(
+          find.descendant(
+            of: rowOf(last),
+            matching: find.byType(SuperTabAvatar),
+          ),
+          findsOneWidget,
+          reason: '$author\'s face stands by "$last"',
+        );
+      }
+      // `@Name` of an agent in the project reads as a tag: the plan names two, Pip's question one.
+      expect(tag('@Pip'), findsOneWidget);
+      expect(tag('@Juno'), findsNWidgets(2));
       await look(tester, 'posts');
     },
   );
@@ -75,17 +113,14 @@ void main() {
     expect(key('super-agents-only'), findsOneWidget);
     expect(find.byType(EditableText), findsNothing);
     expect(key('super-message-composer'), findsNothing);
-    // Typing goes nowhere: there is no field to take it.
+    // The bar holds the chat's focus, and typing there has no field to reach: no text input is open, and nothing is sent.
     await tester.tap(key('super-agents-only'));
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
     await tester.pump();
+    expect(tester.testTextInput.hasAnyClients, isFalse);
     expect(find.byType(EditableText), findsNothing);
     expect(server.posts, isEmpty);
-    expect(
-      server.messages.where((m) => (m['author'] as Map)['kind'] == 'person'),
-      isEmpty,
-    );
   });
 
   testWidgets('nothing posted yet: what a person sees in the channel', (
@@ -94,13 +129,9 @@ void main() {
     final server = swarmV4Channel();
     await openSwarmV4(tester, server);
     expect(find.byType(SuperTabMessageRow), findsNothing);
-    // The one line there is says who may post; it says nothing of why the channel is empty.
-    expect(
-      find.text(
-        'Only agents post here. To change what happens, talk to your agents.',
-      ),
-      findsOneWidget,
-    );
+    // What stands in the empty page's place is the read-only bar (look at 'empty' for its words).
+    expect(key('super-agents-only'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await look(tester, 'empty');
   });
 
@@ -146,7 +177,9 @@ void main() {
   testWidgets(
     '500 posts: the newest show, and the older ones are read on the way up',
     (tester) async {
-      final server = swarmV4Channel();
+      final server = swarmV4Channel()..messagePage = 100;
+      final reads = <String>[];
+      server.onRead = reads.add;
       const who = ['Faye', 'Pip', 'Juno'];
       for (var i = 1; i <= 500; i++) {
         swarmV4Post(
@@ -173,6 +206,15 @@ void main() {
       expect(find.textContaining('Post number 399:'), findsOneWidget);
       expect(find.textContaining('Post number 500:'), findsNothing);
       expect(find.byType(SuperTabMessageRow).evaluate().length, lessThan(60));
+      // It came from a read of the page before the newest: 399 is the newest page's (401 to 500) predecessor's last.
+      expect(
+        reads.where(
+          (path) =>
+              path.contains('/conversations/channel/messages') &&
+              path.contains('before='),
+        ),
+        isNotEmpty,
+      );
     },
   );
 
@@ -192,21 +234,34 @@ void main() {
     await look(tester, 'long-word');
   });
 
-  testWidgets('an agent whose computer is off still has its posts read', (
-    tester,
-  ) async {
-    final server = swarmV4Channel();
-    swarmV4Talk(server);
-    await openSwarmV4(tester, server);
-    expect(find.textContaining('Reading #12 now'), findsOneWidget);
-    // Juno's laptop is off: the left pane says so under Your Machines once it is opened.
-    await tester.tap(key('project-sidebar-machines'));
-    await tester.pumpAndSettle();
-    // The open group is saved 200 ms later.
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('offline'), findsOneWidget);
-    await look(tester, 'offline');
-  });
+  testWidgets(
+    'an agent whose computer is off still has its posts read, and Your Machines names the computer',
+    (tester) async {
+      final server = swarmV4Channel();
+      swarmV4Talk(server);
+      final c = await openSwarmV4(tester, server);
+      expect(rowOf('Reading #12 now'), findsOneWidget);
+      // Juno's laptop is off: the left pane says so under Your Machines, once it is opened.
+      await tester.tap(key('project-sidebar-machines'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(c.flush);
+      expect(
+        find.descendant(
+          of: key('super-machine-laptop'),
+          matching: find.text('offline'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: key('super-machine-host'),
+          matching: find.text('offline'),
+        ),
+        findsNothing,
+      );
+      await look(tester, 'offline');
+    },
+  );
 
   for (final size in const [Size(1024, 700), Size(700, 800)]) {
     testWidgets('the channel at ${size.width.toInt()}x${size.height.toInt()}', (

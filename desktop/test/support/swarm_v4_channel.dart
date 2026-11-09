@@ -11,7 +11,8 @@ import 'super_tab_fixture.dart';
 
 /// Swarm v4's agent-to-agent room: the project "lampos" of three agents, Faye its PM and the builders Pip and Juno, whose
 /// channel only agents post in. Juno is on a computer that is off. Its channel is `channel`, not the default `lead`, so what a
-/// first open lands on is the project's own. Each agent has its 1:1 chat with its person, `agent-chat-<id>`.
+/// first open lands on is the project's own. Each agent has its 1:1 chat with its person, `agent-chat-<id>`. A smaller world
+/// than `swarmV4Server`'s replay of lampOS: every line in it is known, so a test can say what a person sees of each.
 ConversationServer swarmV4Channel({String pip = 'Pip', String juno = 'Juno'}) {
   final server = ConversationServer()..threads = true;
   final groups = (server.state['conversations'] as List)
@@ -74,7 +75,8 @@ String swarmV4Post(
   String chat = 'channel',
   String? thread,
 }) {
-  server.append(text, conversationId: chat);
+  // An agent's line, which moves no person's read mark (the backend's channel has only agents' lines).
+  server.append(text, conversationId: chat, agent: true);
   final message = server.messages.last;
   message['author'] = {'kind': 'agent', 'id': who.toLowerCase(), 'name': who};
   if (thread != null) {
@@ -149,7 +151,8 @@ Future<SuperTabController> openSwarmV4(
           onOpenTerminal: (_) {},
           onNewAgent: () {},
           onNewProject: () {},
-          machineName: (id) => id == 'laptop' ? 'Juno\'s laptop' : 'Mac Studio',
+          machineName: (id) =>
+              app.machines.firstWhere((m) => m.machineId == id).displayName,
           github: github,
           board: true,
         ),
