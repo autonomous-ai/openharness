@@ -26,8 +26,8 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
-import { lstat, mkdir, open, rename, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
+import { join, sep } from 'node:path'
 
 /** The most a file may hold, read or written: far more than instructions need, and the most a request can make the
  *  daemon hold in memory. */
@@ -84,13 +84,15 @@ async function locate(dir: string, file: string): Promise<Stats | null> {
   return plainFile(file)
 }
 
-/** The file's bytes, to one past the limit at most: never the file whole, and the one byte over says there was more. */
-async function readPrefix(file: string): Promise<Buffer> {
+/** The file's bytes, to one past the limit at most: never the file whole, and the one byte over says there was more. [looked]
+ *  is the file as it was looked at, where it is not enough that the handle is a plain file: it must be that file. */
+async function readPrefix(file: string, looked?: Stats): Promise<Buffer> {
   // The check of the file and this open are two steps: a file swapped for a named pipe between them would hold the open for
   // ever. NONBLOCK opens a pipe at once, and the handle is looked at again, as a pipe would otherwise read as an empty file.
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
-    if (!(await handle.stat()).isFile()) throw new InstructionsError('UNSAFE_PATH')
+    const found = await handle.stat()
+    if (!found.isFile() || (looked && (found.ino !== looked.ino || found.dev !== looked.dev))) throw new InstructionsError('UNSAFE_PATH')
     const bytes = Buffer.alloc(INSTRUCTIONS_MAX_BYTES + 1)
     let length = 0
     while (length < bytes.length) {
@@ -140,21 +142,41 @@ type SharedName = (typeof SHARED_NAMES)[number]
 
 interface SharedInstructions { name: SharedName; text: string; truncated: boolean }
 
-/** One of those files, there and not shown, and why in the words the apps read: a link (never followed), a file that is not
- *  text, a file this user may not open or the disk fails on, or what is not a plain file (a folder, a named pipe). [error] is
- *  what went wrong where the caller may log it, for a file that is not text and for the disk's failures, and is not there for
- *  what is as the person made it. */
+/** One of those files, there and not shown, and why in the words the apps read: a link that leads out of the project or to
+ *  nothing, a file that is not text, a file this user may not open or the disk fails on, or what is not a plain file (a folder, a
+ *  named pipe). [error] is what went wrong where the caller may log it, for a file that is not text and for the disk's failures,
+ *  and is not there for what is as the person made it. */
 interface SkippedInstructions { name: SharedName; why: 'link' | 'not_text' | 'unreadable' | 'not_a_file'; error?: unknown }
 
+/** Where a link at [link] leads when that is inside [cwd], with every link on the way resolved: the real path, or null when it
+ *  leads out of the project or to nothing (a link to nowhere, a loop). The project's own folder may sit behind links itself
+ *  (`/tmp` on a Mac), so it is resolved the same way and the two are compared whole: a folder whose name only starts like the
+ *  project's is not in it. */
+async function insideProject(cwd: string, link: string): Promise<string | null> {
+  try {
+    const [root, real] = await Promise.all([realpath(cwd), realpath(link)])
+    return real.startsWith(root + sep) ? real : null
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ELOOP') return null
+    throw error
+  }
+}
+
 /** One of the shared files as it is shown (its text, to the limit, and whether there was more), or why it is not, or null where
- *  there is no such file. It does not throw: a file that cannot be shown is a reason, not a failure of the read. */
+ *  there is no such file. It does not throw: a file that cannot be shown is a reason, not a failure of the read. A link is
+ *  followed to a plain file inside the project and to no other place, and what it leads to is read where it is, as the file that
+ *  was looked at. */
 async function readShared(cwd: string, name: SharedName): Promise<SharedInstructions | SkippedInstructions | null> {
   const file = join(cwd, name)
   try {
     const info = await entry(file)
     if (!info) return null
-    if (!info.isFile()) return { name, why: info.isSymbolicLink() ? 'link' : 'not_a_file' }
-    const bytes = await readPrefix(file)
+    const real = info.isSymbolicLink() ? await insideProject(cwd, file) : file
+    if (!real) return { name, why: 'link' }
+    const target = real === file ? info : await entry(real)
+    if (!target?.isFile()) return { name, why: 'not_a_file' }
+    const bytes = await readPrefix(real, real === file ? undefined : target)
     const truncated = bytes.length > INSTRUCTIONS_MAX_BYTES
     try {
       // A file cut at the limit may end inside a character. Decoding as a stream holds an unfinished one back, so the text
@@ -172,10 +194,11 @@ async function readShared(cwd: string, name: SharedName): Promise<SharedInstruct
 }
 
 /** The files that instruct the agent besides its own, for a person to read beside it and never to change: AGENTS.md and
- *  CLAUDE.md when each is a plain file directly in its folder, never a parent's or the home's. Held to the rules of its own
- *  file: a link is not followed (a project often makes one of them the other, and then it is shown once, by the file itself),
- *  and each is read to the limit, with `truncated` saying it was cut, at a whole character. No file is an error of the whole:
- *  one that is there and cannot be shown comes back in `skipped`, with why, in the order of the names. */
+ *  CLAUDE.md when each is a plain file directly in its folder, never a parent's or the home's, or a link in its folder to one
+ *  that is inside the project (a project often makes one of them the other: both are shown, with the one text). A link that
+ *  leads out of the project is never followed. Each is read to the limit, with `truncated` saying it was cut, at a whole
+ *  character. No file is an error of the whole: one that is there and cannot be shown comes back in `skipped`, with why, in the
+ *  order of the names. */
 export async function readSharedInstructions(cwd: string): Promise<{ shared: SharedInstructions[]; skipped: SkippedInstructions[] }> {
   const shared: SharedInstructions[] = [], skipped: SkippedInstructions[] = []
   for (const name of SHARED_NAMES) {

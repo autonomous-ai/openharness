@@ -253,9 +253,15 @@ describe('an agent\'s instructions file', () => {
         })
         if (process.platform !== 'win32') {
           await rm(join(cwd, 'AGENTS.md'), { recursive: true })
-          await symlink(join(cwd, 'CLAUDE.md'), join(cwd, 'AGENTS.md'))
+          await symlink('nowhere.md', join(cwd, 'AGENTS.md'))
           expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({
             text: null, version: '', shared: [both[1]], skipped: [{ name: 'AGENTS.md', why: 'link' }],
+          })
+          // And a link that stays inside the project is followed: both are shown, with the one text.
+          await rm(join(cwd, 'AGENTS.md'))
+          await symlink('CLAUDE.md', join(cwd, 'AGENTS.md'))
+          expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({
+            text: null, version: '', shared: [{ name: 'AGENTS.md', text: 'Claude rules\n', truncated: false }, both[1]],
           })
         }
         expect(log).not.toHaveBeenCalled()

@@ -121,10 +121,21 @@ describe('an agent\'s instructions, as the owner reads them from another compute
         symlinkSync('AGENTS.md', claudeFile)
       }, undefined, [left('AGENTS.md', 'link'), left('CLAUDE.md', 'link')]],
       ['a link to nothing', () => symlinkSync(join(outside, 'missing.md'), claudeFile), undefined, [left('CLAUDE.md', 'link')]],
-      ['one file that is a link to the other: the real one, once', () => {
+      ['one file that is a link to the other: both, the one text', () => {
         writeFileSync(agentsFile, 'Real.\n')
         symlinkSync('AGENTS.md', claudeFile)
-      }, [fine('AGENTS.md', 'Real.\n')], [left('CLAUDE.md', 'link')]],
+      }, [fine('AGENTS.md', 'Real.\n'), fine('CLAUDE.md', 'Real.\n')], undefined],
+      ['a link to a file in a subfolder of the project, and one to a folder', () => {
+        mkdirSync(join(folder, 'docs'))
+        writeFileSync(join(folder, 'docs', 'rules.md'), 'Rules.\n')
+        symlinkSync('docs/rules.md', agentsFile)
+        symlinkSync('docs', claudeFile)
+      }, [fine('AGENTS.md', 'Rules.\n')], [left('CLAUDE.md', 'not_a_file')]],
+      ['links out of the project, through a folder that is a link out and by a way up', () => {
+        symlinkSync(outside, join(folder, 'docs'))
+        symlinkSync('docs/secret.md', agentsFile)
+        symlinkSync('../../outside/secret.md', claudeFile)
+      }, undefined, [left('AGENTS.md', 'link'), left('CLAUDE.md', 'link')]],
       ['bytes that are not text beside text', () => {
         writeFileSync(agentsFile, 'Fine.\n')
         writeFileSync(claudeFile, Buffer.from([0x41, 0xe9, 0x42]))
@@ -137,7 +148,7 @@ describe('an agent\'s instructions, as the owner reads them from another compute
       cases.push(['a named pipe, which an open would wait on for ever', () => { writeFileSync(agentsFile, 'Before the pipe.\n'); execFileSync('mkfifo', [claudeFile]) }, [fine('AGENTS.md', 'Before the pipe.\n')], [left('CLAUDE.md', 'not_a_file')]])
     }
     for (const [what, set, shown, skipped] of cases) {
-      for (const file of [agentsFile, claudeFile]) clear(file)
+      for (const file of [agentsFile, claudeFile, join(folder, 'docs')]) clear(file)
       set()
       const answer = await ask('agent_instructions_read')
       expect(answer, what).not.toHaveProperty('error')
@@ -166,7 +177,7 @@ describe('an agent\'s instructions, as the owner reads them from another compute
   it('an error of her own file does not hide the project\'s: a name it cannot have, a file over the limit, a file that is not text', async () => {
     const { phone, folder, ask } = await fresh()
     writeFileSync(join(folder, 'AGENTS.md'), 'Ship it.\n')
-    if (process.platform !== 'win32') symlinkSync('AGENTS.md', join(folder, 'CLAUDE.md'))
+    if (process.platform !== 'win32') symlinkSync('nowhere.md', join(folder, 'CLAUDE.md'))
     const shared = [{ name: 'AGENTS.md', text: 'Ship it.\n', truncated: false }]
     const skipped = process.platform === 'win32' ? undefined : [{ name: 'CLAUDE.md', why: 'link' }]
     const refused = await ask('agent_instructions_read', { name: 'Faye:Ken' })

@@ -11,11 +11,13 @@ const LIMIT = 65_536
 
 // What a real disk will not show on demand: the one rename that can fail after the new bytes are safely on disk, so a spec
 // can watch what is left behind; a rename held at the last step, so a spec can watch what else goes on meanwhile; a file
-// that cannot be opened, as a failing disk would not open it; a file swapped for a named pipe just before it is opened, the
-// moment a check of it cannot see; and how many bytes a read really took from a file, to prove it is bounded.
+// that cannot be opened, as a failing disk would not open it; a file swapped for a named pipe, or for a link, and a folder
+// on its way swapped for a link out, just before it is opened, the moment a check of it cannot see; and how many bytes a read
+// really took from a file, to prove it is bounded.
 const disk = vi.hoisted(() => ({
   failRename: null as Error | null, holdRename: null as Promise<void> | null, renameHeld: false, failOpenOf: null as string | null,
-  swapForPipe: null as string | null, bytesRead: 0,
+  swapForPipe: null as string | null, swapForLink: null as { file: string; to: string } | null,
+  swapFolderForLink: null as { folder: string; to: string } | null, bytesRead: 0,
 }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
@@ -29,6 +31,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     open: vi.fn(async (...args: Parameters<typeof actual.open>) => {
       if (disk.failOpenOf && String(args[0]).endsWith(disk.failOpenOf)) throw Object.assign(new Error('input/output error'), { code: 'EIO' })
       if (disk.swapForPipe && String(args[0]).endsWith(disk.swapForPipe)) { await actual.rm(String(args[0])); execFileSync('mkfifo', [String(args[0])]) }
+      if (disk.swapForLink && String(args[0]).endsWith(disk.swapForLink.file)) { await actual.rm(String(args[0])); await actual.symlink(disk.swapForLink.to, String(args[0])) }
+      if (disk.swapFolderForLink) {
+        const { folder, to } = disk.swapFolderForLink, at = String(args[0]).indexOf(`/${folder}/`)
+        if (at >= 0) { const dir = String(args[0]).slice(0, at + folder.length + 1); await actual.rm(dir, { recursive: true }); await actual.symlink(to, dir) }
+      }
       const handle = await actual.open(...args)
       const read = handle.read.bind(handle) as (...call: unknown[]) => Promise<{ bytesRead: number }>
       handle.read = (async (...call: unknown[]) => { const result = await read(...call); disk.bytesRead += result.bytesRead; return result }) as typeof handle.read
@@ -77,6 +84,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
   })
   afterEach(async () => {
     disk.failRename = null; disk.holdRename = null; disk.renameHeld = false; disk.failOpenOf = null; disk.swapForPipe = null
+    disk.swapForLink = null; disk.swapFolderForLink = null
     await rm(join(cwd, '..'), { recursive: true, force: true })
   })
 
@@ -664,34 +672,7 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       }, 30_000)
     })
 
-    describe.skipIf(!posix)('never through a link, and only a plain file', () => {
-      it('leaves out a link to a file outside, to one inside, and to nothing, and says it is a link', async () => {
-        await writeFile(join(outside, 'secret.md'), 'SECRET outside the project')
-        await project('real.md', 'inside the project')
-        for (const target of [join(outside, 'secret.md'), join(cwd, 'real.md'), join(outside, 'not-there.md')]) {
-          await rm(join(cwd, 'AGENTS.md'), { force: true })
-          await symlink(target, join(cwd, 'AGENTS.md'))
-          expect(await read(), target).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'link' }] })
-        }
-      })
-
-      it('shows the file once when one is a link to the other, as projects often make them, and says the other is a link', async () => {
-        await project('AGENTS.md', 'the one text')
-        await symlink('AGENTS.md', join(cwd, 'CLAUDE.md'))
-        expect(await read()).toEqual({
-          shared: [{ name: 'AGENTS.md', text: 'the one text', truncated: false }],
-          skipped: [{ name: 'CLAUDE.md', why: 'link' }],
-        })
-        await rm(join(cwd, 'AGENTS.md'))
-        await rm(join(cwd, 'CLAUDE.md'))
-        await project('CLAUDE.md', 'the other text')
-        await symlink('CLAUDE.md', join(cwd, 'AGENTS.md'))
-        expect(await read()).toEqual({
-          shared: [{ name: 'CLAUDE.md', text: 'the other text', truncated: false }],
-          skipped: [{ name: 'AGENTS.md', why: 'link' }],
-        })
-      })
-
+    describe.skipIf(!posix)('only a plain file, and a link only where it stays inside the project', () => {
       it('leaves out what is not a plain file, a folder or a named pipe, which is never opened, and says it is not a file', async () => {
         await mkdir(join(cwd, 'AGENTS.md'))
         execFileSync('mkfifo', [join(cwd, 'CLAUDE.md')])
@@ -731,6 +712,135 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         const front = join(cwd, '..', 'front')
         await symlink(cwd, front)
         expect(await read(front)).toEqual({ shared: [{ name: 'AGENTS.md', text: 'through the front door', truncated: false }], skipped: [] })
+      })
+
+      // A project often makes one of the two the other, or keeps the text in one place (`docs/ai/AGENTS.md`) and links to it. A
+      // link is followed when, with every link on the way resolved, it ends at a plain file inside the project, and only then:
+      // what it leads to is looked at where it is, and opened as the file that was looked at.
+      describe('a link that stays inside the project is followed, and one that leaves it never', () => {
+        const agents = () => join(cwd, 'AGENTS.md')
+        const secret = () => join(outside, 'secret.md')
+        const the = (name: string, text: string) => ({ name, text, truncated: false })
+        beforeEach(async () => { await writeFile(secret(), 'SECRET outside the project') })
+
+        it.each([
+          ['a file beside it, by a relative link', async () => { await project('real.md', 'the text'); await symlink('real.md', agents()) }],
+          ['a file beside it, by an absolute link', async () => { await project('real.md', 'the text'); await symlink(join(cwd, 'real.md'), agents()) }],
+          ['a file in a subfolder', async () => {
+            await mkdir(join(cwd, 'docs'))
+            await writeFile(join(cwd, 'docs', 'rules.md'), 'the text')
+            await symlink('docs/rules.md', agents())
+          }],
+          ['a file by a way that goes down and up again', async () => {
+            await mkdir(join(cwd, 'docs'))
+            await project('real.md', 'the text')
+            await symlink('docs/../real.md', agents())
+          }],
+          ['a file at the end of a chain of links', async () => {
+            await project('real.md', 'the text')
+            await symlink('real.md', join(cwd, 'mid.md'))
+            await symlink('mid.md', agents())
+          }],
+          ['a file in a folder that is itself a link inside the project', async () => {
+            await mkdir(join(cwd, 'real-docs'))
+            await writeFile(join(cwd, 'real-docs', 'rules.md'), 'the text')
+            await symlink('real-docs', join(cwd, 'docs'))
+            await symlink('docs/rules.md', agents())
+          }],
+        ])('follows a link to %s', async (_what, set) => {
+          await set()
+          expect(await read()).toEqual({ shared: [the('AGENTS.md', 'the text')], skipped: [] })
+        })
+
+        it('shows both when one is a link to the other, as projects often make them, the one text under each name', async () => {
+          await project('AGENTS.md', 'the one text')
+          await symlink('AGENTS.md', join(cwd, 'CLAUDE.md'))
+          expect(await read()).toEqual({ shared: [the('AGENTS.md', 'the one text'), the('CLAUDE.md', 'the one text')], skipped: [] })
+          await rm(join(cwd, 'AGENTS.md'))
+          await rm(join(cwd, 'CLAUDE.md'))
+          await project('CLAUDE.md', 'the other text')
+          await symlink('CLAUDE.md', join(cwd, 'AGENTS.md'))
+          expect(await read()).toEqual({ shared: [the('AGENTS.md', 'the other text'), the('CLAUDE.md', 'the other text')], skipped: [] })
+        })
+
+        it('holds what it leads to to the same rules as a file: the limit, and text', async () => {
+          await project('big.md', Buffer.alloc(LIMIT + 1, 98))
+          await project('bad.md', Buffer.from([0xff]))
+          await symlink('big.md', agents())
+          await symlink('bad.md', join(cwd, 'CLAUDE.md'))
+          expect(await read()).toEqual({
+            shared: [{ name: 'AGENTS.md', text: 'b'.repeat(LIMIT), truncated: true }],
+            skipped: [{ name: 'CLAUDE.md', why: 'not_text', error: expect.objectContaining({ code: 'NOT_UTF8' }) }],
+          })
+        })
+
+        it.each([
+          ['a file outside, by an absolute link', async () => { await symlink(secret(), agents()) }],
+          ['a file outside, by a way up', async () => { await symlink('../outside/secret.md', agents()) }],
+          ['a file outside, at the end of a chain of links', async () => {
+            await symlink(secret(), join(cwd, 'mid.md'))
+            await symlink('mid.md', agents())
+          }],
+          ['a file outside, through a folder that is a link out', async () => {
+            await symlink(outside, join(cwd, 'docs'))
+            await symlink('docs/secret.md', agents())
+          }],
+          ['a file outside, by a way that goes in and comes out again', async () => {
+            await mkdir(join(cwd, 'docs'))
+            await symlink('docs/../../outside/secret.md', agents())
+          }],
+          ['a file in a folder whose name only starts like the project\'s', async () => {
+            await mkdir(join(cwd, '..', 'project-other'))
+            await writeFile(join(cwd, '..', 'project-other', 'secret.md'), 'SECRET outside the project')
+            await symlink('../project-other/secret.md', agents())
+          }],
+          ['the project\'s folder', async () => { await symlink('.', agents()) }],
+          ['the folder above the project', async () => { await symlink('..', agents()) }],
+          ['nothing', async () => { await symlink('nowhere.md', agents()) }],
+          ['itself', async () => { await symlink('AGENTS.md', agents()) }],
+        ])('never follows a link to %s, and says it is a link', async (_what, set) => {
+          await set()
+          const result = await read()
+          expect(result).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'link' }] })
+          expect(JSON.stringify(result)).not.toContain('SECRET')
+        })
+
+        it('says a link to a folder or a named pipe inside the project is not a file, and never opens the pipe', async () => {
+          await mkdir(join(cwd, 'docs'))
+          execFileSync('mkfifo', [join(cwd, 'pipe')])
+          await symlink('docs', agents())
+          await symlink('pipe', join(cwd, 'CLAUDE.md'))
+          expect(await read()).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'not_a_file' }, { name: 'CLAUDE.md', why: 'not_a_file' }] })
+        })
+
+        it.skipIf(!unprivileged)('says a link to a file this user may not open is unreadable', async () => {
+          await project('real.md', 'SECRET inside the project')
+          await chmod(join(cwd, 'real.md'), 0)
+          await symlink('real.md', agents())
+          expect(await read()).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'unreadable', error: expect.objectContaining({ code: 'EACCES' }) }] })
+        })
+
+        // What a link leads to is looked at, and then opened: a folder on the way swapped for a link out between the two would
+        // open a file outside by a path that was inside a moment ago. The handle is checked to be the file that was looked at.
+        it('is not led out by a folder swapped for a link after the file was looked at', async () => {
+          await mkdir(join(cwd, 'docs'))
+          await writeFile(join(cwd, 'docs', 'rules.md'), 'inside the project')
+          await writeFile(join(outside, 'rules.md'), 'SECRET outside the project')
+          await symlink('docs/rules.md', agents())
+          disk.swapFolderForLink = { folder: 'docs', to: outside }
+          const result = await read()
+          expect(result).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'not_a_file' }] })
+          expect(JSON.stringify(result)).not.toContain('SECRET')
+        })
+
+        it('is not led out by the file swapped for a link after it was looked at: it is opened without following one', async () => {
+          await project('real.md', 'inside the project')
+          await symlink('real.md', agents())
+          disk.swapForLink = { file: 'real.md', to: secret() }
+          const result = await read()
+          expect(result).toEqual({ shared: [], skipped: [{ name: 'AGENTS.md', why: 'unreadable', error: expect.objectContaining({ code: 'ELOOP' }) }] })
+          expect(JSON.stringify(result)).not.toContain('SECRET')
+        })
       })
     })
   })
