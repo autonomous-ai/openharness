@@ -57,6 +57,7 @@ import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
 import 'reminders.dart';
 import 'places.dart';
+import 'agent_state.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'file_links.dart';
@@ -404,6 +405,19 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
+  /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is and the Swarm is laid
+  /// out as v4.
+  SwarmAgentStates? _states;
+
+  SwarmAgentStates? _agentStates() => widget.app == null || !widget.board
+      ? null
+      : SwarmAgentStates(
+          controller: c,
+          github: _github,
+          // A test never waits for the next read of a board.
+          boardEvery: kUnderTest ? null : const Duration(minutes: 1),
+        );
+
   /// What this computer's GitHub says of the pull requests on live cards.
   late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
     widget.app?.readPullRequestsStatus,
@@ -470,6 +484,7 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     SuperTabPlaces.of(c).addListener(_takePlace);
     _registerDial();
+    _states = _agentStates();
     _changed();
   }
 
@@ -559,6 +574,8 @@ class _SuperTabViewState extends State<SuperTabView>
       _registerDial();
       _facts.dispose();
       _facts = SuperTabPullRequestFacts(widget.app?.readPullRequestsStatus);
+      _states?.dispose();
+      _states = _agentStates();
     }
     if (oldWidget.controller != c) {
       _board.dispose();
@@ -1216,6 +1233,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
+    _states?.dispose();
     _facts.dispose();
     _tasksLayout.dispose();
     c.removeListener(_changed);
@@ -2108,6 +2126,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
     leaderboard: _board,
+    agentStates: _states,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
