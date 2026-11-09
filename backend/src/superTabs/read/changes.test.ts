@@ -34,7 +34,7 @@ function write(parts: SwarmParts, kind: Kind, key: string, change: (part: Part) 
 function receive(parts: SwarmParts, changed: Part[], actor: Actor, cursor?: number) {
   const active = { ...parts, ...Object.fromEntries((['members', 'agents', 'groups', 'machines', 'starts', 'progress'] as Kind[])
     .map(kind => [kind, (parts[kind] as Part[]).filter(p => !p.deleted && !p.dormant)])) } as SwarmParts
-  return changesFor(readerView(active, actor, LATER, { teamMachines: [] }), changed, actor, undefined, cursor)
+  return changesFor(readerView(active, actor, LATER, {}), changed, actor, undefined, cursor)
 }
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
@@ -163,8 +163,8 @@ describe('changes since a cursor (design 4.4)', () => {
       requires: { machines: ['secret-mac', 'mac'] } }, checks: [{ description: 'It answers.', independent: false }] })
     const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const requires = (groups: Array<{ key: string }>) => (groups.find(g => g.key === s.done) as unknown as { data: { task: { requires: unknown } } }).data.task.requires
-    expect(requires(readerView(fresh, owner, LATER, { teamMachines: [] }).parts.groups)).toEqual({ machines: ['secret-mac', 'mac'] })
-    expect(requires(readerView(fresh, peer, LATER, { teamMachines: [] }).parts.groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
+    expect(requires(readerView(fresh, owner, LATER, {}).parts.groups)).toEqual({ machines: ['secret-mac', 'mac'] })
+    expect(requires(readerView(fresh, peer, LATER, {}).parts.groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
     const changed = [write(fresh, 'groups', s.done, () => {})]
     expect(requires(receive(fresh, changed, peer).groups)).toEqual({ machines: ['mac'], unseenMachines: 1 })
     expect(requires(receive(fresh, changed, owner).groups)).toEqual({ machines: ['secret-mac', 'mac'] })
@@ -175,7 +175,7 @@ describe('changes since a cursor (design 4.4)', () => {
 describe('a machine\'s reading, for a client that asks for lines', () => {
   const SINCE = NOW + 1_000
   const lightly = (parts: SwarmParts, changed: Part[], actor: Actor) => {
-    const view = readerView(parts, actor, LATER, { teamMachines: [] })
+    const view = readerView(parts, actor, LATER, {})
     return changesFor(view, changed, actor, { since: SINCE })
   }
   const reading = (parts: SwarmParts, change: (p: Part) => void = () => {}) => {
@@ -212,7 +212,7 @@ describe('a machine\'s reading, for a client that asks for lines', () => {
   it('is a removal, never a line, when the machine left', () => {
     const { parts } = scene()
     const gone = write(parts, 'machines', 'mac', p => { p.deleted = true; p.readAt = LATER })
-    const out = changesFor(readerView({ ...parts, machines: [] }, peer, LATER, { teamMachines: [] }), [gone], peer, { since: SINCE })
+    const out = changesFor(readerView({ ...parts, machines: [] }, peer, LATER, {}), [gone], peer, { since: SINCE })
     expect(out.machines).toEqual([{ key: 'mac', version: R + 1, changedAt: LATER, deleted: true }])
     expect(out.machineReadings).toEqual([])
   })

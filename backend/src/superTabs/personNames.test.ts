@@ -119,7 +119,7 @@ describe('member.name', () => {
   it('reaches members with the rest of the person, and only members', () => {
     const f = fixture()
     f.setName('Minh Nguyen')
-    const view = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, { teamMachines: [] })
+    const view = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, {})
     expect(view.parts.members.find(m => m.key === 'relay')!.data.name).toBe('Minh Nguyen')
     expect(visibleState(f.state, peer, NOW).people.find(p => p.id === 'relay')!.name).toBe('Minh Nguyen')
     expect(() => visibleState(f.state, person('stranger', 'stranger@example.com'), NOW)).toThrow()
