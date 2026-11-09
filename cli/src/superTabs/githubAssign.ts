@@ -58,6 +58,10 @@ export class GitHubAssign {
   private readonly given = new Map<string, string>()
   /** The labels each repository has, or was asked to make, as `repo:name` (labelRepo). */
   private readonly labels = new Set<string>()
+  /** The take backs and the readers' asks made, by task or pull request (`repo#N`), so each is made once; forgotten once
+   *  the task or pull request is no longer open, so the memory stays as large as the open work. */
+  private readonly backs = new Set<string>()
+  private readonly asks = new Set<string>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
@@ -124,6 +128,7 @@ export class GitHubAssign {
     // list and is never given twice; once shown, or closed, it is forgotten.
     const open = new Set(listed.map(issue => `${repo}#${issue.number}`))
     for (const key of [...this.given.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) this.given.delete(key)
+    for (const key of [...this.backs]) if (key.startsWith(`${repo}#`) && !open.has(key.slice(0, key.indexOf(':back:')))) this.backs.delete(key)
     const issues = listed.map(issue => {
       const key = `${repo}#${issue.number}`, label = this.given.get(key)
       if (!label) return issue
@@ -172,7 +177,7 @@ export class GitHubAssign {
     if (!away.length) return
     for (const back of takeBacks(issues, away, this.now()).filter(b => !keep.has(b.number)).map(b => why ? { ...b, why } : b)) {
       const key = `${repo}#${back.number}:back:${back.label}`
-      if (this.said.has(key)) continue
+      if (this.backs.has(key)) continue
       // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for
       // its builder is taken back again next pass. A label already gone is off; anything else GitHub refuses is said, and
       // tried again next pass.
@@ -182,7 +187,7 @@ export class GitHubAssign {
         if (reply.status !== 200 && reply.status !== 404) { refused = reply.status; break }
       }
       if (refused) { this.once(`[super-tab] Task assignment: TAKE_BACK_REFUSED ${repo}#${back.number}: GitHub answered ${refused}`); continue }
-      this.said.add(key)
+      this.backs.add(key)
       await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
         { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
       this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
@@ -225,6 +230,8 @@ export class GitHubAssign {
     // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
     const withReaders = new Set<number>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
+    const openPulls = new Set(open.map(pull => `${repo}#${pull.number}`))
+    for (const key of [...this.asks]) if (key.startsWith(`${repo}#`) && !openPulls.has(key.slice(0, key.indexOf('@')))) this.asks.delete(key)
     const pulls = open.filter(pull => pull.draft !== true && String((pull.base as Json | undefined)?.ref ?? '') === base)
     for (const pull of pulls) {
       const number = Number(pull.number), head = String((pull.head as Json | undefined)?.sha ?? '')
@@ -356,11 +363,11 @@ export class GitHubAssign {
    *  refuses is said, and asked again next pass. */
   private async ask(repo: string, number: number, head: string, name: string, what: string): Promise<void> {
     const key = `${repo}#${number}@${head}:${name.toLowerCase()}`
-    if (this.said.has(key)) return
+    if (this.asks.has(key)) return
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
       + `and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
-    this.said.add(key)
+    this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)
   }
 

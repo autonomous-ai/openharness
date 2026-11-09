@@ -350,6 +350,20 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
   })
 
+  it('forgets the asks and take backs it made once their pull request or task is no longer open', async () => {
+    const team: Crew = { ...crew(), away: [{ name: 'Atlas', label: 'builder:atlas', why: 'stopping' }] }
+    const f = setup([issue(1, ['size:s', 'builder:atlas'])], { crew: team })
+    f.github.state.pulls = [{ number: 30, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }],
+      head: { sha: `f6edb44${'0'.repeat(33)}`, ref: 'pip/14' }, body: 'Closes #14' }]
+    await f.assigner.tick()
+    const memory = f.assigner as unknown as { asks: Set<string>; backs: Set<string> }
+    expect([memory.asks.size, memory.backs.size]).toEqual([1, 1])
+    f.github.state.pulls = []
+    f.github.state.open = []
+    await f.assigner.tick()
+    expect([memory.asks.size, memory.backs.size]).toEqual([0, 0])
+  })
+
   it('says a take back GitHub refuses, leaves the task as it was, and takes it back next pass', async () => {
     const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
     const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])], { crew: team })
