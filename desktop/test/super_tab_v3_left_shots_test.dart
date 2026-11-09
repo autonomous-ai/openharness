@@ -123,22 +123,29 @@ void main() {
           };
         }
         server.append('Working on the fix.', conversationId: 'offline');
-        // Humans: the board's people with their points.
+        // Top Teams: the leaderboard's people with their points.
         (server.state['people'] as List).addAll([
           for (final id in ['dee', 'ken15'])
             {'id': id, 'email': '$id@example.com', 'role': 'collaborator'},
         ]);
-        server.leaderboard = {
-          'projectId': 'lead',
+        server.shipping = {
           'week': 0,
           'people': [
             for (final (i, (id, points)) in [
-              ('dee', 120),
-              ('ken15', 80),
-              ('owner', 12),
+              ('dee', 4.2),
+              ('ken15', 2.8),
+              ('owner', 1.0),
             ].indexed)
-              {'personId': id, 'points': points, 'rank': i + 1},
+              {
+                'personId': id,
+                'displayName': id,
+                'agentsShipping': 3 - i,
+                'level': 3 - i,
+                'points': points,
+                'rank': i + 1,
+              },
           ],
+          'failures': <dynamic>[],
         };
         (server.state['projects'] as List)
           ..first['repository'] = {

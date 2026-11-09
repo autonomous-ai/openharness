@@ -294,7 +294,7 @@ place, such as the #1 crown, follow [Team and celebration](#team-and-celebration
 | --- | --- | --- |
 | Rank | `AppType.label`, `FontWeight.w700`, `AppPalette.textSecondary` | A bold numeral in a fixed leading column. First place differs from tenth only by its number. |
 | Emphasized number (points) | `AppType.label`, `FontWeight.w600`, `AppPalette.textPrimary` | One per row, at the trailing edge. Shown even when it is 0, so the column holds. |
-| Secondary metrics | `AppType.caption`, `AppPalette.textSecondary` | Plain words beneath the name, joined by a spaced middle dot: `3 shipped · 2 unblocked`. A metric at 0 is left out; a row with none has no second line. |
+| Secondary metrics | `AppType.caption`, `AppPalette.textSecondary` | Plain words beneath the name, joined by a spaced middle dot: `3 agents shipping · Level 3`. A metric at 0 is left out; a row with none has no second line. |
 | Trend | `AppIcons.arrowUp` / `AppIcons.arrowDown` at 14 points, with a caption-size number | Shape and color together: up in `AppPalette.online`, down in the theme's semantic error ink. No change shows nothing. |
 | Current person | `AppSurface.selectedFill` | The sidebar's selected-row fill, not the blue keyboard selection (`AppDesktop.selection`). Text stays in ordinary ink. |
 
@@ -310,6 +310,21 @@ The Desktop left pane's Top Teams has no rank number and no crown: it is the
 Leaderboard in short, its people most points first with their points at the
 right ([Swarm left pane](#swarm-left-pane)). There, as the one exception to the
 table, points are the row's quiet detail: 12, tertiary, tabular.
+
+The Leaderboard (`SuperTabLeaderboardPage`,
+`super_tabs/leaderboard/leaderboard_page.dart`) ranks people by how many of
+their agents ship (`docs/plans/2026-11-09-swarm-v4-leaderboard.md`). Its header
+is the title, then two `ToolbarPill`s, This week and All time, the one shown
+tinted, and Refresh at the right. Each row is the recipe above: the place, the
+top three's mark beside it, the face, the name with `You` for the reader, the
+second line `3 agents shipping · Level 3`, and the points to one decimal
+(`4.2`), as the server rounds them. A computer of the reader's own that could
+not read GitHub shows above the rows as one caption line in
+`AppPalette.textSecondary` after `triangleAlert`: `Mac Studio · GitHub signed
+out`. Only its person sees it, and the numbers stay. While the first read is on
+its way, three skeleton rows hold the place; a failed read keeps the board shown
+with the reason and Retry; an empty board shows nothing. Top Teams and the page
+show one board, read when the Swarm shows and every five minutes while it does.
 
 A place is its numeral; a celebration mark sits beside it and never replaces
 it, as [Team and celebration](#team-and-celebration) describes. Color never

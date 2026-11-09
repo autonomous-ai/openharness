@@ -34,7 +34,8 @@ import '../shortcuts/keymap.dart' show KeymapContext;
 import 'chat_find.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
-import 'leaderboard/weekly_page.dart';
+import 'leaderboard/leaderboard_page.dart';
+import 'leaderboard/shipping.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -404,6 +405,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
+  /// The Swarm's leaderboard, read for the left pane's Top Teams and the Leaderboard page, so both show one board.
+  late SuperTabShippingBoard _shipping = SuperTabShippingBoard(c);
+
   /// What this computer's GitHub says of the pull requests on live cards.
   late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
     widget.app?.readPullRequestsStatus,
@@ -563,6 +567,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c) {
       _board.dispose();
       _board = SuperTabProjectBoard(c);
+      _shipping.dispose();
+      _shipping = SuperTabShippingBoard(c);
       oldWidget.controller.threadPaneHidden();
       oldWidget.controller.removeListener(_changed);
       oldWidget.controller.removeListener(_holdVoiceAway);
@@ -1216,6 +1222,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
+    _shipping.dispose();
     _facts.dispose();
     _tasksLayout.dispose();
     c.removeListener(_changed);
@@ -2107,7 +2114,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
-    leaderboard: _board,
+    leaderboard: _shipping,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
@@ -6420,8 +6427,12 @@ class _SuperTabViewState extends State<SuperTabView>
                                 )
                               : const SizedBox.shrink(),
                           switch (_pageShown) {
-                            SwarmPage.leaderboard =>
-                              SuperTabWeeklyLeaderboardPage(controller: c),
+                            SwarmPage.leaderboard => SuperTabLeaderboardPage(
+                              key: ObjectKey(_shipping),
+                              controller: c,
+                              reader: _shipping,
+                              machineName: widget.machineName,
+                            ),
                             null => const SizedBox.shrink(),
                           },
                           _manageVisible

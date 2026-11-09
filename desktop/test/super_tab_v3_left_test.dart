@@ -7,7 +7,7 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/leaderboard/reader.dart';
+import 'package:harness/super_tabs/leaderboard/shipping.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
@@ -65,7 +65,7 @@ void main() {
     List<SwarmPage>? pages,
     SwarmPage? page,
     String? boardProjectId,
-    SuperTabLeaderboardReader? leaderboard,
+    SuperTabShippingReader? leaderboard,
     AppNotifier? withApp,
   }) async {
     final server = swarm();
@@ -214,15 +214,22 @@ void main() {
     });
   });
   group('the left pane\'s sections fold', () {
-    SuperTabLeaderboardReader board() {
-      final reader = SuperTabLeaderboardReader(
+    SuperTabShippingReader board() {
+      final reader = SuperTabShippingReader(
         tabId: 'tab',
         request: (method, path, {body}) async => {
-          'projectId': 'lead',
           'week': 0,
           'people': [
-            {'personId': 'dee', 'points': 120, 'rank': 1},
+            {
+              'personId': 'dee',
+              'displayName': 'dee',
+              'agentsShipping': 3,
+              'level': 3,
+              'points': 12.5,
+              'rank': 1,
+            },
           ],
+          'failures': <dynamic>[],
         },
       );
       addTearDown(reader.dispose);
@@ -274,7 +281,7 @@ void main() {
         setup: people,
         leaderboard: await tester.runAsync(() async {
           final reader = board();
-          await reader.show('lead');
+          await reader.show();
           return reader;
         }),
         withApp: appWithMachines(),
@@ -405,16 +412,23 @@ void main() {
     });
   });
   group('Humans is the Leaderboard', () {
-    SuperTabLeaderboardReader board(List<(String, int)> people) {
-      final reader = SuperTabLeaderboardReader(
+    SuperTabShippingReader board(List<(String, double)> people) {
+      final reader = SuperTabShippingReader(
         tabId: 'tab',
         request: (method, path, {body}) async => {
-          'projectId': 'lead',
           'week': 0,
           'people': [
             for (final (i, (id, points)) in people.indexed)
-              {'personId': id, 'points': points, 'rank': i + 1},
+              {
+                'personId': id,
+                'displayName': id,
+                'agentsShipping': 1,
+                'level': 1,
+                'points': points,
+                'rank': i + 1,
+              },
           ],
+          'failures': <dynamic>[],
         },
       );
       addTearDown(reader.dispose);
@@ -430,8 +444,8 @@ void main() {
     testWidgets('lists people most points first, their points on the right', (
       tester,
     ) async {
-      final reader = board([('dee', 120), ('ken', 80), ('owner', 0)]);
-      await tester.runAsync(() => reader.show('lead'));
+      final reader = board([('dee', 12.5), ('ken', 8), ('owner', 0)]);
+      await tester.runAsync(reader.show);
       final c = await show(tester, setup: people, leaderboard: reader);
       expect(
         find.descendant(
@@ -449,12 +463,15 @@ void main() {
       expect(top('super-human-ken'), lessThan(top('super-human-owner')));
       final points = find.descendant(
         of: key('super-human-dee'),
-        matching: find.text('120'),
+        matching: find.text('12.5'),
       );
       expect(points, findsOneWidget);
       // Zero still shows, so the column holds.
       expect(
-        find.descendant(of: key('super-human-owner'), matching: find.text('0')),
+        find.descendant(
+          of: key('super-human-owner'),
+          matching: find.text('0.0'),
+        ),
         findsOneWidget,
       );
       expect(
@@ -468,8 +485,8 @@ void main() {
 
     testWidgets('at most 8 people; the heading folds them and every person '
         'opens the whole board', (tester) async {
-      final reader = board([for (var i = 0; i < 12; i++) ('p$i', 12 - i)]);
-      await tester.runAsync(() => reader.show('lead'));
+      final reader = board([for (var i = 0; i < 12; i++) ('p$i', 12.0 - i)]);
+      await tester.runAsync(reader.show);
       final pages = <SwarmPage>[];
       final c = await show(
         tester,
@@ -488,7 +505,7 @@ void main() {
 
     testWidgets('before the board is read, nothing: an empty list shows no '
         'heading', (tester) async {
-      await show(tester, leaderboard: board([('dee', 1)]));
+      await show(tester, leaderboard: board([('dee', 1.0)]));
       expect(key('project-sidebar-humans'), findsNothing);
       expect(key('super-human-dee'), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing);

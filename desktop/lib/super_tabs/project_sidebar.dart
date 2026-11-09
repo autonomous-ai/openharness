@@ -25,7 +25,7 @@ import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
 import 'buddy_rows.dart';
 import 'identity.dart';
-import 'leaderboard/reader.dart';
+import 'leaderboard/shipping.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
 import 'private_project_lock.dart';
@@ -78,9 +78,9 @@ class ProjectSidebar extends StatelessWidget {
   });
   final SuperTabController controller;
 
-  /// The board Humans lists on the Desktop (task #4466): the view's, which the right pane reads too. Without it, or
-  /// before it is read, Humans is its heading alone.
-  final SuperTabLeaderboardReader? leaderboard;
+  /// The leaderboard Top Teams lists on the Desktop: the view's, which its Leaderboard page shows too. Without it, or before it
+  /// is read, there is no Top Teams.
+  final SuperTabShippingReader? leaderboard;
 
   /// How many people Humans lists, most points first; the heading opens the whole board.
   static const humansShown = 8;
@@ -691,8 +691,8 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  /// Humans (task #4466): the Leaderboard in short, its people most points first with their points on the right. The
-  /// heading and every person open the whole board.
+  /// Top Teams: the Leaderboard in short, its people most points first with their points on the right (people ranked by how
+  /// many of their agents ship, docs/plans/2026-11-09-swarm-v4-leaderboard.md). Every person opens the whole board.
   List<Widget> _humans(SuperTabSnapshot? snapshot) {
     final onPage = this.onPage;
     if (snapshot == null || onPage == null) return const [];
@@ -716,15 +716,15 @@ class ProjectSidebar extends StatelessWidget {
               leading: person == null
                   ? SuperTabAvatar(
                       identity: 'person:${score.personId}',
-                      name: score.displayName ?? '',
+                      name: score.displayName,
                       size: SuperTabQuietRow.faceSize,
                     )
                   : SuperTabAvatar.person(
                       person,
                       size: SuperTabQuietRow.faceSize,
                     ),
-              name: person?.shownName ?? score.displayName ?? 'Someone',
-              detail: '${score.points}',
+              name: person?.shownName ?? score.displayName,
+              detail: shippingPoints(score.points),
               selected:
                   page == SwarmPage.leaderboard &&
                   score.personId == controller.accountId,
