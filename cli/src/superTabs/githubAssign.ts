@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, openPullsPath, PULL_PAGES, sameKey, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, openPullsPath, PULL_PAGES, sameKey, verdicts, writersOf, type LedProject } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -255,7 +255,8 @@ export class GitHubAssign {
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
-      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
+      const writers = writersOf(pull)
+      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), writers)
       const onHead = (sha: string) => head.startsWith(sha)
       if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
       for (const task of tasksOf(pull)) withReaders.add(task)
@@ -281,8 +282,8 @@ export class GitHubAssign {
       // measured from its ask for this head; one that never gave one, from its last ask.
       const lastAsk = (name: string, thisHead: boolean) =>
         Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
-      // Its author's own verdicts count for nothing, however its name is written (sameKey).
-      const own = (name: string) => sameKey(name) === sameKey(author)
+      // Its writers' own verdicts count for nothing, however their names are written (sameKey).
+      const own = (name: string) => writers.some(writer => sameKey(writer) === sameKey(name))
       const ok = [...readers].filter(([reader, r]) => !own(reader) && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => reader)
       const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
