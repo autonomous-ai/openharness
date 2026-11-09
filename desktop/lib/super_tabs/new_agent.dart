@@ -132,16 +132,28 @@ HarnessLaunchIntegration swarmNewAgent(
   return integration;
 }
 
-/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"): an agent
-/// already running on one of its person's own computers joins their team as + New agent's does, with its own 1:1 chat,
-/// which opens. Its name is the one its person gave it, else one of the Swarm's. Nothing is typed into it: it goes on with
-/// what it was doing, and its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection
-/// lost is tried again as the same operation, which never adds it twice.
-Future<void> swarmAttachAgent(
+/// The name an agent already running joins a Swarm under: the one its person gave it, else one of the Swarm's that none of
+/// [agents] has.
+String swarmJoinName(Agent native, Iterable<SuperTabAgent> agents) =>
+    native.nameChosen == true
+    ? native.name
+    : freshAgentName([
+        for (final agent in agents) agent.displayName ?? agent.name,
+      ]);
+
+/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), and a click on a
+/// pane's row in Your Team: an agent already running on one of its person's own computers joins their team as + New agent's
+/// does, with its own 1:1 chat, which opens; the chat's id is the answer. Its name is [name], else [swarmJoinName]'s. Nothing
+/// is typed into it: it goes on with what it was doing, and its daemon tells it the team's ways once it is in (cli
+/// superTabs/host.ts). A join the connection lost is tried again as the same operation, which never adds it twice; a caller
+/// whose join failed passes its [operationId] and [name] again to finish that one, so it never makes a second chat.
+Future<String> swarmAttachAgent(
   AppNotifier app,
   String tabId,
   String machineId,
   Agent native, {
+  String? operationId,
+  String? name,
   Future<void> Function(Duration) wait = Future<void>.delayed,
 }) async {
   final engine = native.engine;
@@ -151,14 +163,11 @@ Future<void> swarmAttachAgent(
       'Only Claude Code or Codex can join this Swarm.',
     );
   }
-  final creationId = superTabOperationId();
+  final creationId = operationId ?? superTabOperationId();
   final started = DateTime.now();
-  final snapshot = await app.superTabs.readSnapshot(tabId);
-  final name = native.nameChosen == true
-      ? native.name
-      : freshAgentName([
-          for (final agent in snapshot.agents) agent.displayName ?? agent.name,
-        ]);
+  final joinName =
+      name ??
+      swarmJoinName(native, (await app.superTabs.readSnapshot(tabId)).agents);
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -189,7 +198,7 @@ Future<void> swarmAttachAgent(
     'kind': 'regular',
     'machineId': machineId,
     'engine': engine,
-    'name': name,
+    'name': joinName,
     'local': true,
   });
   final chatId = chat['conversationId'] as String;
@@ -198,7 +207,7 @@ Future<void> swarmAttachAgent(
     'conversationId': chatId,
     'machineId': machineId,
     'harnessId': native.id,
-    'name': name,
+    'name': joinName,
     'lead': false,
     'configuration': {
       'engine': engine,
@@ -216,4 +225,5 @@ Future<void> swarmAttachAgent(
     'super-tabs',
     'Agent attached in ${DateTime.now().difference(started).inMilliseconds} ms',
   );
+  return chatId;
 }

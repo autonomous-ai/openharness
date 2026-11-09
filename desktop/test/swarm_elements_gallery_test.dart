@@ -447,6 +447,18 @@ class _Gallery extends StatelessWidget {
                           detail: 'Mac Studio',
                           onTap: () {},
                         ),
+                        // While a click joins it: it waits.
+                        SuperTabQuietRow(
+                          leading: SuperTabAvatar(
+                            identity: 'agent:${swarmAgentId('m', 'billing')}',
+                            name: 'Billing fix',
+                            size: SuperTabQuietRow.faceSize,
+                            face: true,
+                          ),
+                          name: 'Billing fix',
+                          detail: 'joining',
+                          onTap: null,
+                        ),
                         SuperTabQuietHeading(
                           'Your Machines',
                           collapsed: true,
