@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, outOfQuota, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { DEEP, labelOf, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -131,7 +131,7 @@ export class GitHubAssign {
     if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short)
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
     const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
-    const withReaders = await this.askReaders(project, read, pulls)
+    const withReaders = await this.askReaders(project, read, pulls, crew)
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
@@ -196,8 +196,9 @@ export class GitHubAssign {
    * (githubMerge.ts), so its reader is asked to read the new head, once. Nothing while a HOLD stands on the head itself: its
    * author fixes first. Each ask is one comment naming the reader, which GitHub news brings it (githubMentions.ts).
    */
-  private async askReaders(project: LedProject, read: Read, open: Json[]): Promise<Set<number>> {
+  private async askReaders(project: LedProject, read: Read, open: Json[], crew: Crew): Promise<Set<number>> {
     const { repo } = project
+    const team = teamOf(crew, project.pm)
     // The tasks whose pull request waits for its readers or its merge, not for its builder (askQuiet).
     const withReaders = new Set<number>()
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
@@ -205,9 +206,10 @@ export class GitHubAssign {
     for (const pull of pulls) {
       const number = Number(pull.number), head = String((pull.head as Json | undefined)?.sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
+      const author = authorOf(pull)
+      if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
-      const author = authorOf(pull)
       const onHead = (sha: string) => head.startsWith(sha)
       if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
       for (const task of tasksOf(pull)) withReaders.add(task)

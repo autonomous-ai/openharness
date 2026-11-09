@@ -181,6 +181,16 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       machines: crew().machines }
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
 
+    it('asks nobody for a pull request that is not the team\'s: a person\'s, or a branch no builder of the team made', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ number: 31, head: { sha: HEAD, ref: 'ken/fix-login' }, labels: [], body: '' }),
+        pull({ number: 32, head: { sha: HEAD, ref: 'fix-login' }, labels: [], body: '' })]
+      await f.assigner.tick()
+      expect(f.said()).toEqual([])
+      // Their comments are not even read.
+      expect(f.github.sent).toEqual([])
+    })
+
     it('asks another reader once the one asked has not read for 2 hours, and nobody more once a READ-OK is on the head', async () => {
       const ask = (name: string, at: string) => comment(`Harness, ${at.slice(11, 16)}, to **${name}**: please read this pull request, `
         + 'and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
