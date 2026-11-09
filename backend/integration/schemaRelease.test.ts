@@ -24,8 +24,6 @@ const SCHEMA = join(process.cwd(), 'prisma/schema.prisma')
 /** Every index Prisma cannot describe, as the worker has always made it: collection, name, key, seconds to expiry. */
 const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
   ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, 'part_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
-  ...['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval'].map(c => [c, 'workspace_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
-  ['SwarmWorkspaceInvitation', 'workspace_invitation_expiry', { expiresAt: 1 }, 0],
   ['SuperTabMention', 'mention_expiry', { createdAt: 1 }, 30 * DAY],
   ['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY],
   ['SuperTabTerminalRequest', 'terminal_request_expiry', { createdAt: 1 }, 120],
