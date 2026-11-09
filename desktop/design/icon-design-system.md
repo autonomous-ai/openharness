@@ -102,13 +102,10 @@ These are content or identities, not a second action-icon library:
   share `ActivityMark`. In Flutter, `ActivityMark` draws Failed as
   `AppIcons.triangleAlert` in its cell rather than `✗`: an X means close
   (task #4461). Native tabs and terminal text keep `✗`.
-- Swarm task status marks (`SuperTabTaskStatusMark`) add three icons of their
-  own: Proposal `AppIcons.lightbulb`, Rejected `AppIcons.thumbsDown`, and Failed
-  (Stuck) `AppIcons.triangleAlert` in the semantic error ink. No status uses an
-  X. See [Swarm elements](desktop-design-system.md#swarm-elements). Bridge payloads use `nativeActivityPayload` and the
-  same `activityColor`, including the monochrome preference. Do not substitute
-  SF Symbols or add status pills to a different Harness surface. A notification
-  mark describes its unread receipt; a tab/pane mark describes current activity.
+- Bridge payloads use `nativeActivityPayload` and the same `activityColor`,
+  including the monochrome preference. Do not substitute SF Symbols or add
+  status pills to a different Harness surface. A notification mark describes its
+  unread receipt; a tab/pane mark describes current activity.
 - A rank is its numeral. The #1 crown and badges are content artwork beside
   it, never a replacement for it, and the crown means only that: a Lead wears
   the gold Lead ring instead; see
@@ -154,8 +151,8 @@ changed symbols in their real screens too: dense grids, menus, long labels,
 hover/focus/disabled states, Increase Contrast and text scaling. A contact
 sheet does not replace interaction checks.
 
-Swarm elements (agent faces, the Lead ring, person avatars, task status marks,
-the task card and the row) have their own gallery against checked-in images;
+Swarm elements (agent faces, the Lead ring, person avatars, the task card and
+the row) have their own gallery against checked-in images;
 it runs in every suite, and an intended change regenerates its images:
 
 ```sh

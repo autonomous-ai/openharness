@@ -1,4 +1,9 @@
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readInstructions, writeInstructions } from '../lib/agentInstructions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { listDir } from '../lib/fsBrowse.js'
 import { readGitProject } from '../lib/gitProject.js'
@@ -17,6 +22,11 @@ vi.mock('../lib/gitProject.js', () => ({ readGitProject: vi.fn(async () => ({ pa
 vi.mock('../scm/scmProjects.js', () => ({ detectScmProject: vi.fn(async () => ({ kind: 'git', git: { isGit: true } })) }))
 vi.mock('../lib/projectPreview.js', () => ({ projectPreview: vi.fn(async () => ({ path: '/work/app', readme: '# app' })) }))
 vi.mock('../lib/sessionGitPullRequest.js', () => ({ readSessionGitPullRequest: vi.fn(async () => ({ status: 'found', number: 12 })) }))
+// The instructions file is the real one, on a real folder: only a failure no real disk gives on demand needs a stand-in.
+vi.mock('../lib/agentInstructions.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/agentInstructions.js')>()
+  return { ...actual, readInstructions: vi.fn(actual.readInstructions), writeInstructions: vi.fn(actual.writeInstructions) }
+})
 vi.mock('../lib/mediaPreview.js', async (importOriginal) => ({
   MediaPreviewError: (await importOriginal<typeof import('../lib/mediaPreview.js')>()).MediaPreviewError,
   readMediaPreviewChunk: vi.fn(async () => ({ mime: 'image/png', data: 'AAAA', done: true })),
@@ -136,5 +146,164 @@ describe('the project and folder readers', () => {
     expect(await ask('agent_read_file', { agentId: 'a1', path: '../x.png', media: true })).toEqual({ error: 'OUTSIDE_PROJECT' })
     vi.mocked(readMediaPreviewChunk).mockRejectedValueOnce(new Error('EIO'))
     expect(await ask('agent_read_file', { agentId: 'a1', path: 'shot.png', media: true })).toEqual({ error: 'MEDIA_READ_FAILED' })
+  })
+})
+
+// An agent's instructions file lives in the agent's own folder, on the computer the agent runs on. The owner's other
+// computers read and save it there, so it goes through neither GitHub nor our servers (lib/agentInstructions.ts).
+describe('an agent\'s instructions file', () => {
+  const LOCAL_OWNER = { local: true, owner: true }
+  const OWN_COMPUTER = { local: false, owner: true, accountOwner: true, machine: { machineId: 'mac-1', label: 'Mac 1' } }
+  const TYPES = ['agent_instructions_read', 'agent_instructions_write'] as const
+  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
+  const folders: string[] = []
+  afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
+
+  async function project() {
+    const cwd = await mkdtemp(join(tmpdir(), 'harness-projects-instructions-'))
+    folders.push(cwd)
+    const resolve = vi.fn((id: string) => id === 'a1' ? row('a1', cwd) : id === 'a2' ? row('a2', null) : id === 'gone' ? row('gone', join(cwd, 'moved-away'))
+      : id === 'loop' ? row('loop', join(cwd, 'loop')) : undefined)
+    const requests = startProjects(fakeCore({ agents: { resolve } }))
+    const ask = (type: string, payload: Record<string, unknown>, asker: Record<string, unknown> = LOCAL_OWNER) => requests[type]!(payload, asker as never)
+    return { cwd, resolve, ask, file: join(cwd, 'agents', 'Faye.md') }
+  }
+
+  it('is declared with the project readers, which the core routes from that list', () => {
+    expect(PROJECTS_REQUESTS).toEqual(expect.arrayContaining([...TYPES]))
+  })
+
+  it('reads the file with its version, and says there is none, for the account\'s own computers and this one', async () => {
+    const { ask, file, cwd } = await project()
+    for (const asker of [LOCAL_OWNER, OWN_COMPUTER]) {
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }, asker)).toEqual({ text: null, version: '' })
+    }
+    await mkdir(join(cwd, 'agents'))
+    await writeFile(file, 'Be brief.\n')
+    for (const asker of [LOCAL_OWNER, OWN_COMPUTER]) {
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }, asker)).toEqual({ text: 'Be brief.\n', version: sha256('Be brief.\n') })
+    }
+  })
+
+  it('saves it when the writer saw the file as it is, and refuses a save over a change it did not see', async () => {
+    const { ask, file } = await project()
+    const first = await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'one', version: '' }, OWN_COMPUTER)
+    expect(first).toEqual({ version: sha256('one') })
+    expect(await readFile(file, 'utf8')).toBe('one')
+    expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'two', version: '' }, OWN_COMPUTER)).toEqual({ error: 'CHANGED' })
+    expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'two', version: first.version }, OWN_COMPUTER)).toEqual({ version: sha256('two') })
+    expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ text: 'two', version: sha256('two') })
+  })
+
+  it('finds the agent as agent_read_file does', async () => {
+    const { ask, resolve } = await project()
+    await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
+    expect(resolve).toHaveBeenLastCalledWith('a1')
+  })
+
+  it.each([
+    ['a window or tool here that may not control this computer', { local: true, owner: false }],
+    ['a trusted collaborator', { local: false, owner: true }],
+    ['a collaborator the host account does not vouch for', { local: false, owner: true, accountOwner: false }],
+    ['a guest of a shared computer', { local: false, owner: false, guest: 'kim@acme.io' }],
+    ['a device or an observer', { local: false, owner: false, accountOwner: false }],
+  ])('refuses %s before it looks at the request, and reads and writes nothing', async (_who, asker) => {
+    const { ask, resolve, cwd } = await project()
+    await mkdir(join(cwd, 'agents'))
+    await writeFile(join(cwd, 'agents', 'Faye.md'), 'private')
+    for (const [type, payload] of [
+      ['agent_instructions_read', { agentId: 'a1', name: 'Faye' }],
+      ['agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'planted', version: sha256('private') }],
+      ['agent_instructions_read', {}], ['agent_instructions_write', { agentId: 'nobody', name: '../x' }],
+    ] as const) {
+      expect(await ask(type, payload, asker), type).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(resolve).not.toHaveBeenCalled()
+    expect(await readFile(join(cwd, 'agents', 'Faye.md'), 'utf8')).toBe('private')
+  })
+
+  it.each(TYPES)('%s: asks for an agent and a name', async (type) => {
+    const { ask } = await project()
+    for (const payload of [{}, { name: 'Faye' }, { agentId: 'a1' }, { agentId: 'a1', name: '' }, { agentId: '', name: 'Faye' }, { agentId: 7, name: 'Faye' }, { agentId: 'a1', name: 7 }]) {
+      expect(await ask(type, { text: 'x', version: '', ...payload }), JSON.stringify(payload)).toEqual({ error: 'MISSING_AGENT_OR_NAME' })
+    }
+  })
+
+  it.each(TYPES)('%s: no such agent, or an agent with no folder, is AGENT_NOT_FOUND', async (type) => {
+    const { ask } = await project()
+    for (const agentId of ['nobody', 'a2']) {
+      expect(await ask(type, { agentId, name: 'Faye', text: 'x', version: '' }), agentId).toEqual({ error: 'AGENT_NOT_FOUND' })
+    }
+  })
+
+  it('names what is wrong with a name, a text, a size and a path, in the codes the apps read', async () => {
+    const { ask, cwd } = await project()
+    expect(await ask('agent_instructions_read', { agentId: 'a1', name: '../Faye' })).toEqual({ error: 'BAD_NAME' })
+    expect(await ask('agent_instructions_write', { agentId: 'a1', name: '   ', text: 'x', version: '' })).toEqual({ error: 'BAD_NAME' })
+    expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 5, version: '' })).toEqual({ error: 'BAD_TEXT' })
+    expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'a'.repeat(65_537), version: '' })).toEqual({ error: 'TOO_LARGE' })
+    await mkdir(join(cwd, 'agents'))
+    await writeFile(join(cwd, 'agents', 'Faye.md'), Buffer.alloc(65_537, 97))
+    expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'TOO_LARGE' })
+    await rm(join(cwd, 'agents'), { recursive: true })
+    await mkdir(join(cwd, 'elsewhere'))
+    if (process.platform === 'win32') return
+    await symlink(join(cwd, 'elsewhere'), join(cwd, 'agents'))
+    expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'UNSAFE_PATH' })
+    expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'x', version: '' })).toEqual({ error: 'UNSAFE_PATH' })
+  })
+
+  // A file that is not text is not a failure of the disk: it is named, so the app can say what is wrong, and logged by that
+  // name, so nobody has to guess at a bare error.
+  it('says NOT_UTF8 for a file that is not text, whether it is read or saved over, and logs that name and nothing else', async () => {
+    const { ask, cwd, file } = await project()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await mkdir(join(cwd, 'agents'))
+      const bytes = Buffer.from([0x66, 0xff, 0xfe, 0x66])
+      await writeFile(file, bytes)
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'NOT_UTF8' })
+      expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'my private words', version: createHash('sha256').update(bytes).digest('hex') })).toEqual({ error: 'NOT_UTF8' })
+      expect(await readFile(file)).toEqual(bytes)
+      expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
+        '[projects] agent_instructions_read failed · NOT_UTF8',
+        '[projects] agent_instructions_write failed · NOT_UTF8',
+      ])
+    } finally { log.mockRestore() }
+  })
+
+  it('says WRITE_FAILED when the disk will not save, and logs its code, never where or what', async () => {
+    const { ask, cwd } = await project()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await ask('agent_instructions_write', { agentId: 'gone', name: 'Faye', text: 'my private words', version: '' })).toEqual({ error: 'WRITE_FAILED' })
+      await expect(stat(join(cwd, 'moved-away'))).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(log.mock.calls.map((call) => call.join(' '))).toEqual(['[projects] agent_instructions_write failed · ENOENT'])
+    } finally { log.mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32')('says READ_FAILED when the disk cannot look, and logs its code, never where', async () => {
+    const { ask, cwd } = await project()
+    await symlink('loop', join(cwd, 'loop'))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await ask('agent_instructions_read', { agentId: 'loop', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
+      expect(log.mock.calls.map((call) => call.join(' '))).toEqual(['[projects] agent_instructions_read failed · ELOOP'])
+    } finally { log.mockRestore() }
+  })
+
+  it('logs a failure with no code as unknown, and never what the error said', async () => {
+    const { ask } = await project()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      vi.mocked(readInstructions).mockRejectedValueOnce(new Error('/Users/me/secret-project/agents/Faye.md went wrong'))
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
+      vi.mocked(writeInstructions).mockRejectedValueOnce(new Error('disk'))
+      expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'x', version: '' })).toEqual({ error: 'WRITE_FAILED' })
+      expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
+        '[projects] agent_instructions_read failed · unknown',
+        '[projects] agent_instructions_write failed · unknown',
+      ])
+    } finally { log.mockRestore() }
   })
 })

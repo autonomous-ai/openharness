@@ -38,7 +38,7 @@ import { openDaemon } from '../agentClient/daemon.js'
 import { conversationTokens } from '../lib/conversationSize.js'
 import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
-import { SwarmReads } from './swarmReads.js'
+import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { ADDED_MAX, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
 import { isCoordinator } from './agentContext.js'
 import { UPDATE_REQUIRED } from './readContract.js'
@@ -55,11 +55,12 @@ const readCommand = (entry: Entry, prefix: string, group: string, id: string, bu
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { leadSwitchOf, leadSwitchRecovered, SWITCH_ADOPT_MS, SWITCH_RECOVERY_MS, switchWithin, type LeadSwitch } from './leadSwitch.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError, within } from './wire.js'
-import { parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, wireRole, type SkillRefresh, type SwarmSkill, type SwarmSkillGrant,
-  type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { parseSwarmSkill, PM_BASICS, recordBuddySkillNotice, refreshBuddySkill, SWARM_BASICS, wireRole, type SkillRefresh, type SwarmSkill,
+  type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { artifactLinks, buddyLaunchOf, buddyReadsOf, forgetBuddyReads, grantBuddyWide, heldByOldGuard, listSentToOldGuard, SentListsError,
   writeBuddyAccount } from '../lib/buddyGuard.js'
 import { authorName } from './personName.js'
+import { adoptReplies, AgentReplies, type Owed } from './agentReplies.js'
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
@@ -176,10 +177,17 @@ interface Entry {
   checkFails?: number
 }
 /** `scrubs`: the Claude Code traces of ended Buddy sessions still to remove, by agent id, written before their close, so a host
- *  restarted between the close and the scrub still removes them (security re-check 2 of #2345). Older hosts drop it. */
-interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget> }
-/** `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; lead?: unknown
+ *  restarted between the close and the scrub still removes them (security re-check 2 of #2345). Older hosts drop it.
+ *  `replies`: what the host owes each person who talked to their agent in its own chat, by delivery: it outlives the delivery's
+ *  entry, which goes once the backend has its acknowledgement, so a restart in the middle of a turn still posts its answer
+ *  (agentReplies.ts). Older hosts drop it, and then owe none. */
+interface Journal { version: 1; machineId: string; entries: Record<string, Entry>; scrubs?: Record<string, PurgeTarget>; replies?: Record<string, Owed> }
+/** `roleName` and `instructions` name its project's instructions (backend read/hostRows.ts); an older backend sends neither.
+ *  `agent.chatId`: its own 1:1 chat with its person, which the server's time check gives each agent but a Buddy within 30 s of
+ *  its joining (backend agentChats.ts); an older backend sends none. `agent.displayName` and `agent.name`: what its person calls it
+ *  (shownName), for the line they are told if its answer cannot be posted (agentReplies.ts). */
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string; chatId?: unknown; displayName?: unknown; name?: unknown
+  switchLanded?: { id?: unknown; candidateAgentId?: unknown } }; lead?: unknown
   buddySleepManaged?: true; leadsConversationId?: unknown; roleName?: unknown; instructions?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
@@ -392,7 +400,7 @@ const closeFailure = (result: { error?: string; detail?: string }, fallback: str
 }
 /** How long after a pre-#1527 Swarm launch its engine may first bind a session and still be the Swarm's own. */
 const LEGACY_FIRST_BIND_MS = 120_000
-const typedId = (entry: Entry) => `team:service:superTabs:${entry.deliveryId}`
+const typedId = (entry: { deliveryId: string }) => `team:service:superTabs:${entry.deliveryId}`
 const endingKey = (target: HostAgent) => `${target.tabId}:${target.agent.id}:${target.agent.harnessId}`
 /** The id the backend gives the agent a machine's native session joins as, whether started for the Swarm or added to it
  *  (backend commands.ts, `stableId(machineId, harnessId)`): this host's own record of which agent each of its sessions is. */
@@ -454,6 +462,14 @@ export function inChannel(state: Record<string, unknown>, groupId: string): bool
   return (Array.isArray(state.projects) ? state.projects.map(object) : []).some(p => p.leadConversationId === groupId)
 }
 
+/** What a person typed to their agent in its own 1:1 chat, and the text of the files they attached after a blank line, and nothing
+ *  else (anh Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"): no place, context, quote, header
+ *  or Answer line, which the agent is no longer told to run. */
+const plainText = (message: Json, files: string): string => {
+  const text = String(message.text)
+  return `${text}${files ? `${text ? '\n\n' : ''}${files}` : ''}`
+}
+
 /** Owns only the handoff between a durable backend claim and the core's native input.
  * A process restart never interprets a lost acknowledgement as permission to type twice. */
 export class SuperTabHost {
@@ -504,6 +520,12 @@ export class SuperTabHost {
   private readonly knownTasks = new Set<string>()
   /** The one-message page `repliedTo()` read, for the thread line when the reply answers its thread's root. */
   private readonly replyPages = new Map<string, Json>()
+  /** Each delivery's answer to whether its message is in its agent's own 1:1 chat (plainChat), asked once and kept while it
+   *  is tried again: the question may cost a read of the Swarm. */
+  private readonly plainChats = new Map<string, boolean>()
+  /** What this host owes the people who talked to their agent in its own chat, and posts when the agent's turn ends. */
+  private readonly replies: AgentReplies
+  private readonly stopEnds: () => void
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
@@ -689,9 +711,15 @@ export class SuperTabHost {
           ;(this.journal.scrubs ??= {})[agentId] = { agentId, sessionId, cwd: t.cwd, engine: 'claude', codexHome: null }
         } else this.log(`Dropped a saved Buddy session scrub this host did not write: ${identifier(agentId) ? `agent ${agentId}` : 'an unreadable agent id'}`)
       }
+      // What it owes its people was written by a host of this release, or is read as nothing: the journal's delivery receipts
+      // above are what must be right, and a reply that cannot be read costs one answer, not the host.
+      const replies = adoptReplies(saved.replies, this.log)
+      if (Object.keys(replies).length) this.journal.replies = replies
     }
+    this.replies = new AgentReplies(core, this.journal, { now: this.now, log: this.log, save: () => this.persist(), typedId: deliveryId => typedId({ deliveryId }), refused: receiptRefused })
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
+    this.stopEnds = core.turns.onEnd(event => { void this.replies.ended(event) })
     this.stopNotices = core.account.onNotice(notice => this.pushed(notice))
     if (existsSync(nativeJournalFile(core.dataDir, machineId))) {
       try { this.native = new NativeRecorder(core, machineId) } catch (error) { this.log(String(error)) }
@@ -723,6 +751,8 @@ export class SuperTabHost {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.stopHearing()
+    this.stopEnds()
+    this.replies.stop()
     this.stopNotices()
     this.native?.stop()
     this.machines?.stop()
@@ -1384,6 +1414,7 @@ export class SuperTabHost {
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
     for (const deliveryId of [...this.downloads.keys()]) if (!this.journal.entries[deliveryId]) this.dropDownload(deliveryId)
     for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
+    for (const deliveryId of this.plainChats.keys()) if (!this.journal.entries[deliveryId]) this.plainChats.delete(deliveryId)
     for (const deliveryId of this.contexts.keys()) if (!this.journal.entries[deliveryId]) { this.contexts.delete(deliveryId); this.threadAnswers.delete(deliveryId) }
     for (const deliveryId of this.replyPages.keys()) if (!this.journal.entries[deliveryId]) this.replyPages.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
@@ -1788,11 +1819,9 @@ export class SuperTabHost {
     return target
   }
 
-  /** What a running Swarm session is told (task #4673): a Buddy, when a CLI update ships new text for its skill; any other
-   *  agent, when its project's instructions or its role name change, to read them again with the instructions command, or once,
-   *  if an older release launched it, that its skill files are gone. Told through the Swarm, as any delivery, once it is in an
-   *  open group. The operation id names the agent and what it is told, so a retry, a restart or a second daemon never sends it
-   *  twice. */
+  /** What a running Swarm session is told: an agent its person attached, the team's basics, once (Swarm v4); a Buddy, when a
+   *  CLI update ships new text for its skill (task #4673). Told through the Swarm, as any delivery, once it is in an open group.
+   *  The operation id names the agent and what it is told, so a retry, a restart or a second daemon never sends it twice. */
   private async refreshSkill(target: HostAgent): Promise<void> {
     const session = this.core.agents.byAgent(target.agent.harnessId)
     // Read as every saved row is (project instructions, phase 4): a core from before role kinds answers in the wire's values.
@@ -1805,7 +1834,25 @@ export class SuperTabHost {
       this.skillChecks.delete(target.agent.harnessId)
     }
     const due = this.skillChecks.get(target.agent.harnessId) ?? 0
-    // Plain agents (Swarm v4): only a Buddy has Harness text to keep fresh; every other agent reads only its repo's files.
+    // An agent its person attached (Desktop's Attach, Swarm v4) was started outside the Swarm, so without the team's basics
+    // that every agent the Swarm starts gets at launch (lib/swarmSkills.ts SWARM_BASICS): it is told them once, as only it
+    // reads, in its own chat. The operation id names the text, so a restart or a second daemon never tells it twice. A
+    // plain shell is no agent, and a Buddy keeps its own skill.
+    if (session && !skill && (session.engine === 'claude' || session.engine === 'codex') && !isBuddy(object(target.agent)) && this.now() >= due) {
+      this.skillChecks.set(target.agent.harnessId, Infinity)
+      const notice = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
+      try {
+        // Named by its text alone: its own hash, so no Buddy notice shares its id.
+        const told = await this.tellSkill(target, { version: createHash('sha256').update(notice).digest('hex'), change: 0, notice }, current)
+        if (!told && current()) this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+        else if (!told) this.skillChecks.delete(target.agent.harnessId)
+      } catch (error) {
+        this.log(error instanceof Error ? error.message : String(error))
+        this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
+      }
+      return
+    }
+    // Every other agent the Swarm started has the basics from its launch; only a Buddy has Harness text to keep fresh.
     if (!session || !skill || !session.cwd || this.now() < due || skill.role !== 'buddy') return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     try {
@@ -1830,7 +1877,9 @@ export class SuperTabHost {
     const { state } = await this.sources.reads.read(target.tabId, id)
     const groups = (Array.isArray(state.conversations) ? state.conversations : []).map(object)
       .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
-    const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
+    // A PM's project chat, a crew member's task, else the agent's own chat with its person (Swarm v4).
+    const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id)
+      ?? groups.find(g => g.kind === 'agent-chat') ?? groups[0]
     if (!group || !current()) return false
     const send = (agentOnly: boolean, notice: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
       // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.
@@ -2106,14 +2155,16 @@ export class SuperTabHost {
     const command = await this.prefix
     // Which of the messages the delivery quotes an agent of another account wrote, as the server says (audit M3).
     const quotedOther = new Set((Array.isArray(result.quotedOtherAccount) ? result.quotedOtherAccount : []).filter(identifier))
+    // Its person's own words in their agent's own chat are typed as they typed them, so nothing is read to quote or place them.
+    const { plain, read: swarm } = await this.plainChat(entry, target, message)
     let quote = this.quotes.get(deliveryId)
     if (quote === undefined) {
-      quote = await this.repliedTo(entry, message, command, quotedOther)
+      quote = plain ? '' : await this.repliedTo(entry, message, command, quotedOther)
       if (quote !== undefined) this.quotes.set(deliveryId, quote)
     }
     let context = this.contexts.get(deliveryId)
     if (context === undefined) {
-      context = await this.contextLines(entry, message, command, quotedOther, result.buddyNews === true)
+      context = plain ? '' : await this.contextLines(entry, message, command, quotedOther, result.buddyNews === true, swarm)
       this.contexts.set(deliveryId, context)
     }
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return false
@@ -2131,27 +2182,53 @@ export class SuperTabHost {
         grantBuddyWide(buddyReadsOf(sent.key), wide ? { session: sent.session, wide: true, account: signedIn!, launch: launch! } : { session: sent.session, wide: false })
       } catch (error) { this.authorized.delete(id); throw error }
     }
+    const attached = [files.text, sent?.links.length ? ARTIFACT_LINKS(sent.links) : '', elsewhere.length ? LINKS_ELSEWHERE(elsewhere) : '']
+      .filter(Boolean).join('\n\n')
+    const text = plain ? plainText(message, attached) : this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true, context,
+      result.otherAccount === true, !!own)
     // The durable intent must exist before the core can write. A thrown disk write must not deliver, and leaves the delivery
-    // untyped, so the next pass types it: left 'submitting', it was reported interrupted and never typed (task #3514).
+    // untyped, so the next pass types it: left 'submitting', it was reported interrupted and never typed (task #3514). The reply
+    // it owes its person is saved by the same write, so a restart in the middle of its turn still posts the answer.
     const before = entry.stage
     entry.stage = 'submitting'
+    if (plain) this.replies.owe({ ...entry, name: shownName(target.agent, 'The agent') }, message, text)
     try { this.persist() } catch (error) {
       entry.stage = before
+      this.replies.forget(deliveryId)
       this.authorized.delete(id)
       throw error
     }
     this.active.add(id)
-    const attached = [files.text, sent?.links.length ? ARTIFACT_LINKS(sent.links) : '', elsewhere.length ? LINKS_ELSEWHERE(elsewhere) : '']
-      .filter(Boolean).join('\n\n')
     // A person's message closes the question it answers, only the one of this machine's own signed-in account, and only a
     // question opened after it was written (core/input.ts `beforeTeamWrite`).
     const answers = fromPerson && !['agent-only', 'native'].includes(String(object(message.source).kind))
       && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
     const writtenAt = typeof message.createdAt === 'string' ? Date.parse(message.createdAt) : NaN
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true, context,
-      result.otherAccount === true, !!own), id,
-      ...(answers ? [{ answersQuestion: true as const, ...(Number.isFinite(writtenAt) ? { writtenAt } : {}) }] : []))
+    this.core.turns.deliver(entry.harnessId, text, id, ...(answers ? [{ answersQuestion: true as const, ...(Number.isFinite(writtenAt) ? { writtenAt } : {}) }] : []))
     return false
+  }
+
+  /** Whether [message] is its person's own words in [target]'s own 1:1 chat (backend agentChats.ts: kind `agent-chat`), which
+   *  reach the agent exactly as typed, and are answered by the host when the turn ends (agentReplies.ts). Only a person's message
+   *  with no source of its own: a system row, a native turn already typed in the terminal and an agent-only notice are not their
+   *  words, and an agent's message is not theirs; nor is a Buddy's, which has no such chat. The chat is the id the roster row keeps
+   *  (`chatId`), which costs no read. Until the server has given it (within 30 s of the agent joining), one read of the Swarm says,
+   *  which a delivery that is not plain then uses for its context lines, so it reads no more than it did. A read that fails or is
+   *  slow says no. */
+  private async plainChat(entry: Entry, target: HostAgent, message: Json): Promise<{ plain: boolean; read?: SwarmRead }> {
+    if (object(message.author).kind !== 'person' || typeof object(message.source).kind === 'string' || this.isBuddy(entry)) return { plain: false }
+    const known = this.plainChats.get(entry.deliveryId)
+    if (known !== undefined) return { plain: known }
+    if (typeof target.agent.chatId === 'string') {
+      const own = target.agent.chatId === message.conversationId
+      this.plainChats.set(entry.deliveryId, own)
+      return { plain: own }
+    }
+    const read = await within(this.sources.reads.read(target.tabId, target.agent.id), this.contextWaitMs)
+    if (!read) return { plain: false }
+    const own = (Array.isArray(read.state.conversations) ? read.state.conversations.map(object) : []).some(c => c.id === message.conversationId && c.kind === 'agent-chat')
+    this.plainChats.set(entry.deliveryId, own)
+    return { plain: own, read }
   }
 
   /** Takes out of a person's one Buddy's folder each project worktree whose project its person no longer reads, as the Swarm
@@ -2368,7 +2445,7 @@ export class SuperTabHost {
   /** The lines that say where a delivery is (agent context design, section 2): the conversation, the agent's own work, and
    *  the thread it is in. Read fresh for each delivery, as the agent: a 60 s cache could build the delivery announcing a
    *  work.assign from a read taken before it. Anything that cannot be read leaves its line out; the delivery always goes. */
-  private async contextLines(entry: Entry, message: Json, prefix: string, quotedOther: ReadonlySet<string>, buddyNews = false): Promise<string> {
+  private async contextLines(entry: Entry, message: Json, prefix: string, quotedOther: ReadonlySet<string>, buddyNews = false, swarm?: SwarmRead): Promise<string> {
     // A Buddy reads its own person's chat and holds no task, and each read it makes is judged for its grants (security
     // reviews of #2310): it gets no place or work line, so a delivery costs it no read of the Swarm (design call). Its news
     // comes from a chat outside its own and gets no line at all, so nothing is read there for it.
@@ -2392,7 +2469,8 @@ export class SuperTabHost {
     if (!buddy) try {
       // Bounded: a delivery never waits on its context (final review, finding 3). A read that does not answer in time
       // leaves its lines out, and the read goes on for the next delivery.
-      const read = await within(this.sources.reads.read(entry.tabId, entry.agentId), wait)
+      // The read that said whether this was its agent's own chat, when there was one (plainChat), is this one: not asked twice.
+      const read = swarm ?? await within(this.sources.reads.read(entry.tabId, entry.agentId), wait)
       if (!read) throw new Error(`no answer in ${wait} ms`)
       const { state } = read
       if (inChannel(state, group)) this.threadAnswers.add(entry.deliveryId)
@@ -2517,6 +2595,8 @@ export class SuperTabHost {
   }
 
   private heard(event: TurnDelivery): void {
+    // Before the entry is looked for: what the host owes its person for a delivery outlives the entry, which goes at the acknowledgement.
+    this.replies.delivery(event)
     const entry = Object.values(this.journal.entries).find(e => typedId(e) === event.deliveryId)
     if (this.stopped || !entry || event.sessionId !== entry.harnessId || !this.active.has(event.deliveryId)) return
     if (event.state === 'queued') return

@@ -7,6 +7,9 @@ import { performance } from 'node:perf_hooks'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { PreparedHandoff } from '../lib/handoffAuthority.js'
+
+// These specs do real fsyncs, renames and a fresh core instance per case: 5.2-5.7 s on a loaded Intel Mac, over the default 5 s.
+vi.setConfig({ testTimeout: 30_000 })
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
 vi.mock('node:timers/promises', async original => ({ ...await original<object>() }))
 vi.mock('node:child_process', () => {

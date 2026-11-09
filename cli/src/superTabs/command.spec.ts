@@ -18,7 +18,10 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
     .toMatchObject({ action: 'message', conversationId: 'lead', messageId: 'old-question' })
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '--tab', 'literal'], where).payload.command).toMatchObject({ text: '--tab' })
   expect(parseSuperTabArgs(['--tab', 'tab', 'status'], where).payload.agentId).toBe('')
-  for (const argv of [[], ['status'], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
+  // An agent in its own pane may leave its Swarm out: its daemon takes the one it is in (service.ts).
+  expect(parseSuperTabArgs(['status'], where).payload).toMatchObject({ action: 'status', tabId: '' })
+  expect(() => parseSuperTabArgs(['--tab', '../other', 'status'], where)).toThrow('harness super-tab')
+  for (const argv of [[], [...prefix, 'post', 'lead', 'Ready'], [...prefix, 'messages', '../other'],
     [...prefix, 'message', 'lead'], [...prefix, 'message', 'lead', '../other'], [...prefix, 'message', 'lead', 'id', 'extra'],
     ['--port', 'no', 'help'], ['--machine', '', 'help'], [...prefix, 'status', 'extra']]) {
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
@@ -212,22 +215,16 @@ it('routes through the caller and prints the decision, or the parse failure as a
   expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{nope'], deps)).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toMatch(/JSON/)
 })
-it('parses plan, with or without the Lead\'s assessments, and refuses anything more', () => {
-  expect(parseSuperTabArgs([...prefix, 'plan'], where).payload).toMatchObject({ action: 'plan' })
-  expect(parseSuperTabArgs([...prefix, 'plan', '{"groups":{}}'], where).payload).toMatchObject({ action: 'plan', request: { groups: {} } })
-  expect(() => parseSuperTabArgs([...prefix, 'plan', '{}', 'extra'], where)).toThrow('harness super-tab')
-})
-it('plans through the caller with its data folder, and prints the plan or why there is none', async () => {
-  const print = vi.fn(), close = vi.fn()
-  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
-    if (type === 'agents_list') return { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
-    if (payload.action === 'routeContext') return { error: 'LEAD_REQUIRED', detail: 'x' }
-    return { ok: true }
-  })
-  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
-  expect(await superTabCommand(['--tab', 'tab', 'plan'], deps)).toBe(1)
-  expect(request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }), 30_000)
-  expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'LEAD_REQUIRED' })
+it('has no plan command: it is refused with the usage line, which does not offer it, and nothing is asked of the daemon', async () => {
+  for (const tail of [['plan'], ['plan', '{"groups":{}}']]) {
+    expect(() => parseSuperTabArgs([...prefix, ...tail], where)).toThrow(/^harness super-tab \[--tab ID\]/)
+    const print = vi.fn(), open = vi.fn()
+    expect(await superTabCommand(['--tab', 'tab', ...tail], { where: () => where, pane: undefined, open: open as never, print })).toBe(1)
+    expect(open).not.toHaveBeenCalled()
+    const refusal = String(JSON.parse(print.mock.calls.at(-1)![0]).error)
+    expect(refusal).toMatch(/^harness super-tab \[--tab ID\]/)
+    expect(refusal).not.toContain('plan [JSON]')
+  }
 })
 it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--reply-to', 'msg-1'], where).payload.command)

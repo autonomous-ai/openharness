@@ -25,7 +25,6 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/reply_box.dart';
-import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
 import 'support/swarm_v4_data.dart';
@@ -46,25 +45,6 @@ void main() {
     final mono = rootBundle.load('assets/fonts/roboto-mono/RobotoMono.ttf');
     for (final family in {AppType.sansFamily, terminalFontFamily, 'Roboto'}) {
       await (FontLoader(family)..addFont(mono)).load();
-    }
-    // The activity marks' symbols (◌ ✓ ■ ⊘ and the spinner) come from the
-    // host's symbol font, as in the app; they are a few dozen pixels, inside
-    // the comparator's tolerance where hosts differ.
-    for (final (family, paths) in [
-      ('Apple Symbols', ['/System/Library/Fonts/Apple Symbols.ttf']),
-      (
-        'DejaVu Sans',
-        [
-          '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-          // macOS has no DejaVu; this face carries the same marks (✓).
-          '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
-        ],
-      ),
-    ]) {
-      final file = paths.map(File.new).where((f) => f.existsSync()).firstOrNull;
-      if (file == null) continue;
-      final bytes = ByteData.sublistView(file.readAsBytesSync());
-      await (FontLoader(family)..addFont(Future.value(bytes))).load();
     }
     await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
           rootBundle.load(
@@ -227,10 +207,6 @@ const _rest = .0001;
 List<GalleryRegion> _regions(WidgetTester tester) {
   final faces = find.byType(SuperTabAvatarFace);
   final avatars = find.byType(SuperTabAvatar);
-  final marks = find.descendant(
-    of: find.byType(SuperTabTaskStatusMark),
-    matching: find.byType(Icon),
-  );
   return [
     for (var i = 0; i < faces.evaluate().length; i++)
       if (tester.widget<SuperTabAvatarFace>(faces.at(i)) case final face)
@@ -254,12 +230,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
           rect: tester.getRect(avatars.at(i)).inflate(avatar.size * .12 + 1),
           limit: _art,
         ),
-    for (var i = 0; i < marks.evaluate().length; i++)
-      (
-        name: 'status mark ${tester.widget<Icon>(marks.at(i)).semanticLabel}',
-        rect: tester.getRect(marks.at(i)),
-        limit: _glyph,
-      ),
   ];
 }
 
@@ -345,19 +315,6 @@ const _faces = [
   'Nova',
 ];
 
-const _statuses = [
-  'proposal',
-  'planned',
-  'working',
-  'needs_human',
-  'review',
-  'blocked',
-  'done',
-  'stopped',
-  'lost',
-  'rejected',
-];
-
 SuperTabAgent _agent(String name, {String? kind}) => SuperTabAgent.fromJson({
   'id': 'id-$name',
   'name': name,
@@ -440,28 +397,6 @@ class _Gallery extends StatelessWidget {
                     gap(),
                     gap(),
                   ],
-                ],
-              ),
-              title('Task status marks'),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final status in _statuses)
-                    SizedBox(
-                      width: 72,
-                      child: Column(
-                        children: [
-                          SuperTabTaskStatusMark(status),
-                          const SizedBox(height: 4),
-                          Text(
-                            superTabTaskStatusLabel(status),
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ],
-                      ),
-                    ),
                 ],
               ),
               title('Left pane rows'),
@@ -584,6 +519,15 @@ class _Gallery extends StatelessWidget {
                           label: 'Shipped',
                           title: 'Wake fix: the mic closes after 1 second',
                           action: 'What changed',
+                          details: SizedBox.shrink(),
+                        ),
+                        const SizedBox(height: 8),
+                        // What GitHub said to your agent (github_row.dart).
+                        const SwarmChatCard(
+                          icon: AppIcons.gitPullRequest,
+                          label: 'PR #4 · deehw',
+                          title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
+                          action: 'Read',
                           details: SizedBox.shrink(),
                         ),
                         const SizedBox(height: 8),
