@@ -103,7 +103,6 @@ void main() {
               page: page,
               boardProjectId: boardProjectId,
               leaderboard: leaderboard,
-              activity: activity,
               attention: activity.attention,
               onManage: () {},
               board: board,

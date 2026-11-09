@@ -67,7 +67,6 @@ void main() {
                     onNewAgent: () {},
                     onNewSwarm: () {},
                     onPage: (_) {},
-                    activity: activity,
                     attention: activity.attention,
                     onManage: () {},
                     board: true,

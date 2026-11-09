@@ -55,7 +55,6 @@ void main() {
   final huy = person('huy', 'huy@example.com');
   final darren = person('darren', 'darren@example.com');
   final river = agent('agent-lead', 'River');
-  final gannet = agent('gannet', 'Gannet');
   final egret = agent('egret', 'Egret');
   List<Map<String, Object>> reacted(List<(String, String)> by) => [
     for (final emoji in ['eyes', 'check'])

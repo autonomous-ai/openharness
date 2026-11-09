@@ -23,6 +23,7 @@ import 'machine_status.dart';
 import 'model.dart';
 import 'new_repository.dart';
 import 'personal_projects.dart' show PersonalProjects;
+import 'agent_names.dart';
 import 'launch_prompt.dart';
 import 'identity.dart' show superTabMachineName;
 import 'instructions_model.dart';
@@ -1166,8 +1167,13 @@ class SuperTabLaunch {
     if (snapshot.projectFor(conversationId)?.hasInstructions != true) {
       saved.remove('roleName');
     }
-    // The name the person gave it in the form; the same name joins the Swarm.
-    saved['agentName'] ??= saved['roleName'];
+    // The name the person gave it in the form, else a free one of the Swarm's names (Faye, Atlas, ...); the same name joins the
+    // Swarm (anh Dee, 2026-11-09).
+    saved['agentName'] ??=
+        saved['roleName'] ??
+        freshAgentName([
+          for (final agent in snapshot.agents) agent.displayName ?? agent.name,
+        ]);
     final prompt = superTabLaunchPrompt(
       name: saved['agentName'] as String?,
       task: task,

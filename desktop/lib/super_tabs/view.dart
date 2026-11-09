@@ -52,9 +52,6 @@ import 'activity.dart';
 import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
 import 'reminders.dart';
-import 'decisions_page.dart';
-import 'mentions_page.dart';
-import 'threads_page.dart';
 import 'places.dart';
 import 'attention.dart';
 import 'controller.dart';
@@ -293,14 +290,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// beside that task's title (task #3117).
   ({String taskId, String error})? _priorityRefusal;
 
-  /// The Swarm's page holding the main pane, if one does: Decisions,
-  /// Mentions or Threads (anh Dee, 11-05, task #2996).
+  /// The Swarm's page holding the main pane, if one does: the Leaderboard or
+  /// Projects.
   SwarmPage? _page;
-
-  /// The need a notice opened Decisions for, lit there for a moment, and how
-  /// many times one was (task #3029): the same need opened again lights again.
-  String? _highlight;
-  int _highlightTurn = 0;
 
   /// Manage holds the main pane; [_manageTab] is which of its pages, but for
   /// Devices, which is the pane the view holds for it ([_devicesVisible]).
@@ -2088,7 +2080,6 @@ class _SuperTabViewState extends State<SuperTabView>
     page: _pageShown,
     places: SuperTabPlaces.of(c),
     attention: SuperTabAttention.of(c),
-    activity: SuperTabActivity.of(c),
     onManage: _openManage,
     manageSelected: _manageOpen,
     // On every platform: the Mac's menu bar and Dock still say what waits,
@@ -2125,10 +2116,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return c.openBuddyChat(projectId);
   }
 
-  /// What the menu bar asked to open ([SuperTabController.openNotice]), as
-  /// its page's row opens it (task #2914): a tag or a due reminder at its
-  /// message, an agent waiting in its chat with its terminal beside it, a
-  /// decision on Decisions, where it is answered.
+  /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
+  /// or a due reminder at its message, an agent waiting in its chat with its
+  /// terminal beside it, anything else in its chat.
   void _takeNotice() {
     final request = c.noticeRequest;
     if (request == null || c.snapshot == null) return;
@@ -2138,12 +2128,7 @@ class _SuperTabViewState extends State<SuperTabView>
         .where((n) => n.kind.name == request.kind && n.id == request.id)
         .firstOrNull;
     setState(() {
-      _page = notice?.kind == SuperTabNoticeKind.mention
-          ? SwarmPage.mentions
-          : SwarmPage.decisions;
-      // Decisions lights the row it was opened for (task #3029).
-      _highlight = notice?.need?.id;
-      _highlightTurn++;
+      _page = null;
       _showManage = false;
       _showPullRequests = _showTasks = false;
     });
@@ -2159,6 +2144,8 @@ class _SuperTabViewState extends State<SuperTabView>
             conversationId: need.conversationId,
           );
         }
+      case SuperTabNotice(:final need?):
+        _openConversation(need.conversationId);
       case _:
         break;
     }
@@ -2262,7 +2249,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
   }
 
-  /// Opens [root]'s thread beside its chat, from a Threads card.
+  /// Opens [root]'s thread beside its chat, from a task's card.
   void _openThreadFromList(String conversationId, String root) {
     if (_openConversation(conversationId)) c.openThread(root);
   }
@@ -2444,7 +2431,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _openMention(SuperTabMention mention) =>
       _openAtMessage(mention.conversationId, mention.messageId, answer: true);
 
-  /// More ▸ Remind me: the message comes back in Decisions at [when].
+  /// More ▸ Remind me: the message comes back in the menu bar at [when].
   Future<void> _remind(SuperTabMessage message, SuperTabRemindIn when) async {
     final at = when.from(clock.now());
     final kept = await SuperTabReminders.of(c).set(message, at);
@@ -2461,7 +2448,7 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// A due reminder opened from Decisions: its message, which clears it.
+  /// A due reminder opened from the menu bar: its message, which clears it.
   Future<void> _openReminder(SuperTabReminder reminder) async {
     unawaited(SuperTabReminders.of(c).open(reminder));
     await _openAtMessage(
@@ -2471,8 +2458,8 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// Opens conversation [id] at message [messageId], from a page; [answer]
-  /// replies to it (a tag).
+  /// Opens conversation [id] at message [messageId], from the menu bar;
+  /// [answer] replies to it (a tag).
   Future<void> _openAtMessage(
     String id,
     String messageId, {
@@ -2503,7 +2490,6 @@ class _SuperTabViewState extends State<SuperTabView>
       );
       return;
     }
-    if (_page == null) return;
     _page = null;
     c.select(id);
     // A tag in a thread reply opens the thread; one shown only there is not in
@@ -2839,10 +2825,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// says it is already open.
   void _openQuestion(SuperTabConversation group, SuperTabAgent agent) {
     final asks = widget.app?.questionFor(agent.machineId, agent.harnessId);
-    if (_decisionsOf(group).isNotEmpty) {
-      _openPage(SwarmPage.decisions);
-      return;
-    }
     final message = asks != null ? null : _askedIn(group, agent);
     if (message != null) {
       _showMessage(group.id, message);
@@ -3015,10 +2997,7 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 'Manage'
         : _pageShown != null
         ? switch (_pageShown!) {
-            SwarmPage.decisions => 'Decisions',
             SwarmPage.leaderboard => 'Leaderboard',
-            SwarmPage.mentions => 'Mentions',
-            SwarmPage.threads => 'Threads',
             SwarmPage.projects => 'Projects',
           }
         : group == null
@@ -4717,8 +4696,8 @@ class _SuperTabViewState extends State<SuperTabView>
       onOpenGroup: (id) {
         setState(() {
           _showPullRequests = _showTasks = false;
-          // From a page's card (Threads), the chat comes forward: changing
-          // only the chat behind the page left the link looking dead (#3751).
+          // From a page, the chat comes forward: changing only the chat
+          // behind the page left the link looking dead (#3751).
           _page = null;
         });
         c.select(id);
@@ -6346,29 +6325,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           switch (_pageShown) {
                             SwarmPage.leaderboard =>
                               SuperTabWeeklyLeaderboardPage(controller: c),
-                            SwarmPage.decisions => SuperTabDecisionsPage(
-                              activity: SuperTabActivity.of(c),
-                              highlight: _highlight,
-                              highlightTurn: _highlightTurn,
-                              onOpenConversation: _openConversation,
-                              onOpenReminder: (reminder) =>
-                                  unawaited(_openReminder(reminder)),
-                            ),
-                            SwarmPage.mentions => SuperTabMentionsPage(
-                              activity: SuperTabActivity.of(c),
-                              onOpenMention: (mention) =>
-                                  unawaited(_openMention(mention)),
-                            ),
-                            SwarmPage.threads => SuperTabThreadsPage(
-                              activity: SuperTabActivity.of(c),
-                              onOpenThread: _openThreadFromList,
-                              message: (message) => _message(
-                                message,
-                                false,
-                                const {},
-                                inThread: true,
-                              ),
-                            ),
                             SwarmPage.projects => SuperTabProjectsPage(
                               controller: c,
                               onOpen: _openProject,

@@ -17,6 +17,7 @@ import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/state/lead_placement.dart';
 import 'package:harness/terminal/terminal_binary.dart';
+import 'package:harness/super_tabs/agent_names.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -2367,7 +2368,11 @@ void main() {
         final creates = f.connection.calls.where((c) => c.$1 == 'agent_create');
         expect(creates, hasLength(1));
         expect(creates.single.$2['engine'], engine);
-        expect(f.connection.joins.single['command']['name'], 'Lead');
+        // Given no name, it gets one of the Swarm's names (Faye, Atlas, ...),
+        // starts as that name and joins under it (anh Dee, 2026-11-09).
+        final name = f.connection.joins.single['command']['name'] as String;
+        expect(agentNames, contains(name));
+        expect(creates.single.$2['prompt'], startsWith('You are $name.\n\n'));
         // Swarm v4: the person's request, with no Swarm manual.
         expect(creates.single.$2['prompt'], isNot(contains('super-tab')));
         expect(f.app.swarms, hasLength(1));

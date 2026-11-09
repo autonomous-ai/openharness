@@ -17,8 +17,10 @@ const _open = Duration(
 
 void main() {
   if (!kUnderTest) throw StateError('Requires FLUTTER_TEST=1');
-  ensureNativeTestBinding().framePolicy =
-      LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
+  // A person clicks and types in this window: a test binding drops real input unless told to pass it on.
+  ensureNativeTestBinding()
+    ..framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive
+    ..shouldPropagateDevicePointerEvents = true;
   testWidgets(
     'Swarm v4 review',
     (tester) async {

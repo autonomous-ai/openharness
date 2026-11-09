@@ -1,4 +1,7 @@
-import 'package:flutter/gestures.dart';
+/// Back and Forward go through the reader's places in a Swarm: its chats, the
+/// thread open beside one, and the Leaderboard.
+library;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -6,11 +9,9 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm, unreadThread;
+import 'super_tab_activity_lists_test.dart' show swarm;
 import 'support/super_tab_fixture.dart';
 
-/// The Swarm view of task #2996: the sidebar's three rows open their pages,
-/// and Back and Forward go through the reader's places.
 /// Lets the server's answers in and draws a few frames: the Swarm view is
 /// never idle, so it is not waited for.
 Future<void> _settle(WidgetTester tester) async {
@@ -20,6 +21,28 @@ Future<void> _settle(WidgetTester tester) async {
     );
     await tester.pump(const Duration(milliseconds: 50));
   }
+}
+
+/// This week's Leaderboard with the owner on it, so Humans shows.
+void withPoints(ConversationServer server) {
+  server.leaderboard = {
+    'projectId': 'lead',
+    'allProjects': true,
+    'week': 1793577600000,
+    'people': [
+      {
+        'personId': 'owner',
+        'displayName': 'Owner',
+        'rank': 1,
+        'points': 4,
+        'shipped': {'count': 1},
+        'accepted': 1,
+        'unblocked': {'count': 0},
+        'agentsBrought': 2,
+        'streakDays': 1,
+      },
+    ],
+  };
 }
 
 void main() {
@@ -73,49 +96,10 @@ void main() {
     await _settle(tester);
   }
 
-  testWidgets('each row opens its page, named in the header', (tester) async {
-    final (c, _) = await show(tester);
-    expect(key('super-leaderboard'), findsNothing);
-    for (final (row, title, list) in [
-      ('super-decisions', 'Decisions', 'super-decisions-list'),
-      ('super-mentions', 'Mentions', 'super-mentions-list'),
-      ('super-threads', 'Threads', 'super-threads-list'),
-    ]) {
-      await tap(tester, row);
-      expect(key(list), findsOneWidget, reason: row);
-      expect(find.text(title), findsNWidgets(2), reason: '$row and header');
-    }
-    expect(find.text('Activity'), findsNothing);
-    await end(tester, c);
-  });
-
   testWidgets(
     'Humans opens this week\'s Leaderboard, and it takes part in Back and Forward',
     (tester) async {
-      final (c, server) = await show(
-        tester,
-        board: true,
-        prepare: (server) {
-          server.leaderboard = {
-            'projectId': 'lead',
-            'allProjects': true,
-            'week': 1793577600000,
-            'people': [
-              {
-                'personId': 'owner',
-                'displayName': 'Owner',
-                'rank': 1,
-                'points': 4,
-                'shipped': {'count': 1},
-                'accepted': 1,
-                'unblocked': {'count': 0},
-                'agentsBrought': 2,
-                'streakDays': 1,
-              },
-            ],
-          };
-        },
-      );
+      final (c, server) = await show(tester, board: true, prepare: withPoints);
       // Humans is the Leaderboard's way in (task #4466).
       expect(key('project-sidebar-humans'), findsOneWidget);
       await tap(tester, 'project-sidebar-humans');
@@ -140,109 +124,33 @@ void main() {
     },
   );
 
-  // Tuan, task #3751: on the Threads page a card's #-link to a task changed the chat behind the page, so
-  // nothing on screen moved and the link read as dead.
-  testWidgets('a #-link in a Threads card opens its task, as in the chat', (
-    tester,
-  ) async {
-    final (c, _) = await show(
-      tester,
-      prepare: (server) {
-        (server.state['conversations'] as List)
-                .cast<Map<String, dynamic>>()
-                .firstWhere((g) => g['id'] == 'offline')['number'] =
-            42;
-        server.append('See #42 for the fix.');
-        final root = server.messages.last['id'] as String;
-        server.followedThreads = {
-          'unread': [
-            unreadThread(root, text: 'See #42 for the fix.')
-              ..['conversationId'] = 'lead',
-          ],
-          'read': [],
-          'more': false,
-        };
-      },
-    );
-    await tap(tester, 'super-threads');
-    expect(key('super-threads-list'), findsOneWidget);
-
-    TextSpan? link;
-    for (final text in tester.widgetList<RichText>(
-      find.descendant(
-        of: key('super-threads-list'),
-        matching: find.byType(RichText),
-      ),
-    )) {
-      text.text.visitChildren((span) {
-        if (span is TextSpan &&
-            span.text == '#42' &&
-            span.recognizer is TapGestureRecognizer) {
-          link = span;
-        }
-        return true;
-      });
-    }
-    expect(link, isNotNull, reason: 'the card shows #42 as a link');
-    (link!.recognizer! as TapGestureRecognizer).onTap!();
-    await _settle(tester);
-    expect(key('super-threads-list'), findsNothing);
-    expect(c.selectedId, 'offline');
-    await end(tester, c);
-  });
-
-  testWidgets('Back returns from a chat to the page it was opened from, and '
-      'Forward goes to the chat again', (tester) async {
-    final (c, _) = await show(tester);
-    await tap(tester, 'super-threads');
-    await tap(tester, 'super-group-lead');
-    expect(key('super-threads-list'), findsNothing);
-    expect(c.selectedId, 'lead');
-
-    await tap(tester, 'super-back');
-    expect(key('super-threads-list'), findsOneWidget);
-
-    await tap(tester, 'super-forward');
-    expect(key('super-threads-list'), findsNothing);
-    expect(c.selectedId, 'lead');
-    await end(tester, c);
-  });
-
   testWidgets('Back to a chat opens the thread that was open beside it', (
     tester,
   ) async {
-    final (c, _) = await show(tester);
+    final (c, _) = await show(tester, board: true, prepare: withPoints);
     c.openThread('message-1');
     await _settle(tester);
-    await tap(tester, 'super-mentions');
-    expect(c.openedThread, isNotNull);
+    await tap(tester, 'project-sidebar-humans');
+    expect(find.text('This week'), findsOneWidget);
     c.closeThread();
     await _settle(tester);
 
-    await tap(tester, 'super-back');
-    expect(key('super-mentions-list'), findsNothing);
+    SuperTabPlaces.of(c).step(-1);
+    await _settle(tester);
+    expect(find.text('This week'), findsNothing);
     expect(c.openedThread?.root, 'message-1');
     await end(tester, c);
   });
 
-  testWidgets('a decision from the menu bar opens Decisions', (tester) async {
-    final (c, _) = await show(tester);
-    c.openNotice('decision', 'decision-1');
-    await _settle(tester);
-    expect(key('super-decisions-list'), findsOneWidget);
-    expect(find.text('Ship it?'), findsOneWidget);
-    await end(tester, c);
-  });
-
   testWidgets('⌘[ in a Swarm steps its places before the tabs', (tester) async {
-    final (c, _) = await show(tester);
+    final (c, _) = await show(tester, board: true, prepare: withPoints);
     expect(stepSwarmPlaces(c, -1), isFalse);
-    await tap(tester, 'super-decisions');
-    await tap(tester, 'super-mentions');
+    await tap(tester, 'project-sidebar-humans');
     expect(canStepSwarmPlaces(c, -1), isTrue);
     expect(stepSwarmPlaces(c, -1), isTrue);
     await _settle(tester);
-    expect(key('super-decisions-list'), findsOneWidget);
+    expect(find.text('This week'), findsNothing);
+    expect(key('super-agents-only'), findsOneWidget);
     expect(stepSwarmPlaces(null, -1), isFalse);
     await end(tester, c);
   });

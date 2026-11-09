@@ -12,7 +12,6 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
-import 'activity.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'buddies.dart';
@@ -60,7 +59,6 @@ class ProjectSidebar extends StatelessWidget {
     this.onPage,
     this.page,
     this.attention,
-    this.activity,
     this.places,
     this.onOpenBuddyChat,
     this.compact = false,
@@ -112,16 +110,11 @@ class ProjectSidebar extends StatelessWidget {
   final bool manageSelected;
   final bool devicesSelected;
 
-  /// Opens one of the Swarm's pages: Decisions, Mentions or Threads (anh
-  /// Dee, 11-05, task #2996). Without it the three rows are not shown.
+  /// Opens one of the Swarm's pages, the Leaderboard or Projects.
   final ValueChanged<SwarmPage>? onPage;
 
   /// The page holding the main pane, if one does.
   final SwarmPage? page;
-
-  /// What the three rows read, to be bold or grey; without it Decisions and
-  /// Mentions read what the server says waits, and Threads nothing.
-  final SuperTabActivity? activity;
 
   /// The reader's places, for the back and forward arrows at the top of a
   /// layout that is not the Desktop's; without it there are none. The
@@ -246,25 +239,6 @@ class ProjectSidebar extends StatelessWidget {
         ),
       ),
     ),
-  );
-
-  /// A page row of Decisions, Mentions or Threads: no number and no red,
-  /// bold at full strength while something waits, grey when nothing does
-  /// (anh Dee, 11-05, task #3128).
-  Widget _pageRow(
-    ValueChanged<SwarmPage> onPage, {
-    required SwarmPage target,
-    required String key,
-    required String label,
-    required IconData icon,
-    required int waiting,
-  }) => _navigationRow(
-    key: key,
-    label: label,
-    icon: icon,
-    onTap: () => onPage(target),
-    selected: page == target,
-    unread: waiting > 0,
   );
 
   /// Back and forward over the reader's places (⌘[ and ⌘]), at the top.
@@ -967,7 +941,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?activity, ?places, ?leaderboard]) {
+    child: switch ([?attention, ?places, ?leaderboard]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -981,9 +955,6 @@ class ProjectSidebar extends StatelessWidget {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention);
-    final decisions = activity?.needsCount ?? snapshot?.decisionsWaiting ?? 0;
-    final mentions = activity?.mentionsCount ?? snapshot?.mentionsWaiting ?? 0;
-    final threads = activity?.threadsCount ?? 0;
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
         app: app,
@@ -1035,38 +1006,8 @@ class ProjectSidebar extends StatelessWidget {
                   : [
                       if (places case final places?) _arrows(places),
                       ?switcher,
-                      // Three rows, each one thing, in anh Dee's order (11-05, task
-                      // #2996): bold when something waits, grey when not, and no
-                      // numbers (task #3128). The Swarm switcher stands apart from
-                      // them by a control gap.
-                      if (onPage case final onPage?) ...[
-                        if (app != null && onNewSwarm != null)
-                          const SizedBox(height: DesktopChrome.controlGap),
-                        _pageRow(
-                          onPage,
-                          target: SwarmPage.decisions,
-                          key: 'super-decisions',
-                          label: 'Decisions',
-                          icon: AppIcons.flag,
-                          waiting: decisions,
-                        ),
-                        _pageRow(
-                          onPage,
-                          target: SwarmPage.mentions,
-                          key: 'super-mentions',
-                          label: 'Mentions',
-                          icon: AppIcons.atSign,
-                          waiting: mentions,
-                        ),
-                        _pageRow(
-                          onPage,
-                          target: SwarmPage.threads,
-                          key: 'super-threads',
-                          label: 'Threads',
-                          icon: AppIcons.messagesSquare,
-                          waiting: threads,
-                        ),
-                      ],
+                      if (app != null && onNewSwarm != null)
+                        const SizedBox(height: DesktopChrome.controlGap),
                       const SizedBox(height: 20),
                       SuperTabSectionHeading(
                         key: const ValueKey('project-sidebar-projects'),
