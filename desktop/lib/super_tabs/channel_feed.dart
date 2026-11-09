@@ -17,13 +17,13 @@ import 'model.dart';
 /// It reads while [active] (the channel is open and the app in front), at most every [every]; a failure backs off, and a rate
 /// limit waits for GitHub's word. Each of the three lists ([SwarmFeed]) is read [SwarmFeed.perPage] rows at a time, newest
 /// first, with its last ETag: a list that has not changed is a 304, which GitHub does not count against the rate limit.
-/// [more] reads the next page of each, up to [pagesMax].
+/// [more] reads the next page of each, up to [_pagesMax].
 class SwarmChannelFeed extends ChangeNotifier {
   SwarmChannelFeed({
     required this.github,
     required this.repository,
     required this.channelId,
-    this.every = const Duration(seconds: 30),
+    this.every = const Duration(minutes: 1),
   });
 
   final SwarmGitHub github;
@@ -34,18 +34,20 @@ class SwarmChannelFeed extends ChangeNotifier {
   /// The channel it is read for.
   final String channelId;
 
-  /// The least time between two reads while the channel is open.
+  /// The time between two rounds of reads while the channel is open: each round reads the comments, and every third the pull
+  /// requests and the labels too ([SwarmFeed.every]). A round is three `gh` calls at the most, about 0.13 s of CPU each, so a
+  /// channel left open and in front costs about 0.4% of a core.
   final Duration every;
 
   /// How many pages of each list are read at most (of [SwarmFeed.perPage] rows), so what is kept is bounded.
-  static const pagesMax = 4;
+  static const _pagesMax = 4;
 
   /// The longest a failing read waits before it asks again.
-  static const backoffMax = Duration(minutes: 10);
+  static const _backoffMax = Duration(minutes: 10);
 
   /// The longest a rate limit is waited out in one go: GitHub's reset may be an hour away, and a person who comes back sooner
   /// should not wait for it.
-  static const limitMax = Duration(minutes: 15);
+  static const _limitMax = Duration(minutes: 15);
 
   final _rows = {for (final feed in SwarmFeed.values) feed: <SwarmFeedRow>[]};
   final _etags = <SwarmFeed, String>{};
@@ -57,6 +59,7 @@ class SwarmChannelFeed extends ChangeNotifier {
   var _failures = 0;
   var _disposed = false;
   var _version = 0;
+  var _round = 0;
   DateTime? _nextRead;
 
   /// Why the last read failed, in the words the person sees; null when it did not. [retryAt] is when a rate-limited read tries
@@ -72,10 +75,7 @@ class SwarmChannelFeed extends ChangeNotifier {
   var moreFailed = false;
 
   /// What the channel's rows of this feed are in: apart from the channel's own, whose rows number theirs.
-  String get conversationId => 'github:$channelId';
-
-  bool owns(SuperTabMessage message) =>
-      message.conversationId == conversationId;
+  String get _conversationId => 'github:$channelId';
 
   /// Reads while the channel is open and the app in front; stops otherwise, and reads at once on coming back unless it read
   /// lately.
@@ -88,6 +88,8 @@ class SwarmChannelFeed extends ChangeNotifier {
       return;
     }
     final wait = _nextRead?.difference(clock.now());
+    // What was shown may be long out of date: the first round after it reads every list.
+    _round = 0;
     _arm(wait == null || wait.isNegative ? Duration.zero : wait);
   }
 
@@ -99,23 +101,24 @@ class SwarmChannelFeed extends ChangeNotifier {
     });
   }
 
-  /// One read of the first page of each list, the three at once. A read under way is joined.
-  Future<void> read() => _reading ??= _readNewest().whenComplete(() {
-    _reading = null;
-    final delay = _delay();
-    if (_active && !_disposed) _arm(delay);
-  });
+  /// One round: the first page of each list that is due, [all] of them or not, at once. A round under way is joined.
+  Future<void> read({bool all = false}) =>
+      _reading ??= _readNewest(all: all).whenComplete(() {
+        _reading = null;
+        final delay = _delay();
+        if (_active && !_disposed) _arm(delay);
+      });
 
   /// How long until the next read: [every], longer after failures, and until GitHub's word after a rate limit.
   Duration _delay() {
     final limit = retryAt?.difference(clock.now());
     final delay = limit != null && !limit.isNegative
-        ? (limit > limitMax ? limitMax : limit)
+        ? (limit > _limitMax ? _limitMax : limit)
         : _failures == 0
         ? every
         : Duration(
             milliseconds: min(
-              backoffMax.inMilliseconds,
+              _backoffMax.inMilliseconds,
               every.inMilliseconds * pow(2, _failures - 1).toInt(),
             ),
           );
@@ -123,19 +126,22 @@ class SwarmChannelFeed extends ChangeNotifier {
     return delay;
   }
 
-  Future<void> _readNewest() async {
+  Future<void> _readNewest({required bool all}) async {
     SwarmGitHubError? failed;
     var changed = !loaded;
+    if (all) _round = 0;
+    final round = _round++;
     await Future.wait([
       for (final feed in SwarmFeed.values)
-        _readFirst(feed).then<void>(
-          (read) {
-            changed |= read;
-          },
-          onError: (Object error) {
-            failed ??= _named(error);
-          },
-        ),
+        if (round % feed.every == 0)
+          _readFirst(feed).then<void>(
+            (read) {
+              changed |= read;
+            },
+            onError: (Object error) {
+              failed ??= _named(error);
+            },
+          ),
     ]);
     if (_disposed) return;
     // What no list changed, and no failure changed, redraws nothing.
@@ -204,9 +210,9 @@ class SwarmChannelFeed extends ChangeNotifier {
     return top;
   }
 
-  /// Whether older rows may be read: a list whose last page was full and that is under [pagesMax].
+  /// Whether older rows may be read: a list whose last page was full and that is under [_pagesMax].
   bool get hasMore =>
-      SwarmFeed.values.any((f) => _full[f]! && _pages[f]! < pagesMax);
+      SwarmFeed.values.any((f) => _full[f]! && _pages[f]! < _pagesMax);
 
   /// Reads the next page of each list that has one, the older rows joining what is held.
   Future<void> more() async {
@@ -217,7 +223,7 @@ class SwarmChannelFeed extends ChangeNotifier {
     SwarmGitHubError? failed;
     await Future.wait([
       for (final feed in SwarmFeed.values)
-        if (_full[feed]! && _pages[feed]! < pagesMax)
+        if (_full[feed]! && _pages[feed]! < _pagesMax)
           _readOlder(feed).catchError((Object error) {
             failed ??= _named(error);
           }),
@@ -245,7 +251,7 @@ class SwarmChannelFeed extends ChangeNotifier {
   /// Where the lists have been read back to: the newest of their oldest rows, over the lists that have older ones. Nothing is
   /// drawn from before it, or a stretch one list has not been read through would read as a quiet one. Null when every list is
   /// whole.
-  DateTime? get horizon {
+  DateTime? get _horizon {
     DateTime? newest;
     for (final feed in SwarmFeed.values) {
       final held = _rows[feed]!;
@@ -294,7 +300,7 @@ class SwarmChannelFeed extends ChangeNotifier {
 
   /// The feed's own rows, oldest first: the marker where older rows may be read, then each card.
   List<SuperTabMessage> _derive(List<SuperTabAgent> agents) {
-    final floor = horizon;
+    final floor = _horizon;
     final cards = <(SwarmFeedEvent, SuperTabAgent)>[];
     for (final rows in _rows.values) {
       for (final row in rows) {
@@ -356,7 +362,7 @@ class SwarmChannelFeed extends ChangeNotifier {
     };
     return SuperTabMessage.fromJson({
       'id': 'github:${event.id}',
-      'conversationId': conversationId,
+      'conversationId': _conversationId,
       'sequence': 0,
       'text': text,
       'createdAt': event.time.toUtc().toIso8601String(),
@@ -382,7 +388,7 @@ class SwarmChannelFeed extends ChangeNotifier {
   /// The row where older GitHub talk may be read: [SwarmFeedEarlier] draws it, and reads it as it comes into view.
   SuperTabMessage _earlier(DateTime at) => SuperTabMessage.fromJson({
     'id': 'github:earlier',
-    'conversationId': conversationId,
+    'conversationId': _conversationId,
     'sequence': 0,
     'text': '',
     'createdAt': at.toUtc().toIso8601String(),

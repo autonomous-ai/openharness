@@ -304,7 +304,7 @@ void main() {
     expect(find.text('Juno, 07:06: Reading #12.'), findsOneWidget);
     expect(key('swarm-github-row'), findsOneWidget);
     github.comment(12, 'Pippin, 07:30: Back on #12.', at: at('07:30'));
-    await tester.pump(const Duration(seconds: 31));
+    await tester.pump(const Duration(seconds: 61));
     await tester.pumpAndSettle();
     expect(find.text('Pippin, 07:30: Back on #12.'), findsOneWidget);
     // Juno is deleted: its card goes, and nothing breaks.
@@ -445,7 +445,7 @@ void main() {
       );
       expect(key('swarm-github-row'), findsNWidgets(5));
       github.failure = FakeGitHubFailure.down;
-      await tester.pump(const Duration(seconds: 31));
+      await tester.pump(const Duration(seconds: 61));
       await tester.pumpAndSettle();
       expect(key('swarm-github-row'), findsNWidgets(5));
       expect(
@@ -460,7 +460,7 @@ void main() {
     int rounds(FakeGitHubFeeds github) => github.reads('issues/comments');
 
     testWidgets(
-      'at most every 30 s, and an unchanged list is a 304 that draws nothing',
+      'a round a minute, the comments each time and the pull requests and labels every third; an unchanged list is a 304 that draws nothing',
       (tester) async {
         final github = lampos();
         await openSwarmV4(
@@ -470,18 +470,31 @@ void main() {
           size: const Size(1440, 1300),
         );
         expect(rounds(github), 1);
+        expect(github.reads('pulls'), 1);
+        expect(github.reads('issues/events'), 1);
         expect(github.conditional, 0);
-        await tester.pump(const Duration(seconds: 29));
+        await tester.pump(const Duration(seconds: 59));
         expect(rounds(github), 1);
+        // The second round reads the comments alone, with their ETag, and is answered 304.
         await tester.pump(const Duration(seconds: 2));
         await tester.pumpAndSettle();
         expect(rounds(github), 2);
-        // The second read asked with each list's ETag, and was answered 304.
-        expect(github.conditional, 3);
+        expect(github.reads('pulls'), 1);
+        expect(github.reads('issues/events'), 1);
+        expect(github.conditional, 1);
         expect(key('swarm-github-row'), findsNWidgets(5));
-        // Something new on GitHub is read at the next, and shown.
+        await tester.pump(const Duration(minutes: 1));
+        expect(rounds(github), 3);
+        expect(github.reads('pulls'), 1);
+        // The fourth reads all three, each with its ETag.
+        await tester.pump(const Duration(minutes: 1));
+        expect(rounds(github), 4);
+        expect(github.reads('pulls'), 2);
+        expect(github.reads('issues/events'), 2);
+        expect(github.conditional, 5);
+        // Something new on GitHub is read at the next round, and shown.
         github.comment(12, 'Pip, 07:40: One more.', at: at('07:40'));
-        await tester.pump(const Duration(seconds: 31));
+        await tester.pump(const Duration(seconds: 61));
         await tester.pumpAndSettle();
         expect(find.text('Pip, 07:40: One more.'), findsOneWidget);
         expect(key('swarm-github-row'), findsNWidgets(6));
@@ -499,15 +512,14 @@ void main() {
       await tester.pump(const Duration(minutes: 5));
       expect(rounds(github), 1);
       app.appLifecycleChanged(AppLifecycleState.resumed);
-      await tester.pump();
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
       expect(rounds(github), 2);
-      // Back lately, it does not read twice: the next is 30 s after that one.
+      // Back lately, it does not read twice: the next is a minute after that one.
       app.appLifecycleChanged(AppLifecycleState.paused);
       app.appLifecycleChanged(AppLifecycleState.resumed);
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
       expect(rounds(github), 2);
-      await tester.pump(const Duration(seconds: 31));
+      await tester.pump(const Duration(seconds: 61));
       expect(rounds(github), 3);
     });
 
@@ -524,29 +536,37 @@ void main() {
       expect(rounds(github), 2);
     });
 
-    testWidgets('a failing read backs off: 30 s, then 60 s, then 120 s', (
+    testWidgets('a failing read backs off: 1 min, then 2, then 4, up to 10', (
       tester,
     ) async {
       final github = lampos()..failure = FakeGitHubFailure.down;
       await openSwarmV4(tester, withPosts(), github: github.github);
-      // Reads at 0 s, 30 s, 90 s, 210 s and 450 s.
+      // Rounds at 0 s, 1 min, 3 min, 7 min and 15 min, then every 10.
       expect(rounds(github), 1);
-      await tester.pump(const Duration(seconds: 31));
+      await tester.pump(const Duration(seconds: 61));
       expect(rounds(github), 2);
-      await tester.pump(const Duration(seconds: 58));
+      await tester.pump(const Duration(seconds: 118));
       expect(rounds(github), 2);
       await tester.pump(const Duration(seconds: 2));
       expect(rounds(github), 3);
-      await tester.pump(const Duration(seconds: 118));
+      await tester.pump(const Duration(seconds: 238));
       expect(rounds(github), 3);
       await tester.pump(const Duration(seconds: 2));
       expect(rounds(github), 4);
-      // A read that works brings it back to 30 s.
-      github.failure = null;
-      await tester.pump(const Duration(seconds: 241));
+      await tester.pump(const Duration(seconds: 478));
+      expect(rounds(github), 4);
+      await tester.pump(const Duration(seconds: 2));
       expect(rounds(github), 5);
-      await tester.pump(const Duration(seconds: 31));
+      await tester.pump(const Duration(minutes: 9, seconds: 58));
+      expect(rounds(github), 5);
+      await tester.pump(const Duration(seconds: 2));
       expect(rounds(github), 6);
+      // A round that works brings it back to a minute.
+      github.failure = null;
+      await tester.pump(const Duration(minutes: 10, seconds: 1));
+      expect(rounds(github), 7);
+      await tester.pump(const Duration(seconds: 61));
+      expect(rounds(github), 8);
     });
 
     testWidgets('a project with no repository on GitHub reads nothing', (
@@ -603,7 +623,6 @@ void main() {
       await tester.tap(find.text('Read'));
       await tester.pumpAndSettle();
       expect(find.byType(Image), findsNothing);
-      expect(find.textContaining('click'), findsOneWidget);
       // Only a web address is a link.
       expect(SuperTabMessageText.webLink('javascript:alert(1)'), isNull);
       expect(SuperTabMessageText.webLink('file:///etc/passwd'), isNull);
@@ -711,9 +730,9 @@ void main() {
         expect(told, 1);
         expect(cards(feed), hasLength(2));
         await tester.runAsync(feed.read);
-        // A 304 on each list: nothing changed, so nothing is told.
+        // A 304: nothing changed, so nothing is told. The round read the comments alone.
         expect(told, 1);
-        expect(github.conditional, 3);
+        expect(github.conditional, 1);
         github.deleteComment(0);
         await tester.runAsync(feed.read);
         expect(told, 2);
@@ -730,7 +749,7 @@ void main() {
         await tester.pump(const Duration(minutes: 5));
         expect(github.calls, isEmpty);
         feed.active = true;
-        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 10));
         expect(github.reads('issues/comments'), 1);
         feed.active = false;
         await tester.pump(const Duration(minutes: 5));

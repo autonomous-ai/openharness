@@ -59,20 +59,24 @@ class SwarmFeedRow {
 
 /// The three lists of a repository's GitHub that tell what its agents do, newest first, a page of [perPage] rows at a time. Each
 /// is read with `gh api` and the last answer's ETag: an unchanged list is a 304, which GitHub does not count against the rate
-/// limit (the daemon reads the same lists to wake an agent, cli superTabs/githubMentions.ts).
+/// limit (the daemon reads the same lists to wake an agent, cli superTabs/githubMentions.ts). A `gh` call is a process: about
+/// 0.13 s of CPU measured on a Mac under load, so the lists that change least are read least.
 enum SwarmFeed {
-  /// Comments on issues and on pull requests, by when they were written.
-  comments('issues/comments?sort=created&direction=desc'),
+  /// Comments on issues and on pull requests, by when they were written: the agents' talk, read each round.
+  comments('issues/comments?sort=created&direction=desc', 1),
 
-  /// Pull requests, by when they last changed: one opened or merged has just changed.
-  pulls('pulls?state=all&sort=updated&direction=desc'),
+  /// Pull requests, by when they last changed (one opened or merged has just changed): read every third round.
+  pulls('pulls?state=all&sort=updated&direction=desc', 3),
 
-  /// What happened to issues and pull requests, where a label is put on.
-  labels('issues/events');
+  /// What happened to issues and pull requests, where a label is put on: read every third round.
+  labels('issues/events', 3);
 
-  const SwarmFeed(this._path);
+  const SwarmFeed(this._path, this.every);
 
   final String _path;
+
+  /// How many rounds pass between two reads of it.
+  final int every;
 
   /// How many rows one read brings.
   static const perPage = 50;

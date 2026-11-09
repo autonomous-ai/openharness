@@ -1737,8 +1737,19 @@ class _SuperTabViewState extends State<SuperTabView>
   }) {
     if (!_nearTop(metrics, ahead: ahead) ||
         _finding != null ||
-        _find?.reading != null ||
-        _loadingOlder.contains(id) ||
+        _find?.reading != null) {
+      return;
+    }
+    // A channel's feed reads its older cards as the top comes near, as the channel's own older pages are read.
+    if (_feeds[id] case final feed?
+        when feed.hasMore && !feed.loadingMore && !feed.moreFailed) {
+      WidgetsBinding.instance
+        ..addPostFrameCallback((_) {
+          if (mounted && c.selectedId == id) unawaited(feed.more());
+        })
+        ..scheduleFrame();
+    }
+    if (_loadingOlder.contains(id) ||
         _olderFailed.contains(id) ||
         !c.hasOlder(id)) {
       return;
@@ -3906,6 +3917,18 @@ class _SuperTabViewState extends State<SuperTabView>
       _feedSeen[id] = newest;
       _followEnd(id);
     }
+    // Still near the top once the cards are laid out, as after a page that did not fill the view or a list that is short: the
+    // next. By the scroll's own place, which a jump to the end has already moved.
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        if (mounted &&
+            c.selectedId == id &&
+            scroll != null &&
+            scroll.hasClients) {
+          _readEarlierNearTop(id, scroll.position);
+        }
+      })
+      ..scheduleFrame();
   }
 
   /// Where [rows], the channel's own rows with its feed's cards among them, divide: the row [_splitAt] chose among the channel's

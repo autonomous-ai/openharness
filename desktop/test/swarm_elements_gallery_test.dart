@@ -18,8 +18,12 @@ import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/channel_feed.dart';
+import 'package:harness/super_tabs/channel_feed_widgets.dart';
 import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/github_row.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
@@ -141,7 +145,7 @@ Future<List<SuperTabController>> _show(
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1950);
+  tester.view.physicalSize = const Size(760, 2650);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -594,6 +598,44 @@ class _Gallery extends StatelessWidget {
                 height: 60,
                 child: SuperTabEmptyWords(superTabEmptyChannel),
               ),
+              // What a project's agents do on GitHub, in its channel (anh Dee 2026-11-09): their cards, why it stops, and the
+              // button for older cards after a read that failed.
+              title(
+                'Channel feed: an agent\'s card on GitHub, why it stops, older cards',
+              ),
+              SizedBox(
+                width: 560,
+                child: Column(
+                  children: [
+                    _githubCard(
+                      'Quinn',
+                      'comment',
+                      12,
+                      'issue',
+                      'Quinn, 07:05: Taking #12. Measuring the clips first.',
+                    ),
+                    _githubCard(
+                      'Kai',
+                      'merged',
+                      20,
+                      'pull',
+                      'Score the update rows again',
+                    ),
+                    _githubCard(
+                      'Quinn',
+                      'task',
+                      13,
+                      'issue',
+                      'Voice: answer within a second',
+                    ),
+                    SwarmFeedState(
+                      feed: _feed()
+                        ..error = 'Sign in to GitHub: run gh auth login.',
+                    ),
+                    SwarmFeedEarlier(feed: _feed()..moreFailed = true),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -601,6 +643,49 @@ class _Gallery extends StatelessWidget {
     );
   }
 }
+
+/// A card in a channel of what an agent did on GitHub, as the channel draws one ([SuperTabGitHubRow]): [who]'s, for [event]
+/// (`comment`, `opened`, `merged`, `task`) on issue or pull request [number], its words [text].
+Widget _githubCard(
+  String who,
+  String event,
+  int number,
+  String on,
+  String text,
+) {
+  final agent = _agent(who);
+  return SuperTabGitHubRow(
+    agent: agent,
+    author: who,
+    onOpen: on == 'issue' ? () {} : null,
+    message: SuperTabMessage.fromJson({
+      'id': 'gh-$who-$number-$event',
+      'conversationId': 'github:lead',
+      'sequence': 0,
+      'text': event == 'task'
+          ? 'New task for $who: issue autonomous-ai/lampOS#$number $text\nhttps://github.com/autonomous-ai/lampOS/issues/$number'
+          : 'On GitHub, deehw wrote on $on autonomous-ai/lampOS#$number:\n$text\nhttps://github.com/autonomous-ai/lampOS/$on/$number',
+      'createdAt': '2026-11-09T07:05:00Z',
+      'author': {'kind': 'agent', 'id': agent.id, 'name': who},
+      'source': {
+        'kind': 'github',
+        'event': event,
+        'on': on,
+        'repository': 'autonomous-ai/lampOS',
+        'number': number,
+        'url': 'https://github.com/autonomous-ai/lampOS/$on/$number',
+        'login': 'deehw',
+      },
+    }),
+  );
+}
+
+/// A feed that reads nothing: the state and the button are drawn from what it says.
+SwarmChannelFeed _feed() => SwarmChannelFeed(
+  github: SwarmGitHub(),
+  repository: 'autonomous-ai/lampOS',
+  channelId: 'lead',
+);
 
 /// A chat message row, as the chat draws one. Its time is words, which the
 /// comparison leaves out, so the image holds in every time zone.

@@ -102,7 +102,7 @@ class SwarmFeedState extends StatelessWidget {
               key: const ValueKey('swarm-feed-retry'),
               icon: AppIcons.refreshCw,
               tooltip: 'Try again',
-              onPressed: () => unawaited(feed.read()),
+              onPressed: () => unawaited(feed.read(all: true)),
             ),
           ],
         ),
@@ -111,9 +111,9 @@ class SwarmFeedState extends StatelessWidget {
   );
 }
 
-/// The row among a channel's where the lists of GitHub have not been read further back ([SwarmChannelFeed.horizon]). It reads
-/// the next page as it comes into view, which is the person scrolling up, and shows that it does as the earlier-messages row
-/// does; after a read that failed it is a button, so a failure is not asked again by itself.
+/// The row among a channel's where the lists of GitHub have not been read further back ([SwarmChannelFeed.horizon]). The channel
+/// reads the next page as the top comes near, as it reads its own older pages, so this shows that it does, as the earlier-messages
+/// row does; after a read that failed it is a button, so a failure is not asked again by itself.
 class SwarmFeedEarlier extends StatelessWidget {
   const SwarmFeedEarlier({super.key, required this.feed});
 
@@ -122,28 +122,25 @@ class SwarmFeedEarlier extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: feed,
-    builder: (context, _) {
-      if (feed.hasMore && !feed.loadingMore && !feed.moreFailed) {
-        WidgetsBinding.instance.addPostFrameCallback(
-          (_) => unawaited(feed.more()),
-        );
-      }
-      return SizedBox(
-        key: const ValueKey('swarm-feed-earlier'),
-        height: 40,
-        child: Center(
-          child: feed.moreFailed
-              ? TextButton(
-                  onPressed: () => unawaited(feed.more()),
-                  child: const Text('Earlier on GitHub'),
-                )
-              : const SizedBox.square(
-                  key: ValueKey('swarm-feed-earlier-loading'),
-                  dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-        ),
-      );
-    },
+    builder: (context, _) => SizedBox(
+      key: const ValueKey('swarm-feed-earlier'),
+      height: 40,
+      child: feed.moreFailed
+          ? Center(
+              child: TextButton(
+                onPressed: () => unawaited(feed.more()),
+                child: const Text('Show earlier'),
+              ),
+            )
+          : feed.loadingMore
+          ? const Center(
+              child: SizedBox.square(
+                key: ValueKey('swarm-feed-earlier-loading'),
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          : null,
+    ),
   );
 }
