@@ -20,7 +20,7 @@ import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
 import { trustBuddyHome } from './buddyHome.js'
 import { leadSwitchOf, leadSwitching, SWITCH_ADOPT_MS, switchWithin } from './leadSwitch.js'
-import { githubPromptLine, LAUNCH_MODEL_REFUSALS, leadPrompt } from './start.js'
+import { githubPromptLine, LAUNCH_MODEL_REFUSALS, startNote } from './start.js'
 import { pmEngineHome } from './teamDaemon.js'
 import { backend, identifier, object } from './wire.js'
 
@@ -39,9 +39,8 @@ const LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 /** The row of a PM or Buddy on this machine, as the host reads it (cli read/hostRows.ts). */
 export interface SwitchRow {
   tabId: string
-  /** The conversation the PM leads and the name of its role, as the host row has them (backend read/hostRows.ts). */
+  /** The conversation the PM leads, as the host row has it (backend read/hostRows.ts). */
   ledConversationId?: unknown
-  roleName?: unknown
   /** A Buddy's private chat; never substitute the project's PM conversation. */
   buddyConversationId?: unknown
   agent: { id: string; harnessId: string; buddyOf?: unknown; buddyScope?: unknown; buddySession?: unknown; modelRequest?: unknown; switchRequest?: { id?: unknown; engine?: unknown; profileId?: unknown; model?: unknown; effort?: unknown; targetMachineId?: unknown; requestedBy?: unknown };
@@ -206,11 +205,11 @@ export class LeadSwitchRequests {
       if (closed.error || closed.closed !== true) return { ok: false, error: NO_STOP }
       run.closed = true
       // What superTabs/start.ts sends when it first starts a Lead: its start prompt first, then the handoff.
-      const roleName = typeof row.roleName === 'string' ? row.roleName.replace(/\s+/g, ' ').trim().slice(0, 80) : ''
       const startPrompt = buddy
         ? `You are a person's ${row.agent.buddyScope === 'swarm' ? 'one Buddy for every project they read' : 'Buddy'} in a shared Super Tab. Your chat with your owner is conversation ${conversation}: read it with harness super-tab --tab ${row.tabId} messages ${conversation}, and reply there with harness super-tab --tab ${row.tabId} post ${conversation} 'your message' UNIQUE_OPERATION_ID. Continue helping your owner in that chat.`
-        : leadPrompt(row.tabId, conversation, roleName)
-      const prompt = `${startPrompt}${!buddy && skill.github ? ` ${githubPromptLine()}` : ''}${handoff ? ` ${handoff}` : ''}`
+        : startNote(old.defaultName)
+      // A PM that has no name to give has its handoff alone: no line of it starts with a space.
+      const prompt = [startPrompt, !buddy && skill.github ? githubPromptLine() : '', handoff].filter(Boolean).join(' ')
       // Desktop's rule (_changeAgent): a mode the new engine lacks becomes ask, and bypass follows the mode.
       const mode = old.permissionMode && permissionModeFlags(engine as AgentEngine, old.permissionMode) ? old.permissionMode : old.permissionMode ? 'ask' : undefined
       // A Team user's Codex PM keeps an engine home of its own, as at its first start (start.ts, security re-check 2 of #2089).
