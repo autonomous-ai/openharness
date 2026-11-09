@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { awaitingWorkers, workerIndex, type SuperTabState } from './model.js'
 import type { Command } from './commands.js'
-import { sweepLiveness } from './liveness.js'
+import { loseTasks } from './liveness.js'
 import { REOPEN_OWNER_MS, reopenOnEvents } from './handed.js'
 import { currentGroup } from './terminal.js'
 import { workHolds, startedHolds, endedHolds, tokenTask } from '../github/holds.js'
@@ -84,15 +84,15 @@ describe('a handed task is never lost for its Engineer (#3399)', () => {
   it('stays in review when the Engineer\'s session stops, its machine goes offline or it hits a usage limit', () => {
     const stopped = handedFixture()
     report(stopped.state, stopped.now, 'stopped')
-    expect(sweepLiveness(stopped.state, stopped.now)).toEqual([])
+    expect(loseTasks(stopped.state, stopped.now)).toEqual([])
     expect(stopped.group(stopped.task).assignment!.status).toBe('review')
     const offline = handedFixture()
     report(offline.state, offline.now)
-    expect(sweepLiveness(offline.state, offline.now + 10 * MINUTE)).toEqual([])
+    expect(loseTasks(offline.state, offline.now + 10 * MINUTE)).toEqual([])
     expect(offline.group(offline.task).assignment!.status).toBe('review')
     const limited = handedFixture()
     Object.assign(limited.state.agents.find(a => a.id === limited.dev)!, { alerting: ['limit'], limitedUntil: new Date(limited.now + 60 * MINUTE).toISOString() })
-    expect(sweepLiveness(limited.state, limited.now)).toEqual([])
+    expect(loseTasks(limited.state, limited.now)).toEqual([])
     expect(limited.group(limited.task).assignment!.status).toBe('review')
   })
 })
@@ -161,7 +161,7 @@ describe('No, red CI or a conflict reopens the task pinned to its owner (#3399)'
     f.run({ type: 'message.send', conversationId: f.task, text: 'Fixing the offline test now.', replyTo: null, recipientIds: [] } as Command, f.as(f.dev))
     expect(f.group(f.task).assignment!.reopened).toBeUndefined()
     report(f.state, f.now + REOPEN_OWNER_MS)
-    sweepLiveness(f.state, f.now + REOPEN_OWNER_MS)
+    loseTasks(f.state, f.now + REOPEN_OWNER_MS)
     expect(f.group(f.task).assignment!.status).toBe('working')
   })
 
@@ -171,10 +171,10 @@ describe('No, red CI or a conflict reopens the task pinned to its owner (#3399)'
     const reopenedAt = f.now
     // Busy on its next task: its session keeps reporting progress, which keeps any working task's lease.
     report(f.state, reopenedAt + REOPEN_OWNER_MS)
-    expect(sweepLiveness(f.state, reopenedAt + REOPEN_OWNER_MS)).toEqual([])
+    expect(loseTasks(f.state, reopenedAt + REOPEN_OWNER_MS)).toEqual([])
     expect(f.group(f.task).assignment!.status).toBe('working')
     report(f.state, reopenedAt + REOPEN_OWNER_MS + 1)
-    sweepLiveness(f.state, reopenedAt + REOPEN_OWNER_MS + 1)
+    loseTasks(f.state, reopenedAt + REOPEN_OWNER_MS + 1)
     expect(f.group(f.task).assignment).toMatchObject({ status: 'lost', lost: { reason: expect.stringContaining('60 minutes') } })
   })
 
@@ -182,7 +182,7 @@ describe('No, red CI or a conflict reopens the task pinned to its owner (#3399)'
     const f = reviewed()
     fail(f, f.rev)
     report(f.state, f.now, 'stopped')
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(f.group(f.task).assignment!.status).toBe('lost')
   })
 
