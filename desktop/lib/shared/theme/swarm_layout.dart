@@ -12,6 +12,12 @@ abstract final class SwarmLayout {
     vertical: 6,
   );
 
+  /// The strip that leads back to the chat when a pane has taken its place: the pill's room, in from the bar's side.
+  static const EdgeInsets backPadding = EdgeInsets.symmetric(
+    horizontal: barSide,
+    vertical: 8,
+  );
+
   /// The corners of a task card and of the agents-only line.
   static const double cardRadius = 12;
 
@@ -53,4 +59,8 @@ abstract final class SwarmLayout {
     vertical: 2,
   );
   static const EdgeInsets nameInset = EdgeInsets.symmetric(horizontal: 4);
+
+  /// The most of the room its buttons leave that an agent's name takes: a long name is cut with an ellipsis, and where the agent
+  /// runs keeps the rest.
+  static const double nameShare = 2 / 3;
 }

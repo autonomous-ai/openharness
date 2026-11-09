@@ -21,6 +21,7 @@ import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
+import 'package:harness/super_tabs/back_to_chat.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -557,6 +558,8 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title('Back to chat: where a pane took the chat\'s place'),
+              SizedBox(width: 280, child: SwarmBackToChat(onBack: () {})),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
               // is not there.
               title('Empty: a row'),
