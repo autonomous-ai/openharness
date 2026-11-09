@@ -5,7 +5,7 @@
  * Moved out of the socket's switch as they were (docs/design/2026-10-06-core-boundary-next.md, step 4).
  */
 import type { Asker, CoreApi, ServiceRequest, ServiceRequests } from '../core/api.js'
-import { InstructionsError, readInstructions, writeInstructions } from '../lib/agentInstructions.js'
+import { InstructionsError, readInstructions, readSharedInstructions, writeInstructions } from '../lib/agentInstructions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { listDir } from '../lib/fsBrowse.js'
 import { readGitProject } from '../lib/gitProject.js'
@@ -115,8 +115,14 @@ export function startProjects(core: CoreApi): ServiceRequests {
     }),
 
     // An agent's instructions file, in the folder it works in on this computer (lib/agentInstructions.ts). The owner's
-    // other computers read and save it here, so it is never in git or on our servers: the one copy is this one.
-    agent_instructions_read: instructions('agent_instructions_read', 'READ_FAILED', (cwd, { name }) => readInstructions(cwd, name)),
+    // other computers read and save it here, so it is never in git or on our servers: the one copy is this one. A read also
+    // carries what else instructs the agent, AGENTS.md and CLAUDE.md in that folder, as `shared` and only when there is any: read
+    // only, for an agent with no file of its own too, and a reader that predates it never looks at the field.
+    agent_instructions_read: instructions('agent_instructions_read', 'READ_FAILED', async (cwd, { name }) => {
+      const own = await readInstructions(cwd, name)
+      const shared = await readSharedInstructions(cwd, (file, error) => console.error(`[projects] agent_instructions_read left out ${file} · ${(error as NodeJS.ErrnoException).code ?? 'unknown'}`))
+      return shared.length ? { ...own, shared } : own
+    }),
     agent_instructions_write: instructions('agent_instructions_write', 'WRITE_FAILED', (cwd, { name, text, version }) => writeInstructions(cwd, name, text, version)),
   }
 }
