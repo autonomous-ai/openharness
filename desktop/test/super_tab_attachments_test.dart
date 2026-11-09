@@ -128,7 +128,7 @@ void main() {
   Future<(ConversationServer, SuperTabController)> open(
     WidgetTester tester,
   ) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     final controller = server.controller();
     await controller.refresh();
     await mount(tester, controller);
@@ -275,7 +275,7 @@ void main() {
       final original = FileSelectorPlatform.instance;
       FileSelectorPlatform.instance = _Picker([_Sized(size)]);
       addTearDown(() => FileSelectorPlatform.instance = original);
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       final sent = <(bool, int)>[];
       final controller = server.controller(
         upload:
@@ -342,7 +342,7 @@ void main() {
     });
 
     test('a file over 256 MB, or an eleventh file, is refused', () {
-      final controller = ConversationServer().controller();
+      final controller = ConversationServer.chat().controller();
       addTearDown(controller.dispose);
       final files = controller.attachments('lead');
 
@@ -490,7 +490,7 @@ void main() {
     });
 
     testWidgets('a chip fills as its file goes up', (tester) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       final release = Completer<void>();
       final controller = server.controller(
         upload:
@@ -539,7 +539,7 @@ void main() {
     testWidgets(
       'an upload that stops moving times out and frees the composer',
       (tester) async {
-        final server = ConversationServer();
+        final server = ConversationServer.chat();
         CancelToken? token;
         final controller = SuperTabController(
           tabId: 'tab',
@@ -586,7 +586,7 @@ void main() {
     testWidgets('taking a chip off cancels the upload and frees the composer', (
       tester,
     ) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       CancelToken? token;
       final controller = SuperTabController(
         tabId: 'tab',
@@ -632,7 +632,7 @@ void main() {
     });
 
     test('only the files that were sent leave the composer', () async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       final held = Completer<void>();
       final controller = SuperTabController(
         tabId: 'tab',
@@ -671,7 +671,7 @@ void main() {
           ('INVALID_RECIPIENT', false),
           ('INVALID_ATTACHMENT', true),
         ]) {
-          final server = ConversationServer();
+          final server = ConversationServer.chat();
           final controller = SuperTabController(
             tabId: 'tab',
             accountId: 'owner',
@@ -753,7 +753,7 @@ void main() {
     testWidgets('a file shows as a chip and loads nothing until a click', (
       tester,
     ) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append(
           'Here',
           attachments: [
@@ -792,7 +792,7 @@ void main() {
     testWidgets('a message of files alone has no empty text block', (
       tester,
     ) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append(
           '',
           attachments: [
@@ -817,7 +817,7 @@ void main() {
     testWidgets('a link off the attachments host opens nothing and says why', (
       tester,
     ) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append(
           'Here',
           attachments: [
@@ -873,7 +873,8 @@ void main() {
       List<Map<String, dynamic>> rows, {
       Map<String, List<int>> served = const {},
     }) async {
-      final server = ConversationServer()..append('Here', attachments: rows);
+      final server = ConversationServer.chat()
+        ..append('Here', attachments: rows);
       final controller = server.controller();
       await controller.refresh();
       await mount(tester, controller);
@@ -1040,7 +1041,7 @@ void main() {
     testWidgets('a text file off the attachments host is never fetched', (
       tester,
     ) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append(
           'Here',
           attachments: [
@@ -1080,7 +1081,7 @@ void main() {
     testWidgets('a malformed attachment row is left out, not the page', (
       tester,
     ) async {
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append(
           'Two files, one broken',
           attachments: [
