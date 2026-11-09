@@ -163,10 +163,11 @@ it.each([['claude', false], ['codex', false], ['claude', true]] as const)('types
   // A message queued in the room that server calls the Leads conversation is typed like any other, not withheld: this host
   // reads no Leads conversation of a row. On Claude Code alone: Codex's fake pane is too short for a message that is not in the
   // agent's chat, whose place line and Answer line hide its composer, and the host then holds its Enter (host.spec.ts covers it).
-  if (engine === 'codex') return
-  const oldRoom = { id: 'delivery-old-room', agentId: memberId, conversationId: 'leads', status: 'queued', claimId: null as string | null,
-    message: { id: 'message-old-room', conversationId: 'leads', author: person, text: 'A line in the old Leads room.' } }
-  deliveries.push(oldRoom)
-  await until('the old room message to be typed and acknowledged', () => oldRoom.status === 'delivered' || null, 90_000, 100)
-  expect(prompts().some(prompt => prompt.includes('A line in the old Leads room.'))).toBe(true)
+  if (engine === 'claude') {
+    const oldRoom = { id: 'delivery-old-room', agentId: memberId, conversationId: 'leads', status: 'queued', claimId: null as string | null,
+      message: { id: 'message-old-room', conversationId: 'leads', author: person, text: 'A line in the old Leads room.' } }
+    deliveries.push(oldRoom)
+    await until('the old room message to be typed and acknowledged', () => oldRoom.status === 'delivered' || null, 90_000, 100)
+    expect(prompts().some(prompt => prompt.includes('A line in the old Leads room.'))).toBe(true)
+  }
 }, 300_000)

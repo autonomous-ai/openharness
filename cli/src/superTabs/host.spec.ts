@@ -329,7 +329,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(t.saved().entries.delivery.stage).toBe('uncertain')
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
   })
-  // The design of #1726 (section 5.3): the roster names the Leads conversation, so no delivery costs a read of the Swarm.
   // Agent context design, section 2: a delivery reads the Swarm once, for the lines that say where it is (by what changed
   // since the last read); judging the delivery itself still reads none, and a delivery tried again reads nothing more.
   it('reads the Swarm once per delivery, for its context lines, and not again when it is tried again', async () => {
@@ -5590,6 +5589,9 @@ describe('a roster row from a server that still names an owed ask and a Leads co
     await t.poll(60 * MIN)
     expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('Restarting the Product Manager'))
     expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('Could not restart the Product Manager'))
+    // Its session runs throughout: nothing reopens or closes it.
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    expect(t.closeMember).not.toHaveBeenCalled()
   })
 
   it('types a delivery for the conversation that server called the Leads one, like any other, and says nothing of it', async () => {
@@ -5601,7 +5603,6 @@ describe('a roster row from a server that still names an owed ask and a Leads co
     expect(t.log.mock.calls.filter(([line]) => String(line).includes('not in a conversation'))).toEqual([])
   })
 })
-
 
 // Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never
 // kept alive; an awake one is left to the keep-alive.
