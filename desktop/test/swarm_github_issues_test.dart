@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 
@@ -410,7 +411,7 @@ void main() {
     ]) {
       expect(
         await failure(answering((_) => ProcessResult(1, 1, '', said))),
-        'GitHub is limiting requests. Try again in a few minutes.',
+        SwarmGitHub.limitedWords,
         reason: said,
       );
     }
@@ -425,7 +426,22 @@ void main() {
           ),
         ),
       ),
-      'Allow gh in this organisation\'s SSO on github.com.',
+      'Authorize gh for this organization\'s SSO: run gh auth refresh.',
+    );
+    // An organization's SSO can be said beside a repository GitHub then cannot find: the SSO is what to fix.
+    expect(
+      await failure(
+        answering(
+          (_) => ProcessResult(
+            1,
+            1,
+            '',
+            "GraphQL: Could not resolve to a Repository with the name 'autonomous-ai/lampOS'. (repository)\n"
+                'Resource protected by organization SAML enforcement. You must grant your OAuth token access to this organization.',
+          ),
+        ),
+      ),
+      'Authorize gh for this organization\'s SSO: run gh auth refresh.',
     );
     expect(
       await failure(
@@ -446,6 +462,60 @@ void main() {
       ),
       'GitHub didn\'t answer. Try again.',
     );
+  });
+
+  test('once GitHub limits requests, no gh runs for two minutes; then it reads again', () async {
+    var now = DateTime.utc(2026, 11, 10, 7);
+    var limited = true;
+    var runs = 0;
+    final github = answering((_) {
+      runs++;
+      return limited
+          ? ProcessResult(
+              1,
+              1,
+              '',
+              'gh: API rate limit exceeded for user ID 12345. (HTTP 403)',
+            )
+          : ProcessResult(
+              1,
+              0,
+              jsonEncode({
+                'data': {
+                  'repository': {
+                    'issues': {
+                      'pageInfo': {'hasNextPage': false, 'endCursor': null},
+                      'nodes': <Object?>[],
+                    },
+                  },
+                },
+              }),
+              '',
+            );
+    });
+    Future<String> read() async {
+      try {
+        await github.issues('autonomous-ai/lampOS');
+        return 'read';
+      } on SwarmGitHubError catch (error) {
+        return error.message;
+      }
+    }
+
+    await withClock(Clock(() => now), () async {
+      expect(await read(), SwarmGitHub.limitedWords);
+      expect(runs, 1);
+      // A minute on, the board's next refresh and a Try again: said at once, gh not asked.
+      now = now.add(const Duration(minutes: 1));
+      expect(await read(), SwarmGitHub.limitedWords);
+      expect(await read(), SwarmGitHub.limitedWords);
+      expect(runs, 1);
+      // Past two minutes it asks again, and reads.
+      limited = false;
+      now = now.add(const Duration(minutes: 1, seconds: 1));
+      expect(await read(), 'read');
+      expect(runs, 2);
+    });
   });
 
   test('never runs a real gh under test', () async {

@@ -219,7 +219,8 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
                     child: Text(
                       stale,
                       key: const ValueKey('swarm-tasks-stale'),
-                      maxLines: 1,
+                      // Two lines: at the 1280 window the bar has about 175 px for it, and what to do is its end.
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: DesktopChrome.metadata(),
                     ),
@@ -380,8 +381,12 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(bottom: SwarmLayout.capsuleGap),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                // The pull request sits at the top right, or under the task's number when the column has no room for both
+                // whole: a chip cut to "#7…" said neither which pull request nor where it stands.
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
                     Container(
                       padding: SwarmLayout.capsulePadding,
@@ -396,11 +401,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
                         style: DesktopChrome.metadata(),
                       ),
                     ),
-                    // A narrow column shortens the chip's words, never the task's number.
-                    if (pull != null) ...[
-                      const SizedBox(width: 8),
-                      Flexible(child: SwarmPullChip(pull: pull)),
-                    ],
+                    ?(pull == null ? null : SwarmPullChip(pull: pull)),
                   ],
                 ),
               ),

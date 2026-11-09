@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/task_board.dart';
@@ -36,6 +37,59 @@ void main() {
       final query = arguments
           .firstWhere((a) => a.startsWith('query='), orElse: () => '')
           .substring(6);
+      // The taken ones (n leaves 1 over 3) each have their builder's open pull request: green and waiting for a reader, the
+      // seventh in conflict.
+      if (query.contains('pullRequests(')) {
+        return ProcessResult(
+          1,
+          0,
+          jsonEncode({
+            'data': {
+              'repository': {
+                'defaultBranchRef': {'name': 'main'},
+                'pullRequests': {
+                  'nodes': [
+                    for (var n = 1; n <= total; n += 3)
+                      {
+                        'number': 7000 + n,
+                        'title': 'Fix task $n',
+                        'url':
+                            'https://github.com/autonomous-ai/lampOS/pull/${7000 + n}',
+                        'isDraft': false,
+                        'headRefName': 'pip/${6000 + n}',
+                        'headRefOid': '${'a' * 39}$n'.substring(0, 40),
+                        'baseRefName': 'main',
+                        'body': 'Closes #${6000 + n}',
+                        'mergeable': n == 7 ? 'CONFLICTING' : 'MERGEABLE',
+                        'labels': {
+                          'nodes': [
+                            {'name': 'builder:pip'},
+                          ],
+                        },
+                        'closingIssuesReferences': {
+                          'nodes': [
+                            {'number': 6000 + n},
+                          ],
+                        },
+                        'commits': {
+                          'nodes': [
+                            {
+                              'commit': {
+                                'statusCheckRollup': {'state': 'SUCCESS'},
+                              },
+                            },
+                          ],
+                        },
+                        'comments': {'nodes': <Object?>[]},
+                      },
+                  ],
+                },
+              },
+            },
+          }),
+          '',
+        );
+      }
       if (!query.contains('issues(first:')) {
         return ProcessResult(
           3,
@@ -164,6 +218,78 @@ void main() {
     );
   }
 
+  /// Whether the text in [finder] is cut to fit, an ellipsis where its end was.
+  bool cut(WidgetTester tester, Finder finder) => tester
+      .renderObject<RenderParagraph>(
+        // The last: a chip draws its icon as text first.
+        find.descendant(of: finder, matching: find.byType(RichText)).last,
+      )
+      .didExceedMaxLines;
+
+  for (final size in const [Size(1440, 860), Size(1280, 800)]) {
+    testWidgets(
+      'a card\'s pull request reads whole beside or under its task\'s number at ${size.width.toInt()}x${size.height.toInt()}',
+      (tester) async {
+        await openBoard(tester, board(), size: size);
+        for (final (task, pull) in const [(6001, 7001), (6007, 7007)]) {
+          expect(key('swarm-pull-$pull'), findsOneWidget);
+          // Whole, but for a long word in the narrowest column, which shortens ("#7007 Confl…"), never its number.
+          if (size.width > 1280 || pull == 7001) {
+            expect(
+              cut(tester, key('swarm-pull-$pull')),
+              isFalse,
+              reason: '#$pull is whole',
+            );
+          } else {
+            expect(
+              tester.getSize(key('swarm-pull-$pull')).width,
+              greaterThan(80),
+              reason: '#$pull has the room of its own line',
+            );
+          }
+          final card = tester.getRect(key('swarm-task-$task'));
+          expect(
+            card.contains(tester.getTopRight(key('swarm-pull-$pull'))),
+            isTrue,
+            reason: '#$pull stays inside its card',
+          );
+        }
+        expect(tester.takeException(), isNull);
+        await captureWindow(tester, shots, 'board-pulls-${size.width.toInt()}');
+      },
+    );
+  }
+
+  testWidgets(
+    'a rate limit beside cards already read says to wait in full, at 1280x800',
+    (tester) async {
+      var limited = false;
+      await openBoard(
+        tester,
+        board(
+          fail: () => limited
+              ? (
+                  code: 1,
+                  said: 'gh: API rate limit exceeded for user ID 12345. (HTTP 403)',
+                )
+              : null,
+        ),
+        size: const Size(1280, 800),
+      );
+      limited = true;
+      await tester.tap(key('swarm-tasks-close'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-tasks-button'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(key('swarm-tasks-stale')).data,
+        SwarmGitHub.limitedWords,
+      );
+      expect(cut(tester, key('swarm-tasks-stale')), isFalse);
+      await captureWindow(tester, shots, 'board-limited-1280');
+    },
+  );
+
   testWidgets('a card far down a column opens its task', (tester) async {
     await openBoard(tester, board());
     // Card 6154 is the oldest, last in On it: scroll its column to it.
@@ -195,7 +321,7 @@ void main() {
       );
       expect(
         tester.widget<Text>(key('swarm-tasks-error')).data,
-        'GitHub is limiting requests. Try again in a few minutes.',
+        SwarmGitHub.limitedWords,
       );
       expect(key('swarm-tasks-retry'), findsOneWidget);
       expect(key('swarm-task-board'), findsNothing);

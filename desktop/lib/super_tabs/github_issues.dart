@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:clock/clock.dart';
+
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
 import '../core/test_run.dart';
@@ -486,7 +488,21 @@ class SwarmGitHub {
       r'repository(owner:$owner,name:$name){issue(number:$number){'
       'comments(last:\$last,before:\$before){$_commentFields}}}}';
 
+  /// What a read says while GitHub limits this person's requests.
+  static const limitedWords =
+      'GitHub is limiting requests. Wait a few minutes.';
+
+  /// How long no `gh` runs after GitHub said it is limiting requests: the board reads every minute and a task's panel every
+  /// 30 s, and asking again at once only spends what the limit leaves.
+  static const limitedFor = Duration(minutes: 2);
+
+  /// Until when GitHub limits this person's requests ([limitedFor]); null when it does not.
+  DateTime? _limitedUntil;
+
   Future<String> _call(List<String> arguments, String repository) async {
+    if (_limitedUntil case final until? when clock.now().isBefore(until)) {
+      throw const SwarmGitHubError(limitedWords);
+    }
     final ProcessResult result;
     try {
       result = await _run(arguments).timeout(timeout);
@@ -501,39 +517,67 @@ class SwarmGitHub {
       throw const SwarmGitHubError('GitHub didn\'t answer. Try again.');
     }
     if (result.exitCode == 0) return '${result.stdout}';
-    final said = '${result.stderr}';
+    final (kind, refusal) = _refusal(
+      result.exitCode,
+      '${result.stderr}',
+      repository,
+    );
+    // Its kind names the failure in the log; what gh printed stays out of it.
     appLog.warn(
       'super-tabs',
-      'GitHub issues not read: gh exited ${result.exitCode}',
+      'GitHub issues not read: $kind (gh exited ${result.exitCode})',
     );
-    if (result.exitCode == 4 ||
+    if (kind == 'rate limited') _limitedUntil = clock.now().add(limitedFor);
+    throw refusal;
+  }
+
+  /// What a failed `gh` call means, from its exit code and what it printed: its kind for the log and the words the person
+  /// sees. A limit or an organization's SSO comes first: GitHub can answer either beside a repository it then cannot find.
+  static (String, SwarmGitHubError) _refusal(
+    int exitCode,
+    String said,
+    String repository,
+  ) {
+    if (exitCode == 4 ||
         said.contains('gh auth login') ||
         said.contains('not logged in')) {
-      throw const SwarmGitHubError('Sign in to GitHub: run gh auth login.');
+      return (
+        'signed out',
+        const SwarmGitHubError('Sign in to GitHub: run gh auth login.'),
+      );
+    }
+    if (said.contains('rate limit') || said.contains('HTTP 429')) {
+      return ('rate limited', const SwarmGitHubError(limitedWords));
+    }
+    if (said.contains('SAML')) {
+      return (
+        'SSO',
+        const SwarmGitHubError(
+          'Authorize gh for this organization\'s SSO: run gh auth refresh.',
+        ),
+      );
     }
     if (said.contains('Could not resolve to a Repository') ||
         said.contains('HTTP 404')) {
-      throw SwarmGitHubError('You can\'t see $repository on GitHub.');
+      return (
+        'no repository',
+        SwarmGitHubError('You can\'t see $repository on GitHub.'),
+      );
     }
     if (said.contains('Could not resolve to an Issue')) {
-      throw const SwarmGitHubError('That issue is gone.');
-    }
-    // GitHub answered, so trying again at once only meets the same limit.
-    if (said.contains('rate limit') || said.contains('HTTP 429')) {
-      throw const SwarmGitHubError(
-        'GitHub is limiting requests. Try again in a few minutes.',
-      );
-    }
-    if (said.contains('SAML')) {
-      throw const SwarmGitHubError(
-        'Allow gh in this organisation\'s SSO on github.com.',
-      );
+      return ('no issue', const SwarmGitHubError('That issue is gone.'));
     }
     if (said.contains('disabled issues') ||
         said.contains('has disabled issues')) {
-      throw SwarmGitHubError('$repository has issues turned off.');
+      return (
+        'issues off',
+        SwarmGitHubError('$repository has issues turned off.'),
+      );
     }
-    throw const SwarmGitHubError('GitHub didn\'t answer. Try again.');
+    return (
+      'failed',
+      const SwarmGitHubError('GitHub didn\'t answer. Try again.'),
+    );
   }
 
   /// `gh` where its installers put it: a Finder launch has only launchd's bare PATH (`/usr/bin:/bin:/usr/sbin:/sbin`),

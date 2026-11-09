@@ -498,7 +498,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   before it) and, at the right, how many comments it has (a speech bubble and
   the count, none for no comments). A task with an open pull request (one
   that closes it, "Closes #14", else one on its builder's branch for it,
-  `pip/14`) shows it at the card's top right (`SwarmPullChip`,
+  `pip/14`) shows it at the card's top right, or under the task's number when the column has no room for both whole (`SwarmPullChip`,
   `super_tabs/pull_chip.dart`): the pull request's icon, number and one word in
   a capsule of its colour at 14%, by the rule Harness merges by
   (`super_tabs/github_pulls.dart`): Draft and Checks (running) in muted grey,
@@ -512,7 +512,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   and brings the rest: the newest hundred first, then the others, but only
   where nothing shows yet: a list already shown stays whole while a refresh is
   read, one refresh at a time. A refresh that fails keeps the cards and says
-  why in the bar, in 12 metadata grey, with a retry icon (`Try again`).
+  why in the bar, in 12 metadata grey on up to two lines, with a retry icon (`Try again`).
   A card opens its issue in the board's place (`SwarmIssuePanel`,
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
   its title, its agent, state and who opened it, its labels, its open pull
@@ -526,9 +526,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   else it stands alone: a gap is never hidden. The header says `opened now` or
   `opened 5m ago`. A project with no GitHub repository says so in one line; a failed read says
   what to do (`Sign in to GitHub: run gh auth login.`; `GitHub is limiting
-  requests. Try again in a few minutes.` when GitHub's rate limit answers;
-  `Allow gh in this organisation's SSO on github.com.` when SAML does) with a
-  retry.
+  requests. Wait a few minutes.` when GitHub's rate limit answers, and
+  then no `gh` runs for two minutes, whatever asks; `Authorize gh for this
+  organization's SSO: run gh auth refresh.` when SAML does) with a retry.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   two things: `Notifications ›` (All new messages, Mentions only, Muted) and,
   below a divider, `Project settings…`, whose rows are Rename project, Project
