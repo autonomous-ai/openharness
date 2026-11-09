@@ -3,9 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm, unreadThread, wait;
+import 'super_tab_activity_lists_test.dart' show swarm, wait;
 import 'super_tab_mentions_test.dart' show showView;
-import 'support/super_tab_fixture.dart';
 
 /// Quiet Swarm's polish pass: what a walk of the screens found drifting from
 /// the design (docs/plans/2026-11-03-quiet-swarm-polish-plan.md).

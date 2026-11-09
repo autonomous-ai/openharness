@@ -24,7 +24,6 @@ import 'identity.dart';
 import 'leaderboard/reader.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
-import 'project_github.dart';
 import 'private_project_lock.dart';
 import '../widgets/laid_out_list.dart';
 import 'swarm_type.dart';
@@ -429,23 +428,11 @@ class ProjectSidebar extends StatelessWidget {
                                             overflow: TextOverflow.ellipsis,
                                             style: style,
                                           )
-                                        : Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                project!.name,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: style,
-                                              ),
-                                              // Teammates' agents cannot push to its repository yet (project_github.dart).
-                                              ProjectGitHubLine(
-                                                controller: controller,
-                                                project: project,
-                                              ),
-                                            ],
+                                        : Text(
+                                            project!.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: style,
                                           ),
                                   ),
                                   if (badge > 0) ...[

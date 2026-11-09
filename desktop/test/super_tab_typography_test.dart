@@ -144,11 +144,11 @@ void main() {
     // taller, as Huy asked (11-03, #2427).
     expect(tester.getSize(project).height, 30);
     final activity = tester.widget<Text>(
-      find.descendant(of: side, matching: find.text('Decisions')),
+      find.descendant(of: side, matching: find.text('Manage')),
     );
     expect(activity.style!.fontSize, 15);
     expect(
-      tester.getSize(find.byKey(const ValueKey('super-decisions'))).height,
+      tester.getSize(find.byKey(const ValueKey('super-manage'))).height,
       26,
     );
     final heading = tester.widget<Text>(
@@ -184,7 +184,7 @@ void main() {
     expect(name.style!.fontSize, 13);
     expect(tester.getSize(project).height, 36);
     expect(
-      tester.getSize(find.byKey(const ValueKey('super-decisions'))).height,
+      tester.getSize(find.byKey(const ValueKey('super-manage'))).height,
       36,
     );
     await unmountPhoneSuperTab(tester, controller);

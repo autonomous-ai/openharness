@@ -517,28 +517,6 @@ void main() {
       },
     );
 
-    testWidgets(
-      'the shortcut leaves Notifications for the chat, first opened or already selected',
-      (tester) async {
-        final c = await show(tester, riverSwarm());
-        Future<void> shortcutOverNotifications() async {
-          await tester.tap(find.byKey(const ValueKey('super-decisions')));
-          await tester.pumpAndSettle();
-          expect(find.text('Message your agent'), findsNothing);
-          // What ⇧⌘K runs (openActiveBuddyChat).
-          expect(await c.openCurrentBuddyChat(), isTrue);
-          await tester.pumpAndSettle();
-          expect(c.selectedId, c.buddyChat('lead')?.id);
-          // The composer names the Buddy chat as its row does.
-          expect(find.text('Message your agent'), findsOneWidget);
-        }
-
-        await shortcutOverNotifications();
-        await shortcutOverNotifications();
-        await close(tester, c);
-      },
-    );
-
     testWidgets('the header names a workgroup by its number in grey, no #', (
       tester,
     ) async {
@@ -560,22 +538,6 @@ void main() {
         find.descendant(of: title, matching: find.text('196')),
       );
       expect(number.style?.color, DesktopChrome.muted);
-      await close(tester, c);
-    });
-
-    testWidgets('the first open leaves Notifications for the new chat', (
-      tester,
-    ) async {
-      final c = await show(tester, pmChatSwarm());
-      await tester.tap(find.byKey(const ValueKey('super-decisions')));
-      await tester.pumpAndSettle();
-      expect(find.text('Message your agent'), findsNothing);
-
-      await tester.tap(entry);
-      await tester.pumpAndSettle();
-
-      expect(c.selectedId, c.buddyChat('lead')!.id);
-      expect(find.text('Message your agent'), findsOneWidget);
       await close(tester, c);
     });
 

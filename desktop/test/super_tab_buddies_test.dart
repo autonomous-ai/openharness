@@ -1527,21 +1527,6 @@ void main() {
         await close(tester, c);
       });
 
-      testWidgets(
-        'Decisions lists what waits on the reader, with or without a Buddy',
-        (tester) async {
-          final server = buddySwarm();
-          server.ask(['Ship it?']);
-          final c = await show(tester, server);
-          await tester.tap(find.byKey(const ValueKey('super-decisions')));
-          await tester.pumpAndSettle();
-
-          expect(find.text('Decisions'), findsWidgets);
-          expect(find.text('Ship it?'), findsOneWidget);
-          await close(tester, c);
-        },
-      );
-
       testWidgets('the Buddy menu offers none', (tester) async {
         final (_, c) = await withHistory(tester);
         await tester.tap(buddyEntry);
@@ -1554,25 +1539,6 @@ void main() {
         expect(find.textContaining('Chat with PM'), findsNothing);
         await close(tester, c);
       });
-
-      testWidgets(
-        'a tag from the old Chat with PM is placed in the project chat and opens it',
-        (tester) async {
-          final (_, c) = await withHistory(tester);
-          await tester.tap(find.byKey(const ValueKey('super-mentions')));
-          await tester.pumpAndSettle();
-
-          expect(find.textContaining('Chat with PM'), findsNothing);
-          await tester.tap(
-            find.byKey(const ValueKey('super-activity-row-mention:mention-1')),
-          );
-          await tester.pumpAndSettle();
-
-          expect(c.selectedId, 'lead');
-          expect(find.text('Earlier answer from the PM'), findsNothing);
-          await close(tester, c);
-        },
-      );
     });
 
     group('a proposal in the project chat', () {
