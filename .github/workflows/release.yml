@@ -97,6 +97,31 @@ jobs:
         with:
           fetch-depth: 1
 
+<<<<<<< HEAD
+=======
+      # A tag pushed by hand skips the release scripts, so the window is checked here too
+      # (scripts/release-window.py). An emergency release carries `Emergency: <reason>` (or the scripts' `Release-Urgent: <reason>`) in its annotated tag.
+      - name: Release window
+        # A promotion publishes no new version: it points the Windows terminal-host manifest at bytes a release
+        # already published and verified. The window governs what lands on the fleet as a new build, so it does not
+        # apply here.
+        if: ${{ !inputs.promote_pty && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.metadata_path == '' || inputs.metadata_path == 'harness/cli/metadata.json'))) }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          URGENT_REASON: ${{ inputs.urgent_reason }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = push ]; then
+            git fetch --quiet --force --depth=1 origin tag "$REF_NAME"
+            python3 scripts/release-window.py --kind cli --from-tag "$REF_NAME" --exclude-tag "$REF_NAME"
+          elif [ -n "$URGENT_REASON" ]; then
+            python3 scripts/release-window.py --kind cli --urgent "$URGENT_REASON"
+          else
+            python3 scripts/release-window.py --kind cli
+          fi
+
+>>>>>>> origin/main
       - id: resolve
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a ref
         # name, so interpolating one into the shell would let a tag name execute as code.
@@ -183,6 +208,9 @@ jobs:
   # minute and that cannot be undone.
   publish:
     needs: [version, preflight, process-images]
+    # promote_pty alone re-points the terminal host at bytes a release already published: there is nothing to build,
+    # and the bucket refuses to republish an existing version's files.
+    if: ${{ !inputs.promote_pty }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -326,6 +354,7 @@ jobs:
   # fail loudly, and the next version fixes them.
   pty-build:
     needs: version
+    if: ${{ !inputs.promote_pty }}
     uses: ./.github/workflows/windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
