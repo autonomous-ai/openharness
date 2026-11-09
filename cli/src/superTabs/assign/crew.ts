@@ -24,7 +24,7 @@ export const WEIGHTS: Record<string, number> = { p0: 8, p1: 4, p2: 2 }
 /** The percent of each window its person keeps for their own work: Swarm work never spends it (AGENTS.md, contributed
  *  capacity: "their quota is never drained without them knowing"). */
 export const RESERVE = 20
-/** Cores a machine gives Swarm work until hosts report how many they have: two large tasks at once. */
+/** Cores a machine is planned with when its daemon reports none (one before 0.5.86): two large tasks at once. */
 export const CORES = 8
 /** Of a machine's memory, what Swarm work may hold: its person keeps the rest. */
 export const MEMORY_SHARE = 0.75
@@ -74,6 +74,12 @@ export interface Read {
 
 /** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
 export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
+
+/** The labels of a project's team: its builders' (away ones too) and its PM's. Harness asks readers for, and merges, only
+ *  the team's own pull requests: a person's, or anyone's in a shared repository, is theirs (openharness has dozens open at a
+ *  time, by people and their own agents). */
+export const teamOf = (crew: Crew, pm: string): Set<string> =>
+  new Set([...crew.builders.map(b => b.label), ...(crew.away ?? []).map(a => a.label), labelOf(pm)])
 
 /** An area as its `part:` label names it: "Mobile app" is mobile-app, "part:API" is api. */
 export const areaOf = (word: string): string =>
@@ -186,7 +192,7 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
       spend: Object.fromEntries([...windowNames].map(name => [name, everyOf(name) === 300 ? shape.spend : shape.spend / 5])),
       floor: 0, kind: 'build', part: valueOf(labels, 'part:'), weight: priority ? WEIGHTS[priority]! : 1, ready: 0,
       deps: dependsOn(issue.body).filter(n => openNumbers.has(n)).map(n => `#${n}`),
-      independentOf: [], notBuilders: unable, files: [],
+      independentOf: [], notBuilders: unable, ...unable.length ? { notWhy: `its builder's machine lacks one of: ${needs.join(', ')}` } : {}, files: [],
       ...(holder ? { pinned: holder.id, queuedOn: holder.id } : {}),
     })
     if (!holder) free.add(id)
@@ -206,7 +212,9 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
     const memory = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes * MEMORY_SHARE : 16 * GiB
     const free = typeof resources.projectDiskFreeBytes === 'number' ? resources.projectDiskFreeBytes
       : typeof resources.diskFreeBytes === 'number' ? resources.diskFreeBytes : 60 * GiB
-    return { id, capacity: { cpu: CORES, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
+    // Its cores as it reports them (a daemon since 0.5.86); an older one is planned as CORES.
+    const cores = typeof resources.cpuCores === 'number' && Number.isSafeInteger(resources.cpuCores) && resources.cpuCores > 0 ? resources.cpuCores : CORES
+    return { id, capacity: { cpu: cores, ram: memory, disk: Math.max(0, free - DISK_KEPT) } }
   })
   const accounts: Account[] = [...new Set(crew.builders.map(b => `${b.machineId}:${b.engine}`))].map(id => {
     const [machineId, engine] = id.split(':') as [string, string]

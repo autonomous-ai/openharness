@@ -12,8 +12,10 @@ const PROJECT = { repo: 'acme/app', pm: 'Faye', tabId: 'tab', pmAgentId: 'faye',
 /** One repository's issues as GitHub's REST API answers them, with ETags, and what was sent to it. Labels sent are kept
  *  only once [applied] says GitHub's lists show them. */
 function fakeGitHub(open: Json[], closed: Json[] = []) {
+  // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
+  const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
   const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
-    files: new Map<string, string>(), labels: [] as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
+    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -23,10 +25,14 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
     if (file && text === undefined) return { status: 404, etag: null, body: null, resetAt: null }
     const body = file ? { encoding: 'base64', content: Buffer.from(text!).toString('base64') }
       : url.pathname === '/repos/acme/app' ? { default_branch: 'main' }
-      : url.pathname === '/repos/acme/app/pulls' ? state.pulls
+      // A page of the list, as GitHub pages it.
+      : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
+        Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
       : url.pathname === '/repos/acme/app/labels' ? state.labels
-      : url.pathname === '/repos/acme/app/issues' ? url.searchParams.get('state') === 'closed' ? state.closed : state.open
+      // A page of the list, as GitHub pages it.
+      : url.pathname === '/repos/acme/app/issues' ? (url.searchParams.get('state') === 'closed' ? state.closed : state.open)
+        .slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30), Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : null
     if (body === null) return { status: 404, etag: null, body: null, resetAt: null }
     const tag = `"${createHash('sha1').update(JSON.stringify(body)).digest('hex')}"`
@@ -118,6 +124,18 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.labelled()).toEqual([[3, 'builder:pip']])
   })
 
+  it('plans the oldest of a busy repository\'s open issues too, and says when they fill every page it reads', async () => {
+    const unsized = (n: number) => issue(n, [])
+    const f = setup([...Array.from({ length: 340 }, (_, i) => unsized(1000 + i)), issue(7, ['size:s']), ...Array.from({ length: 9 }, (_, i) => unsized(2000 + i))])
+    await f.assigner.tick()
+    expect(f.labelled().map(([n]) => n)).toEqual([7])
+    expect(f.log.mock.calls.some(([line]) => String(line).includes('TOO_MANY_OPEN'))).toBe(false)
+    const full = setup(Array.from({ length: 1000 }, (_, i) => unsized(1000 + i)))
+    await full.assigner.tick()
+    await full.assigner.tick()
+    expect(full.log.mock.calls.filter(([line]) => String(line).includes('TOO_MANY_OPEN acme/app: the newest 1000 open issues'))).toHaveLength(1)
+  })
+
   it('gives nothing the PM has not sized, nothing to a team with no builders, and keeps a full list full', async () => {
     const unsized = setup([issue(1, ['part:api'])])
     await unsized.assigner.tick()
@@ -139,9 +157,25 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.labelled().find(([n]) => n === 1)?.[1]).toMatch(/^builder:(pip|juno)$/)
     expect(f.labelled().some(([n]) => n === 2)).toBe(false)
     expect(f.log).toHaveBeenCalledWith(expect.stringContaining('UNPLACED acme/app#2'))
-    // Said once, not every pass.
+    // Its PM is told why, by name, on the task: only its person can add the tool, or the PM change the task.
+    const told = () => f.said().filter(([n]) => n === 2).map(([, body]) => String(body))
+    expect(told()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: nobody can start this yet: it needs robot-arm, which no builder's machine has\.$/)])
+    // Said once, not every pass, nor again after a restart that finds it on the task.
     await f.assigner.tick()
     expect(f.log.mock.calls.filter(([line]) => String(line).includes('UNPLACED'))).toHaveLength(1)
+    f.github.state.comments.set(2, told().map(body => ({ body, created_at: '2026-11-09T07:31:00Z', author_association: 'OWNER' })))
+    await f.make().tick()
+    expect(told()).toHaveLength(1)
+  })
+
+  it('tells the PM of "after #N" lines that wait on each other, and of a task larger than every machine', async () => {
+    const f = setup([issue(1, ['size:s'], { body: 'after #2' }), issue(2, ['size:s'], { body: 'after #1' }), issue(3, ['size:l'])],
+      { crew: { builders: crew().builders, machines: [{ machineId: 'mac', observation: { resources: { memoryTotalBytes: 4 * GiB, projectDiskFreeBytes: 500 * GiB } } }] } })
+    await f.assigner.tick()
+    const lines = f.said().map(([n, body]) => [n, String(body).replace(/^Harness, \d\d:\d\d, /, '')]).sort()
+    expect(lines).toEqual([[1, 'to **Faye**: nobody can start this yet: its "after #N" lines wait on each other.'],
+      [2, 'to **Faye**: nobody can start this yet: its "after #N" lines wait on each other.'],
+      [3, 'to **Faye**: nobody can start this yet: it needs more than any builder\'s machine has.']])
   })
 
   it('says a label GitHub refused once, and gives the task again on the next pass', async () => {
@@ -157,10 +191,30 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.said()).toHaveLength(1)
   })
 
+  it('makes the labels a fresh repository lacks, the flow\'s and each builder\'s, once, and says one GitHub refuses', async () => {
+    const f = setup([])
+    f.github.state.labels = [{ name: 'P1' }]
+    await f.assigner.tick()
+    const made = () => f.github.sent.filter(s => s.path === '/repos/acme/app/labels').map(s => s.body.name)
+    expect(made()).toEqual(['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p2', 'builder:pip', 'builder:juno'])
+    expect(f.github.sent.find(s => s.body.name === 'size:s')!.body).toEqual({ name: 'size:s', color: 'c2e0c6', description: 'About half an hour of work' })
+    // Read and made once: the next pass asks GitHub for nothing about labels.
+    await f.assigner.tick()
+    expect(made()).toHaveLength(8)
+    const refused = setup([])
+    refused.github.state.labels = []
+    const send = refused.github.send
+    refused.github.send = (async (method, path, body) => path === '/repos/acme/app/labels' ? { status: 403, etag: null, body: {}, resetAt: null }
+      : send(method, path, body)) as typeof send
+    const again = refused.make()
+    await again.tick(); await again.tick()
+    expect(refused.log.mock.calls.filter(([line]) => String(line).includes('LABEL_NOT_MADE acme/app status:taken: GitHub answered 403'))).toHaveLength(1)
+  })
+
   it('gives a builder the tasks of the area its instructions say it works on, and makes that area\'s label', async () => {
     const f = setup([issue(1, ['size:s', 'part:mobile']), issue(2, ['size:s', 'part:api'])])
     f.github.state.files.set('agents/Pip.md', '# Pip\nWorks on: Mobile\n\nMy rules.')
-    f.github.state.labels = [{ name: 'part:api' }]
+    f.github.state.labels.push({ name: 'part:api' })
     await f.assigner.tick()
     expect(f.labelled().sort()).toEqual([[1, 'builder:pip'], [2, 'builder:juno']])
     expect(new Map(f.said() as Array<[number, string]>).get(1)).toMatch(/for \*\*Pip\*\*: it can start now, and it works on mobile\.$/)
@@ -180,6 +234,109 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const team: Crew = { builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }],
       machines: crew().machines }
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
+
+    it('counts no READ-OK its author signed, however its two-word name is written, and asks a reader', async () => {
+      const two: Crew = { builders: [...crew().builders, { id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }],
+        machines: crew().machines }
+      const f = setup([], { crew: two })
+      f.github.state.pulls = [pull({ labels: [{ name: 'builder:pip-two' }], head: { sha: HEAD, ref: 'pip-two/14' } })]
+      f.github.state.comments.set(30, [comment('Pip Two, 07:10, to **Juno**: READ-OK f6edb44')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*(Pip|Juno)\*\*: please read this pull request/)])
+    })
+
+    it('asks a reader for the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
+      const f = setup([], { crew: team })
+      const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` }, body: '' }))
+      f.github.state.pulls = [...people.slice(0, 110), pull(), ...people.slice(110)]
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+    })
+
+    it('takes no outsider\'s comment for its own ask, so the reader it names is still asked', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [comment('Harness, 07:30, to **Atlas**: please read this pull request, and start your comment with READ-OK f6edb44 '
+        + 'or HOLD f6edb44 (with the file, line and fix).', { author_association: 'NONE', user: { login: 'stranger' } })])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+    })
+
+    it('asks nobody for a pull request that is not the team\'s: a person\'s, or a branch no builder of the team made', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ number: 31, head: { sha: HEAD, ref: 'ken/fix-login' }, labels: [], body: '' }),
+        pull({ number: 32, head: { sha: HEAD, ref: 'fix-login' }, labels: [], body: '' })]
+      await f.assigner.tick()
+      expect(f.said()).toEqual([])
+      // Their comments are not even read.
+      expect(f.github.sent).toEqual([])
+    })
+
+    it('asks another reader once the one asked has not read for 2 hours, and nobody more once a READ-OK is on the head', async () => {
+      const ask = (name: string, at: string) => comment(`Harness, ${at.slice(11, 16)}, to **${name}**: please read this pull request, `
+        + 'and start your comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
+      // Atlas (Codex) was asked an hour and a half ago: still reading.
+      const recent = setup([], { crew: team })
+      recent.github.state.pulls = [pull()]
+      recent.github.state.comments.set(30, [ask('Atlas', '2026-11-09T06:01:00Z')])
+      await recent.assigner.tick()
+      expect(asks(recent)).toEqual([])
+      // Asked three hours ago with no word since: Juno is asked too.
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T04:31:00Z')])
+      await f.assigner.tick()
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      // Atlas reads after all: its READ-OK counts, and nobody more is asked when Juno's ask is old too.
+      f.github.state.comments.set(30, [ask('Atlas', '2026-11-09T04:31:00Z'), ask('Juno', '2026-11-09T04:40:00Z'),
+        comment('Atlas, 07:30, to **Pip**: READ-OK f6edb44', { created_at: '2026-11-09T07:30:00Z' })])
+      await f.make().tick()
+      expect(asks(f)).toHaveLength(1)
+    })
+
+    it('asks the only reader again after 2 silent hours, at most twice more for a head, after a restart too', async () => {
+      const HOUR = 60 * 60_000
+      const askedAt = (at: string) => comment(`Harness, ${at.slice(11, 16)}, to **Faye**: please read this pull request, and start your `
+        + 'comment with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: at })
+      // Pip builds alone; Faye, its PM, was asked three hours ago and has said nothing since (stopped when it was asked).
+      const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+      f.github.state.pulls = [pull()]
+      const iso = (ms: number) => new Date(ms).toISOString()
+      const first = iso(f.clock.now - 3 * HOUR)
+      f.github.state.comments.set(30, [askedAt(first)])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Faye\*\*: please read this pull request/)])
+      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now))])
+      f.clock.now += HOUR
+      await f.assigner.tick()
+      expect(asks(f)).toHaveLength(1)
+      f.clock.now += HOUR + 60_000
+      await f.make().tick()
+      expect(asks(f)).toHaveLength(2)
+      f.github.state.comments.set(30, [askedAt(first), askedAt(iso(f.clock.now - 2 * HOUR)), askedAt(iso(f.clock.now))])
+      f.clock.now += 3 * HOUR
+      await f.make().tick()
+      expect(asks(f)).toHaveLength(2)
+    })
+
+    it('measures a reader asked again after a push from that ask, and one that never answered from its last', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      // Atlas held an older head, was asked again for this one 2.5 hours ago, and has said nothing since.
+      f.github.state.comments.set(30, [comment('Atlas, 04:00, to **Pip**: HOLD 1234567 app.ts:3 add the test', { created_at: '2026-11-09T04:00:00Z' }),
+        comment('Harness, 05:01, to **Atlas**: the head is now f6edb44, after your HOLD on 1234567: please read it again, and start your comment '
+          + 'with READ-OK f6edb44 or HOLD f6edb44 (with the file, line and fix).', { created_at: '2026-11-09T05:01:00Z' })])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Juno\*\*: please read this pull request/)])
+      // Juno, asked for an older head 3 hours ago, never answered: Atlas is asked for this one.
+      const g = setup([], { crew: team })
+      g.github.state.pulls = [pull()]
+      g.github.state.comments.set(30, [comment('Harness, 04:31, to **Juno**: please read this pull request, and start your comment with '
+        + 'READ-OK 1234567 or HOLD 1234567 (with the file, line and fix).', { created_at: '2026-11-09T04:31:00Z' })])
+      await g.assigner.tick()
+      expect(asks(g)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+    })
 
     it('asks one reader for a pull request, never its author, of another model family first, once', async () => {
       const f = setup([], { crew: team })
@@ -260,6 +417,47 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     // The next plan gives both to Pip, two deep.
     await f.assigner.tick()
     expect(f.labelled().map(([n, label]) => [n, label]).sort()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
+  })
+
+  it('keeps the task of a builder that went away while its pull request waits for its readers or its merge', async () => {
+    const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+    const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:s', 'builder:juno', 'status:taken'])], { crew: team })
+    const head = (n: number) => `f6edb4${n}${'0'.repeat(33)}`
+    f.github.state.pulls = [1, 2].map(n => ({ number: 8 + n, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:juno' }],
+      head: { sha: head(n), ref: `juno/${n}` }, body: `Closes #${n}`, updated_at: '2026-11-09T07:00:00Z' }))
+    // #9 (for #1) has its READ-OK and waits to merge; #10 (for #2) has a HOLD on its head, which Juno will not fix.
+    f.github.state.comments.set(9, [{ body: `Pip, 07:10, to **Juno**: READ-OK ${head(1).slice(0, 7)}`, created_at: '2026-11-09T07:10:00Z', author_association: 'OWNER' }])
+    f.github.state.comments.set(10, [{ body: `Pip, 07:10, to **Juno**: HOLD ${head(2).slice(0, 7)} app.ts:3 add the test`, created_at: '2026-11-09T07:10:00Z',
+      author_association: 'OWNER' }])
+    await f.assigner.tick()
+    expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/2/labels/status%3Ataken',
+      '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
+  })
+
+  it('keeps a down builder\'s tasks while nobody else can take them, and gives back a stopping one\'s all the same', async () => {
+    const long = new Date(Date.parse('2026-11-09T07:31:00Z') - 4 * 60 * 60_000).toISOString()
+    const down = setup([issue(1, ['size:s', 'builder:pip']), issue(2, ['size:s', 'builder:pip', 'status:taken'])],
+      { crew: { builders: [], machines: crew().machines, away: [{ name: 'Pip', label: 'builder:pip', why: 'down', since: long }] } })
+    await down.assigner.tick()
+    expect(down.github.sent.filter(s => s.method === 'DELETE')).toEqual([])
+    const stopping = setup([issue(1, ['size:s', 'builder:pip'])],
+      { crew: { builders: [], machines: crew().machines, away: [{ name: 'Pip', label: 'builder:pip', why: 'stopping' }] } })
+    await stopping.assigner.tick()
+    expect(stopping.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Apip'])
+  })
+
+  it('forgets the asks and take backs it made once their pull request or task is no longer open', async () => {
+    const team: Crew = { ...crew(), away: [{ name: 'Atlas', label: 'builder:atlas', why: 'stopping' }] }
+    const f = setup([issue(1, ['size:s', 'builder:atlas'])], { crew: team })
+    f.github.state.pulls = [{ number: 30, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }],
+      head: { sha: `f6edb44${'0'.repeat(33)}`, ref: 'pip/14' }, body: 'Closes #14' }]
+    await f.assigner.tick()
+    const memory = f.assigner as unknown as { asks: Set<string>; backs: Set<string> }
+    expect([memory.asks.size, memory.backs.size]).toEqual([1, 1])
+    f.github.state.pulls = []
+    f.github.state.open = []
+    await f.assigner.tick()
+    expect([memory.asks.size, memory.backs.size]).toEqual([0, 0])
   })
 
   it('says a take back GitHub refuses, leaves the task as it was, and takes it back next pass', async () => {
@@ -411,6 +609,18 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     // Middle tasks took 40 minutes here, not the 90 a size:m is guessed at: Pip's second starts after 40.
     expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, '')).sort())
       .toEqual(['for **Pip**: it can start in 40 min.', 'for **Pip**: it can start now.'])
+  })
+
+  it('learns only from tasks done: one closed as not planned is no measure of its size', async () => {
+    const closedAt = (n: number, reason: string) => ({ ...issue(n, ['size:m', 'builder:juno']), closed_at: '2026-11-09T05:10:00Z', state_reason: reason })
+    const one: Crew = { ...crew(), builders: [crew().builders[0]!] }
+    // Three middle tasks closed 10 minutes after they were taken, all dropped: nothing learned, the guess of 90 stands.
+    const f = setup([issue(1, ['size:m']), issue(2, ['size:m'])], { crew: one,
+      closed: [closedAt(10, 'not_planned'), closedAt(11, 'not_planned'), closedAt(12, 'not_planned')] })
+    for (const n of [10, 11, 12]) f.github.state.comments.set(n, [{ body: 'Juno, 12:00, taken by Juno.', created_at: '2026-11-09T05:00:00Z' }])
+    await f.assigner.tick()
+    expect(f.said().map(([, body]) => String(body).replace(/^Harness, \d\d:\d\d: /, '')).sort())
+      .toEqual(['for **Pip**: it can start in 2 h.', 'for **Pip**: it can start now.'])
   })
 
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {

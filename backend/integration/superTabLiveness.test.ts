@@ -1424,7 +1424,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
     const f = await swarm({ client: counted.client })
     const row = await held(f)
     f.clock.now += 1_000
-    await f.execute({ type: 'member.timeZone', timeZone: 'UTC' })
+    await f.execute({ type: 'tab.rename', name: 'Renamed' })
     counted.ops.length = 0
     f.clock.now += 1_000
     expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).toEqual([row.id])
