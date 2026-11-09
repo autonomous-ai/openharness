@@ -629,11 +629,26 @@ class _AppDropdownState extends State<AppDropdown> {
   /// Holds the place of the control that opens the menu in the focus tree, so
   /// the menu can take focus there and hear Escape. A click opens a menu without
   /// moving focus into it, and the menu's own Escape only hears the key from
-  /// inside the menu.
+  /// inside the menu. A caller that brings its own [AppDropdown.childFocusNode]
+  /// has this already, and a submenu does not move focus at all.
   final _anchor = FocusNode(
     debugLabel: 'Dropdown control',
     skipTraversal: true,
   );
+
+  /// Whether this dropdown sits in another one's panel: a submenu, which opens
+  /// on a pointer's passing and leaves focus where it is.
+  var _nested = false;
+
+  /// Where focus was when the menu opened, given back when a pick or a click
+  /// away closes it, so typing goes on where it was.
+  FocusNode? _before;
+
+  /// Escape closed the menu: focus stays on the control, as it was asked to.
+  var _escaped = false;
+
+  /// Escape went down on the control and was taken, so its key-up is too.
+  var _escapeDown = false;
   final _searchFocus = FocusNode(debugLabel: 'Dropdown search');
   final _searchText = TextEditingController();
   final _pointer = _AppMenuPointer();
@@ -695,11 +710,54 @@ class _AppDropdownState extends State<AppDropdown> {
     return math.min(widget.width, math.max(fit, AppDropdown.minFitWidth));
   }
 
+  bool _inAnchor(FocusNode node) =>
+      node == _anchor || _anchor.descendants.contains(node);
+
+  /// The control takes focus as the menu opens: the one thing in the anchor
+  /// that takes focus, else the anchor itself, so a key never lands on a
+  /// button that merely sits beside the one clicked. Whatever the menu takes
+  /// focus for afterwards (a search, a row that asks for it) wins.
+  void _takeFocus() {
+    final focus = FocusManager.instance.primaryFocus;
+    _before = focus == null || focus is FocusScopeNode || _inAnchor(focus)
+        ? null
+        : focus;
+    final controls = _anchor.traversalDescendants.take(2).toList();
+    (controls.length == 1 ? controls.single : _anchor).requestFocus();
+  }
+
+  /// A pick or a click away gives focus back to where it was, unless the pick
+  /// moved it somewhere itself; Escape leaves it on the control.
+  void _giveFocusBack() {
+    final before = _before;
+    _before = null;
+    if (_escaped) {
+      _escaped = false;
+      return;
+    }
+    if (before == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final now = FocusManager.instance.primaryFocus;
+      final home = now == null || now is FocusScopeNode || _inAnchor(now);
+      if (home && before.canRequestFocus && before.context != null) {
+        before.requestFocus();
+      }
+    });
+  }
+
   KeyEventResult _anchorKeys(FocusNode node, KeyEvent event) {
-    if (event is KeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.escape &&
-        _controller.isOpen) {
+    if (event.logicalKey != LogicalKeyboardKey.escape) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyDownEvent && _controller.isOpen) {
+      _escapeDown = true;
+      _escaped = true;
       _controller.close();
+      return KeyEventResult.handled;
+    }
+    if (event is KeyUpEvent && _escapeDown) {
+      _escapeDown = false;
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -711,6 +769,7 @@ class _AppDropdownState extends State<AppDropdown> {
     }
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.escape) {
+      _escaped = true;
       _controller.close();
       return KeyEventResult.handled;
     }
@@ -740,6 +799,7 @@ class _AppDropdownState extends State<AppDropdown> {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final root = _rootOf(context);
+    _nested = _AppMenuRoot.maybeOf(context) != null;
     final needle = _query.toLowerCase();
     final searching = _searching;
     final glyphs = _rows.any((row) => row.icon != null || row.leading != null);
@@ -761,12 +821,8 @@ class _AppDropdownState extends State<AppDropdown> {
           ? base
           : base.copyWith(alignment: widget.alignment),
       onOpen: () {
-        // The control takes focus first, so Escape closes the menu from there
-        // and leaves focus on it; whatever the menu takes focus for (a search,
-        // a row that asks for it) comes after and wins.
-        if (widget.childFocusNode == null) {
-          (_anchor.traversalDescendants.firstOrNull ?? _anchor).requestFocus();
-        }
+        _escaped = false;
+        if (widget.childFocusNode == null && !_nested) _takeFocus();
         if (_searching) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted && _controller.isOpen) _searchFocus.requestFocus();
@@ -775,6 +831,7 @@ class _AppDropdownState extends State<AppDropdown> {
         widget.onOpen?.call();
       },
       onClose: () {
+        _giveFocusBack();
         if (_query.isNotEmpty) {
           _searchText.clear();
           if (mounted) setState(() => _query = '');
@@ -828,15 +885,17 @@ class _AppDropdownState extends State<AppDropdown> {
             ),
           ),
       ],
-      builder: (context, controller, child) => Focus(
-        focusNode: _anchor,
-        includeSemantics: false,
-        onKeyEvent: _anchorKeys,
-        child:
-            widget.builder?.call(context, controller, child) ??
-            child ??
-            const SizedBox.shrink(),
-      ),
+      builder: widget.childFocusNode != null
+          ? widget.builder
+          : (context, controller, child) => Focus(
+              focusNode: _anchor,
+              includeSemantics: false,
+              onKeyEvent: _anchorKeys,
+              child:
+                  widget.builder?.call(context, controller, child) ??
+                  child ??
+                  const SizedBox.shrink(),
+            ),
       child: widget.child,
     );
   }

@@ -7,6 +7,7 @@ import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'support/focus_in.dart';
 import 'support/swarm_v4_data.dart';
 
 /// Every menu of the v4 chat closes on Escape, however it was opened, and its control has focus again, so the
@@ -42,21 +43,6 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// Whether focus is on [control] or inside it.
-  bool focusIn(Finder control) {
-    final focus = FocusManager.instance.primaryFocus;
-    final element = control.evaluate().first;
-    if (focus == null || focus is FocusScopeNode || focus.context == null) {
-      return false;
-    }
-    var inside = focus.context == element;
-    focus.context!.visitAncestorElements((e) {
-      inside = inside || e == element;
-      return !inside;
-    });
-    return inside;
-  }
-
   Future<void> escape(WidgetTester tester) async {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
@@ -73,7 +59,7 @@ void main() {
         expect(find.text('Project settings…'), findsOneWidget, reason: '$i');
         await escape(tester);
         expect(find.text('Project settings…'), findsNothing, reason: '$i');
-        expect(focusIn(key('super-project-menu')), isTrue, reason: '$i');
+        expect(focusIsIn(key('super-project-menu')), isTrue, reason: '$i');
       }
       // Enter on the name opens it again.
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -113,7 +99,7 @@ void main() {
     expect(find.byType(AppMenuItem), findsWidgets);
     await escape(tester);
     expect(find.byType(AppMenuItem), findsNothing);
-    expect(focusIn(more), isTrue);
+    expect(focusIsIn(more), isTrue);
     expect(tester.takeException(), isNull);
   });
 }

@@ -7,6 +7,8 @@ import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/widgets/harness_agent_picker.dart';
 
+import 'support/focus_in.dart';
+
 /// Escape closes a dropdown, however it was opened, and the control that opened
 /// it has focus again (anh Dee, 2026-11-09). A click opens a menu without moving
 /// focus into it, so the menu's own Escape never heard the key.
@@ -44,21 +46,6 @@ void main() {
 
   setUp(() => picked = 0);
 
-  /// Whether the focus is on the control that opened the menu: its own node, or one inside it.
-  bool controlHasFocus(WidgetTester tester) {
-    final focus = FocusManager.instance.primaryFocus;
-    final control = tester.element(find.byKey(opener));
-    if (focus == null || focus is FocusScopeNode || focus.context == null) {
-      return false;
-    }
-    var inside = focus.context == control;
-    focus.context!.visitAncestorElements((e) {
-      inside = inside || e == control;
-      return !inside;
-    });
-    return inside;
-  }
-
   testWidgets(
     'Escape closes a dropdown a click opened, and focus is on its control',
     (tester) async {
@@ -74,7 +61,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('One'), findsNothing);
-      expect(controlHasFocus(tester), isTrue);
+      expect(focusIsIn(find.byKey(opener)), isTrue);
       expect(picked, 0);
 
       // From there the keyboard works the control: Enter opens the menu again.
@@ -107,10 +94,7 @@ void main() {
           body: Focus(
             autofocus: true,
             onKeyEvent: (_, event) {
-              if (event is KeyDownEvent &&
-                  event.logicalKey == LogicalKeyboardKey.escape) {
-                escaped++;
-              }
+              if (event.logicalKey == LogicalKeyboardKey.escape) escaped++;
               return KeyEventResult.ignored;
             },
             child: AppDropdown(
@@ -125,15 +109,16 @@ void main() {
         ),
       ),
     );
+    // A key down and its key up.
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    expect(escaped, 1);
+    expect(escaped, 2);
     await tester.tap(find.byKey(opener));
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     expect(find.text('One'), findsNothing);
-    // The key that closed the menu closed only the menu.
-    expect(escaped, 1);
+    // The keypress that closed the menu, down and up, closed only the menu.
+    expect(escaped, 2);
   });
 
   testWidgets(
@@ -209,54 +194,209 @@ void main() {
     expect(find.text('Codex'), findsNothing);
   });
 
-  testWidgets('Escape closes one level at a time: a submenu, then the menu', (
+  Widget withSubmenu() => MaterialApp(
+    theme: buildAppTheme(brightness: Brightness.light),
+    home: Scaffold(
+      body: Align(
+        alignment: Alignment.topLeft,
+        child: AppDropdown(
+          width: 200,
+          children: [
+            AppMenuItem(label: 'Status', onPressed: () {}),
+            AppSubmenuItem(
+              label: 'Notifications',
+              menuChildren: [
+                AppMenuItem(label: 'All new messages', onPressed: () {}),
+                AppMenuItem(label: 'Muted', onPressed: () {}),
+              ],
+            ),
+          ],
+          builder: (context, controller, _) => InkWell(
+            key: opener,
+            onTap: () =>
+                controller.isOpen ? controller.close() : controller.open(),
+            child: const Padding(
+              padding: EdgeInsets.all(8),
+              child: Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  testWidgets(
+    'a submenu a pointer passes opens without taking focus, and Escape closes the whole menu from the control',
+    (tester) async {
+      await tester.pumpWidget(withSubmenu());
+      await tester.tap(find.byKey(opener));
+      await tester.pumpAndSettle();
+      expect(focusIsIn(find.byKey(opener)), isTrue);
+
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      await mouse.moveTo(tester.getCenter(find.text('Notifications')));
+      await tester.pumpAndSettle();
+      expect(find.text('Muted'), findsOneWidget);
+      // The pointer's passing moved no focus.
+      expect(focusIsIn(find.byKey(opener)), isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('Muted'), findsNothing);
+      expect(find.text('Status'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Escape on a submenu\'s own row closes that submenu, and the next the menu',
+    (tester) async {
+      await tester.pumpWidget(withSubmenu());
+      await tester.tap(find.byKey(opener));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Notifications'));
+      await tester.pumpAndSettle();
+      expect(find.text('Muted'), findsOneWidget);
+      // A person who walked to the row with the arrow keys has focus on it.
+      Focus.of(tester.element(find.text('Notifications'))).requestFocus();
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('Muted'), findsNothing);
+      expect(find.text('Status'), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('Status'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'a person typing who picks a row goes on typing where they were',
+    (tester) async {
+      await tester.pumpWidget(app());
+      await tester.tap(find.byKey(const ValueKey('field')));
+      await tester.pump();
+      expect(focusIsIn(find.byKey(const ValueKey('field'))), isTrue);
+      await tester.tap(find.byKey(opener));
+      await tester.pumpAndSettle();
+      expect(focusIsIn(find.byKey(opener)), isTrue);
+
+      await tester.tap(find.text('Two'));
+      await tester.pumpAndSettle();
+      expect(picked, 1);
+      expect(find.text('Two'), findsNothing);
+      expect(focusIsIn(find.byKey(const ValueKey('field'))), isTrue);
+    },
+  );
+
+  testWidgets('a click away closes it, and focus is back where it was', (
     tester,
   ) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: Align(
-            alignment: Alignment.topLeft,
-            child: AppDropdown(
-              width: 200,
-              children: [
-                AppMenuItem(label: 'Status', onPressed: () {}),
-                AppSubmenuItem(
-                  label: 'Notifications',
-                  menuChildren: [
-                    AppMenuItem(label: 'All new messages', onPressed: () {}),
-                    AppMenuItem(label: 'Muted', onPressed: () {}),
-                  ],
-                ),
-              ],
-              builder: (context, controller, _) => InkWell(
-                key: opener,
-                onTap: () =>
-                    controller.isOpen ? controller.close() : controller.open(),
-                child: const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: Text('Open'),
+    await tester.pumpWidget(app());
+    await tester.tap(find.byKey(const ValueKey('field')));
+    await tester.pump();
+    await tester.tap(find.byKey(opener));
+    await tester.pumpAndSettle();
+    expect(focusIsIn(find.byKey(opener)), isTrue);
+    await tester.tapAt(const Offset(700, 500));
+    await tester.pumpAndSettle();
+    expect(find.text('One'), findsNothing);
+    expect(focusIsIn(find.byKey(const ValueKey('field'))), isTrue);
+  });
+
+  testWidgets(
+    'a control with other buttons beside it: focus goes to the anchor, and Enter presses none of them',
+    (tester) async {
+      var beside = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: AppDropdown(
+              children: [AppMenuItem(label: 'One', onPressed: () {})],
+              builder: (context, controller, _) => Row(
+                children: [
+                  InkWell(
+                    key: opener,
+                    onTap: () => controller.isOpen
+                        ? controller.close()
+                        : controller.open(),
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Text('Open'),
+                    ),
+                  ),
+                  TextButton(
+                    key: const ValueKey('beside'),
+                    onPressed: () => beside++,
+                    child: const Text('Beside'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(opener));
+      await tester.pumpAndSettle();
+      expect(find.text('One'), findsOneWidget);
+      expect(focusIsIn(find.byKey(const ValueKey('beside'))), isFalse);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(beside, 0);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.text('One'), findsNothing);
+      expect(beside, 0);
+    },
+  );
+
+  testWidgets(
+    'a menu with a search keeps focus in its search, and Escape from there closes it and returns to the control',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: AppDropdown(
+                searchAfter: 2,
+                children: [
+                  for (final label in ['One', 'Two', 'Three', 'Four'])
+                    AppMenuItem(label: label, onPressed: () {}),
+                ],
+                builder: (context, controller, _) => InkWell(
+                  key: opener,
+                  onTap: () => controller.isOpen
+                      ? controller.close()
+                      : controller.open(),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text('Open'),
+                  ),
                 ),
               ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.tap(find.byKey(opener));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Notifications'));
-    await tester.pumpAndSettle();
-    expect(find.text('Muted'), findsOneWidget);
+      );
+      await tester.tap(find.byKey(opener));
+      await tester.pumpAndSettle();
+      final search = find.byKey(const Key('app-menu-search'));
+      expect(search, findsOneWidget);
+      expect(focusIsIn(search), isTrue);
+      await tester.enterText(search, 'Tw');
+      await tester.pumpAndSettle();
+      expect(find.text('Four'), findsNothing);
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(find.text('Muted'), findsNothing);
-    expect(find.text('Status'), findsOneWidget);
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(find.text('Status'), findsNothing);
-  });
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('app-menu-search')), findsNothing);
+      expect(focusIsIn(find.byKey(opener)), isTrue);
+    },
+  );
 }
