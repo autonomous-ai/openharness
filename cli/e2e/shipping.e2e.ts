@@ -46,8 +46,9 @@ async function run(mode: 'ok' | 'signed-out') {
   const backend = await FakeBackend.start(); relay = backend
   const spec = { machineId: 'e1'.repeat(16), computerId: 'shipping-fixture', name: 'Ann\'s Mac', token: 'fixture-ann-token', account: 'ann', email: 'ann@example.com' }
   backend.addMachine(spec)
-  const d = await signedInDaemon(backend, spec, {}); daemon = d
-  // The developer's own gh is never found by a daemon (the harness stubs it); this test writes its own.
+  // `ghRun` refuses to run a real gh under a test runner (lib/github.ts): this daemon runs the gh this test writes, so it is not told it is
+  // in one. The developer's own gh is never found by a daemon (the harness stubs it); this test replaces the stub.
+  const d = await signedInDaemon(backend, spec, { VITEST: '' }); daemon = d
   writeFileSync(join(d.root, 'bin', 'gh'), fakeGh(mode), { mode: 0o755 })
   const from = weekStart(Date.now()) - 4 * WEEK
   const reports: Array<Record<string, any>> = []
