@@ -45,8 +45,9 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   side of the recaps: the turn lifecycle it tells them, and what it reads back. `ends.ts`: each live turn's
   end (`CoreApi.turns.onEnd`), which names its turn by a hash of its prompt and a number, told by the funnel to listeners here
   and to the services in their own processes that asked (`TURN_END_HEARERS`: the Swarm's host, which posts an
-  agent's answer into its person's chat); the funnel tells it each turn as it goes, so it keeps what each of the
-  last few turns of a session said (`CoreApi.turns.answerOf`), whatever the transcript shows by the time it is asked.
+  agent's answer into its person's chat); the funnel tells it each turn as it goes, so that once the Swarm's process has
+  connected it keeps what each of the last few turns of a session said (`CoreApi.turns.answerOf`), whatever the
+  transcript shows by the time it is asked.
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex
