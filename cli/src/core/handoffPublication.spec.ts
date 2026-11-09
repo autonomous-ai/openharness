@@ -7,6 +7,9 @@ import { performance } from 'node:perf_hooks'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { PreparedHandoff } from '../lib/handoffAuthority.js'
+
+// These specs do real fsyncs, renames and a fresh core instance per case: 5.2-5.7 s on a loaded Intel Mac, over the default 5 s.
+vi.setConfig({ testTimeout: 30_000 })
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
 vi.mock('node:timers/promises', async original => ({ ...await original<object>() }))
 vi.mock('node:child_process', () => {
@@ -142,7 +145,7 @@ it.each(['reservation write', 'reservation sync', 'project directory sync', 'par
   expect(fs.readFileSync(join(cwd, original.result.file!.replace(/\.md$/, '.transcript.md')), 'utf8')).toBe(original.documents!.transcript)
   expect(fs.readFileSync(ctx.exclusion, 'utf8')).toBe(original.exclude!.after)
   expect(await ctx.create()(original, ctx.permit)).toEqual(original.result)
-}, 30_000)
+})
 
 it('never adopts or overwrites a public file without its durable intent receipt', async () => {
   const ctx = await setup(), target = join(cwd, ctx.prepared.result.file!)
@@ -321,7 +324,7 @@ it.each([true, false])('serializes publication and refreshes a stale shared excl
   await expect(ctx.publish(second, ctx.permit)).rejects.toThrow()
   expect(fs.readdirSync(join(data, 'handoff-receipts')).filter(name => name.endsWith('.json'))).toHaveLength(1)
   expect(await ctx.publish(await refreshExclude(second), ctx.permit)).toEqual(second.result)
-}, 30_000)
+})
 
 it('finishes its retained snapshot after interruption and a peer completes the shared exclusion', async () => {
   const ctx = await setup(true), second = await peer(ctx, false), yieldLoop = timers.setImmediate
