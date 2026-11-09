@@ -593,16 +593,110 @@ void main() {
       WidgetTester tester, {
       String? dsh,
       String url = 'http://127.0.0.1:4179/',
+      Map<String, dynamic>? verdict,
     }) async {
       final app = createApp();
       addTearDown(app.dispose);
       app.stateOf('m')!.nodeOnline = true;
       app.adoptSessionForTest(terminal('a0', <TerminalBinaryFrame>[]));
       await mount(tester, app);
-      await _synced(app, 'a0', viewerUrl: url, dsh: dsh);
+      await _synced(app, 'a0', viewerUrl: url, dsh: dsh, verdict: verdict);
       await tester.pump();
       return app;
     }
+
+    testWidgets(
+      'a web harness\'s pane reads as a browser: the page\'s path, back, forward, typed paths, and no other host',
+      (tester) async {
+        const gateway =
+            'http://127.0.0.1:61000/__harness_viewer/tok?path=%2Fmenu';
+        await open(
+          tester,
+          dsh: 'autonomous/web-studio',
+          url: gateway,
+          verdict: {'ready': false, 'preview': 'http://127.0.0.1:8123/'},
+        );
+        final controller = platform.controllers.single;
+        expect(
+          find.byKey(const ValueKey('web-pane-browser-bar')),
+          findsOneWidget,
+        );
+        // The gateway redirects to the page; the bar names the page's path on the agent's machine.
+        controller.backward = true;
+        controller.delegate!.onUrlChange!(
+          const UrlChange(url: 'http://127.0.0.1:61000/menu?day=mon'),
+        );
+        await tester.pump();
+        final address = tester.widget<TextField>(
+          find.byKey(const ValueKey('web-pane-address')),
+        );
+        expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('viewer-pane-title')))
+              .data,
+          'Preview',
+        );
+        // The full address, at the agent's own dev server, as its terminal names it.
+        expect(address.controller!.text, 'http://127.0.0.1:8123/menu?day=mon');
+        await tester.tap(find.byKey(const ValueKey('web-pane-back')));
+        expect(controller.backs, 1);
+        // Forward cannot go anywhere yet.
+        await tester.tap(find.byKey(const ValueKey('web-pane-forward')));
+        expect(controller.forwards, 0);
+        // A typed path opens on the same page's host; another host stays out of the pane.
+        await tester.enterText(
+          find.byKey(const ValueKey('web-pane-address')),
+          '/about',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        expect(
+          controller.loads.last,
+          Uri.parse('http://127.0.0.1:61000/about'),
+        );
+        // The agent's own full address of a page opens that page here, through the gateway.
+        await tester.enterText(
+          find.byKey(const ValueKey('web-pane-address')),
+          'http://127.0.0.1:8123/contact#map',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        expect(
+          controller.loads.last,
+          Uri.parse('http://127.0.0.1:61000/contact#map'),
+        );
+        final loads = controller.loads.length;
+        await tester.enterText(
+          find.byKey(const ValueKey('web-pane-address')),
+          'example.com',
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await tester.pump();
+        expect(controller.loads, hasLength(loads));
+        await tester.tap(find.byKey(const ValueKey('web-pane-reload-page')));
+        expect(controller.reloads, 1);
+        // A phone's and a tablet's width, and back to the whole pane, on the same webview.
+        double pageWidth() =>
+            tester.getSize(find.byKey(const ValueKey('web-pane-page'))).width;
+        final full = pageWidth();
+        await tester.tap(find.byKey(const ValueKey('web-pane-size-mobile')));
+        await tester.pump();
+        expect(pageWidth(), full < 390 ? full : 390);
+        await tester.tap(find.byKey(const ValueKey('web-pane-size-tablet')));
+        await tester.pump();
+        expect(pageWidth(), full < 820 ? full : 820);
+        await tester.tap(find.byKey(const ValueKey('web-pane-size-desktop')));
+        await tester.pump();
+        expect(pageWidth(), full);
+        expect(platform.controllers, [controller]);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('a viewer that is not a web page keeps its header alone', (
+      tester,
+    ) async {
+      await open(tester);
+      expect(find.byKey(const ValueKey('web-pane-browser-bar')), findsNothing);
+    });
 
     testWidgets('Linux pane menu detaches the viewer and restores its page', (
       tester,
