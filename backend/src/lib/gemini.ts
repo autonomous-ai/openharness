@@ -73,14 +73,16 @@ export async function transcribe(pcm: Buffer, sampleRate = 16000): Promise<strin
     generationConfig: { temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
   })
 
-  // Retry transient overload (503/UNAVAILABLE, 429) with backoff — flash-lite spikes are common.
+  // Retry transient overload (503/UNAVAILABLE, 429) with backoff — flash-lite spikes are common. One deadline for all attempts and
+  // their waits: slow answers cannot add up to minutes.
+  const signal = AbortSignal.timeout(STT_TIMEOUT_MS)
   let res!: Response
   for (let attempt = 0; attempt < 4; attempt++) {
     res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
-      signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+      signal,
     })
     if (res.ok || (res.status !== 503 && res.status !== 429)) break
     const backoff = 400 * 2 ** attempt // 400, 800, 1600 ms

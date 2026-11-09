@@ -28,6 +28,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', hungService())
 })
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -43,6 +44,23 @@ describe('every speech-to-text call', () => {
     await expect(call()).rejects.toMatchObject({ name: 'TimeoutError' })
     expect(asked).toHaveLength(1)
     expect(asked[0]!).toBeGreaterThan(0)
-    expect(asked[0]!).toBeLessThanOrEqual(VOICE_CLAIM_MS)
+    // At most half the claim: it starts before the file is read and the quota reserved (store.ts readVoice).
+    expect(asked[0]!).toBeLessThanOrEqual(VOICE_CLAIM_MS / 2)
+  })
+
+  // Gemini retries a busy answer: its attempts and their waits share one deadline, or slow answers would add up to minutes.
+  it('gives all of Gemini\'s attempts one deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    const signals: Array<AbortSignal | null | undefined> = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      signals.push(init?.signal)
+      return new Response('busy', { status: 503 })
+    }))
+    const settled = deviceGemini(Buffer.from('pcm'), 16000).then(() => null, (error: Error) => error)
+    await vi.advanceTimersByTimeAsync(7_000)
+    expect(await settled).toMatchObject({ message: expect.stringContaining('Gemini HTTP 503') })
+    expect(signals).toHaveLength(4)
+    expect(new Set(signals).size).toBe(1)
+    expect(asked).toHaveLength(1)
   })
 })
