@@ -8,12 +8,12 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, readProblem, reasonOf, worksOnOf, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, readerFor, readProblem, reasonOf, worksOnOf, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import type { LedProject } from './githubMerge.js'
+import { authorOf, verdicts, type LedProject } from './githubMerge.js'
 
 type Json = Record<string, unknown>
 
@@ -24,6 +24,10 @@ const SOLVE_MS = 1_000
  *  (benchmark, 2026-11-09), so a small team stops early and a large one uses the second. */
 const STEPS_PER_TASK = 400, MAX_STEPS = 200_000
 const SELF = 'Harness'
+/** How many open pull requests are read for readers each pass, as the merger reads them. */
+const MAX_PULLS = 30
+/** Harness's ask of a reader, as `ask` writes it: who was asked, so nobody is asked twice. */
+const ASKED = /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: please read/
 
 export class GitHubAssign {
   private timer: NodeJS.Timeout | null = null
@@ -104,7 +108,9 @@ export class GitHubAssign {
     const read = readProblem({ now: this.now(), issues: issues.filter(issue => !this.given.has(`${repo}#${issue.number}`)),
       closed: await this.reads.current(repo, `/repos/${repo}/issues?state=closed&sort=updated&direction=desc&per_page=${PAGE}`, 1),
       crew })
-    if (!read.free.size || !read.problem.builders.length) return
+    if (!read.problem.builders.length) return
+    await this.askReaders(project, read)
+    if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
     // keeps under 1% of a core).
     if (![...read.open.values()].some(count => count < DEEP)) return
@@ -130,6 +136,44 @@ export class GitHubAssign {
       // 422: someone made it since the list was read.
       if (made.status === 201 || made.status === 422) this.log(`[super-tab] made the label ${name} in ${repo}`)
       else this.once(`[super-tab] Task assignment: LABEL_NOT_MADE ${repo} ${name}: GitHub answered ${made.status}`)
+    }
+  }
+
+  /**
+   * Asks a reader for each open pull request into the default branch that needs one (Swarm v4: a builder no longer picks
+   * its own): a READ-OK on its head from someone other than its author, two for TWO READS, counting those asked and not yet
+   * answered. None while a HOLD stands: its author fixes first, and its holder reads again. One comment names the reader,
+   * so GitHub news brings it the ask (githubMentions.ts).
+   */
+  private async askReaders(project: LedProject, read: Read): Promise<void> {
+    const { repo } = project
+    const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
+    const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
+      .filter(pull => pull.draft !== true && String((pull.base as Json | undefined)?.ref ?? '') === base)
+    for (const pull of pulls) {
+      const number = Number(pull.number), head = String((pull.head as Json | undefined)?.sha ?? '')
+      if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
+      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
+      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
+      if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
+      const author = authorOf(pull)
+      const asked = new Set(comments.map(c => ASKED.exec(String(c.body ?? ''))?.[1]?.toLowerCase()).filter((name): name is string => !!name))
+      const okOnHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== author)
+      // Asked and not yet READ-OK on this head: still reading.
+      const reading = [...asked].filter(name => !okOnHead.some(([reader]) => reader === name))
+      let need = (twoReads ? 2 : 1) - okOnHead.length - reading.length
+      const skip = new Set([...asked, ...readers.keys()])
+      while (need-- > 0) {
+        const reader = readerFor(read, author, skip)
+        if (!reader) { this.once(`[super-tab] Task assignment: NO_READER ${repo}#${number}: no builder of the team but its author can read it`); break }
+        skip.add(reader.id)
+        const key = `${repo}#${number}@${head}:${reader.id}`
+        if (this.said.has(key)) continue
+        this.said.add(key)
+        await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${reader.name}**: please read `
+          + `this pull request, and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
+        this.log(`[super-tab] asked ${reader.name} to read ${repo}#${number}`)
+      }
     }
   }
 
