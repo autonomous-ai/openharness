@@ -8,6 +8,8 @@ import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { pmAcceptsMessage, legacyProposalId, type LegacyProposalAsk } from './proposalCards.js'
 import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
+import { isRetiredCommand, retiredAnswer } from './retired.js'
+import { metrics } from '../lib/metrics.js'
 import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
 import { finishedWakes } from './crewTimes.js'
 import { isCrew } from './crew.js'
@@ -1656,6 +1658,13 @@ export class SuperTabStore {
 
   async execute(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     client?: DeclaredClient) {
+    // A command v4 no longer has is ignored before anything is read, written or checked: the answer is one constant, as
+    // `updateRequired`'s is, and names nothing of the Swarm (retired.ts). It is counted by type and kind of client, which says
+    // when the last older client has stopped sending it.
+    if (isRetiredCommand(input.command?.type)) {
+      metrics.retiredCommand(input.command.type, client?.kind ?? 'other')
+      return retiredAnswer()
+    }
     try {
       const done = await timeCommand(this.now, () => this.executeOnce(user, tabId, input, asAgentId, hostMachineId),
         (phases, totalMs) => slowCommand(tabId, input.command?.type, totalMs, phases, !!asAgentId))
