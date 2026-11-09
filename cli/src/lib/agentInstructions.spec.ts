@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -107,6 +107,23 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       await put('hi', 'Faye')
       expect((await readInstructions(cwd, '  Faye \n')).text).toBe('hi')
     })
+
+    // A save is a file renamed over the old one: a read at the same time is one file or the other, whole, so the version it
+    // gives is always that of the text it gives. Not on Windows, where a program holding the file open (a scanner, an indexer)
+    // can make a rename over it fail whatever this does. Every save is fsynced: on a Mac with other builds running that took over
+    // the default 5 s, so this has its own limit.
+    it.skipIf(!posix)('gives a file whole when it is saved at the same time: its version is that of its text', async () => {
+      await put('Version 0')
+      let version = sha256('Version 0'), saving = true
+      const saves = (async () => {
+        try { for (let i = 1; i <= 10; i++) version = (await writeInstructions(cwd, 'Faye', `Version ${i}`, version)).version } finally { saving = false }
+      })()
+      const seen: Array<{ text: string | null; version: string }> = []
+      while (saving) seen.push(await readInstructions(cwd, 'Faye'))
+      await saves
+      expect(seen.length).toBeGreaterThan(0)
+      for (const one of seen) expect(one.version).toBe(sha256(one.text!))
+    }, 30_000)
 
     it('hands back every byte as written: a byte-order mark, Windows line ends, any script', async () => {
       const text = '\u{FEFF}line one\r\nline two \u{2014} \u{1EA3}nh \u{1F600}\r\n'
@@ -575,6 +592,16 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       })
     })
 
+    it.skipIf(!unprivileged)('leaves out a file this user may not open, and tells which: the other is still shown', async () => {
+      await project('AGENTS.md', 'SECRET words')
+      await project('CLAUDE.md', 'fine')
+      await chmod(join(cwd, 'AGENTS.md'), 0)
+      expect(await read()).toEqual({
+        shared: [{ name: 'CLAUDE.md', text: 'fine', truncated: false }],
+        failed: [{ name: 'AGENTS.md', error: expect.objectContaining({ code: 'EACCES' }) }],
+      })
+    })
+
     it.skipIf(!posix)('tells of both when the disk cannot look at the folder at all: a project path that loops', async () => {
       const loop = join(cwd, '..', 'loop')
       await symlink('loop', loop)
@@ -591,6 +618,51 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
       expect(await readFile(join(cwd, 'AGENTS.md'), 'utf8')).toBe('agents as they were')
       expect(await readFile(join(cwd, 'CLAUDE.md'), 'utf8')).toBe('claude as it was')
       expect((await readdir(cwd)).sort()).toEqual(['AGENTS.md', 'CLAUDE.md', 'agents'])
+    })
+
+    // The person's editor, a script or a checkout writes these files while the owner has them open on another computer: a file
+    // is replaced by a new one renamed over it, or written in place, and a read can fall anywhere in between. Not run on Windows,
+    // where a program holding a file open (a scanner, an indexer) can make a rename over it fail whatever this does. These do
+    // real writes and reads, which on a Mac with other builds running took over the default 5 s: so they have their own limit.
+    describe('written while it is read', () => {
+      /** [step] again and again, a turn at a time, until the function this returns is awaited. */
+      const writing = (step: (turn: number) => Promise<void>) => {
+        let going = true
+        const done = (async () => {
+          for (let turn = 0; going; turn++) { await step(turn); await new Promise<void>((resolve) => setImmediate(resolve)) }
+        })()
+        return async () => { going = false; await done }
+      }
+
+      it.skipIf(!posix)('shows a file replaced by a new one renamed over it as one text or the other, never a mix', async () => {
+        const one = 'a'.repeat(50_000), two = 'b'.repeat(50_000)
+        await project('AGENTS.md', one)
+        const stop = writing(async (turn) => {
+          await project('.next', turn % 2 ? one : two)
+          await rename(join(cwd, '.next'), join(cwd, 'AGENTS.md'))
+        })
+        try {
+          for (let i = 0; i < 30; i++) {
+            const { shared, failed } = await read()
+            expect(failed).toEqual([])
+            expect([one, two], `read ${i}`).toContain(shared[0].text)
+          }
+        } finally { await stop() }
+      }, 30_000)
+
+      // Caught half way, text of 3-byte characters can end inside one: that read leaves the file out as not text, and no read fails.
+      it.skipIf(!posix)('shows a file written in place as what it held when it was caught, or leaves it out as not text', async () => {
+        const text = cjk(20_000)
+        await project('AGENTS.md', text)
+        const stop = writing((turn) => project('AGENTS.md', turn % 2 ? text : cjk(10_000)))
+        try {
+          for (let i = 0; i < 30; i++) {
+            const { shared, failed } = await read()
+            for (const one of shared) expect(one.text.replaceAll(cjk(1), ''), `read ${i}`).toBe('')
+            for (const lost of failed) expect(lost.error, `read ${i}`).toMatchObject({ code: 'NOT_UTF8' })
+          }
+        } finally { await stop() }
+      }, 30_000)
     })
 
     describe.skipIf(!posix)('never through a link, and only a plain file', () => {
