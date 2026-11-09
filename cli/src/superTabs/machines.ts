@@ -27,6 +27,7 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { cleanupClosed } from './cleanupCloses.js'
+import { repositoryKey } from './repositoryKey.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
@@ -1494,26 +1495,6 @@ const NO_PUSH = /permission|denied|returned error: 40[13]|could not read (userna
 
 /** What git says of a folder that is no repository at all: the one failure that tells it is not a checkout. */
 const NOT_A_REPOSITORY = /not a git repository/i
-
-/** A repository's name for comparing two addresses of it: host and path, lowercase, without credentials, port or `.git`,
- * the same over HTTPS and SSH. Null for a folder on disk or an address it cannot read. A machine reports its checkouts'
- * origins this way (readCheckouts), so no credential in an origin leaves it. */
-export function repositoryKey(url: string): string | null {
-  const text = url.trim()
-  // Only the host and the path are kept: userinfo, a port, a query and a fragment can all carry what is not the repository's
-  // name, a token among them (review of #1743).
-  const scp = /^[\w.-]+@([\w.-]+):(?!\/)([^?#]+)/.exec(text)
-  let host: string | undefined, path: string | undefined
-  if (scp) [, host, path] = scp
-  else {
-    try {
-      const parsed = new URL(text)
-      if (['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol)) [host, path] = [parsed.hostname, decodeURIComponent(parsed.pathname)]
-    } catch { /* Not an address: a folder on disk, or nothing readable. */ }
-  }
-  const clean = path?.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '')
-  return host && clean ? `${host}/${clean}`.toLowerCase() : null
-}
 
 /** Each project folder in a Swarm folder: the repository its origin names (without credentials), whether it is a
  *  checkout of its own, and whether this machine's login can push there, by a dry run that runs no hooks. git's own
