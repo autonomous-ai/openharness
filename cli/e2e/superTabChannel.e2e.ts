@@ -44,6 +44,8 @@ async function boot() {
   const stored = new Map<string, Record<string, any>>()
   const requests: Array<{ tab: string; operationId: string; asAgentId: string; command: Record<string, any> }> = []
   const deliveries: Array<Record<string, any>> = []
+  /** The agents whose deliveries the host asked for, in order. */
+  const deliveryReads: string[] = []
   relay.superTabs = overOldRoutes(async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
     if (path === `/api/super-tabs/hosts/${ME.machineId}/pools` || path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: [] }
@@ -70,6 +72,7 @@ async function boot() {
     }
     const delivery = /\/agents\/([^/]+)\/deliveries(?:\/([^/]+))?$/.exec(path)
     if (delivery) {
+      deliveryReads.push(delivery[1]!)
       const open = deliveries.filter(value => value.agentId === delivery[1])
       if (method === 'GET') return { data: delivery[2] ? open.find(value => value.id === delivery[2]) : open.filter(value => value.status !== 'delivered') }
       const value = open.find(item => item.id === delivery[2])
@@ -86,13 +89,14 @@ async function boot() {
   const client = await LocalClient.connect(d, { machineId: ME.machineId }); clients.push(client)
   const cwd = join(d.projectsDir, 'project'); mkdirSync(cwd, { recursive: true })
   const make = async (name: string) => {
-    // A start made while the daemon is still confirming the engine's native hooks is held, and answered as it is made again.
+    // A start made while the daemon is still confirming the engine's native hooks is held, and answered as it is made again; each
+    // ask has less time than the whole wait, so a slow one is asked again, and the wait's failure names the last error.
     const made = await until(`${name} to be created`, async () => {
       // Started as + New agent starts one (desktop/lib/super_tabs/new_agent.dart), with its Swarm role: its launch carries the team's basics,
       // and the host tells it nothing of them.
-      const answer = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, swarmRole: 'dev' }, 90_000)
+      const answer = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, swarmRole: 'dev' }, 30_000)
       return answer.error === 'NATIVE_LAUNCH_HELD' ? null : answer
-    }, 90_000, 1_000)
+    }, 120_000, 1_000)
     expect(made.error, JSON.stringify(made)).toBeUndefined()
     const row = (await client.request('agents_list')).agents.find((agent: Record<string, any>) => agent.id === made.agent.id)
     return { harnessId: made.agent.id as string, memberId: idFor(made.agent.id), pane: row.tmuxPane as string, name }
@@ -107,8 +111,16 @@ async function boot() {
       ...(stdin === undefined ? {} : { stdin: () => stdin, terminal: () => false }) })
     return { code, answer: JSON.parse(printed) as Record<string, any> }
   }
-  const prompts = () => { try { return readFileSync(join(d.root, 'submitted-prompts'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string) } catch { return [] } }
-  return { d, client, rosters, stored, requests, deliveries, make, member, run, prompts }
+  /** What the fake engines were typed, one JSON line each; none yet is no file. */
+  const prompts = (): string[] => {
+    let text: string
+    try { text = readFileSync(join(d.root, 'submitted-prompts'), 'utf8') } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    return text.split('\n').filter(Boolean).map(line => JSON.parse(line) as string)
+  }
+  return { d, client, rosters, stored, requests, deliveries, deliveryReads, make, member, run, prompts }
 }
 
 it('stores an agent\'s post in its channel once, from its own pane, whatever it says and however many Swarms it is in', async () => {
@@ -158,7 +170,7 @@ it('stores an agent\'s post in its channel once, from its own pane, whatever it 
   // Far past what the daemon's own socket takes, the agent hears a reason, not silence.
   const huge = await f.run(pip, ['post', CHANNEL, '-', 'post-huge'], 'z'.repeat(3_000_000))
   expect(huge.code).toBe(1)
-  expect(String(huge.answer.error), JSON.stringify(huge.answer)).not.toBe('')
+  expect(huge.answer.error, JSON.stringify(huge.answer)).toMatch(/\S/)
   expect(f.stored.has('post-huge')).toBe(false)
 
   // An agent in two Swarms names one; with its Swarm named it posts there.
@@ -171,25 +183,23 @@ it('stores an agent\'s post in its channel once, from its own pane, whatever it 
   expect(other.code, JSON.stringify(other.answer)).toBe(0)
   expect(sent('post-other')[0]).toMatchObject({ tab: OTHER_TAB })
 
-  // An agent in no Swarm has nothing to post to, whether it names one or not.
-  const lost = await f.run(mira, ['post', CHANNEL, 'hello', 'post-lost'])
+  // An agent in no Swarm has nothing to post to in a Swarm it names. (What one that names none is told changes in its own pull
+  // request, with its own test.)
+  const lost = await f.run(mira, ['--tab', TAB, 'post', CHANNEL, 'hello', 'post-lost'])
   expect(lost.code).toBe(1)
-  expect(lost.answer).toMatchObject({ error: 'INVALID_REQUEST' })
-  const lostNamed = await f.run(mira, ['--tab', TAB, 'post', CHANNEL, 'hello', 'post-lost-named'])
-  expect(lostNamed.code).toBe(1)
-  expect(lostNamed.answer).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
-  expect(f.stored.has('post-lost') || f.stored.has('post-lost-named')).toBe(false)
+  expect(lost.answer).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+  expect(f.stored.has('post-lost')).toBe(false)
 }, 300_000)
 
 it('types an @Name mention from another agent into the named agent once: idle, busy, and not running', async () => {
   const f = await boot()
-  const pip = await f.make('Pip'), juno = await f.make('Juno'), kai = await f.make('Kai')
+  const [pip, juno, kai] = await Promise.all([f.make('Pip'), f.make('Juno'), f.make('Kai')])
   // Zed is the Swarm's, on this machine's roster, but its session is not running here (stopped, or the machine was off).
-  const away = { harnessId: 'zed-session-not-running', memberId: idFor('zed-session-not-running'), pane: '%99', name: 'Zed' }
+  const away = { harnessId: 'zed-session-not-running', memberId: idFor('zed-session-not-running'), name: 'Zed' }
   for (const agent of [pip, juno, kai, away]) f.rosters.get(TAB)!.push(f.member(agent))
   // The Swarm's service runs in a process of its own, started when the core is asked for it.
   expect(await f.client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
-  const mention = (to: typeof pip, id: string, text: string) => {
+  const mention = (to: { memberId: string }, id: string, text: string) => {
     const row = { id: `delivery-${id}`, agentId: to.memberId, conversationId: CHANNEL, status: 'queued', claimId: null,
       message: { id: `message-${id}`, conversationId: CHANNEL, author: { kind: 'agent', id: pip.memberId, name: 'Pip' }, text, recipientIds: [to.memberId],
         createdAt: '2026-11-09T09:00:00.000Z' } }
@@ -207,9 +217,10 @@ it('types an @Name mention from another agent into the named agent once: idle, b
     + `Answer: .* super-tab .* --tab '${TAB}' --agent '${juno.memberId}' post '${CHANNEL}' 'your message' UNIQUE_OPERATION_ID --reply-to 'message-idle' --to '${pip.memberId}'$`))
   expect(idle.claims).toBe(1)
 
-  // Busy: typed into the running turn, once, and acknowledged before that turn ends.
+  // Busy: typed into the running turn, once, and acknowledged before that turn ends. The turn runs longer than the whole wait, so
+  // no turn_ended can be on its way when the acknowledgement is seen.
   const turn = f.client.next(frame => frame.type === 'turn_started' && frame.agentId === kai.harnessId && !frame.replay)
-  f.client.send('message', { agentId: kai.harnessId, content: '!slow 15000' })
+  f.client.send('message', { agentId: kai.harnessId, content: '!slow 90000' })
   await turn
   const ended = () => f.client.frames.filter(frame => frame.type === 'turn_ended' && frame.agentId === kai.harnessId && !frame.replay).length
   const before = ended()
@@ -219,10 +230,14 @@ it('types an @Name mention from another agent into the named agent once: idle, b
   expect(f.prompts().filter(prompt => prompt.includes('the build is red'))).toHaveLength(1)
   expect(busy.claims).toBe(1)
 
-  // Not running: its session is not on this machine, so nothing is claimed or typed for it, and the mention waits where the server
-  // keeps it for the next time it runs.
+  // Not running: its session is not on this machine, so its deliveries are never asked for, nothing is claimed or typed for it,
+  // and the mention waits where the server keeps it for the next time it runs. A mention to Juno queued after it is delivered
+  // first: the host has looked since.
   const waiting = mention(away, 'waiting', '@Zed are you there?')
-  await new Promise(resolve => setTimeout(resolve, 6_000))
+  const later = mention(juno, 'later', '@Juno and you?')
+  await until('Juno\'s later delivery acknowledged', () => later.status === 'delivered' || null, 60_000, 250)
+  expect(f.deliveryReads).toContain(juno.memberId)
+  expect(f.deliveryReads).not.toContain(away.memberId)
   expect(waiting).toMatchObject({ status: 'queued', claimId: null })
   expect(f.prompts().some(prompt => prompt.includes('are you there'))).toBe(false)
 }, 300_000)
