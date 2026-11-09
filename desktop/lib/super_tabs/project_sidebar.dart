@@ -15,6 +15,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'attention.dart';
 import 'controller.dart';
+import 'delete_agent.dart';
 import 'buddies.dart';
 import 'model.dart';
 import 'my_agents.dart';
@@ -26,7 +27,6 @@ import 'leaderboard/reader.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
 import 'private_project_lock.dart';
-import '../widgets/delete_harness_dialog.dart';
 import '../widgets/laid_out_list.dart';
 import '../widgets/pane_menu.dart' show showContextMenuAt;
 import 'swarm_type.dart';
@@ -818,9 +818,12 @@ class ProjectSidebar extends StatelessWidget {
         _ => null,
       },
     );
-    final app = this.app;
-    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent).
-    if (app == null || agent.contributorId != controller.accountId) return row;
+    // Delete is one right-click away, for its person alone (Swarm v4: only its person stops an agent). A project's PM
+    // stays until its project goes.
+    if (agent.contributorId != controller.accountId || !controller.canWrite) {
+      return row;
+    }
+    final kept = snapshot.leadProtectionReason(agent.id);
     return Builder(
       builder: (context) => GestureDetector(
         onSecondaryTapUp: (event) async {
@@ -830,19 +833,14 @@ class ProjectSidebar extends StatelessWidget {
             children: (close) => [
               AppMenuItem(
                 label: 'Delete',
+                detail: kept,
                 leadingSlot: false,
-                onPressed: () => close('delete'),
+                onPressed: kept == null ? () => close('delete') : null,
               ),
             ],
           );
           if (choice == 'delete' && context.mounted) {
-            await confirmDeleteHarness(
-              context,
-              app,
-              agent.machineId,
-              agent.harnessId,
-              name,
-            );
+            await deleteSwarmAgent(context, controller, agent, name);
           }
         },
         child: row,
