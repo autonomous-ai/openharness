@@ -143,6 +143,8 @@ machine is down gives back its queued tasks after 30 minutes (a sleep or a resta
 it took after 3 hours (work may be on that machine). Its builder label, and status:taken, come off with one comment
 ("Harness, 23:10: Atlas's machine has been down since 15:40 UTC, so this task goes to the builder who can start it
 next."), and the next plan gives each to another builder (`assign/crew.ts takeBacks`, `githubAssign.ts takeBack`). A
+task whose pull request waits for its readers or its merge is kept: its builder has done its part, and the pull request
+merges without it; another builder would do it again. A
 builder whose subscription has less room than a small task until a reset more than two hours off gives back what waits
 for it, never what it took (`outOfQuota`): the plan would only hold it until the reset. A task its builder took that
 nothing touched for 4 hours (no comment or label on the issue, no change to a pull request for it, drafts included) gets

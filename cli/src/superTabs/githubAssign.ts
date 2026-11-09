@@ -131,7 +131,6 @@ export class GitHubAssign {
       return { ...issue, labels: [...(Array.isArray(issue.labels) ? issue.labels : []), { name: label }] }
     })
     const crew = await this.deps.crew(project)
-    await this.takeBack(repo, issues, crew.away ?? [])
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
     await this.labelRepo(repo, crew)
@@ -139,13 +138,17 @@ export class GitHubAssign {
     await this.measure(repo, closed)
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
     const read = readProblem({ now: this.now(), issues, closed, crew, minutes })
+    // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
+    const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
+    // The tasks whose pull request waits for its readers or its merge, readers asked as needed (with no builder here, its
+    // PM): their builders have done their part, so none is called quiet, and one whose builder went away is kept, as its
+    // pull request merges without it. Another builder would do it again.
+    const withReaders = await this.askReaders(project, read, pulls, crew)
+    await this.takeBack(repo, issues, crew.away ?? [], undefined, withReaders)
     if (!read.problem.builders.length) return
     // Only while another builder has room: a team's one builder would be given its task straight back.
     const short = outOfQuota(read)
-    if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short)
-    // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
-    const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
-    const withReaders = await this.askReaders(project, read, pulls, crew)
+    if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short, undefined, withReaders)
     await this.askQuiet(repo, issues, pulls, crew, withReaders)
     if (!read.free.size) return
     // Nobody can take a task while every list is full: no plan, so a backlog costs no CPU each minute (the daemon at rest
@@ -165,9 +168,9 @@ export class GitHubAssign {
    * status:taken when it was taken, come off, with one line of why; the next plan gives each to another builder. Once a
    * task, as the label is gone from the next read.
    */
-  private async takeBack(repo: string, issues: Json[], away: AwayBuilder[], why?: string): Promise<void> {
+  private async takeBack(repo: string, issues: Json[], away: AwayBuilder[], why?: string, keep: ReadonlySet<number> = new Set()): Promise<void> {
     if (!away.length) return
-    for (const back of takeBacks(issues, away, this.now()).map(b => why ? { ...b, why } : b)) {
+    for (const back of takeBacks(issues, away, this.now()).filter(b => !keep.has(b.number)).map(b => why ? { ...b, why } : b)) {
       const key = `${repo}#${back.number}:back:${back.label}`
       if (this.said.has(key)) continue
       // status:taken first: a task left taken with no builder is one nobody plans (readProblem), while one left queued for

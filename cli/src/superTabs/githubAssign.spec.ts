@@ -335,6 +335,21 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.labelled().map(([n, label]) => [n, label]).sort()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
   })
 
+  it('keeps the task of a builder that went away while its pull request waits for its readers or its merge', async () => {
+    const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+    const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:s', 'builder:juno', 'status:taken'])], { crew: team })
+    const head = (n: number) => `f6edb4${n}${'0'.repeat(33)}`
+    f.github.state.pulls = [1, 2].map(n => ({ number: 8 + n, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:juno' }],
+      head: { sha: head(n), ref: `juno/${n}` }, body: `Closes #${n}`, updated_at: '2026-11-09T07:00:00Z' }))
+    // #9 (for #1) has its READ-OK and waits to merge; #10 (for #2) has a HOLD on its head, which Juno will not fix.
+    f.github.state.comments.set(9, [{ body: `Pip, 07:10, to **Juno**: READ-OK ${head(1).slice(0, 7)}`, created_at: '2026-11-09T07:10:00Z', author_association: 'OWNER' }])
+    f.github.state.comments.set(10, [{ body: `Pip, 07:10, to **Juno**: HOLD ${head(2).slice(0, 7)} app.ts:3 add the test`, created_at: '2026-11-09T07:10:00Z',
+      author_association: 'OWNER' }])
+    await f.assigner.tick()
+    expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/2/labels/status%3Ataken',
+      '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
+  })
+
   it('says a take back GitHub refuses, leaves the task as it was, and takes it back next pass', async () => {
     const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
     const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken'])], { crew: team })
