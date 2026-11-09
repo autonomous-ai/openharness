@@ -1,7 +1,7 @@
 import { reopenTaskApproval, stageTaskApproval } from './taskApproval.js'
 import { steers } from './boardRights.js'
 import { expireProposalQuestion } from './proposalClock.js'
-export { advanceProposalCards, proposalDueAt } from './proposalClock.js'
+export { proposalDueAt } from './proposalClock.js'
 /** Durable proposal metadata lives on its existing version-guarded card. Discussion stays in message rows. */
 import { z } from 'zod'
 import { author, fail, nextConversationNumber, person, stableId, type Actor, type Author, type Conversation, type MessageDraft, renderWorkTask, type SuperTabState } from './model.js'

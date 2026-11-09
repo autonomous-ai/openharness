@@ -3,7 +3,6 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { SEED_RULES, type ProjectRules } from './policy.js'
 import { stepsOf } from './steps.js'
-import { openWaitingSteps } from './osSteps.js'
 
 // Task #4278: since v3 (#4120) a Tester starts only on its own person's computer, and no own-account Linux machine could take
 // harness's Linux test steps, yet every new head opened one and the PM closed it by hand (#4204, #4215, #4216, #4217, #4252,
@@ -132,59 +131,4 @@ for (const [os, { reports, step: osStep, line, field, rules }] of Object.entries
     })
   })
 
-  describe(`a waiting ${reports} step opens once a ${reports} machine is there`, () => {
-    it('opens nothing while none is, then opens it at the recorded head and tells the PM, once', () => {
-      const f = fixture(rules)
-      f.machines()
-      const head = 'a'.repeat(40)
-      f.ready(head)
-      const state = f.state
-      expect(openWaitingSteps(state, NOW)).toEqual([])
-      expect(f.steps()).toEqual(['Review', 'Test on a Mac'])
-      // The PM's person's computer of that OS reports.
-      state.machines = [machine('mac1', 'macOS'), machine('box1', reports)] as never
-      const rows = openWaitingSteps(state, NOW)
-      const opened = stepsOf(state, f.task).filter(step => step.step === osStep)
-      expect(opened).toHaveLength(1)
-      expect(opened[0]!.brief).toContain(head)
-      expect(rows.find(row => row.conversationId === opened[0]!.id)!.text).toBe(opened[0]!.brief)
-      expect(rows.find(row => row.conversationId === f.task)!.recipients).toEqual([f.lead])
-      expect((state.conversations.find(c => c.id === f.task)! as unknown as Record<string, unknown>)[field], os).toBeUndefined()
-      // A second pass opens nothing more.
-      expect(openWaitingSteps(state, NOW)).toEqual([])
-      expect(stepsOf(state, f.task).filter(step => step.step === osStep)).toHaveLength(1)
-    })
-
-    it('keeps waiting on a task that is no longer open', () => {
-      const f = fixture(rules)
-      f.machines()
-      f.ready('a'.repeat(40))
-      const state = f.state
-      state.conversations.find(c => c.id === f.task)!.assignment!.status = 'done'
-      state.machines = [machine('mac1', 'macOS'), machine('box1', reports)] as never
-      expect(openWaitingSteps(state, NOW)).toEqual([])
-      expect(stepsOf(state, f.task).some(step => step.step === osStep)).toBe(false)
-    })
-  })
 }
-
-describe('a task that needs a Linux and a Windows test, with neither machine there (#4410)', () => {
-  it('waits for each, says each line once, and opens each when its own machine is there', () => {
-    const f = fixture(bothRules)
-    f.machines()
-    f.ready('a'.repeat(40))
-    f.ready('b'.repeat(40))
-    expect(f.steps()).toEqual(['Review', 'Test on a Mac'])
-    expect(f.lines(OSES.linux.line)).toHaveLength(1)
-    expect(f.lines(OSES.windows.line)).toHaveLength(1)
-    const state = f.state
-    state.machines = [machine('mac1', 'macOS'), machine('win1', 'Windows')] as never
-    openWaitingSteps(state, NOW)
-    expect(stepsOf(state, f.task).filter(step => !step.archived).map(step => step.step)).toEqual(['Review', 'Test on a Mac', OSES.windows.step])
-    expect(state.conversations.find(c => c.id === f.task)!.waitingLinuxStep).toBeDefined()
-    state.machines = [machine('mac1', 'macOS'), machine('win1', 'Windows'), machine('linux1', 'Linux')] as never
-    openWaitingSteps(state, NOW)
-    expect(stepsOf(state, f.task).filter(step => !step.archived).map(step => step.step))
-      .toEqual(['Review', 'Test on a Mac', OSES.windows.step, OSES.linux.step])
-  })
-})

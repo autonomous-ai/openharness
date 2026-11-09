@@ -262,23 +262,6 @@ describe('durable proposal cards', () => {
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.pm, messageId: answered.result.messageId as string } })).toBe(1)
   })
 
-  it('applies questions after long inactivity including dormant cards, using the due index', async () => {
-    const { dueProposalCards } = await import('../src/superTabs/proposalDue.js')
-    const f = await fixture(), id = await f.create(), deadline = f.clock.now + 30 * DAY
-    await f.execute({ type: 'proposal.ask', conversationId: id, personId: peer.sub, question: 'Wait?', defaultAnswer: 'Proceed', deadline }, owner, f.pm)
-    const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: id } } })
-    await db.swarmGroup.update({ where: { id: row.id }, data: { dormant: true, lastActivityAt: new Date(f.clock.now - 60 * DAY), data: { ...(row.data as object), dormant: true } } })
-    f.clock.now = deadline
-    const prof = await profiled(db, () => dueProposalCards(db, deadline, 200))
-    const due = plan(reads(prof, 'SwarmGroup', ['proposalDueAt']))
-    expect(due).toEqual([expect.objectContaining({ plan: 'IXSCAN { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 }' })])
-    expect(due[0]!.docsExamined).toBeLessThanOrEqual(due[0]!.returned ?? 0)
-    await runTimeCheckPass(db, f.store, deadline)
-    expect((await f.card(id)).proposal!.questions[0]!.answer).toMatchObject({ text: 'Proceed', defaulted: true })
-    await runTimeCheckPass(db, f.store, deadline + 1)
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: id, text: 'Proceed' } })).toBe(1)
-  })
-
   it('guards answer races and denies receipt replay after private-project revocation', async () => {
     const f = await fixture(), id = await f.create(), deadline = f.clock.now + 1000
     const q = await f.execute({ type: 'proposal.ask', conversationId: id, personId: peer.sub, question: 'Keep?', defaultAnswer: 'Yes', deadline }, owner, f.pm)
