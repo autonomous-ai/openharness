@@ -28,7 +28,7 @@ function swarm() {
   state.machines = [pool('mac', 'computer'), pool('mac-team', 'team', { hostMachineId: 'mac' })]
   state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/ngochuy13/groupme' }
   const run = (command: Command, context: Partial<CommandContext> = {}) => {
-    const effects = applyCommand(state, owner, command, { now: NOW, operationId: `op-${++sequence}`, teamMachines: ['mac-team'],
+    const effects = applyCommand(state, owner, command, { now: NOW, operationId: `op-${++sequence}`,
       contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }, ...context })
     state = effects.state
     return effects

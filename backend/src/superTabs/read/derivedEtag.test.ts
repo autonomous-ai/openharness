@@ -4,7 +4,7 @@ import { derivedEtag, MARK_FIELDS } from './derivedEtag.js'
 
 const summary = (): Derived => ({
   agents: { a1: { downSince: null, limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null, myAgent: false, role: 'member' as const, mainProjectId: null } },
-  machines: { m1: { availableSlots: 2, teamWork: { allowed: true } } },
+  machines: { m1: { availableSlots: 2, clientVersion: '0.5.82' } },
   mentionsWaiting: 1, mentionsDigest: 'd1', avatars: { 'person:p1': 'https://example.test/a?sig=1' },
 })
 
@@ -17,7 +17,7 @@ describe('derivedEtag', () => {
   it('is the same for the same summary built in another key order', () => {
     const s = summary()
     const reordered: Derived = { avatars: s.avatars, mentionsDigest: s.mentionsDigest, mentionsWaiting: s.mentionsWaiting,
-      machines: { m1: { teamWork: { allowed: true }, availableSlots: 2 } }, agents: s.agents }
+      machines: { m1: { clientVersion: '0.5.82', availableSlots: 2 } }, agents: s.agents }
     expect(derivedEtag(reordered)).toBe(derivedEtag(s))
   })
 
@@ -33,7 +33,7 @@ describe('derivedEtag', () => {
       d => { d.agents.a1!.downSince = '2026-11-04T00:00:00.000Z' },
       d => { d.agents.a1!.roleName = 'Reviewer' },
       d => { d.machines.m1!.availableSlots = 1 },
-      d => { d.machines.m1!.teamWork = { allowed: false, reason: 'full' } },
+      d => { d.machines.m1!.machineSuspended = 'full' },
       d => { d.avatars = { 'person:p1': 'https://example.test/a?sig=2' } },
       d => { d.mentionsWaiting = 2 },
       d => { d.decisionsDigest = 'x' },

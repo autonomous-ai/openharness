@@ -33,7 +33,7 @@ function fixture() {
     ...(process ? { process } : {}) }, actor).result.projectId as string
   const set = (projectId: string, process: string, actor = peer) => run({ type: 'project.process', projectId, process }, actor)
   const project = (id: string) => projectsOf(state).find(p => p.id === id)!
-  const view = (actor = owner) => readerView(split(state, { tabId: state.id, version: sequence, now: 1000 }), actor, 1000, { teamMachines: [] })
+  const view = (actor = owner) => readerView(split(state, { tabId: state.id, version: sequence, now: 1000 }), actor, 1000, {})
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
   const add = (projectId: string) => run({ type: 'agent.add', conversationId: project(projectId).leadConversationId,
     machineId: 'machine', harnessId: 'pm', name: 'PM', configuration, lead: true }, peer).result.agentId as string
