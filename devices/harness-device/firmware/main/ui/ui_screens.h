@@ -8,7 +8,6 @@
 #include <stddef.h>   // size_t (ui_project_id_at)
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"   // TaskHandle_t — ui_set_reload_waiter
-#include "ui_metrics.h"   // UI_DESK_GRID — which face this build is for, and so which of these exist
 #include "config_store.h"
 #include "../cable_machines.h"   // cable_machine_t — the wheel's row, already parsed and diffed
 #include "../cable_client.h"     // cable_swarm_t — one of the window's tabs, as the wire carries it
@@ -189,12 +188,6 @@ bool ui_notif_is_open(void);
 // button that lives inside that band can be pressed — a tap on the bell reaches LVGL and opens the
 // drawer; a pull that starts anywhere else in the band opens it too.
 bool ui_notif_pill_hit(uint16_t x, uint16_t y);
-/* First y the notification pull-down may start on: the bottom of the fixed tab line, which owns the top
- * of the Pro's face. Declared only where UI_DESK_GRID — the round face has no line and no floor, and its
- * touch path must compile to exactly what it did before. */
-#if UI_DESK_GRID
-int ui_notif_band_top_px(void);
-#endif
 // A swipe-up inside the open drawer → close it, but only if the list is already scrolled to the top
 // (otherwise the gesture is just scrolling the list).
 void ui_notif_swipe_up(void);

@@ -30,11 +30,7 @@ sdkconfig.dial.defaults.stamp
 sdkconfig.pro.defaults.stamp
 build-arm
 
-# Local pairing secrets (WiFi password / API key) — do not commit.
-# Copy main/provisioned_config.h.example → main/provisioned_config.h and fill in.
-# The .local variant is a per-machine override that also carries secrets.
-main/provisioned_config.h
-main/provisioned_config.h.local
+# The release build dir (scripts/upload-firmware.sh, scripts/flash-station.sh).
 build-prod/
 
 # Design mockups: HTML frames used to agree on a layout BEFORE writing LVGL code. They are a
