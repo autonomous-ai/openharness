@@ -1,8 +1,9 @@
 # People at the owner's email domain join a Swarm by themselves
 
 Status: spec for Ken's confirmation · 2026-11-03 · requested by Ken.
-Builds on Swarm sharing (`backend/src/superTabs/sharing.ts`, `desktop/lib/super_tabs/sharing.dart`) and Workspaces
-(removed with Swarm v4: a Swarm is the org, so the Workspace parts below no longer apply).
+Builds on Swarm sharing (`backend/src/superTabs/sharing.ts`, `desktop/lib/super_tabs/sharing.dart`) and Workspaces.
+Swarm v4 removed Workspaces (2026-11-09: a Swarm is the org): the Workspace guest role, the Workspace's own decline and
+`GET /api/super-tabs/workspaces` below no longer exist, and auto-join runs on the list read alone.
 
 ## Why
 
