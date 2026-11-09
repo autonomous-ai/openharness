@@ -37,7 +37,8 @@ class SwarmAttachment extends StatelessWidget {
 
   /// [file]'s thumbnail link, when it has one that opens now
   /// ([SwarmFileRef.currentThumb]): the chat draws that, and the original
-  /// only when the picture is opened full screen.
+  /// only when the picture is opened full screen. Null for a thumbnail whose
+  /// link has ended: a fresh one is asked of [fileRef] first.
   final Uri? thumb;
 
   /// [file]'s link, when it is on Harness's file storage — the only place a
@@ -173,8 +174,7 @@ class _PreviewState extends State<_Preview> {
   void _ask() {
     _turn = widget.store.turns.value;
     _thumbShown = false;
-    final thumb = widget.thumb;
-    _local = thumb == null ? _original() : _thumbnailOrOriginal(thumb);
+    _local = _thumbnailOrOriginal();
     _failed = false;
   }
 
@@ -187,7 +187,21 @@ class _PreviewState extends State<_Preview> {
 
   /// The thumbnail, kept apart from the original (their addresses and so their
   /// links differ); the original when the thumbnail cannot be had.
-  Future<File> _thumbnailOrOriginal(Uri thumb) async {
+  ///
+  /// A thumbnail whose link has ended (a chat opened again later) is asked a
+  /// fresh link first, as Desktop does: the read that signs the original again
+  /// signs its thumbnail too (backend fileLinks.ts), so the original, many
+  /// times the size, is not fetched in its place.
+  Future<File> _thumbnailOrOriginal() async {
+    var thumb = widget.thumb;
+    final ref = widget.fileRef;
+    if (thumb == null && ref != null && widget.file.thumb != null) {
+      // The original would ask this same read: one that fails fails the
+      // picture, as it did there.
+      await ref.link();
+      thumb = ref.currentThumb;
+    }
+    if (thumb == null) return _original();
     try {
       final file = await widget.store.file(
         thumb,
