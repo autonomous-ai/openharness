@@ -1,5 +1,6 @@
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { STT_TIMEOUT_MS } from './sttTimeout.js'
 
 // Gemini batch STT for the device voice endpoint. The device streams raw linear16/16k/mono PCM;
 // Gemini's inline audio wants a container, so we prepend a 44-byte WAV header and send audio/wav.
@@ -79,6 +80,7 @@ export async function transcribe(pcm: Buffer, sampleRate = 16000): Promise<strin
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
+      signal: AbortSignal.timeout(STT_TIMEOUT_MS),
     })
     if (res.ok || (res.status !== 503 && res.status !== 429)) break
     const backoff = 400 * 2 ** attempt // 400, 800, 1600 ms
