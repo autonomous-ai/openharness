@@ -59,3 +59,32 @@ describe('reads with their ETags kept (GitHubReads)', () => {
     await expect(out.one('acme/app', '/repos/acme/app')).rejects.toMatchObject({ code: 'GH_SIGNED_OUT', everywhere: true })
   })
 })
+
+describe('a file of a repository (GitHubReads.file)', () => {
+  it('reads a file as text, again by its ETag, and a missing file as nothing without stopping its repository', async () => {
+    let now = 0
+    const asked: string[] = []
+    const get: GitHubGet = async (path, etag) => {
+      asked.push(path)
+      if (path.endsWith('/Pip.md')) return etag === '"p"' ? { status: 304, etag: '"p"', body: null, resetAt: null }
+        : { status: 200, etag: '"p"', body: { encoding: 'base64', content: Buffer.from('Works on: mobile\n').toString('base64') }, resetAt: null }
+      if (path === '/repos/acme/app/issues?state=open') return { status: 200, etag: null, body: [{ number: 1 }], resetAt: null }
+      return { status: 404, etag: null, body: null, resetAt: null }
+    }
+    const reads = new GitHubReads(get, () => now)
+    expect(await reads.file('acme/app', 'agents/Pip.md')).toBe('Works on: mobile\n')
+    expect(await reads.file('acme/app', 'agents/Pip.md')).toBe('Works on: mobile\n')
+    expect(await reads.file('acme/app', 'agents/First builder.md')).toBeNull()
+    expect(asked.at(-1)).toBe('/repos/acme/app/contents/agents/First%20builder.md')
+    // The repository still reads.
+    expect(await reads.current('acme/app', '/repos/acme/app/issues?state=open', 1)).toEqual([{ number: 1 }])
+    // A missing file is not asked for again for five minutes.
+    const before = asked.length
+    expect(await reads.file('acme/app', 'agents/First builder.md')).toBeNull()
+    expect(asked.length).toBe(before)
+    now += 5 * 60_000
+    await reads.file('acme/app', 'agents/First builder.md')
+    expect(asked.length).toBe(before + 1)
+  })
+})
+

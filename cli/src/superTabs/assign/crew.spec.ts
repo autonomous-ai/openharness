@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { crewOf, CORES, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -127,5 +127,42 @@ describe('labels, needs and dependencies', () => {
     expect(machineHas({ resources: { gpuPercent: 3 } }, 'gpu')).toBe(true)
     expect(machineHas({ resources: { gpuPercent: null } }, 'gpu')).toBe(false)
     expect(machineHas(undefined, 'iphone')).toBe(false)
+  })
+})
+
+describe('what an agent works on (worksOnOf, contextOf)', () => {
+  it('reads the Works on line of its instructions file as areas', () => {
+    expect(worksOnOf('Works on: Mobile, backend\n\nRules follow.')).toEqual(['mobile', 'backend'])
+    expect(worksOnOf('# Pip\n- **Works on:** Mobile app and API')).toEqual(['mobile-app', 'api'])
+    expect(worksOnOf('works on: part:Firmware / docs')).toEqual(['firmware', 'docs'])
+    expect(worksOnOf('Works on: anything')).toEqual([])
+    expect(worksOnOf('Works on:')).toEqual([])
+    expect(worksOnOf('Only rules here.')).toBeNull()
+    expect(worksOnOf(null)).toBeNull()
+  })
+
+  it('halves a builder\'s time in its areas and makes the others half as long again, learned speed kept', () => {
+    expect(contextOf(['mobile', 'api', 'ui'], new Map([['api', 2]]), ['mobile'])).toEqual({ mobile: 0.5, api: 1.05, ui: 1.5 })
+    expect(contextOf(['mobile', 'api'], new Map([['api', 2]]), [])).toEqual({ api: 0.7 })
+    expect(contextOf(['mobile'], undefined, null)).toEqual({})
+  })
+
+  it('gives a builder the tasks of its area first; another takes one only when the first is far behind', () => {
+    const team = (worksOn: string[] | null): Crew => ({ ...crew(), builders: [
+      { id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude', worksOn },
+      { id: 'juno', name: 'Juno', label: 'builder:juno', machineId: 'mac', engine: 'claude' }] })
+    const issues = [issue(1, ['size:s', 'part:mobile']), issue(2, ['size:s', 'part:mobile']), issue(3, ['size:s', 'part:mobile']), issue(4, ['size:s', 'part:api'])]
+    const read = readProblem({ now: NOW, crew: team(['mobile']), closed: [], issues })
+    const picks = nextPicks(solve(read.problem, { seed: 1, budgetMs: 2_000 }).plan, read)
+    const of = (builder: string) => picks.filter(p => p.builder === builder).map(p => p.task).sort()
+    // Pip takes the mobile work, two deep; Juno the API task; the third mobile task waits for Pip, who will still finish it
+    // sooner than Juno could.
+    expect(of('pip')).toEqual(['#1', '#2'])
+    expect(of('juno')).toEqual(['#4'])
+    expect(reasonOf(picks.find(p => p.task === '#1')!, read)).toBe('it can start now, and it works on mobile')
+    // Said nothing: the work is shared by who is free.
+    const plain = readProblem({ now: NOW, crew: team(null), closed: [], issues })
+    const shared = nextPicks(solve(plain.problem, { seed: 1, budgetMs: 2_000 }).plan, plain)
+    expect(shared.filter(p => p.builder === 'juno').length).toBe(2)
   })
 })
