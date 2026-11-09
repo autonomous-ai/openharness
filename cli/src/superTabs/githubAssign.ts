@@ -124,7 +124,9 @@ export class GitHubAssign {
     const minutes = learnedMinutes([...this.took].filter(([key, took]) => key.startsWith(`${repo}#`) && took).map(([, took]) => took!))
     const read = readProblem({ now: this.now(), issues, closed, crew, minutes })
     if (!read.problem.builders.length) return
-    await this.takeBack(repo, issues, outOfQuota(read))
+    // Only while another builder has room: a team's one builder would be given its task straight back.
+    const short = outOfQuota(read)
+    if (short.length < read.problem.builders.length) await this.takeBack(repo, issues, short)
     // Open pull requests, drafts included: a draft is where a task's work shows before it is read.
     const pulls = await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1)
     await this.askReaders(project, read, pulls)
@@ -215,8 +217,7 @@ export class GitHubAssign {
       const waiting = [...asked.keys()].filter(name => !readers.has(name))
       for (const [reader, r] of stale) {
         if ([...asked.get(reader) ?? []].some(onHead)) continue
-        const builder = [...read.builders.values()].find(b => b.name.toLowerCase() === reader)
-        await this.ask(repo, number, head, builder?.name ?? reader, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
+        await this.ask(repo, number, head, r.name, `the head is now ${head.slice(0, 7)}, after your ${r.verdict} on ${r.sha.slice(0, 7)}: please read it again`)
       }
       let need = (twoReads ? 2 : 1) - ok.length - stale.length - waiting.length
       const skip = new Set([...asked.keys(), ...readers.keys()])
@@ -274,6 +275,8 @@ export class GitHubAssign {
         if (before !== null) { asked = { since: before - QUIET_ASK_MS, askedAt: before }; this.quiet.set(key, asked) }
       }
       if (asked && now - asked.askedAt >= QUIET_BACK_MS - QUIET_ASK_MS && now - asked.since >= QUIET_BACK_MS) {
+        // A team's one builder keeps it: there is nobody else to give it to.
+        if (!crew.builders.some(b => b.label !== task.label)) continue
         this.quiet.delete(key)
         await this.takeBack(repo, issues.filter(issue => Number(issue.number) === task.number),
           [{ name: task.name, label: task.label, why: 'stopping' }], `${task.name} has had no activity on it since it was asked`)

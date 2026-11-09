@@ -276,6 +276,40 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([1])
   })
 
+  it('asks a PM again by the name it signs with, when it reads for a team of one builder', async () => {
+    const f = setup([], { crew: { builders: [crew().builders[0]!], machines: crew().machines } })
+    f.github.state.pulls = [{ number: 15, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }],
+      head: { sha: `6b5ae5a${'0'.repeat(33)}`, ref: 'pip/13' }, body: '' }]
+    f.github.state.comments.set(15, [{ body: 'Faye, 18:03, to **Pip**: HOLD c208f63 rebase on main', created_at: '2026-11-09T11:03:00Z',
+      author_association: 'OWNER' }])
+    await f.assigner.tick()
+    expect(f.said()).toEqual([[15, expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Faye\*\*: the head is now 6b5ae5a, after your HOLD on c208f63/)]])
+  })
+
+  it('moves nothing within a team of one builder: a quiet task stays, and so does one waiting for its quota', async () => {
+    const HOUR = 3_600_000
+    const one: Crew = { builders: [crew().builders[0]!], machines: crew().machines }
+    const f = setup([issue(1, ['size:s', 'builder:pip', 'status:taken'])], { crew: one })
+    f.github.state.open[0]!.updated_at = new Date(f.clock.now - 5 * HOUR).toISOString()
+    await f.assigner.tick()
+    f.clock.now += 5 * HOUR
+    await f.assigner.tick()
+    expect(f.said().filter(([, body]) => String(body).includes('Are you still on it?'))).toHaveLength(1)
+    expect(f.github.sent.some(s => s.method === 'DELETE')).toBe(false)
+    // Out of quota for 3 hours, with a task waiting for it: with nobody else, it waits.
+    const resetsAt = new Date(Date.parse('2026-11-09T07:31:00Z') + 3 * HOUR).toISOString()
+    const short: Crew = { builders: one.builders, machines: [{ machineId: 'mac', observation: { ...crew().machines[0]!.observation,
+      quotas: [{ engine: 'claude', known: true, windows: [{ name: 'five_hour', usedPercent: 99, resetsAt }] }] } }] }
+    const waiting = setup([issue(2, ['size:s', 'builder:pip'])], { crew: short })
+    await waiting.assigner.tick()
+    expect(waiting.github.sent.some(s => s.method === 'DELETE')).toBe(false)
+    // Juno, on another machine with its own subscription, can start it now.
+    const two = setup([issue(2, ['size:s', 'builder:pip'])], { crew: { builders: [one.builders[0]!, { ...crew().builders[1]!, machineId: 'box' }],
+      machines: [...short.machines, { machineId: 'box', observation: crew().machines[0]!.observation }] } })
+    await two.assigner.tick()
+    expect(two.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/2/labels/builder%3Apip'])
+  })
+
   describe('quiet tasks', () => {
     const HOUR = 3_600_000
     const ago = (f: ReturnType<typeof setup>, hours: number) => new Date(f.clock.now - hours * HOUR).toISOString()
