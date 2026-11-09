@@ -295,8 +295,7 @@ class _SuperTabRosterState extends State<SuperTabRoster>
 
   /// A person's card (Quiet Swarm, screen 5): their name with the crown,
   /// their points, the period on hover, their numbers under the name and
-  /// what is behind them; who they are on the avatar's hover. One's own also
-  /// opens the profile sheet, where one's avatar and status change.
+  /// what is behind them; who they are on the avatar's hover.
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) {
     final name = leaderboardName(person, score);
     return showAppDialog<void>(
