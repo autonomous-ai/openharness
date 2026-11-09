@@ -694,35 +694,22 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('a long block folds with Show more, and Copy takes it all', (
-      tester,
-    ) async {
-      final lines = [for (var i = 1; i <= 30; i++) 'line $i'];
-      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
+    testWidgets(
+      'a long block shows every line, with nothing to open, and Copy takes it all',
+      (tester) async {
+        final lines = [for (var i = 1; i <= 30; i++) 'line $i'];
+        final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
 
-      expect(find.text(lines.take(12).join('\n')), findsOneWidget);
-      expect(find.textContaining('line 13'), findsNothing);
-      await tester.tap(find.text('Show more'));
-      await tester.pump();
-      expect(find.text(lines.join('\n')), findsOneWidget);
-      await tester.tap(find.text('Show less'));
-      await tester.pump();
-      expect(find.textContaining('line 13'), findsNothing);
+        expect(find.text(lines.join('\n')), findsOneWidget);
+        expect(find.text('Show more'), findsNothing);
+        expect(find.text('Show less'), findsNothing);
 
-      await tester.tap(find.text('Copy'));
-      await tester.pump();
-      expect(copied, [lines.join('\n')]);
-      await tester.pumpAndSettle(const Duration(seconds: 3));
-      await close(tester, c);
-    });
-
-    testWidgets('a short block has no Show more', (tester) async {
-      final lines = [for (var i = 1; i <= 12; i++) 'line $i'];
-      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
-
-      expect(find.text(lines.join('\n')), findsOneWidget);
-      expect(find.text('Show more'), findsNothing);
-      await close(tester, c);
-    });
+        await tester.tap(find.text('Copy'));
+        await tester.pump();
+        expect(copied, [lines.join('\n')]);
+        await tester.pumpAndSettle(const Duration(seconds: 3));
+        await close(tester, c);
+      },
+    );
   });
 }
