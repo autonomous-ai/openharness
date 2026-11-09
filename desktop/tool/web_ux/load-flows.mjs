@@ -1,5 +1,5 @@
-// Every flow in flows/<group>.mjs for one fixture build. A new file in that
-// folder is picked up as it is; a flow name in two files is an error.
+// Every flow in flows/<group>.mjs. A new file in that folder is picked up as
+// it is; a flow name in two files is an error.
 //
 // step: ['click', name] button by accessible name (substring)
 //       ['exact', name] button by exact accessible name
@@ -7,16 +7,14 @@
 //       ['rclick', name] right-click a control
 //       ['key', key]    a key press
 // `wide` / `compact` steps replace `steps` at >= 720 px / below it; a flow
-// with `only: 'wide'|'compact'` is skipped at the other widths. `fixture`
-// names the build it runs on: 'app' (tool/web_ux_fixture.dart, the default)
-// or 'super-tab' (tool/super_tab_mobile_fixture.dart).
+// with `only: 'wide'|'compact'` is skipped at the other widths.
 import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const folder = join(dirname(fileURLToPath(import.meta.url)), 'flows');
 
-export async function loadFlows(fixture = 'app') {
+export async function loadFlows() {
   const all = [];
   const files = readdirSync(folder).filter((f) => f.endsWith('.mjs') && f !== 'steps.mjs').sort();
   for (const file of files) {
@@ -30,5 +28,5 @@ export async function loadFlows(fixture = 'app') {
     }
     seen.set(flow.name, flow.group);
   }
-  return all.filter((flow) => (flow.fixture ?? 'app') === fixture);
+  return all;
 }
