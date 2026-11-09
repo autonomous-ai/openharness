@@ -150,6 +150,7 @@ void main() {
         tester,
         _swarm(_saved()),
         brightness: brightness,
+        board: false,
       );
       await _openRules(tester);
       await captureWindow(tester, _shots, 'project-rules-${brightness.name}');
@@ -176,7 +177,12 @@ void main() {
     testWidgets('Project settings opens the rules, read only, with their '
         'history (${brightness.name})', (tester) async {
       final server = _swarm(_saved());
-      final c = await showView(tester, server, brightness: brightness);
+      final c = await showView(
+        tester,
+        server,
+        brightness: brightness,
+        board: false,
+      );
       await _openRules(tester);
       expect(server.rulesReads, ['/api/super-tabs/tab/projects/lead/rules']);
       for (final text in [
@@ -238,7 +244,7 @@ void main() {
       'seeded': true,
       'history': <dynamic>[],
     });
-    final c = await showView(tester, server);
+    final c = await showView(tester, server, board: false);
     await _openRules(tester);
     expect(find.text('openharness · Built-in rules'), findsOneWidget);
     expect(find.text('Off · every 10 minutes'), findsOneWidget);
@@ -249,7 +255,7 @@ void main() {
   testWidgets('a backend without rules says so, and a failed read can be '
       'tried again', (tester) async {
     final server = _swarm(_saved())..rulesRoute = false;
-    final c = await showView(tester, server);
+    final c = await showView(tester, server, board: false);
     await _openRules(tester);
     expect(
       find.text('Project rules are not available on this server yet.'),
