@@ -287,7 +287,9 @@ export class GitHubMentions {
       const operationId = `works-on-${createHash('sha256').update(`${repo}\n${agent.agentId}`).digest('hex').slice(0, 40)}`
       await tell(agent, operationId, `You have your first task in ${repo}. Ask your person, in your chat with them, which area of ${repo} `
         + `you should focus on (${choices}). Do not wait for the answer to start your task. When they answer, make "Works on: <their answer>" `
-        + `the first line of ${file} in ${repo}, in a pull request of its own: Harness then gives you those tasks first.`)
+        + `the first line of ${file} in ${repo}, in a pull request of its own on a branch ${agent.label.slice('builder:'.length)}/works-on, labelled `
+        // Harness reads and merges only the team's own pull requests, known by their builder label or branch (assign/crew.ts teamOf).
+        + `${agent.label}: Harness then gives you those tasks first.`)
     }
     kept.asked = [...kept.asked ?? [], agent.agentId].slice(-MAX_ASKED)
   }

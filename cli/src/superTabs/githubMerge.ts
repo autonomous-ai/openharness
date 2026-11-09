@@ -16,6 +16,7 @@
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
+import { labelOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
@@ -56,9 +57,10 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
   return [...found.values()]
 }
 
-/** What one pull request's comments say: each reader's last verdict, and whether it asks for two reads. */
-export function verdicts(comments: Json[], body: string): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string }>; twoReads: boolean } {
-  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; at: string }>()
+/** What one pull request's comments say: each reader's last verdict, by its name in lowercase, with the name as it signs,
+ *  and whether it asks for two reads. */
+export function verdicts(comments: Json[], body: string): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string }>; twoReads: boolean } {
+  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
@@ -71,9 +73,9 @@ export function verdicts(comments: Json[], body: string): { readers: Map<string,
     const at = String(comment.created_at ?? '')
     const key = reader.toLowerCase()
     const last = readers.get(key)
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, at })
+    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, at })
   }
-  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha }])), twoReads }
+  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
 }
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
@@ -112,8 +114,8 @@ export class GitHubMerge {
   private readonly now: () => number
   private readonly log: (line: string) => void
 
-  constructor(private readonly deps: { projects: () => Promise<LedProject[]>; get: GitHubGet; send: GitHubSend; now?: () => number
-    log?: (line: string) => void; intervalMs?: number }) {
+  constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>; get: GitHubGet
+    send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -163,10 +165,15 @@ export class GitHubMerge {
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
     const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
       .filter(pull => pull.draft !== true && object(pull.base).ref === base)
+    // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
+    if (!pulls.length) return
+    const team = teamOf(await this.deps.crew(project), project.pm)
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
+      // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
+      if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
@@ -189,7 +196,7 @@ export class GitHubMerge {
         this.note('MERGE_REFUSED', `${repo}#${number}: GitHub answered ${merged.status}`)
         continue
       }
-      const by = reads.map(([reader]) => reader).join(' and ')
+      const by = reads.map(([, r]) => r.name).join(' and ')
       await this.comment(repo, number, `${SELF}, ${this.clock()}: merged. READ-OK on ${head.slice(0, 7)} by ${by}, checks green.`)
       this.log(`[super-tab] merged ${repo}#${number} on ${head.slice(0, 7)} (READ-OK by ${by})`)
       this.reads.forget(repo)

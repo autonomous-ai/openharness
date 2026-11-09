@@ -5,7 +5,7 @@ import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { withAvatarView } from './profile.js'
+import { personView, withAvatarView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, RETIRED_MACHINE_FIELDS, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
@@ -22,16 +22,13 @@ export interface Person {
   email: string
   role: Role
   generation: string
-  /** Their own short status (profile.ts); only Swarm members read it. */
-  status?: import('./profile.js').PersonStatus
-  /** Their time zone's IANA name ("Asia/Ho_Chi_Minh"), as their own app reports it (profile.ts); absent until it has.
-   *  Only Swarm members read it, for the local time on a person's card. */
-  timeZone?: string
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
-  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
+  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Nothing sets a chosen one any
+   *  more (2026-11-09): those chosen before stay. Only members read it. */
   username?: string
-  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Only members read it. */
+  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Nothing sets one any more
+   *  (2026-11-09): those set before stay. Only members read it. */
   name?: string
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
@@ -1320,7 +1317,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)
-  visible.people = visible.people.map(p => ({ ...withAvatarView(p), username: names.get(p.id) })) as Person[]
+  visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) })) as Person[]
   visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
   for (const target of visible.agents) {

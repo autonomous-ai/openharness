@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { authorOf, checksOf, GitHubMerge, ledProjects, verdicts } from './githubMerge.js'
+import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
@@ -42,11 +43,14 @@ function fakeGitHub() {
 function setup() {
   const github = fakeGitHub()
   const log = vi.fn()
-  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }], get: github.get, send: github.send,
-    now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+  // Pip builds; Juno is the PM.
+  const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+  const team = vi.fn(async () => crew)
+  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+    crew: team, get: github.get, send: github.send, now: () => Date.parse('2026-11-09T07:31:00Z'), log })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments }
+  return { github, merger, log, merges, comments, crew: team }
 }
 
 describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)', () => {
@@ -54,7 +58,26 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     const f = setup()
     await f.merger.tick()
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
-    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by juno, checks green\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+  })
+
+  it('reads the team only when a pull request is open', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ draft: true })]
+    await f.merger.tick()
+    expect(f.crew).not.toHaveBeenCalled()
+    f.github.repo.pulls = [pull()]
+    await f.merger.tick()
+    expect(f.crew).toHaveBeenCalledTimes(1)
+  })
+
+  it('merges only the team\'s own pull requests: a person\'s, or a branch no builder of the team made, is theirs to merge', async () => {
+    for (const other of [{ head: { sha: HEAD, ref: 'ken/fix-login' }, labels: [] }, { head: { sha: HEAD, ref: 'fix-login' }, labels: [] }]) {
+      const f = setup()
+      f.github.repo.pulls = [pull(other)]
+      await f.merger.tick()
+      expect(f.merges()).toEqual([])
+    }
   })
 
   it('merges nothing on a READ-OK of an older head, by its author, by a stranger, or while a HOLD stands', async () => {
@@ -133,8 +156,8 @@ describe('the rule\'s parts', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
       comment('Kai, 14:00: TWO READS for this one')], '')
-    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44' }, faye: { verdict: 'HOLD', sha: '1234567' },
-      kenmore: { verdict: 'READ-OK', sha: 'abcdef0' } })
+    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno' },
+      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye' }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore' } })
     expect(twoReads).toBe(true)
   })
 
