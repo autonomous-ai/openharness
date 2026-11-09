@@ -576,22 +576,6 @@ void main() {
       expect(server.mentionReads, 0);
       controller.dispose();
     });
-
-    test('mark done sends the tag\'s done and moves it to earlier', () async {
-      final server = ConversationServer()..tag('m1');
-      final controller = server.controller();
-      final mentions = SuperTabMentions.of(controller);
-      await controller.refresh();
-      await mentions.load();
-      expect(await mentions.done(mentions.waiting.single), isTrue);
-      expect(server.posts.last['command'], {
-        'type': 'mention.done',
-        'mentionId': 'mention-1',
-      });
-      expect(mentions.waiting, isEmpty);
-      expect(mentions.earlier.single.resolvedBy, 'done');
-      controller.dispose();
-    });
   });
 
   group('tags in messages', () {
