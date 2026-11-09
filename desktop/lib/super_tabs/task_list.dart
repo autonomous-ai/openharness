@@ -1,54 +1,119 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
+import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
+import 'github_issues.dart';
 import 'identity.dart';
-import 'model.dart';
 import 'swarm_type.dart';
 
-/// A project's tasks (Swarm v4, anh Dee 2026-11-08): every thread in its channel, newest activity first, as quiet cards
-/// beside the channel. A task is a thread: its first line is the task, its replies are the agents' talk, and tapping a
-/// card opens that thread.
-class SwarmTaskList extends StatelessWidget {
+/// A project's tasks (Swarm v4, anh Dee 2026-11-09): its repository's open GitHub issues, read with `gh` on this
+/// computer as its person ([SwarmGitHub]), newest activity first, as quiet cards beside the channel. A card names the
+/// agent its `builder:<name>` label gives it and says On it when it is `status:taken`; tapping it opens the issue.
+class SwarmTaskList extends StatefulWidget {
   const SwarmTaskList({
     super.key,
     required this.controller,
     required this.conversationId,
+    required this.github,
     required this.onOpen,
     required this.onClose,
+    this.openNumber,
+    this.refreshEvery = const Duration(minutes: 1),
+    this.now = DateTime.now,
   });
 
   final SuperTabController controller;
+
+  /// The project's channel, whose project names the repository.
   final String conversationId;
-  final ValueChanged<String> onOpen;
+  final SwarmGitHub github;
+
+  /// Opens an issue of the repository (`owner/name`).
+  final void Function(String repository, SwarmIssue issue) onOpen;
   final VoidCallback onClose;
 
-  /// The channel's threads with at least one reply, newest activity first.
-  static List<(SuperTabMessage, SuperTabThread)> tasksOf(
+  /// The issue open beside the channel: its card shows selected.
+  final int? openNumber;
+
+  /// How often the list is read again while it shows; null reads it once.
+  final Duration? refreshEvery;
+  final DateTime Function() now;
+
+  /// The project's repository as `owner/name`, or null when it has none on GitHub.
+  static String? repositoryOf(
     SuperTabController controller,
     String conversationId,
   ) {
-    final tasks = [
-      for (final message in controller.messages(conversationId))
-        if (!message.threadReply)
-          if (controller.thread(conversationId, message.id) case final thread?
-              when thread.replies > 0)
-            (message, thread),
-    ];
-    DateTime at((SuperTabMessage, SuperTabThread) task) =>
-        task.$2.lastAt ?? task.$1.createdAt ?? DateTime(0);
-    tasks.sort((a, b) => at(b).compareTo(at(a)));
-    return tasks;
+    final project = controller.snapshot?.projectFor(conversationId);
+    final url = project?.repository?['repositoryUrl'];
+    return SwarmGitHub.repositoryOf(url is String ? url : null);
+  }
+
+  @override
+  State<SwarmTaskList> createState() => _SwarmTaskListState();
+}
+
+class _SwarmTaskListState extends State<SwarmTaskList> {
+  List<SwarmIssue>? _issues;
+  String? _error;
+  String? _repository;
+  Timer? _refresh;
+
+  @override
+  void initState() {
+    super.initState();
+    _read();
+    if (widget.refreshEvery case final every?) {
+      _refresh = Timer.periodic(every, (_) => _read());
+    }
+  }
+
+  @override
+  void didUpdateWidget(SwarmTaskList old) {
+    super.didUpdateWidget(old);
+    if (old.conversationId != widget.conversationId) {
+      _issues = null;
+      _error = null;
+      _read();
+    }
+  }
+
+  @override
+  void dispose() {
+    _refresh?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _read() async {
+    final repository = SwarmTaskList.repositoryOf(
+      widget.controller,
+      widget.conversationId,
+    );
+    if (repository != _repository) setState(() => _repository = repository);
+    if (repository == null) return;
+    try {
+      final issues = await widget.github.issues(repository);
+      if (!mounted || repository != _repository) return;
+      setState(() {
+        _issues = issues;
+        _error = null;
+      });
+    } on SwarmGitHubError catch (error) {
+      if (!mounted || repository != _repository) return;
+      setState(() => _error = error.message);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final tasks = tasksOf(controller, conversationId);
     return ColoredBox(
       color: DesktopChrome.surface,
       child: Column(
@@ -68,71 +133,111 @@ class SwarmTaskList extends StatelessWidget {
                   key: const ValueKey('swarm-tasks-close'),
                   icon: AppIcons.close,
                   tooltip: 'Close',
-                  onPressed: onClose,
+                  onPressed: widget.onClose,
                 ),
               ],
             ),
           ),
-          Expanded(
-            // Its cards are kept laid out off screen, so a hovered one never breaks hit testing (laid_out_list.dart).
-            child: LaidOutListView.builder(
-              key: const ValueKey('swarm-task-list'),
-              padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
-              itemCount: tasks.length,
-              itemBuilder: (context, i) => Padding(
-                padding: EdgeInsets.only(
-                  top: i == 0 ? 0 : grid.AppDesktop.controlGap,
-                ),
-                child: _card(context, tasks[i].$1, tasks[i].$2),
-              ),
-            ),
-          ),
+          Expanded(child: _body(context)),
         ],
       ),
     );
   }
 
-  Widget _card(
-    BuildContext context,
-    SuperTabMessage root,
-    SuperTabThread thread,
-  ) {
-    final (number, title) = _split(root.text);
-    final faces = [
-      for (final author in thread.authors.reversed.take(4)) _face(author),
-    ];
+  Widget _body(BuildContext context) {
+    final repository = _repository;
+    if (repository == null) {
+      return _line(
+        'This project has no GitHub repository.',
+        key: 'swarm-tasks-no-repository',
+      );
+    }
+    final issues = _issues;
+    final error = _error;
+    if (issues == null && error != null) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _line(error, key: 'swarm-tasks-error'),
+          const SizedBox(height: 8),
+          AppIconButton(
+            key: const ValueKey('swarm-tasks-retry'),
+            icon: AppIcons.refreshCw,
+            tooltip: 'Try again',
+            onPressed: _read,
+          ),
+        ],
+      );
+    }
+    if (issues == null) {
+      // Waiting in the shape of its answer: cards, as the list will be.
+      return const SkeletonList(
+        key: ValueKey('swarm-tasks-loading'),
+        rows: 4,
+        padding: EdgeInsets.all(16),
+      );
+    }
+    // Its cards are kept laid out off screen, so a hovered one never breaks hit testing (laid_out_list.dart).
+    return LaidOutListView.builder(
+      key: const ValueKey('swarm-task-list'),
+      padding: const EdgeInsets.all(grid.AppDesktop.groupGap),
+      itemCount: issues.length,
+      itemBuilder: (context, i) => Padding(
+        padding: EdgeInsets.only(top: i == 0 ? 0 : grid.AppDesktop.controlGap),
+        child: _card(context, repository, issues[i]),
+      ),
+    );
+  }
+
+  Widget _line(String text, {required String key}) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Text(
+        text,
+        key: ValueKey(key),
+        textAlign: TextAlign.center,
+        style: DesktopChrome.metadata(),
+      ),
+    ),
+  );
+
+  Widget _card(BuildContext context, String repository, SwarmIssue issue) {
+    final agent = issue.agent;
+    final selected = widget.openNumber == issue.number;
     return Material(
-      color: grid.AppPalette.cardBg,
+      color: selected ? grid.AppSurface.recess : grid.AppPalette.cardBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: DesktopChrome.rim),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        key: ValueKey('swarm-task-${root.id}'),
-        onTap: () => onOpen(root.id),
+        key: ValueKey('swarm-task-${issue.number}'),
+        onTap: () => widget.onOpen(repository, issue),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (number != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: grid.AppSurface.recess,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(number, style: DesktopChrome.metadata()),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: grid.AppSurface.recess,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '#${issue.number}',
+                    style: DesktopChrome.metadata(),
                   ),
                 ),
+              ),
               Text(
-                title,
+                issue.title,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: SwarmType.body(context)
@@ -141,16 +246,31 @@ class SwarmTaskList extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  for (final (i, face) in faces.indexed)
-                    Padding(
-                      padding: EdgeInsets.only(left: i == 0 ? 0 : 4),
-                      child: face,
+                  // The agent takes what the state at the end leaves, so the state always sits at the right edge.
+                  Expanded(
+                    child: Row(
+                      children: [
+                        if (agent != null) ...[
+                          swarmAgentFace(widget.controller, agent),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              agent,
+                              overflow: TextOverflow.ellipsis,
+                              style: DesktopChrome.metadata(),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                  const Spacer(),
+                  ),
+                  const SizedBox(width: 8),
                   Text(
-                    thread.replies == 1
-                        ? '1 reply'
-                        : '${thread.replies} replies',
+                    [
+                      if (issue.taken) 'On it',
+                      if (issue.updatedAt case final at?)
+                        swarmAgo(at, widget.now()),
+                    ].join(' · '),
                     style: DesktopChrome.metadata(),
                   ),
                 ],
@@ -161,33 +281,34 @@ class SwarmTaskList extends StatelessWidget {
       ),
     );
   }
+}
 
-  /// "#5861 Forget every copy. More…" reads as #5861 and its first sentence.
-  static (String?, String) _split(String text) {
-    final first = text.trim().split('\n').first;
-    final match = RegExp(r'^(#\d+)\s+').firstMatch(first);
-    final rest = match == null ? first : first.substring(match.end);
-    final sentence = RegExp(r'^(.+?[.!?])(\s|$)').firstMatch(rest);
-    final title = (sentence?.group(1) ?? rest).trim();
-    return (
-      match?.group(1),
-      title.endsWith('.') ? title.substring(0, title.length - 1) : title,
-    );
-  }
+/// The face of the agent named [name] in this Swarm (a `builder:<name>` label, or the name a comment is signed with),
+/// matched without case; a face drawn from the name when the Swarm has no such agent.
+Widget swarmAgentFace(
+  SuperTabController controller,
+  String name, {
+  double size = 22,
+}) {
+  final key = name.toLowerCase();
+  final agent = controller.snapshot?.agents
+      .where((a) => (a.displayName ?? a.name).toLowerCase() == key)
+      .firstOrNull;
+  if (agent != null)
+    return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
+  return SuperTabAvatar(
+    identity: 'agent:$key',
+    name: name,
+    size: size,
+    face: true,
+  );
+}
 
-  Widget _face(Map<String, dynamic> author) {
-    const size = 22.0;
-    final kind = author['kind'] as String? ?? '';
-    final id = author['id'] as String? ?? '';
-    final agent = kind == 'agent' ? controller.snapshot?.agent(id) : null;
-    if (agent != null) {
-      return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
-    }
-    return SuperTabAvatar(
-      identity: '$kind:$id',
-      name: author['name'] as String? ?? id,
-      size: size,
-      face: kind == 'agent',
-    );
-  }
+/// How long ago [at] was, in the fewest characters: now, 5m, 3h, 2d.
+String swarmAgo(DateTime at, DateTime now) {
+  final gone = now.difference(at);
+  if (gone.inMinutes < 1) return 'now';
+  if (gone.inHours < 1) return '${gone.inMinutes}m';
+  if (gone.inDays < 1) return '${gone.inHours}h';
+  return '${gone.inDays}d';
 }

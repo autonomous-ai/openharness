@@ -513,14 +513,19 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
-              title('Tasks: a task is a thread, its card opens it'),
+              title(
+                'Tasks: the project\'s GitHub issues, read with gh; a card opens one',
+              ),
               SizedBox(
                 width: 520,
                 height: 330,
                 child: SwarmTaskList(
                   controller: swarm,
                   conversationId: 'lead',
-                  onOpen: (_) {},
+                  github: swarmV4GitHub(),
+                  refreshEvery: null,
+                  now: () => DateTime.utc(2026, 11, 9, 9),
+                  onOpen: (_, _) {},
                   onClose: () {},
                 ),
               ),
