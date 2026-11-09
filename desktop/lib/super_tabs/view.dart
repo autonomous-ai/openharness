@@ -150,6 +150,7 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onNewAgent,
+    this.onAttachAgent,
     this.onNewSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
@@ -185,6 +186,10 @@ class SuperTabView extends StatefulWidget {
   /// + New agent (task #4196): opens the workspace's Cmd-N form with Member or
   /// Lead. Null shows no + New agent.
   final VoidCallback? onNewAgent;
+
+  /// Attach beside + New agent (Swarm v4): the picker of agents already running on its person's own computers. Null shows
+  /// no Attach.
+  final VoidCallback? onAttachAgent;
 
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
@@ -2109,6 +2114,7 @@ class _SuperTabViewState extends State<SuperTabView>
     app: widget.app,
     onNewProject: widget.onNewProject,
     onNewAgent: widget.onNewAgent,
+    onAttachAgent: widget.board ? widget.onAttachAgent : null,
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
     onOpenPane: _openPane,

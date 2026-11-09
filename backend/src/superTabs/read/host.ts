@@ -39,7 +39,7 @@ export class HostReads {
   private readonly db: PrismaClient
   private readonly now: () => number
   /** Reads the store's own database, on its clock unless given one (tests). */
-  constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean; teamAccountsIdle?: boolean } = {}) {
+  constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
   }
@@ -56,8 +56,6 @@ export class HostReads {
     const grants = new GrantReads(owned)
     // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
     const ids = await machineSwarms(tx, user.autonomousEnv, machineId, FULL_TABS)
-    const teams = isTeamSession(user) || this.options.teamAccountsIdle ? [] : await tx.machine.findMany({ where: { userId: user.sub,
-      hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
     const full = 'reload' in from
     const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
     const tabs = []
@@ -76,7 +74,7 @@ export class HostReads {
       const state = await this.tabState(tx, cached, tabId, machineId)
       // Its Team account alone hosts a machine this Swarm records as one, whatever its account row says now (store.ts).
       if (!isTeamSession(user) && teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
-      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams, grants))
+      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.
       tabs.push(held?.slice(0, ROW_HASH) === rows.etag ? { tabId, lastChangedAt, etag, unchanged: true as const } : { ...rows, etag })
@@ -140,10 +138,10 @@ export class HostReads {
     return parts.loadLight(tx, tabId, { groups: 'working', agentIds: agents.map(a => a.key), groupIds, projectIds, machines: false })
   }
 
-  private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>, grants: GrantReads): Promise<HostLookups> {
+  private async lookups(tx: Transaction, state: SuperTabState, grants: GrantReads): Promise<HostLookups> {
     const people = state.people.length ? await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } }) : []
     const confidential = await confidentialSessions(tx, state.agents.map(a => a.id), state.id)
-    return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target, grants) }
+    return { people, confidential, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target, grants) }
   }
 
   /** Swarms whose record of this machine changed since the cursor and that no longer list it. */

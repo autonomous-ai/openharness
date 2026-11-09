@@ -275,15 +275,6 @@ void main() {
       '53fc1449b3b28a00489bbf59',
     );
     expect(swarmAgentId('m', 'h1'), stableId(['m', 'h1']));
-    // The id of a message a person sends is the same function over its three parts.
-    expect(
-      superTabMessageId(
-        tabId: '0123456789abcdef01234567',
-        accountId: 'owner',
-        operationId: 'receipt-1',
-      ),
-      'c48f7b12bbeacb4a0f75c722',
-    );
   });
 
   scene(

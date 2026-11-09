@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
+import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
@@ -78,7 +79,14 @@ String superTabMessageId({
   required String tabId,
   required String accountId,
   required String operationId,
-}) => stableId([tabId, 'person:$accountId', operationId]);
+}) => const DartSha256()
+    .hashSync(
+      utf8.encode(jsonEncode([tabId, 'person:$accountId', operationId])),
+    )
+    .bytes
+    .map((b) => b.toRadixString(16).padLeft(2, '0'))
+    .join()
+    .substring(0, 24);
 
 /// The most pages of closed groups one read goes through (50 a page), so a
 /// Swarm whose old groups all changed lately cannot read without an end.

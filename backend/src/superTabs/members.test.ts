@@ -205,7 +205,7 @@ describe('the Member', () => {
   it('keeps its mark and set-up out of what readers get, its host alone reads them', () => {
     const { f, lamp, member } = withMember()
     f.run({ type: 'agent.setUp', projectId: lamp, ok: true, steps: ['npm ci'] } as Command, { kind: 'agent', agentId: member, machineOwnerId: 'kai' })
-    const parts = readerView(store.split(f.state, { tabId: 'tab', version: 9_000, now: NOW }), owner, NOW, { teamMachines: [] }).parts
+    const parts = readerView(store.split(f.state, { tabId: 'tab', version: 9_000, now: NOW }), owner, NOW, {}).parts
     const row = parts.agents.find(a => a.key === member)?.data
     expect(row).not.toHaveProperty('member')
     expect(row).not.toHaveProperty('setUp')
