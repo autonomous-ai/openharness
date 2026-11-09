@@ -138,6 +138,32 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a CLAUDE.md that links to AGENTS.md is named, and its text is not shown twice',
+    (tester) async {
+      final computer = SwarmV4Computer()
+        ..shared = [
+          file('AGENTS.md', agentsMd, truncated: false),
+          file('CLAUDE.md', agentsMd, truncated: false),
+        ];
+      await show(tester, computer);
+      expect(find.text('CLAUDE.md'), findsOneWidget);
+      expect(find.text('Same as AGENTS.md.'), findsOneWidget);
+      expect(key('swarm-shared-text-0'), findsOneWidget);
+      expect(key('swarm-shared-text-1'), findsNothing);
+    },
+  );
+
+  testWidgets('a folder with only a CLAUDE.md shows that one', (tester) async {
+    final computer = SwarmV4Computer()
+      ..shared = [file('CLAUDE.md', 'Read the docs first.')];
+    await show(tester, computer);
+    expect(find.text('CLAUDE.md'), findsOneWidget);
+    expect(find.text('AGENTS.md'), findsNothing);
+    expect(find.text('Read the docs first.'), findsOneWidget);
+    expect(find.textContaining('No instructions yet'), findsNothing);
+  });
+
   testWidgets('a file the computer cut says so, and only that file does', (
     tester,
   ) async {
@@ -184,10 +210,9 @@ void main() {
         required bool says,
         required String reason,
       }) async {
-        final computer =
-            SwarmV4Computer(files: {if (own != null) 'h/Faye': own})
-              ..shared = shared
-              ..skipped = skipped;
+        final computer = SwarmV4Computer(files: {'h/Faye': ?own})
+          ..shared = shared
+          ..skipped = skipped;
         await show(tester, computer);
         expect(
           find.textContaining('No instructions yet'),
@@ -235,6 +260,7 @@ void main() {
         {'name': 'CLAUDE.local.md', 'why': 'not_text'},
         {'name': 'a.md', 'why': 'unreadable'},
         {'name': 'b.md', 'why': 'not_a_file'},
+        {'name': '../AGENTS.md', 'why': 'too_much'},
         {'name': 'c.md', 'why': 'a reason from a newer computer'},
         {'name': 'd.md'},
       ];
@@ -244,6 +270,7 @@ void main() {
       'CLAUDE.local.md isn\'t text.',
       'a.md can\'t be read.',
       'b.md isn\'t a file.',
+      '../AGENTS.md isn\'t shown: too much text.',
       'c.md isn\'t shown.',
       'd.md isn\'t shown.',
     ]) {
@@ -328,7 +355,7 @@ void main() {
       final computer = SwarmV4Computer(files: {'h/Faye': 'Be brief.'})
         ..shared = [
           file('AGENTS.md', big, truncated: true),
-          file('CLAUDE.md', big, truncated: true),
+          file('CLAUDE.md', 'z' * 65536, truncated: true),
         ];
       await show(tester, computer);
       expect(key('swarm-shared-text-0'), findsOneWidget);
@@ -404,6 +431,41 @@ void main() {
       expect(find.text('Be brief.'), findsOneWidget);
       expect(find.text('Ship small.'), findsOneWidget);
       expect(key('swarm-instructions-edit'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'Edit and Cancel pressed fast, five times over, leave the pane as it was, and Try again pressed fast reads each time',
+    (tester) async {
+      final computer = SwarmV4Computer(files: {'h/Faye': 'Be brief.'})
+        ..shared = [file('AGENTS.md', 'Ship small.')];
+      await show(tester, computer);
+      for (var i = 0; i < 5; i++) {
+        await tester.tap(key('swarm-instructions-edit'));
+        await tester.pump();
+        expect(key('swarm-shared-text-0'), findsNothing, reason: '$i');
+        await tester.tap(key('swarm-instructions-cancel'));
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+      expect(find.text('Be brief.'), findsOneWidget);
+      expect(find.text('Ship small.'), findsOneWidget);
+      expect(computer.requests, hasLength(1));
+      // A computer that does not answer well: every press of Try again asks again, and the last answer shows.
+      computer.refuse = 'TIMEOUT';
+      await tester.pumpWidget(const SizedBox());
+      await show(tester, computer);
+      for (var i = 0; i < 3; i++) {
+        await tester.tap(key('swarm-instructions-retry'));
+        await tester.pump();
+      }
+      computer.refuse = null;
+      await tester.tap(key('swarm-instructions-retry'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-instructions-error'), findsNothing);
+      expect(find.text('Be brief.'), findsOneWidget);
+      expect(find.text('Ship small.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     },
   );
 

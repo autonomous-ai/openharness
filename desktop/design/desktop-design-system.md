@@ -440,8 +440,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each with its name
   in 13 medium (its path when it sends one), its text in `AppType.mono`,
   selectable, and `Cut at 64 KB.` in metadata grey after a text it cut, a
-  hairline between them. A file it did not show gets one metadata line
-  (`CLAUDE.md is a link.`, `CLAUDE.md isn't text.`). An older computer sends
+  hairline between them. A file with the text of one above it (a `CLAUDE.md`
+  linked to `AGENTS.md`) says `Same as AGENTS.md.` instead of repeating it. A
+  file it did not show gets one metadata line (`CLAUDE.md is a link.`,
+  `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`). An older computer sends
   none: the agent's own file alone. Edit, Save and the 64 KB limit are for the
   agent's own file: while it is typed it has the pane to itself, and the
   others are back after Save or Cancel. A read the computer refuses for the

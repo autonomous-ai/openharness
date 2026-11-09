@@ -330,7 +330,18 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           'No instructions yet. Tell ${widget.name} how you want it to work, '
           'and it writes them here.',
         ),
-      for (final (i, one) in shared.files.indexed) _sharedFile(i, one),
+      for (final (i, one) in shared.files.indexed)
+        _sharedFile(
+          i,
+          one,
+          // A link inside the project comes as a second file with the same text (CLAUDE.md -> AGENTS.md): named, not
+          // shown twice.
+          sameAs: shared.files
+              .take(i)
+              .where((f) => f.text == one.text)
+              .firstOrNull
+              ?.name,
+        ),
     ];
     return SingleChildScrollView(
       child: Column(
@@ -363,37 +374,46 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     );
   }
 
-  /// A file of the agent's folder, read only: its name, its text, and a line when the computer cut it.
-  Widget _sharedFile(int index, SwarmSharedFile file) => Padding(
-    padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          file.name,
-          key: ValueKey('swarm-shared-name-$index'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: DesktopChrome.control(medium: true),
-        ),
-        const SizedBox(height: grid.AppDesktop.controlGap),
-        SelectableText(
-          file.text,
-          key: ValueKey('swarm-shared-text-$index'),
-          style: grid.AppType.mono(color: DesktopChrome.foreground),
-        ),
-        if (file.truncated)
-          Padding(
-            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-            child: Text(
-              'Cut at 64 KB.',
-              key: ValueKey('swarm-shared-cut-$index'),
-              style: DesktopChrome.metadata(),
+  /// A file of the agent's folder, read only: its name, its text, and a line when the computer cut it. One with the text
+  /// of an earlier file, [sameAs], says so instead of repeating it.
+  Widget _sharedFile(int index, SwarmSharedFile file, {String? sameAs}) =>
+      Padding(
+        padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              file.name,
+              key: ValueKey('swarm-shared-name-$index'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: DesktopChrome.control(medium: true),
             ),
-          ),
-      ],
-    ),
-  );
+            const SizedBox(height: grid.AppDesktop.controlGap),
+            if (sameAs != null)
+              Text(
+                'Same as $sameAs.',
+                key: ValueKey('swarm-shared-same-$index'),
+                style: DesktopChrome.metadata(),
+              )
+            else
+              SelectableText(
+                file.text,
+                key: ValueKey('swarm-shared-text-$index'),
+                style: grid.AppType.mono(color: DesktopChrome.foreground),
+              ),
+            if (file.truncated && sameAs == null)
+              Padding(
+                padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+                child: Text(
+                  'Cut at 64 KB.',
+                  key: ValueKey('swarm-shared-cut-$index'),
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+          ],
+        ),
+      );
 
   /// Why a file in the agent's folder is not shown, by the computer's own word for it.
   String _skippedWords(SwarmSkippedFile file) => switch (file.why) {
@@ -401,6 +421,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     'not_text' => '${file.name} isn\'t text.',
     'unreadable' => '${file.name} can\'t be read.',
     'not_a_file' => '${file.name} isn\'t a file.',
+    'too_much' => '${file.name} isn\'t shown: too much text.',
     _ => '${file.name} isn\'t shown.',
   };
 
