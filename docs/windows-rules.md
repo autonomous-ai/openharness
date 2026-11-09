@@ -70,6 +70,9 @@ everywhere), [Process Creation Flags](https://learn.microsoft.com/en-us/windows/
 - **An unsigned program is blocked, and the person is told.** Smart App Control refuses it (`spawn UNKNOWN`, thrown by `spawn`, not
   an `error` event), and each attempt can raise a notice naming Node.js. Never poll an unsigned program: run what it starts, if that
   is signed (`gridCommand` in `lib/gridBinary.ts`), or stop asking. Check `Microsoft-Windows-CodeIntegrity/Operational` after a change.
+  Measured again 2026-11-09: Hermes' `hermes.exe` is an unsigned uv launcher (its bundled Python is unsigned too), so a
+  Hermes harness on that PC never started. Only the launcher is refused — the Python it names runs the package fine — so
+  `windowsEngineArgv` steps past it the same way (`lib/windows/hermesLaunch.ts`).
 
 ## 3. Files
 
