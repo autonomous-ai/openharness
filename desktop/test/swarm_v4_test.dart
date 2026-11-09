@@ -411,10 +411,23 @@ void main() {
     'Instructions\' Edit and × end the header at the pane\'s right edge, and so do Cancel and Save',
     (tester) async {
       final computer = SwarmV4Computer(
-        files: {fileKey: 'Answer in Vietnamese.\n'},
+        files: {'session-second/Kai': 'Answer in Vietnamese.\n'},
       );
-      await show(tester, computer: computer);
-      await openInstructions(tester);
+      await show(
+        tester,
+        computer: computer,
+        // A short name makes a short title, which left the most room unused when the buttons did not take the rest.
+        prepare: (server) =>
+            (server.state['agents'] as List)
+                    .cast<Map<String, dynamic>>()
+                    .firstWhere((a) => a['id'] == 'second')['displayName'] =
+                'Kai',
+      );
+      await tester.tap(key('super-agent-second'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-instructions-button'));
+      await tester.pumpAndSettle();
+      expect(find.text('agents/Kai.md'), findsOneWidget);
       final edge =
           tester.getRect(find.byType(SwarmAgentInstructions)).right -
           SwarmLayout.barSide;
@@ -430,7 +443,7 @@ void main() {
         lessThan(8),
       );
       expect(
-        tester.getRect(find.text('agents/first builder.md')).left,
+        tester.getRect(find.text('agents/Kai.md')).left,
         lessThan(at('swarm-instructions-edit').left),
       );
       await tester.tap(key('swarm-instructions-edit'));
@@ -451,6 +464,174 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'A very long name and a file not written yet: the title gives way, and nothing overflows on the narrowest pane there is',
+    (tester) async {
+      const name =
+          'Second \u{2728} who owns voice, privacy, the offline queue and every lamp in lampOS, whatever it takes';
+      final agent = SuperTabAgent.fromJson({
+        'id': 'second',
+        'name': 'second',
+        'displayName': name,
+        'machineId': 'host',
+        'harnessId': 'session-second',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+      });
+      // Half of what a 1080 pixel window keeps for the chat and its pane, the least a pane opens at.
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                width: 390,
+                child: SwarmAgentInstructions(
+                  agent: agent,
+                  machineName: 'Mac Studio',
+                  onClose: () {},
+                  link: SwarmV4Computer().link,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('No instructions yet'), findsOneWidget);
+      final edge =
+          tester.getRect(find.byType(SwarmAgentInstructions)).right -
+          SwarmLayout.barSide;
+      Rect at(String k) => tester.getRect(key(k));
+      expect(
+        tester.getRect(find.text('agents/$name.md')).right,
+        lessThanOrEqualTo(at('swarm-instructions-edit').left),
+      );
+      expect(
+        at('swarm-instructions-close').right,
+        moreOrLessEquals(edge, epsilon: 1),
+      );
+      await tester.tap(key('swarm-instructions-edit'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getRect(find.text('agents/$name.md')).right,
+        lessThanOrEqualTo(at('swarm-instructions-cancel').left),
+      );
+      expect(
+        at('swarm-instructions-close').right,
+        moreOrLessEquals(edge, epsilon: 1),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  // The way through anh Dee's screenshots (2026-11-09), walked as a person walks it at the window sizes the app is used at:
+  // the project's menu, an agent's chat, its instructions. A pane beside the chat opens from 1080 pixels wide.
+  for (final size in const [Size(1440, 900), Size(1024, 700), Size(700, 800)]) {
+    testWidgets(
+      'a person walks the menu, the chat and the instructions at ${size.width.toInt()}x${size.height.toInt()}',
+      (tester) async {
+        final long = [for (var i = 1; i <= 14; i++) 'Line $i of the plan.']
+            .join('\n\n');
+        final computer = SwarmV4Computer(
+          files: {'session-second/second': 'Answer in Vietnamese.\n'},
+        );
+        await show(
+          tester,
+          size: size,
+          computer: computer,
+          prepare: (server) {
+            server.append(
+              long,
+              conversationId: 'agent-chat-second',
+              agent: true,
+            );
+            server.messages.last['author'] = {
+              'kind': 'agent',
+              'id': 'second',
+              'name': 'second',
+            };
+            server.append(
+              'Thanks \u{1F680} tell me when it is merged',
+              conversationId: 'agent-chat-second',
+            );
+            // What the host's agent leaves under a person's message, as the backend still sends it.
+            server.messages.last['reactions'] = [
+              for (final emoji in ['eyes', 'check'])
+                {
+                  'emoji': emoji,
+                  'count': 1,
+                  'by': [
+                    {'kind': 'agent', 'id': 'second'},
+                  ],
+                },
+            ];
+          },
+        );
+        // The project's menu holds its settings alone.
+        await tester.tap(key('super-project-menu'));
+        await tester.pumpAndSettle();
+        expect(key('super-notify-menu'), findsNothing);
+        expect(find.text('Project settings…'), findsOneWidget);
+        await tester.tap(key('super-project-menu'));
+        await tester.pumpAndSettle();
+        expect(find.text('Project settings…'), findsNothing);
+        // The agent's chat, from the list a narrow window keeps behind its button.
+        if (size.width < 720) {
+          await tester.tap(find.byTooltip('Conversations'));
+          await tester.pumpAndSettle();
+        }
+        await tester.tap(key('super-agent-second'));
+        await tester.pumpAndSettle();
+        expect(key('swarm-agent-header'), findsOneWidget);
+        // Its long answer shows whole; its person's reply has no chip under it, and no picker when the mouse is on it.
+        expect(find.text('More'), findsNothing);
+        expect(find.text('Line 14 of the plan.').hitTestable(), findsOneWidget);
+        final reply = find.textContaining('tell me when it is merged');
+        expect(reply, findsOneWidget);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: Offset.zero);
+        addTearDown(mouse.removePointer);
+        await mouse.moveTo(tester.getCenter(reply));
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('Copy message'), findsWidgets);
+        for (final gone in ['👀', '✅']) {
+          expect(find.text(gone), findsNothing, reason: gone);
+        }
+        expect(find.byTooltip('Add reaction'), findsNothing);
+        if (size.width >= 1080) {
+          // Its instructions open beside it; their buttons end the header, through clicks made faster than the view draws.
+          for (var i = 0; i < 5; i++) {
+            await tester.tap(key('swarm-instructions-button'));
+            await tester.pump();
+          }
+          await tester.pumpAndSettle();
+          expect(find.text('agents/second.md'), findsOneWidget);
+          final edge =
+              tester.getRect(find.byType(SwarmAgentInstructions)).right -
+              SwarmLayout.barSide;
+          expect(
+            tester.getRect(key('swarm-instructions-close')).right,
+            moreOrLessEquals(edge, epsilon: 1),
+          );
+          for (var i = 0; i < 3; i++) {
+            await tester.tap(key('swarm-instructions-edit'));
+            await tester.pump();
+            await tester.tap(key('swarm-instructions-cancel'));
+            await tester.pump();
+          }
+          await tester.pumpAndSettle();
+          expect(find.textContaining('Answer in Vietnamese.'), findsOneWidget);
+          await tester.tap(key('swarm-instructions-close'));
+          await tester.pumpAndSettle();
+          expect(find.text('agents/second.md'), findsNothing);
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets(
     'Instructions are read from the agent\'s own computer, and its person edits and saves them there',

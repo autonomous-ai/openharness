@@ -158,8 +158,6 @@ Future<List<SuperTabController>> _show(
     ),
   );
   await tester.pump();
-  // A fold says More a frame after it measures what it holds.
-  await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
 }
@@ -473,7 +471,7 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              title('Chat: bubbles, a time after a pause, cards'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
