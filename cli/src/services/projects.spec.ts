@@ -508,10 +508,11 @@ describe('an agent\'s instructions file', () => {
           name: path.split('/').pop(), path, loadedBy: path.includes('AGENTS') ? ['codex'] : ['claude'], why: 'unreadable',
         })),
       })
-      expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
-        ...['AGENTS.md', 'CLAUDE.md', 'AGENTS.override.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'].map((path) => `[projects] agent_instructions_read left out ${path} · ELOOP`),
+      // The project's files are read at the same time as the agent's own, so the lines come in either order.
+      expect(log.mock.calls.map((call) => call.join(' ')).sort()).toEqual([
         '[projects] agent_instructions_read failed · ELOOP',
-      ])
+        ...['AGENTS.md', 'CLAUDE.md', 'AGENTS.override.md', 'CLAUDE.local.md', '.claude/CLAUDE.md'].map((path) => `[projects] agent_instructions_read left out ${path} · ELOOP`),
+      ].sort())
     } finally { log.mockRestore() }
   })
 

@@ -23,6 +23,11 @@
  *  - The `agents` folder is made when a save goes ahead, not before: a refused save leaves no empty folder behind.
  *  - A save is a new file renamed over the old one, so a full disk or a crash leaves the old file or the new one,
  *    never half of either; a file the person made private keeps its mode.
+ *
+ * Beside it, read only and never written, the files the agent's engines load (`readSharedInstructions`), which are the
+ * project's and not the request's to choose: a fixed list of names, in the agent's folder and a few above it. Those are read
+ * where the engines read them, from the real path of the agent's folder, and a link among them is followed only from a folder
+ * inside the project to a file inside it.
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
@@ -69,19 +74,14 @@ async function entry(path: string): Promise<Stats | null> {
   }
 }
 
-/** What is at [path] when it is a plain file, or null where there is nothing. From lstat, so a link is not a file here, and
- *  nor is a folder or a named pipe, which would hold an open for ever. */
-async function plainFile(path: string): Promise<Stats | null> {
-  const info = await entry(path)
-  if (info && !info.isFile()) throw new InstructionsError('UNSAFE_PATH')
-  return info
-}
-
-/** What is at the file, after checking that each of `agents` and the file is a plain folder or file, or is not there. */
+/** What is at the file, after checking that each of `agents` and the file is a plain folder or file, or is not there. From
+ *  lstat, so a link is neither, and a named pipe, which would hold an open for ever, is no file. */
 async function locate(dir: string, file: string): Promise<Stats | null> {
   const folder = await entry(dir)
   if (folder && !folder.isDirectory()) throw new InstructionsError('UNSAFE_PATH')
-  return plainFile(file)
+  const info = await entry(file)
+  if (info && !info.isFile()) throw new InstructionsError('UNSAFE_PATH')
+  return info
 }
 
 /** The file's bytes, to one past the limit at most: never the file whole, and the one byte over says there was more. [looked]
@@ -138,9 +138,9 @@ export async function readInstructions(cwd: string, name: unknown): Promise<{ te
 
 /** What else instructs an agent, besides a file of its own: the files its engines really load. Claude Code reads CLAUDE.md,
  *  .claude/CLAUDE.md and CLAUDE.local.md in the agent's folder and in every folder above it. Codex reads, in each folder from the
- *  project's root (the nearest with a `.git`, or the agent's folder where there is none) down to the agent's, AGENTS.override.md or
- *  else AGENTS.md: one file in each, and not an empty one. What an engine loads is its own to change, so this is the one place
- *  that says it. */
+ *  project's root (the nearest with a `.git`, or the agent's folder where there is none) down to the agent's, the first of
+ *  AGENTS.override.md and AGENTS.md that is there as a file or a link, and nothing of that folder when it is empty. What an engine
+ *  loads is its own to change, so this is the one place that says it. */
 const CLAUDE_LOADS = ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']
 const CODEX_LOADS = ['AGENTS.override.md', 'AGENTS.md']
 /** What is looked for in each folder, the two files a reader has always had in the agent's folder first. */
@@ -167,17 +167,20 @@ interface SkippedInstructions extends Located { why: 'link' | 'not_text' | 'unre
 /** What reading one file came to: its text, or why it is not shown. */
 type Read = { text: string; truncated: boolean } | { why: SkippedInstructions['why']; error?: unknown }
 
-/** The agent's folder and the [PARENTS] above it, nearest first and never the root of the disk, and the project's root among
- *  them: the nearest folder with a `.git` (a folder, or the file of a worktree), or null where there is none. */
+/** The agent's folder and the [PARENTS] above it, nearest first and never the root of the disk, whose files are read; and the
+ *  project's root: the nearest folder with a `.git` (a folder, or the file of a worktree) however far up, as Codex finds it, or
+ *  null where there is none. */
 async function foldersOf(cwd: string): Promise<{ dirs: string[]; root: string | null }> {
-  const dirs = [cwd]
-  while (dirs.length <= PARENTS) {
-    const up = dirname(dirs[dirs.length - 1])
-    if (up === parse(up).root) break
-    dirs.push(up)
+  const dirs: string[] = []
+  let root: string | null = null
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    const top = dir === parse(dir).root
+    if (!top && dirs.length <= PARENTS) dirs.push(dir)
+    if (!root && await lstat(join(dir, '.git')).then(() => true, () => false)) root = dir
+    if (top || (root && dirs.length > PARENTS)) break
   }
-  for (const dir of dirs) if (await lstat(join(dir, '.git')).then(() => true, () => false)) return { dirs, root: dir }
-  return { dirs, root: null }
+  if (!dirs.length) dirs.push(cwd)
+  return { dirs, root }
 }
 
 /** The real path of [path] where it leads somewhere, or null where it does not (a link to nowhere, a loop). */
@@ -239,7 +242,8 @@ export async function readSharedInstructions(cwd: string): Promise<{ shared: Sha
   if (real === null) return { shared: [], skipped: [] }
   const base = real ?? cwd
   const { dirs, root } = real ? await foldersOf(base) : { dirs: [base], root: null }
-  const codexDirs = root ? dirs.slice(0, dirs.indexOf(root) + 1) : [base]
+  // Codex's folders: from the root down to the agent's, of those whose files are read.
+  const codexDirs = root ? dirs.filter((dir) => dir === root || dir.startsWith(root + sep)) : [base]
   const found: Array<Located & { dir: string; rel: string; read: Read }> = []
   let spent = 0
   for (const dir of dirs) {
@@ -251,17 +255,18 @@ export async function readSharedInstructions(cwd: string): Promise<{ shared: Sha
       if (read) found.push({ dir, rel, name: basename(rel), path: relative(base, join(dir, rel)).split(sep).join('/'), loadedBy, read })
     }
   }
-  // Codex takes one file of a folder: AGENTS.override.md when there is anything in it, else AGENTS.md; an empty one is not loaded.
-  // An override that is there and not shown for another reason (a link, not text) is still the one it takes; one the disk could
-  // not look at is not known to be there.
+  // Codex takes the first of a folder's two that is there as a file or a link, a folder or a pipe passed over, and nothing of that
+  // folder when the one it took is empty. One the disk could not look at may or may not be what it takes: both keep `codex`.
   const blank = (one?: { read: Read }) => !!one && 'text' in one.read && one.read.text.trim() === ''
-  const wins = (one?: { read: Read }) => !!one && ('text' in one.read ? !blank(one) : one.read.why !== 'unreadable')
+  const taken = (one?: { read: Read }) => !!one && ('text' in one.read || (one.read.why !== 'not_a_file' && one.read.why !== 'unreadable'))
   const drop = (one?: { loadedBy: Engine[] }) => { if (one) one.loadedBy = one.loadedBy.filter((engine) => engine !== 'codex') }
   for (const dir of codexDirs) {
     const override = found.find((one) => one.dir === dir && one.rel === 'AGENTS.override.md')
     const plain = found.find((one) => one.dir === dir && one.rel === 'AGENTS.md')
+    if (taken(override)) drop(plain)
+    else if (override && 'why' in override.read && override.read.why === 'not_a_file') drop(override)
     if (blank(override)) drop(override)
-    if (blank(plain) || wins(override)) drop(plain)
+    if (blank(plain)) drop(plain)
   }
   const shared: SharedInstructions[] = [], skipped: SkippedInstructions[] = []
   for (const { name, path, loadedBy, read } of found) {

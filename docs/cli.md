@@ -100,24 +100,25 @@ It also answers `shared`, only when there is any: `[{ name, path, loadedBy, text
 agent besides its own file, whether or not it has one, so a person sees what the agent really gets. Those are the files
 its engines load: Claude Code reads `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the agent's folder and in
 every folder above it; Codex reads, in each folder from the project's root (the nearest folder with a `.git`, or the
-agent's own folder where there is none) down to the agent's, `AGENTS.override.md` or else `AGENTS.md`, one file in each
-and not an empty one. The `AGENTS.md` and `CLAUDE.md` of the agent's folder come first and are always looked for. Up to
-five folders above the agent's are looked in (the home folder too, when it is one of them), going up from the real path
-of its folder as the engines see it, and never the root of the disk; above the project's root only what Claude Code
-loads there is read. `name` is the file's name, `path` is where it is from the agent's folder (`CLAUDE.md`,
-`.claude/CLAUDE.md`, `../AGENTS.md`, `../../CLAUDE.md`), and `loadedBy` the engines (`claude`, `codex`) that load it,
-which may be none: an `AGENTS.md` that an `AGENTS.override.md` beside it takes Codex from, or an empty one. Each is a
-plain file, or a link that, with every link on the way resolved, ends at a plain file inside the project (never a place
-outside it, and no link above the project's root), so `CLAUDE.md` linked to `AGENTS.md` shows the one text under both
-names. They are read only, and a save never touches them. Each is at most 64 KiB, with `truncated: true` when it was cut
-(at a whole character), and one read carries about 256 KiB of them in all (the last one read may take it up to 320 KiB),
-with the agent's own file besides: the files after that are in `skipped`. One that is there and is not shown never fails
-the read: it is in `skipped`, only when there is any, `[{ name, path, loadedBy, why }]`, with `why` one of `link` (a
-link that leads out of the project or to nothing), `not_text` (not UTF-8), `unreadable` (this user may not open it, or
-the disk fails on it), `not_a_file` (a folder, a named pipe, or a link to one) or `too_much` (the 256 KiB are used); one
-that is not UTF-8, or that the disk fails on, is also logged by its `path` and a code. Both fields also come beside an
-error of the agent's own file (`BAD_NAME`, `TOO_LARGE`, `NOT_UTF8`, `UNSAFE_PATH`, `READ_FAILED`), so that error does
-not hide what instructs the agent; an error that comes before the folder is known (`OWNER_REQUIRED`,
+agent's own folder where there is none, however far up) down to the agent's, the first of `AGENTS.override.md` and
+`AGENTS.md` that is there as a file or a link, and nothing of that folder when it is empty. The `AGENTS.md` and
+`CLAUDE.md` of the agent's folder come first and are always looked for. Up to five folders above the agent's are looked
+in (the home folder too, when it is one of them), going up from the real path of its folder as the engines see it, and
+never the root of the disk; above the project's root only what Claude Code loads there is read. `name` is the file's
+name, `path` is where it is from the agent's folder (`CLAUDE.md`, `.claude/CLAUDE.md`, `../AGENTS.md`,
+`../../CLAUDE.md`), and `loadedBy` the engines (`claude`, `codex`) that load it, which may be none: an `AGENTS.md` that
+an `AGENTS.override.md` beside it takes Codex from, or an empty one (an empty override leaves that folder nothing). Each
+is a plain file, or a link that, with every link on the way resolved, ends at a plain file inside the project (never a
+place outside it, and no link above the project's root), so `CLAUDE.md` linked to `AGENTS.md` shows the one text under
+both names. They are read only, and a save never touches them. Each is at most 64 KiB, with `truncated: true` when it
+was cut (at a whole character), and one read carries about 256 KiB of them in all (the last one read may take it up to
+320 KiB), with the agent's own file besides: the files after that are in `skipped`. One that is there and is not shown
+never fails the read: it is in `skipped`, only when there is any, `[{ name, path, loadedBy, why }]`, with `why` one of
+`link` (a link that leads out of the project or to nothing), `not_text` (not UTF-8), `unreadable` (this user may not
+open it, or the disk fails on it), `not_a_file` (a folder, a named pipe, or a link to one) or `too_much` (the 256 KiB
+are used); one that is not UTF-8, or that the disk fails on, is also logged by its `path` and a code. Both fields also
+come beside an error of the agent's own file (`BAD_NAME`, `TOO_LARGE`, `NOT_UTF8`, `UNSAFE_PATH`, `READ_FAILED`), so
+that error does not hide what instructs the agent; an error that comes before the folder is known (`OWNER_REQUIRED`,
 `MISSING_AGENT_OR_NAME`, `AGENT_NOT_FOUND`) and a save's never carry them. A reader that predates the fields ignores
 them. A write replaces the file only if `version` is the one the writer read (`''` for no
 file), and answers `{ version }`. It makes `agents/` only once the save goes ahead, and saves of one file take turns in

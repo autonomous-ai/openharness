@@ -45,8 +45,8 @@ export function startProjects(core: CoreApi): ServiceRequests {
   }
   /** One of the instructions file's two requests, for an agent in a folder here. A refusal that is the person's own
    *  mistake (a stale version, a bad name) is the reply and no more. A file that is not text is logged by that name, and a
-   *  failure of the disk by its code, and answered [failed]: its message names the person's folder. [beside] is asked first,
-   *  and what it gives comes with the answer, an error included: the agent's own file failing does not hide the rest. */
+   *  failure of the disk by its code, and answered [failed]: its message names the person's folder. [beside] is read at the
+   *  same time, and what it gives comes with the answer, an error included: the agent's own file failing does not hide the rest. */
   const instructions = (
     type: string, failed: string, run: (cwd: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>,
     beside?: (cwd: string) => Promise<Record<string, unknown>>,
@@ -57,14 +57,16 @@ export function startProjects(core: CoreApi): ServiceRequests {
       if (typeof agentId !== 'string' || !agentId || typeof name !== 'string' || !name) return { error: 'MISSING_AGENT_OR_NAME' }
       const cwd = core.agents.resolve(agentId)?.cwd
       if (!cwd) return { error: 'AGENT_NOT_FOUND' }
-      const also = await beside?.(cwd)
+      // Read beside the agent's own file, not after it; it never throws (every file it cannot show is a reason).
+      const also = beside?.(cwd)
       try {
-        return { ...await run(cwd, payload), ...also }
+        const answer = await run(cwd, payload)
+        return { ...answer, ...await also }
       } catch (error) {
         const refusal = error instanceof InstructionsError ? error.code : undefined
-        if (refusal && refusal !== 'NOT_UTF8') return { error: refusal, ...also }
+        if (refusal && refusal !== 'NOT_UTF8') return { error: refusal, ...await also }
         console.error(`[projects] ${type} failed · ${refusal ?? codeOf(error)}`)
-        return { error: refusal ?? failed, ...also }
+        return { error: refusal ?? failed, ...await also }
       }
     })
   return {

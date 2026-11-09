@@ -556,10 +556,15 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         expect(result.skipped).toEqual([])
       })
 
-      it('lets AGENTS.md keep Codex when the override is empty, and takes it from a file with nothing in it', async () => {
+      // Codex takes the first of the two that is there, and only then sees it is empty: an empty override leaves that folder nothing.
+      it('takes Codex from AGENTS.md for an override that is empty too, and gives it to neither; and to no empty AGENTS.md', async () => {
         await at(join(cwd, 'AGENTS.md'), 'rules')
         await at(join(cwd, 'AGENTS.override.md'), ' \n')
-        expect(await loads(cwd)).toEqual([['AGENTS.md', ['codex']], ['AGENTS.override.md', []]])
+        expect(await loads(cwd)).toEqual([['AGENTS.md', []], ['AGENTS.override.md', []]])
+        await rm(join(cwd, 'AGENTS.override.md'))
+        await at(join(cwd, 'AGENTS.md'), '\n\n')
+        expect(await loads(cwd)).toEqual([['AGENTS.md', []]])
+        await at(join(cwd, 'AGENTS.override.md'), ' \n')
         await at(join(cwd, 'AGENTS.md'), '\n\n')
         expect(await loads(cwd)).toEqual([['AGENTS.md', []], ['AGENTS.override.md', []]])
         await rm(join(cwd, 'AGENTS.md'))
@@ -567,19 +572,31 @@ describe('an agent\'s instructions file, agents/<name>.md in its own folder', ()
         expect(await loads(cwd)).toEqual([['AGENTS.override.md', ['codex']]])
       })
 
-      it('takes Codex from AGENTS.md for an override that is there and cannot be shown, and not for one nobody could look at', async () => {
+      it('passes over an override that is a folder, takes one that is not text, and does not know of one the disk failed on', async () => {
         await at(join(cwd, 'AGENTS.md'), 'rules')
-        await at(join(cwd, 'AGENTS.override.md'), 'override')
-        disk.failOpenOf = 'AGENTS.override.md'
-        const result = await read()
-        expect(result.shared.map((one) => [one.path, one.loadedBy])).toEqual([['AGENTS.md', ['codex']]])
-        expect(result.skipped.map((one) => [one.path, one.why, one.loadedBy])).toEqual([['AGENTS.override.md', 'unreadable', ['codex']]])
-        disk.failOpenOf = null
-        await rm(join(cwd, 'AGENTS.override.md'))
         await mkdir(join(cwd, 'AGENTS.override.md'))
         const folder = await read()
-        expect(folder.shared.map((one) => [one.path, one.loadedBy])).toEqual([['AGENTS.md', []]])
-        expect(folder.skipped.map((one) => [one.path, one.why, one.loadedBy])).toEqual([['AGENTS.override.md', 'not_a_file', ['codex']]])
+        expect(folder.shared.map((one) => [one.path, one.loadedBy])).toEqual([['AGENTS.md', ['codex']]])
+        expect(folder.skipped.map((one) => [one.path, one.why, one.loadedBy])).toEqual([['AGENTS.override.md', 'not_a_file', []]])
+        await rm(join(cwd, 'AGENTS.override.md'), { recursive: true })
+        await writeFile(join(cwd, 'AGENTS.override.md'), Buffer.from([0xff]))
+        const bad = await read()
+        expect(bad.shared.map((one) => [one.path, one.loadedBy])).toEqual([['AGENTS.md', []]])
+        expect(bad.skipped.map((one) => [one.path, one.why, one.loadedBy])).toEqual([['AGENTS.override.md', 'not_text', ['codex']]])
+        disk.failOpenOf = 'AGENTS.override.md'
+        const failed = await read()
+        expect(failed.shared.map((one) => [one.path, one.loadedBy])).toEqual([['AGENTS.md', ['codex']]])
+        expect(failed.skipped.map((one) => [one.path, one.why, one.loadedBy])).toEqual([['AGENTS.override.md', 'unreadable', ['codex']]])
+      })
+
+      // Codex finds the project's root however far up its `.git` is; only the nearest folders' files are read.
+      it('finds a project root more than five folders up, and gives Codex the AGENTS.md of the folders between', async () => {
+        await git(repo())
+        const deep = join(repo(), 'a', 'b', 'c', 'd', 'e', 'f', 'g')
+        await at(join(dirname(deep), 'AGENTS.md'), 'one up')
+        await at(join(repo(), 'CLAUDE.md'), 'SECRET seven up')
+        await mkdir(deep, { recursive: true })
+        expect(await loads(deep)).toEqual([['../AGENTS.md', ['codex']]])
       })
 
       it('gives the files of the folders above up to the project\'s root, nearest first, and each folder\'s in the same order', async () => {
