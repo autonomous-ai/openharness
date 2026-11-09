@@ -19,7 +19,7 @@ void main() {
   const radius = grid.AppDesktop.composerRadius;
 
   ConversationServer buddyChat() {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.state['threadSessions'] = true;
     server.state['sessionsFromChat'] = true;
     final chat = (server.state['conversations'] as List)[1] as Map;
@@ -46,7 +46,7 @@ void main() {
   }
 
   ConversationServer projectThread() {
-    final server = ConversationServer()..threads = true;
+    final server = ConversationServer.chat()..threads = true;
     server.append('The build fails on the second run.');
     server.append('Which machine was it on?');
     server.messages.last

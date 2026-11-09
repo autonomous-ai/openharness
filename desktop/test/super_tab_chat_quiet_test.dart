@@ -19,7 +19,7 @@ void main() {
   group('a message row', () {
     /// A person, an agent in the Swarm, and an agent that has left, one message each.
     ConversationServer server() {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       (server.state['agents'] as List).add({
         'id': 'pm',
         'name': 'Lead',
@@ -121,7 +121,7 @@ void main() {
           'or a file (${brightness.name})', (tester) async {
         final c = await showView(
           tester,
-          ConversationServer(),
+          ConversationServer.chat(),
           brightness: brightness,
         );
         const surface = 'super-message-composer-surface';
@@ -152,7 +152,7 @@ void main() {
 
       testWidgets('a thread\'s reply box is drawn the same '
           '(${brightness.name})', (tester) async {
-        final server = ConversationServer()..threads = true;
+        final server = ConversationServer.chat()..threads = true;
         server.append('Should we do thread replies?');
         server.append('Yes, like Slack.');
         server.messages.last
@@ -178,7 +178,7 @@ void main() {
   // anh Dee (11-07 16:23), rule 7: empty means empty. An empty chat shows no
   // line; the composer under it is what fills it.
   testWidgets('an empty chat shows no line', (tester) async {
-    final c = await showView(tester, ConversationServer());
+    final c = await showView(tester, ConversationServer.chat());
     for (final chat in ['lead', 'offline']) {
       await c.select(chat);
       await tester.pumpAndSettle();
