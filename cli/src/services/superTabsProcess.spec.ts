@@ -83,6 +83,44 @@ it('uses the real service wrapper and process runner by default without connecti
   handle.stop()
 })
 
+// The host posts an agent's answer when its turn ends: the core tells this process each live end, and the answer's text is
+// asked of the core, which reads the transcript (core/experimentQueries.ts `last_turn`).
+it('hears each turn end the core tells it, and reads the last turn of a session of the core', async () => {
+  const t = setup()
+  const ends: unknown[] = []
+  t.api().turns.onEnd(end => { ends.push(end) })
+  t.wire().onEvent!({ kind: 'turn_end', event: { agentId: 'one', sessionId: 's1', aborted: false } })
+  expect(ends).toEqual([{ agentId: 'one', sessionId: 's1', aborted: false }])
+  const turn = { userMessage: 'Ship it.', assistantText: 'Shipped.' }
+  const query = vi.fn(async (name: string, payload: Record<string, unknown>) => name === 'last_turn' ? { turn: payload.sessionId === 's1' ? turn : null } : {})
+  t.wire().onConnected!({ query })
+  expect(await t.api().transcripts.lastTurn('s1')).toEqual(turn)
+  expect(query).toHaveBeenCalledWith('last_turn', { sessionId: 's1' })
+  expect(await t.api().transcripts.lastTurn('s2')).toBeNull()
+  t.process.stop()
+})
+
+it('says what it could not read of a last turn: none while the core is away, an error the core answered, or an answer that is no turn', async () => {
+  const t = setup()
+  await expect(t.api().transcripts.lastTurn('s1')).rejects.toThrow('Core disconnected')
+  // A session the core has no turn of is not a failure.
+  t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? { turn: null } : {} })
+  expect(await t.api().transcripts.lastTurn('s1')).toBeNull()
+  // Anything else is a failure with a name for the host's log: read as no turn, a core that has no such question (an older one) or
+  // will not answer this process would leave every answer owed and none ever posted, and nothing said.
+  const failures: Array<[Record<string, unknown>, string]> = [
+    [{ error: 'UNKNOWN_QUERY' }, 'UNKNOWN_QUERY'], [{ error: 'NOT_SUPER_TABS' }, 'NOT_SUPER_TABS'], [{ error: 'INVALID_REQUEST' }, 'INVALID_REQUEST'],
+    [{}, 'INVALID_ANSWER'], [{ turn: 'turn' }, 'INVALID_ANSWER'], [{ turn: {} }, 'INVALID_ANSWER'], [{ turn: [] }, 'INVALID_ANSWER'],
+    [{ turn: { userMessage: 'Ship it.' } }, 'INVALID_ANSWER'], [{ turn: { assistantText: 'Shipped.' } }, 'INVALID_ANSWER'],
+    [{ turn: { userMessage: 4, assistantText: 'Shipped.' } }, 'INVALID_ANSWER'], [{ turn: { userMessage: 'Ship it.', assistantText: 4 } }, 'INVALID_ANSWER'],
+  ]
+  for (const [answer, code] of failures) {
+    t.wire().onConnected!({ query: async (name: string) => name === 'last_turn' ? answer : {} })
+    await expect(t.api().transcripts.lastTurn('s1'), JSON.stringify(answer)).rejects.toMatchObject({ code })
+  }
+  t.process.stop()
+})
+
 // Stability roadmap 2.4: the server's word that work waits reaches the host in this process as the core's notice.
 it('hands the account\'s notices the core tells it to the host, and nothing else', () => {
   const t = setup()
