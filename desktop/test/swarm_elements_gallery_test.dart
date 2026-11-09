@@ -21,6 +21,7 @@ import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
+import 'package:harness/super_tabs/agent_info.dart';
 import 'package:harness/super_tabs/back_to_chat.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
@@ -142,7 +143,7 @@ Future<List<SuperTabController>> _show(
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1950);
+  tester.view.physicalSize = const Size(760, 2300);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -573,6 +574,18 @@ class _Gallery extends StatelessWidget {
               ),
               title('Back to chat: where a pane took the chat\'s place'),
               SizedBox(width: 280, child: SwarmBackToChat(onBack: () {})),
+              title('Info: what the app knows of an agent, beside its chat'),
+              SizedBox(
+                width: 380,
+                height: 300,
+                child: SwarmAgentInfo(
+                  controller: swarm,
+                  agent: swarm.snapshot!.agent('first builder')!,
+                  machineName: 'Mac Studio',
+                  github: swarmV4GitHub(),
+                  onClose: () {},
+                ),
+              ),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
               // is not there.
               title('Empty: a row'),

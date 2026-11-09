@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
-import 'package:harness/super_tabs/agent_info.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
@@ -25,10 +24,7 @@ void main() {
   var terminalOpen = false;
 
   /// This computer's view of `host`, where lampOS's agents run: up, and the first builder at work in its folder.
-  AppNotifier app({
-    bool online = true,
-    String folder = '/Users/dee/lampOS',
-  }) {
+  AppNotifier app({bool online = true, String folder = '/Users/dee/lampOS'}) {
     final app = createApp(connected: true);
     addTearDown(app.dispose);
     final machine = Machine(
@@ -70,9 +66,8 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     server = swarmV4Server();
     (server.state['people'] as List).cast<Map<String, dynamic>>().firstWhere(
-          (p) => p['id'] == 'owner',
-        )['name'] =
-        'Dee';
+      (p) => p['id'] == 'owner',
+    )['name'] = 'Dee';
     if (project != null) {
       (server.state['projects'] as List)
               .cast<Map<String, dynamic>>()
@@ -85,6 +80,8 @@ void main() {
     );
     addTearDown(controller.dispose);
     await tester.runAsync(controller.refresh);
+    // A Swarm shown again starts afresh, nothing open.
+    await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.light),
@@ -125,48 +122,45 @@ void main() {
     reason: id,
   );
 
-  testWidgets(
-    'Info shows the agent\'s person, project and part, computer, engine, model, state, task and folder, and is one pane '
-    'with Instructions and Terminal',
-    (tester) async {
-      await show(tester, const Size(1440, 900), app: app());
-      await tap(tester, key('swarm-info-button'));
-      expect(
-        find.descendant(
-          of: key('super-right-pane'),
-          matching: key('swarm-agent-info'),
-        ),
-        findsOneWidget,
-      );
-      expectRow('owner', 'Dee');
-      expectRow('projects', 'lampos · PM');
-      expectRow('computer', 'Mac Studio · online');
-      expectRow('engine', 'Claude Code');
-      expectRow('model', 'Opus 5.5');
-      expectRow('state', 'Working');
-      expectRow(
-        'task',
-        '#5759 The two update rows were scored down for #5539 and #5476',
-      );
-      expectRow('folder', '/Users/dee/lampOS');
-      // One pane at a time: Instructions takes Info's place, Info Instructions', Terminal Info's, and Info the terminal's.
-      await tap(tester, key('swarm-instructions-button'));
-      expect(key('swarm-agent-info'), findsNothing);
-      expect(find.byType(SwarmAgentInstructions), findsOneWidget);
-      await tap(tester, key('swarm-info-button'));
-      expect(find.byType(SwarmAgentInstructions), findsNothing);
-      expect(key('swarm-agent-info'), findsOneWidget);
-      await tap(tester, key('swarm-terminal-button'));
-      expect(key('swarm-agent-info'), findsNothing);
-      expect(find.text('Terminal fixture'), findsOneWidget);
-      await tap(tester, key('swarm-info-button'));
-      expect(find.text('Terminal fixture'), findsNothing);
-      expect(key('swarm-agent-info'), findsOneWidget);
-      await tap(tester, key('swarm-info-close'));
-      expect(key('swarm-agent-info'), findsNothing);
-      expect(tester.takeException(), isNull);
-    },
-  );
+  testWidgets('Info shows the agent\'s person, project and part, computer, engine, model, state, task and folder, and is one pane '
+      'with Instructions and Terminal', (tester) async {
+    await show(tester, const Size(1440, 900), app: app());
+    await tap(tester, key('swarm-info-button'));
+    expect(
+      find.descendant(
+        of: key('super-right-pane'),
+        matching: key('swarm-agent-info'),
+      ),
+      findsOneWidget,
+    );
+    expectRow('owner', 'Dee');
+    expectRow('projects', 'lampos · PM');
+    expectRow('computer', 'Mac Studio · online');
+    expectRow('engine', 'Claude Code');
+    expectRow('model', 'Opus 5.5');
+    expectRow('state', 'Working');
+    expectRow(
+      'task',
+      '#5759 The two update rows were scored down for #5539 and #5476',
+    );
+    expectRow('folder', '/Users/dee/lampOS');
+    // One pane at a time: Instructions takes Info's place, Info Instructions', Terminal Info's, and Info the terminal's.
+    await tap(tester, key('swarm-instructions-button'));
+    expect(key('swarm-agent-info'), findsNothing);
+    expect(find.byType(SwarmAgentInstructions), findsOneWidget);
+    await tap(tester, key('swarm-info-button'));
+    expect(find.byType(SwarmAgentInstructions), findsNothing);
+    expect(key('swarm-agent-info'), findsOneWidget);
+    await tap(tester, key('swarm-terminal-button'));
+    expect(key('swarm-agent-info'), findsNothing);
+    expect(find.text('Terminal fixture'), findsOneWidget);
+    await tap(tester, key('swarm-info-button'));
+    expect(find.text('Terminal fixture'), findsNothing);
+    expect(key('swarm-agent-info'), findsOneWidget);
+    await tap(tester, key('swarm-info-close'));
+    expect(key('swarm-agent-info'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'an agent the app knows little of shows only the rows it has, and its computer going off says so',
@@ -226,8 +220,7 @@ void main() {
               '/Users/dee/work/autonomous/lampOS/firmware/voice/wake-word/models/'
               'onboarding/2026-11-10/a-folder-name-with-no-break-in-it-at-all',
         ),
-        project:
-            'lampOS \u{1F4A1} the lamp that listens, remembers and answers, for every room of every house',
+        project: 'lampOS \u{1F4A1} the lamp that listens, remembers and answers, for every room of every house',
       );
       for (var i = 0; i < 7; i++) {
         await tester.tap(key('swarm-info-button'));
