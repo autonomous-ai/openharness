@@ -113,14 +113,18 @@ describe('a reply owed to a person in their agent\'s own chat', () => {
     expect(t.lastTurn).toHaveBeenCalledTimes(1)
   })
 
-  it('names a turn that ended without an answer, takes its reply off what is owed and posts nothing', async () => {
+  // A queued follow-up begins the moment a turn ends, and its prompt may be written before the answer is read: the last turn
+  // is then one that has said nothing yet, and it is not over for certain.
+  it('keeps the reply owed for a turn that has said nothing yet, and posts it when that turn has', async () => {
     const t = setup()
     t.owe()
     t.lastTurn.mockResolvedValueOnce({ userMessage: 'Ship it.', assistantText: ' \n ' })
     await t.end()
     expect(t.posts()).toHaveLength(0)
-    expect(t.journal.replies).toBeUndefined()
-    expect(t.lines()).toEqual(['No reply posted for delivery d1 of agent agent: its turn ended with no final answer.'])
+    expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
+    expect(t.lines()).toEqual([])
+    await t.end()
+    expect(t.posts()).toHaveLength(1)
   })
 
   it('names a turn the person interrupted, takes its reply off what is owed and posts nothing', async () => {
@@ -372,13 +376,19 @@ describe('what is owed, kept small', () => {
     ])
   })
 
-  it('owes one reply per delivery: a delivery typed again after the pane held it is the same one', () => {
+  it('owes one reply per delivery: a delivery typed again after the pane held it is the same one, owed from the terminal it is typed in now', async () => {
     const t = setup()
     t.owe('d1')
     const first = { ...t.journal.replies!.d1! }
     t.wait(50)
     t.owe('d1')
     expect(t.journal.replies!.d1).toEqual(first)
+    // Its member moved to a new session while it waited: the turn that ends there is the one that answers it.
+    t.replies.owe({ deliveryId: 'd1', tabId: 'tab', agentId: 'agent', harnessId: 'replacement' }, { id: 'm-d1', conversationId: 'chat' }, 'Ship it.')
+    expect(t.journal.replies!.d1).toEqual({ ...first, harnessId: 'replacement' })
+    expect(Object.keys(t.journal.replies!)).toEqual(['d1'])
+    await t.end({ agentId: 'replacement' })
+    expect(t.posts()).toHaveLength(1)
   })
 
   it('is taken back when the delivery was never typed, and kept when it may have been', () => {

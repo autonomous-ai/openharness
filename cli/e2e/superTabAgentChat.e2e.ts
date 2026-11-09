@@ -106,11 +106,26 @@ it.each(['claude', 'codex'] as const)('types %s what its person typed, and posts
     command: { type: 'message.send', conversationId: CHAT, text: 'answer 2: And once more, in the thread.', replyTo: 'message-two', recipientIds: [] } })
   await until('the second native input acknowledgement', () => second.status === 'delivered' || null, 30_000, 100)
 
-  // A turn its person typed in the terminal is not a reply to anything: nothing is posted for it.
+  // A turn its person typed in the terminal is not a reply to anything: nothing is posted for it, and the message after it is
+  // answered as its own, so the next post is its.
   client.send('message', { agentId: agent.agent.id, content: 'typed in the terminal' })
   await until('the terminal turn to end', () => client.frames.filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.agent.id && !frame.replay).length >= 3 || null, 60_000, 100)
-  await new Promise(resolve => setTimeout(resolve, 1_500))
-  expect(posts).toHaveLength(2)
+  ask('three', 'One last thing.')
+  await until('the third answer', () => posts.length >= 3 || null, 60_000, 100)
+  expect(posts.map(post => post.operationId)).toEqual(['reply-delivery-one', 'reply-delivery-two', 'reply-delivery-three'])
+  expect(posts[2]!.command).toMatchObject({ text: 'answer 4: One last thing.', answers: 'message-three' })
+
+  // Two messages that queue behind a running turn are each their own turn, and their answers follow in the order they were sent.
+  const busy = client.next(frame => frame.type === 'turn_started' && frame.agentId === agent.agent.id && !frame.replay)
+  client.send('message', { agentId: agent.agent.id, content: '!slow 2000' })
+  await busy
+  ask('four', 'First of the queued.')
+  ask('five', 'Second of the queued.')
+  await until('both queued answers', () => posts.length >= 5 || null, 90_000, 100)
+  expect(posts.slice(3).map(post => post.operationId)).toEqual(['reply-delivery-four', 'reply-delivery-five'])
+  expect(posts.slice(3).map(post => post.command.text)).toEqual(['answer 6: First of the queued.', 'answer 7: Second of the queued.'])
+  expect(posts.slice(3).map(post => post.command.answers)).toEqual(['message-four', 'message-five'])
+  expect(posts).toHaveLength(5)
   // And the journal keeps no words of anybody's.
   const journal = readFileSync(join(d.dataDir, 'super-tabs', `host-${ME.machineId}.json`), 'utf8')
   expect(journal).not.toContain(typed)

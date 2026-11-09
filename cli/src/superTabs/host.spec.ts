@@ -5847,7 +5847,8 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
   }
   const answered = (t: ReturnType<typeof setup>, userMessage = 'ok, ship it', assistantText = 'Shipped.') =>
     vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue({ userMessage, assistantText })
-  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+  /** What the host started at a turn's end is promises with nothing to wait for in these specs: one turn of the event loop finishes it. */
+  const flush = () => new Promise(resolve => setImmediate(resolve))
 
   it('is typed as the person typed it: no place, context, quote, header or Answer line, and no read of the Swarm', async () => {
     const t = inChat({ replyTo: 'question-2', thread: 'root', sequence: 5 })
@@ -5929,7 +5930,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
         answered(t)
         await t.open().tick()
         t.end()
-        await settle()
+        await flush()
         expect(posts, JSON.stringify(fields)).toEqual([])
         expect(t.saved().replies, JSON.stringify(fields)).toBeUndefined()
       }
@@ -6014,7 +6015,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
         command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'message', recipientIds: [] } })
       expect(t.core.transcripts.lastTurn).toHaveBeenCalledWith('session')
       t.end(); t.end()
-      await settle()
+      await flush()
       expect(posts).toHaveLength(1)
       expect(t.saved().replies).toBeUndefined()
     })
@@ -6050,12 +6051,12 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       const second = t.open()
       t.end()
       await vi.waitFor(() => expect(posts).toHaveLength(1))
-      await settle()
+      await flush()
       expect(t.saved().replies).toBeUndefined()
       second.stop()
       const third = t.open()
       t.end()
-      await settle()
+      await flush()
       expect(posts).toHaveLength(1)
       third.stop()
     })
@@ -6066,7 +6067,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       await host.tick()
       host.stop()
       t.end()
-      await settle()
+      await flush()
       expect(posts).toEqual([])
     })
     it('is not posted for a turn that was asked something else, or ended with no answer; it stays owed for its own', async () => {
@@ -6076,7 +6077,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       t.end()
       vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue(null)
       t.end()
-      await settle()
+      await flush()
       expect(posts).toEqual([])
       expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
       answered(t)

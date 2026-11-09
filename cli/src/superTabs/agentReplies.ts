@@ -12,7 +12,8 @@
  *
  * Known limit: a message queued behind a running turn starts its own turn the moment the first ends, and an engine may have
  * written that prompt before the answer is read, so the first turn's answer is no longer the last turn the transcript shows.
- * That reply is dropped, with a line saying so, rather than posted from the wrong turn.
+ * That reply stays owed through that end (the last turn has said nothing yet) and is dropped, with a line saying so, when the
+ * turn after it ends and answers: rather posted from the wrong turn, it is not posted.
  */
 import { createHash } from 'node:crypto'
 import type { CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
@@ -38,8 +39,9 @@ const OWED_MAX = 256
 /** A reply the host owes, by the delivery that typed the message. */
 export interface Owed {
   tabId: string
-  /** The member the reply is posted as, and the terminal the core knows it by (the turn that ends says the terminal). */
+  /** The member the reply is posted as. */
   agentId: string
+  /** The terminal its agent runs in, by the id the core knows it by: the turn that ends says which terminal it ran in. */
   harnessId: string
   conversationId: string
   /** The message answered. The reply goes right below it, or in its thread when it is a reply in one, as the Answer line said. */
@@ -155,8 +157,10 @@ export class AgentReplies {
   owe(entry: { deliveryId: string; tabId: string; agentId: string; harnessId: string }, message: Record<string, unknown>, text: string): void {
     this.expire()
     const owed = this.journal.replies ??= {}
-    // The pane held it and it is typed again: the same message, the same reply.
-    if (owed[entry.deliveryId]) return
+    // The pane held it and it is typed again, perhaps in another terminal (its member moved to a new session while it waited): the
+    // same message, the same reply, owed from where it is typed now.
+    const held = owed[entry.deliveryId]
+    if (held) { held.harnessId = entry.harnessId; return }
     owed[entry.deliveryId] = { tabId: entry.tabId, agentId: entry.agentId, harnessId: entry.harnessId, conversationId: String(message.conversationId),
       messageId: String(message.id), thread: identifier(message.thread) && message.thread !== message.id, asked: hashOf(text), at: this.deps.now() }
     const mine = this.owedOf(entry.harnessId)
@@ -189,13 +193,16 @@ export class AgentReplies {
       this.log(`Could not read the answer of the turn that ended for agent ${first[1].agentId}: ${named(error)}.`)
       return
     }
-    // No answer to read says nothing of which turn it was; nor does one read for a prompt that is none of those owed (a turn
-    // its person typed in the terminal, or an automatic one).
     if (this.stopped || !turn) return
-    const asked = hashOf(turn.userMessage)
+    // The last turn the transcript shows is the one this end answers when it has said something, to the prompt of one of
+    // these. One that has said nothing is a turn still at work (a queued follow-up begins the moment one ends, and its prompt
+    // may already be written) or one that said nothing, and neither is over for certain; a prompt that is none of these is a turn
+    // its person typed in the terminal, or an automatic one. Either way nothing is posted and what is owed stays owed.
+    const answer = turn.assistantText.trim()
     // Read again: an earlier hearing of this end may have taken it while this read was out.
     const mine = this.owedOf(event.agentId)
-    const at = mine.findIndex(([, owed]) => owed.asked === asked)
+    const asked = answer ? hashOf(turn.userMessage) : null
+    const at = asked ? mine.findIndex(([, owed]) => owed.asked === asked) : -1
     if (at < 0) return
     // Each message that waited behind this one had its turn after it, so the ones before it went without: it was queued
     // and the engine took it into the turn that followed, or its turn was never seen.
@@ -204,8 +211,6 @@ export class AgentReplies {
     this.remove(id)
     this.commit()
     if (event.aborted) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn was interrupted.`)
-    const answer = turn.assistantText.trim()
-    if (!answer) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn ended with no final answer.`)
     await this.attempt(id, owed, answer.length > REPLY_TEXT_MAX ? cut(answer, REPLY_TEXT_MAX - 1) : answer, 0)
   }
 
