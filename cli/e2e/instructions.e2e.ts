@@ -117,7 +117,8 @@ describe('an agent\'s instructions, as the owner reads them from another compute
     const cases: Array<[string, () => void, Shared | undefined, Array<{ name: string; why: string }> | undefined]> = [
       // 6 MB: the limit falls inside the character after the 21 845th (three bytes each), so the text ends before it.
       ['a file far over the limit, cut at a whole character', () => writeFileSync(agentsFile, euro.repeat(2_000_000)), [fine('AGENTS.md', euro.repeat(21_845), true)], undefined],
-      ['an empty file', () => writeFileSync(agentsFile, ''), [fine('AGENTS.md', '')], undefined],
+      // Codex loads no empty file, so nothing loads this one.
+      ['an empty file', () => writeFileSync(agentsFile, ''), [{ ...fine('AGENTS.md', ''), loadedBy: [] }], undefined],
       ['links that lead out of the project, and a link to such a link', () => {
         symlinkSync(join(outside, 'secret.md'), agentsFile)
         symlinkSync('AGENTS.md', claudeFile)
