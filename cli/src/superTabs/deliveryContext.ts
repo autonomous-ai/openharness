@@ -21,7 +21,7 @@ const RECENT_MIN = 40
 export const ADDED_MAX = 600
 
 /** [text] cut to [max] characters and an ellipsis, never between the halves of an emoji (review 1 of #3114). */
-const cut = (text: string, max: number): string => {
+export const cut = (text: string, max: number): string => {
   if (text.length <= max) return text
   return `${text.slice(0, /[\uD800-\uDBFF]/.test(text[max - 1]!) ? max - 1 : max)}…`
 }

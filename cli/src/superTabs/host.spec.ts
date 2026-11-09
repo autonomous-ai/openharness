@@ -27,7 +27,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
   // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
   return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads), buddyOwnerOf: () => 'peer' }
 })
-import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
+import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -54,8 +54,9 @@ afterEach(() => { team.value = false; for (const host of hosts.splice(0)) host.s
 function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
   const listeners = new Set<(e: TurnDelivery) => void>()
+  const endListeners = new Set<(e: TurnEnd) => void>()
   const notices = new Set<(notice: BackendNotice) => void>()
-  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string }; lead?: boolean; leadsConversationId?: string } =
+  const row: { tabId: string; agent: { id: string; harnessId: string; machineId: string; chatId?: string; displayName?: string }; lead?: boolean; leadsConversationId?: string } =
     { tabId: 'tab', agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }, leadsConversationId: 'leads' }
   /** The conversation the delivery comes from. */
   let from = 'lead'
@@ -83,15 +84,18 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
   const core = fakeCore({ dataDir: dir,
     agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) },
     account: { backend: call, onNotice: vi.fn(fn => { notices.add(fn); return () => { notices.delete(fn) } }) },
-    turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }) },
+    turns: { onDelivery: vi.fn(fn => { listeners.add(fn); return () => { listeners.delete(fn) } }),
+      onEnd: vi.fn(fn => { endListeners.add(fn); return () => { endListeners.delete(fn) } }) },
   })
   const log = vi.fn()
   const open = (options: SuperTabHostOptions = {}) => { const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, ...options }); hosts.push(host); return host }
   const event = (state: TurnDelivery['state'], reason?: string) => {
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
+  /** The agent's turn ends, as the core tells it. */
+  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, ...turn }) }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
-  return { core, call, open, event, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
+  return { core, call, open, event, end, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
     /** What the server's daemon socket tells this machine (backend lib/adapterWs.ts). */
     push: (notice: BackendNotice) => { for (const fn of notices) fn(notice) },
     /** Nothing waits for the agent until `send`, which queues a new delivery. */
@@ -5816,5 +5820,367 @@ describe('a managed main Buddy sleeps and wakes (#3824)', () => {
     finish({ harness: 'idle' })
     await new Promise(resolve => setImmediate(resolve))
     expect(t.closeMember).not.toHaveBeenCalled()
+  })
+})
+
+// Swarm v4 (anh Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"): in an agent's own chat its
+// person's words reach it as they typed them, and the agent's answer is posted there by the host when its turn ends.
+describe('a person\'s message in an agent\'s own 1:1 chat', () => {
+  const KEN = { kind: 'person', id: 'ken', name: 'Ken' }
+  /** A person's message in the agent's own chat, whose id its roster row names. */
+  function inChat(fields: Record<string, unknown> = {}, claim: Record<string, unknown> = {}) {
+    const t = setup({ conversationId: 'chat', author: KEN, text: 'ok, ship it', ...fields }, claim)
+    t.row.agent.chatId = 'chat'
+    t.from('chat')
+    return t
+  }
+  /** What the host asked of the Swarm to build this delivery (its reads as the agent). */
+  const reads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && path.includes('asAgentId=')).map(([, path]) => path)
+  const typed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.turns.deliver).mock.calls.map(([, text]) => text)
+  /** The posts the host makes, answered as the backend answers one, or with a refusal for those [refuse] names. */
+  function posting(t: ReturnType<typeof setup>, refuse: (post: Record<string, any>) => boolean = () => false, code = 'FORBIDDEN') {
+    const original = vi.mocked(t.call).getMockImplementation()!
+    const posts: Array<Record<string, any>> = []
+    vi.mocked(t.call).mockImplementation(async (method, path, body) => {
+      if (method === 'POST' && path.endsWith('/commands')) {
+        const post = { path, ...(body as Record<string, unknown>) }
+        posts.push(post)
+        return refuse(post) ? { status: 403, body: { success: false, error: { code, message: 'Not yours.' } } } : { status: 200, body: { success: true, data: { result: {} } } }
+      }
+      return original(method, path, body)
+    })
+    return posts
+  }
+  const answered = (t: ReturnType<typeof setup>, userMessage = 'ok, ship it', assistantText = 'Shipped.') =>
+    vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue({ userMessage, assistantText })
+  /** What the host started at a turn's end is promises with nothing to wait for in these specs: one turn of the event loop finishes it. */
+  const flush = () => new Promise(resolve => setImmediate(resolve))
+
+  it('is typed as the person typed it: no place, context, quote, header or Answer line, and no read of the Swarm', async () => {
+    const t = inChat({ replyTo: 'question-2', thread: 'root', sequence: 5 })
+    await t.open().tick()
+    expect(vi.mocked(t.core.turns.deliver).mock.calls).toEqual([['harness', 'ok, ship it', 'team:service:superTabs:delivery']])
+    expect(reads(t)).toEqual([])
+    // Every other conversation reads the Swarm for its lines, and the reply it quotes, as before.
+    const channel = setup({ author: KEN, text: 'ok, ship it', replyTo: 'question-2' })
+    channel.row.agent.chatId = 'chat'
+    await channel.open().tick()
+    expect(reads(channel).length).toBeGreaterThan(0)
+  })
+
+  it('is typed with the text of the files it carries after a blank line, and nothing else', async () => {
+    const file = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 5, url: 'https://cdn.example.test/x/screen.png' }
+    const t = inChat({ attachments: [file] })
+    const attachedFiles = vi.fn(async () => ({ text: 'Attached files:\n- /drops/1-screen.png (screen.png, 5 B)', complete: true, paths: ['/drops/1-screen.png'] }))
+    await t.open({ attachedFiles }).tick()
+    expect(typed(t)).toEqual(['ok, ship it\n\nAttached files:\n- /drops/1-screen.png (screen.png, 5 B)'])
+    const alone = inChat({ text: '', attachments: [file] })
+    await alone.open({ attachedFiles }).tick()
+    expect(typed(alone)).toEqual(['Attached files:\n- /drops/1-screen.png (screen.png, 5 B)'])
+  })
+
+  it('still closes the question its person\'s message answers, as any person\'s Swarm message does', async () => {
+    const t = inChat({ createdAt: '2026-11-09T08:00:00.000Z' })
+    vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'ken', email: 'ken@example.test' })
+    await t.open().tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', 'ok, ship it', 'team:service:superTabs:delivery',
+      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z') })
+  })
+
+  it('is typed again, as typed, when the pane held it, with nothing read for it and one reply owed', async () => {
+    const t = inChat({ replyTo: 'question-2' })
+    const host = t.open()
+    await host.tick()
+    t.event('rejected', 'team_waiting_busy')
+    await host.tick()
+    expect(typed(t)).toEqual(['ok, ship it', 'ok, ship it'])
+    expect(reads(t)).toEqual([])
+    expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+  })
+
+  // Everything but a person's own words in their agent's own chat keeps its wrapper, its lines and its Answer line.
+  describe('a delivery that is not one', () => {
+    const wrapped = async (fields: Record<string, unknown>, from = 'chat') => {
+      const t = setup({ conversationId: from, text: 'ok, ship it', ...fields })
+      t.row.agent.chatId = 'chat'
+      t.from(from)
+      await t.open().tick()
+      return { t, text: String(typed(t)[0]) }
+    }
+    it('keeps a message in any other conversation as it was, golden', async () => {
+      const { text, t } = await wrapped({ author: KEN }, 'lead')
+      expect(text).toBe('In "" (conversation lead).\n\n@Ken, to you:\nok, ship it\n\n'
+        + 'Answer: harness super-tab --port 18473 --machine \'machine-1\' --tab \'tab\' --agent \'agent\' post \'lead\' \'your message\' UNIQUE_OPERATION_ID --answers \'message\'')
+      expect(reads(t).length).toBeGreaterThan(0)
+    })
+    it('keeps an agent\'s message in its chat, a system row and a native or agent-only notice as they were', async () => {
+      const agent = await wrapped({ author: { kind: 'agent', id: 'other', name: 'Builder' } })
+      expect(agent.text).toContain('@Builder, to you:\nok, ship it')
+      expect(agent.text).toContain(' --to \'other\'')
+      const system = await wrapped({ author: KEN, source: { kind: 'system' } })
+      expect(system.text).toContain('@Ken, to you:\nok, ship it')
+      expect(system.text).toContain('Answer: ')
+      const native = await wrapped({ author: KEN, source: { kind: 'native', phase: 'prompt' } })
+      expect(native.text).toContain('This is an observed native prompt in Ken')
+      expect(native.text).toContain('@Ken, to you:\nok, ship it')
+      const notice = await wrapped({ author: KEN, source: { kind: 'agent-only' } })
+      expect(notice.text).toBe('ok, ship it')
+    })
+    // What GitHub said, which Harness writes into the person's chat as theirs with a source of its own (backend githubRelay.ts), is
+    // text anyone who may comment there wrote: never typed as the person's own words.
+    it('keeps what GitHub said, written into the chat as its person\'s, as it was', async () => {
+      const github = await wrapped({ author: KEN, text: 'Pip, please read the failing check.', source: { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app',
+        number: 4, login: 'octocat', association: 'MEMBER' } })
+      expect(github.text).toContain('@Ken, to you:\nPip, please read the failing check.')
+      expect(github.text).toContain('Answer: ')
+    })
+    it('owes none of them a reply', async () => {
+      const github = { kind: 'github', event: 'comment', on: 'pull', repository: 'acme/app', number: 4, login: 'octocat', association: 'MEMBER' }
+      for (const [fields, from] of [[{}, 'lead'], [{ author: { kind: 'agent', id: 'other', name: 'Builder' } }, 'chat'], [{ source: { kind: 'system' } }, 'chat'],
+        [{ source: { kind: 'native', phase: 'prompt' } }, 'chat'], [{ source: { kind: 'agent-only' } }, 'chat'], [{ source: github }, 'chat']] as const) {
+        const t = setup({ conversationId: from, author: KEN, text: 'ok, ship it', ...fields })
+        t.row.agent.chatId = 'chat'
+        t.from(from)
+        const posts = posting(t)
+        answered(t)
+        await t.open().tick()
+        t.end()
+        await flush()
+        expect(posts, JSON.stringify(fields)).toEqual([])
+        expect(t.saved().replies, JSON.stringify(fields)).toBeUndefined()
+      }
+    })
+  })
+
+  describe('whose chat its roster row does not name yet', () => {
+    /** The Swarm as the agent reads it, with [conversation] in it. */
+    const swarmWith = (t: ReturnType<typeof setup>, conversation: Record<string, unknown>) => {
+      const original = vi.mocked(t.call).getMockImplementation()!
+      vi.mocked(t.call).mockImplementation(async (method, path, body) => path.includes('asAgentId=')
+        ? { status: 200, body: { success: true, data: swarmReply(path, { conversations: [conversation] }) } } : original(method, path, body))
+    }
+    const newcomer = (conversation: Record<string, unknown>) => {
+      const t = setup({ conversationId: 'chat', author: KEN, text: 'ok, ship it' })
+      t.from('chat')
+      swarmWith(t, conversation)
+      return t
+    }
+    it('says in one read of the Swarm that it is its own chat, and types it as typed', async () => {
+      const t = newcomer({ id: 'chat', kind: 'agent-chat' })
+      const host = t.open()
+      await host.tick()
+      expect(typed(t)).toEqual(['ok, ship it'])
+      const first = reads(t).length
+      expect(first).toBeGreaterThan(0)
+      // Held by the pane and tried again: not read again.
+      t.event('rejected', 'team_waiting_busy')
+      await host.tick()
+      expect(typed(t)).toEqual(['ok, ship it', 'ok, ship it'])
+      expect(reads(t)).toHaveLength(first)
+    })
+    it('keeps the wrapper of a message the Swarm read says is in another kind of conversation, and reads no more for it than before', async () => {
+      const t = newcomer({ id: 'chat' })
+      await t.open().tick()
+      expect(String(typed(t)[0])).toContain('@Ken, to you:\nok, ship it')
+      expect(String(typed(t)[0])).toContain('Answer: ')
+      // The read that said what kind of chat it is gives its context lines: an agent's message there is read for them as often.
+      const agents = setup({ conversationId: 'chat', author: { kind: 'agent', id: 'other', name: 'Builder' }, text: 'ok, ship it' })
+      agents.from('chat')
+      await agents.open().tick()
+      expect(reads(t).length).toBeGreaterThan(0)
+      expect(reads(t)).toEqual(reads(agents))
+    })
+    it('reads nothing of the Swarm for a Buddy, which has no such chat', async () => {
+      const t = newcomer({ id: 'chat', kind: 'agent-chat' })
+      vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+      await t.open().tick()
+      expect(String(typed(t)[0])).toContain('@Ken, to you:')
+      expect(reads(t)).toEqual([])
+    })
+    it('keeps it too when the read fails or is slow, and the person\'s message still goes', async () => {
+      const failing = newcomer({ id: 'chat', kind: 'agent-chat' })
+      const original = vi.mocked(failing.call).getMockImplementation()!
+      vi.mocked(failing.call).mockImplementation(async (method, path, body) => { if (path.includes('asAgentId=')) throw new Error('backend down'); return original(method, path, body) })
+      await failing.open().tick()
+      expect(String(typed(failing)[0])).toContain('@Ken, to you:\nok, ship it')
+      const slow = newcomer({ id: 'chat', kind: 'agent-chat' })
+      const first = vi.mocked(slow.call).getMockImplementation()!
+      vi.mocked(slow.call).mockImplementation((method, path, body) => path.includes('asAgentId=') ? new Promise(() => {}) : first(method, path, body))
+      await slow.open({ contextWaitMs: 5 }).tick()
+      expect(String(typed(slow)[0])).toContain('@Ken, to you:\nok, ship it')
+    })
+    it('names its chat by the id its roster row gives, once it has one, never by a read', async () => {
+      const t = newcomer({ id: 'chat', kind: 'agent-chat' })
+      t.row.agent.chatId = 'another-chat'
+      await t.open().tick()
+      expect(String(typed(t)[0])).toContain('@Ken, to you:\nok, ship it')
+    })
+  })
+
+  describe('its reply', () => {
+    it('is posted by the host as the agent, right below the message, when its turn ends, once', async () => {
+      const t = inChat(), posts = posting(t)
+      answered(t)
+      const host = t.open()
+      await host.tick()
+      t.event('started')
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+      expect(posts[0]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'reply-delivery', asAgentId: 'agent',
+        command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'message', recipientIds: [] } })
+      expect(t.core.transcripts.lastTurn).toHaveBeenCalledWith('session')
+      t.end(); t.end()
+      await flush()
+      expect(posts).toHaveLength(1)
+      expect(t.saved().replies).toBeUndefined()
+    })
+    it('is posted in the thread its message is in', async () => {
+      const t = inChat({ thread: 'root', replyTo: 'root' }), posts = posting(t)
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+      expect(posts[0]!.command).toMatchObject({ replyTo: 'message', recipientIds: [] })
+      expect(posts[0]!.command).not.toHaveProperty('answers')
+    })
+    it('is told to its person in the chat, by the name they know the agent by, when the server turns the reply away for good', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery')
+      t.row.agent.displayName = 'Mia'
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(2))
+      expect(posts[1]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'dropped-reply-delivery', asAgentId: 'agent',
+        command: { type: 'message.send', conversationId: 'chat', text: 'Mia\'s answer could not be posted.', replyTo: null, answers: 'message', recipientIds: [] } })
+      expect(t.log).toHaveBeenCalledWith('Dropped the reply to delivery delivery of agent agent: FORBIDDEN; no later try changes it.')
+      // Said once: nothing owed is left, and the line itself is not answered.
+      t.end()
+      await flush()
+      expect(posts).toHaveLength(2)
+      expect(t.saved().replies).toBeUndefined()
+    })
+    // A host whose billing lapsed is refused as HOST_UNAVAILABLE (403) until it returns: not final, as its receipts are not.
+    it('is tried again, not dropped as refused for good, when the server says its host is unavailable', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery', 'HOST_UNAVAILABLE')
+      answered(t)
+      const host = t.open()
+      await host.tick()
+      t.end()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith(expect.stringContaining('Could not post the reply to delivery delivery of agent agent: HOST_UNAVAILABLE (try 1 of 5)')))
+      // Nothing is told to its person yet: the reply is not dropped, it waits for its next try.
+      expect(posts.map(post => post.operationId)).toEqual(['reply-delivery'])
+      host.stop()
+      expect(t.log).toHaveBeenCalledWith('Dropped the reply to delivery delivery of agent agent: the host stopped.')
+    })
+    it('is told by the agent\'s place-holder name when its roster row gives none', async () => {
+      const t = inChat(), posts = posting(t, post => post.operationId === 'reply-delivery')
+      answered(t)
+      await t.open().tick()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(2))
+      expect(posts[1]!.command.text).toBe('The agent\'s answer could not be posted.')
+    })
+    it('is owed from the delivery that typed it: the journal keeps ids and a hash, never the words, and the entry may go', async () => {
+      const t = inChat({ text: 'a private plan' })
+      const host = t.open()
+      await host.tick()
+      expect(t.saved().replies.delivery).toMatchObject({ tabId: 'tab', agentId: 'agent', harnessId: 'harness', conversationId: 'chat', messageId: 'message', thread: false,
+        name: 'The agent', asked: expect.stringMatching(/^[0-9a-f]{32}$/), at: expect.any(Number) })
+      t.event('started')
+      await host.tick()
+      expect(t.saved().entries).toEqual({})
+      expect(JSON.stringify(t.saved())).not.toContain('a private plan')
+      expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+    })
+    it('survives a restart of the host: the new one posts it once, and one after that owes nothing', async () => {
+      const t = inChat(), posts = posting(t)
+      answered(t)
+      const first = t.open()
+      await first.tick()
+      t.event('started')
+      await first.tick()
+      first.stop()
+      const second = t.open()
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+      await flush()
+      expect(t.saved().replies).toBeUndefined()
+      second.stop()
+      const third = t.open()
+      t.end()
+      await flush()
+      expect(posts).toHaveLength(1)
+      third.stop()
+    })
+    it('is not posted by a host that stopped', async () => {
+      const t = inChat(), posts = posting(t)
+      answered(t)
+      const host = t.open()
+      await host.tick()
+      host.stop()
+      t.end()
+      await flush()
+      expect(posts).toEqual([])
+    })
+    it('is not posted for a turn that was asked something else, or ended with no answer; it stays owed for its own', async () => {
+      const t = inChat(), posts = posting(t)
+      await t.open().tick()
+      answered(t, 'Something typed in the terminal.', 'Done.')
+      t.end()
+      vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue(null)
+      t.end()
+      await flush()
+      expect(posts).toEqual([])
+      expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+      answered(t)
+      t.end()
+      await vi.waitFor(() => expect(posts).toHaveLength(1))
+    })
+    it('is not owed for a delivery the core refused for good, and is for one it may have typed', async () => {
+      const refused = inChat()
+      await refused.open().tick()
+      refused.event('rejected', 'agent_gone')
+      expect(refused.saved().replies).toBeUndefined()
+      const unsure = inChat()
+      await unsure.open().tick()
+      unsure.event('unknown', 'The core did not confirm this delivery.')
+      expect(Object.keys(unsure.saved().replies)).toEqual(['delivery'])
+    })
+    it('is not owed for a delivery whose hand-over could not be saved, and is once the next try is', async () => {
+      const t = inChat()
+      let failOnce = true
+      const write = (file: string, journal: { entries: Record<string, { stage: string }> }) => {
+        if (failOnce && Object.values(journal.entries).some(e => e.stage === 'submitting')) { failOnce = false; throw new Error('Disk full') }
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, JSON.stringify(journal))
+      }
+      const host = t.open({ write: write as never })
+      await host.tick()
+      expect(t.core.turns.deliver).not.toHaveBeenCalled()
+      t.wait(1_500)
+      await host.tick()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
+    })
+    it('is owed from a journal an older host wrote with none, and a journal that holds only nonsense in its place is read, saying so', () => {
+      const t = inChat()
+      const file = hostJournalFile(t.dir, 'machine-1')
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, JSON.stringify({ version: 1, machineId: 'machine-1', entries: {} }))
+      expect(() => t.open()).not.toThrow()
+      writeFileSync(file, JSON.stringify({ version: 1, machineId: 'machine-1', entries: {}, replies: { odd: { tabId: 4 } } }))
+      expect(() => t.open()).not.toThrow()
+      expect(t.log).toHaveBeenCalledWith('Dropped 1 saved replies owed that this host could not use.')
+      expect(t.saved().replies).toBeUndefined()
+    })
+    it('is read from the end of each turn only of an agent that is owed one', async () => {
+      const t = inChat()
+      const host = t.open()
+      await host.tick()
+      t.end({ agentId: 'another-harness' })
+      expect(t.core.transcripts.lastTurn).not.toHaveBeenCalled()
+      host.stop()
+      expect(t.core.turns.onEnd).toHaveBeenCalledTimes(1)
+    })
   })
 })

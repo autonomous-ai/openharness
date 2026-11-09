@@ -11,6 +11,8 @@ const FILES = ['src/superTabs/route.ts', 'src/superTabs/routeCommand.ts', 'src/s
   'src/superTabs/routeCheapFirst.ts', 'src/superTabs/routeMeasured.ts', 'src/superTabs/windowPull.ts', 'src/superTabs/machineFit.ts',
   // Whose PM an account runs (Ken, 11-05).
   'src/superTabs/pmAccounts.ts',
+  // The replies the host owes a person who talked to their agent in its own chat, posted when the agent's turn ends (anh Dee, 11-09).
+  'src/superTabs/agentReplies.ts',
 ]
 export default defineConfig({
   test: {
