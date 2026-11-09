@@ -44,7 +44,13 @@ export interface CrewBuilder { id: string; name: string; label: string; machineI
   worksOn?: string[] | null }
 /** A machine a builder runs on, with its last report (backend machines.ts machineObservationSchema). */
 export interface CrewMachine { machineId: string; name?: string; observation?: Json }
-export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[] }
+/** A builder of the team that cannot work now: its person is stopping it, or its machine has been down since [since]. */
+export interface AwayBuilder { name: string; label: string; why: 'stopping' | 'down'; since?: string }
+export interface Crew { builders: CrewBuilder[]; machines: CrewMachine[]; away?: AwayBuilder[] }
+
+/** How long a builder's machine is down before its queued tasks go to others, and before the ones it took do too: a sleep
+ *  or a restart is back well within the first; a task taken may have work on that machine, so it waits longer. */
+export const QUEUED_AWAY_MS = 30 * 60_000, TAKEN_AWAY_MS = 3 * 60 * 60_000
 
 /** The problem, and what the picks and their reasons need to know of it. */
 export interface Read {
@@ -216,10 +222,15 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
  */
 export function crewOf(state: Json, project: { pmAgentId: string; projectId: string }): Crew {
   const agents = Array.isArray(state.agents) ? state.agents.map(object) : []
-  const builders = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId && !a.buddyOf
-    && a.workDecision !== 'stop' && !a.downSince && typeof a.machineId === 'string'
-    && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
+  const team = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId && !a.buddyOf
+    && typeof a.machineId === 'string' && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
     && ['claude', 'codex'].includes(String(object(a.configuration).engine)))
+  const away: AwayBuilder[] = team.filter(a => a.workDecision === 'stop' || a.downSince).map(a => {
+    const name = String(a.displayName ?? a.name ?? a.id)
+    return a.workDecision === 'stop' ? { name, label: labelOf(name), why: 'stopping' as const }
+      : { name, label: labelOf(name), why: 'down' as const, since: String(a.downSince) }
+  })
+  const builders = team.filter(a => a.workDecision !== 'stop' && !a.downSince)
     .map(a => {
       const name = String(a.displayName ?? a.name ?? a.id)
       const model = object(a.configuration).model
@@ -228,7 +239,35 @@ export function crewOf(state: Json, project: { pmAgentId: string; projectId: str
     })
   const machines = (Array.isArray(state.machines) ? state.machines.map(object) : []).filter(m => typeof m.machineId === 'string')
     .map(m => ({ machineId: String(m.machineId), name: typeof m.name === 'string' ? m.name : undefined, observation: object(m.observation) }))
-  return { builders, machines }
+  return { builders, machines, away }
+}
+
+/** An open task to take back from a builder that cannot work: its label, whether it was taken, and why, in a few words. */
+export interface TakeBack { number: number; label: string; taken: boolean; why: string }
+
+/**
+ * The open tasks of builders that cannot work, to give to others: all of one its person is stopping; of one whose machine
+ * is down, the queued after [QUEUED_AWAY_MS] and the taken after [TAKEN_AWAY_MS]. A task a person set to that builder is
+ * taken back too: the builder cannot do it.
+ */
+export function takeBacks(issues: Json[], away: AwayBuilder[], now: number): TakeBack[] {
+  const byLabel = new Map(away.map(a => [a.label, a]))
+  const out: TakeBack[] = []
+  for (const issue of issues) {
+    if (issue.pull_request || !Number.isSafeInteger(issue.number)) continue
+    const labels = labelsOf(issue)
+    const builder = labels.map(label => byLabel.get(label)).find(Boolean)
+    if (!builder) continue
+    const taken = labels.includes('status:taken')
+    if (builder.why === 'down') {
+      const since = Date.parse(builder.since ?? '')
+      if (!Number.isFinite(since) || now - since < (taken ? TAKEN_AWAY_MS : QUEUED_AWAY_MS)) continue
+    }
+    const down = builder.why === 'down' ? `${builder.name}'s machine has been down since ${new Date(Date.parse(builder.since!)).toISOString().slice(11, 16)} UTC`
+      : `${builder.name} is being stopped`
+    out.push({ number: Number(issue.number), label: builder.label, taken, why: down })
+  }
+  return out
 }
 
 /**

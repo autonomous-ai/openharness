@@ -8,7 +8,7 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, nextPicks, readerFor, readProblem, reasonOf, worksOnOf, type Crew, type Read } from './assign/crew.js'
+import { DEEP, nextPicks, readerFor, readProblem, reasonOf, takeBacks, worksOnOf, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
@@ -102,6 +102,7 @@ export class GitHubAssign {
       if (this.given.has(key) && labelNames(issue).some(name => name.startsWith('builder:'))) this.given.delete(key)
     }
     const crew = await this.deps.crew(project)
+    await this.takeBack(repo, issues, crew)
     // What each builder works on in this project: the Works on line of its instructions file here (agents/<Name>.md).
     for (const builder of crew.builders) builder.worksOn = worksOnOf(await this.reads.file(repo, `agents/${builder.name}.md`))
     await this.labelAreas(repo, crew)
@@ -120,6 +121,26 @@ export class GitHubAssign {
     this.last.set(repo, solved.choice)
     for (const pick of nextPicks(solved.plan, read)) await this.give(project, read, pick)
     for (const { task, why } of solved.plan.unplaced) if (read.free.has(task)) this.once(`[super-tab] Task assignment: UNPLACED ${repo}${task}: ${why}`)
+  }
+
+  /**
+   * Takes back the tasks of builders that cannot work (anh Dee's plan, 2026-11-09: "when a builder stops, stalls or runs
+   * out of quota, Harness takes the task back and gives it to the next best builder"): their builder label, and
+   * status:taken when it was taken, come off, with one line of why; the next plan gives each to another builder. Once a
+   * task, as the label is gone from the next read.
+   */
+  private async takeBack(repo: string, issues: Json[], crew: Crew): Promise<void> {
+    for (const back of takeBacks(issues, crew.away ?? [], this.now())) {
+      const key = `${repo}#${back.number}:back:${back.label}`
+      if (this.said.has(key)) continue
+      this.said.add(key)
+      for (const label of [back.label, ...back.taken ? ['status:taken'] : []]) {
+        await this.deps.send('DELETE', `/repos/${repo}/issues/${back.number}/labels/${encodeURIComponent(label)}`)
+      }
+      await this.deps.send('POST', `/repos/${repo}/issues/${back.number}/comments`,
+        { body: `${SELF}, ${this.clock()}: ${back.why}, so this task goes to the builder who can start it next.` })
+      this.log(`[super-tab] took ${repo}#${back.number} back: ${back.why}`)
+    }
   }
 
   /** Makes the `part:` label of each area a builder works on that the repository does not have yet, so its PM labels tasks

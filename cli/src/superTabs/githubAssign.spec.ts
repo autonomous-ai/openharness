@@ -35,6 +35,12 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   const send: GitHubSend = async (method, path, body) => {
     sent.push({ method, path, body: body as Json })
     if (path === '/repos/acme/app/labels') { state.labels.push({ name: (body as Json).name }); return { status: 201, etag: null, body: {}, resetAt: null } }
+    const removed = /\/issues\/(\d+)\/labels\/(.+)$/.exec(path)
+    if (method === 'DELETE' && removed) {
+      const target = state.open.find(i => i.number === Number(removed[1]))!
+      target.labels = (target.labels as Json[]).filter(l => l.name !== decodeURIComponent(removed[2]!))
+      return { status: 200, etag: null, body: [], resetAt: null }
+    }
     const labels = /\/issues\/(\d+)\/labels$/.exec(path)
     if (labels) {
       if (state.labelAnswer !== 200) return { status: state.labelAnswer, etag: null, body: {}, resetAt: null }
@@ -219,6 +225,19 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toEqual([])
       expect(f.log.mock.calls.filter(([line]) => String(line).includes('NO_READER acme/app#30'))).toHaveLength(1)
     })
+  })
+
+  it('takes back the tasks of a builder its person is stopping, says why, and gives them to another', async () => {
+    const team: Crew = { ...crew(), builders: [crew().builders[0]!], away: [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }] }
+    const f = setup([issue(1, ['size:s', 'builder:juno', 'status:taken']), issue(2, ['size:m', 'builder:juno'])], { crew: team })
+    f.github.state.applied = true
+    await f.assigner.tick()
+    expect(f.github.sent.filter(s => s.method === 'DELETE').map(s => s.path)).toEqual(['/repos/acme/app/issues/1/labels/builder%3Ajuno',
+      '/repos/acme/app/issues/1/labels/status%3Ataken', '/repos/acme/app/issues/2/labels/builder%3Ajuno'])
+    expect(f.said().filter(([, body]) => String(body).includes('is being stopped')).map(([n]) => n)).toEqual([1, 2])
+    // The next plan gives both to Pip, two deep.
+    await f.assigner.tick()
+    expect(f.labelled().map(([n, label]) => [n, label]).sort()).toEqual([[1, 'builder:pip'], [2, 'builder:pip']])
   })
 
   it('stops while gh is signed out, says so once, and says when it runs again', async () => {

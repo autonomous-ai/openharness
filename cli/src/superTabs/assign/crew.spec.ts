@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { contextOf, crewOf, CORES, readerFor, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
+import { contextOf, crewOf, CORES, QUEUED_AWAY_MS, readerFor, takeBacks, TAKEN_AWAY_MS, DEEP, dependsOn, labelOf, machineHas, MEMORY_SHARE, nextPicks, readProblem, reasonOf, RESERVE, SIZES, worksOnOf, type Crew } from './crew.js'
 import { solve } from './search.js'
 
 type Json = Record<string, unknown>
@@ -112,6 +112,7 @@ describe('the crew a project\'s PM reads (crewOf)', () => {
         { id: 'mine', name: 'mine', label: 'builder:mine', machineId: 'mac', engine: 'claude', model: null },
       ],
       machines: [{ machineId: 'mac', name: 'Mac 3', observation: { tools: { xcode: true } } }],
+      away: [{ name: 'leaving', label: 'builder:leaving', why: 'stopping' }, { name: 'asleep', label: 'builder:asleep', why: 'down', since: '2026-11-09T10:00:00Z' }],
     })
   })
 })
@@ -183,5 +184,29 @@ describe('who reads a pull request (readerFor)', () => {
     expect(readerFor(read, 'pip', new Set(['bo', 'atlas', 'juno']))).toBeNull()
     // An author outside the team: anyone, the least busy first.
     expect(readerFor(read, null, new Set())?.id).toBe('bo')
+  })
+})
+
+describe('taking work back from a builder that cannot work (takeBacks)', () => {
+  const at = (ms: number) => new Date(NOW - ms).toISOString()
+  it('takes all of one being stopped; of one down, the queued after half an hour and the taken after three', () => {
+    const issues = [issue(1, ['builder:juno']), issue(2, ['builder:juno', 'status:taken']), issue(3, ['builder:atlas']),
+      issue(4, ['builder:atlas', 'status:taken']), issue(5, ['builder:someone-else']), issue(6, ['builder:juno'], { pull_request: {} })]
+    expect(takeBacks(issues, [{ name: 'Juno', label: 'builder:juno', why: 'stopping' }], NOW).map(b => [b.number, b.taken])).toEqual([[1, false], [2, true]])
+    const down = (ms: number) => takeBacks(issues, [{ name: 'Atlas', label: 'builder:atlas', why: 'down', since: at(ms) }], NOW).map(b => b.number)
+    expect(down(QUEUED_AWAY_MS - 60_000)).toEqual([])
+    expect(down(QUEUED_AWAY_MS)).toEqual([3])
+    expect(down(TAKEN_AWAY_MS)).toEqual([3, 4])
+    expect(takeBacks(issues, [{ name: 'Atlas', label: 'builder:atlas', why: 'down', since: at(TAKEN_AWAY_MS) }], NOW)[0]!.why)
+      .toBe(`Atlas's machine has been down since ${at(TAKEN_AWAY_MS).slice(11, 16)} UTC`)
+  })
+
+  it('reads who is away from the PM\'s read: being stopped, or down', () => {
+    const agent = (id: string, extra: Json = {}) => ({ id, regular: true, name: id, displayName: id[0]!.toUpperCase() + id.slice(1), machineId: 'mac',
+      configuration: { engine: 'claude' }, ...extra })
+    const { builders, away } = crewOf({ agents: [agent('pip'), agent('juno', { workDecision: 'stop' }), agent('atlas', { downSince: '2026-11-09T10:00:00Z' })] },
+      { pmAgentId: 'pm', projectId: 'app' })
+    expect(builders.map(b => b.id)).toEqual(['pip'])
+    expect(away).toEqual([{ name: 'Juno', label: 'builder:juno', why: 'stopping' }, { name: 'Atlas', label: 'builder:atlas', why: 'down', since: '2026-11-09T10:00:00Z' }])
   })
 })
