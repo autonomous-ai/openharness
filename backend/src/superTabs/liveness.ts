@@ -15,10 +15,8 @@ import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
-import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason, type DispatchLookup } from './dispatch.js'
-import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
-import { isBuddy } from './buddies.js'
-import { closeMergedLost } from './mergedTasks.js'
+import { crewClock, DISPATCH_RULES, laneOf, returnReason, type DispatchLookup } from './dispatch.js'
+import { handed, pickUp, unclaimedReason } from './handed.js'
 import { stepCandidates } from './reviewerPick.js'
 import { noTesterFree, stepOs } from './reviewTable.js'
 
@@ -297,21 +295,6 @@ function limitReason(worker: Agent, now: number): string | null {
     ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
 }
 
-/** The earliest time a task held by a worker on [machineId] may be lost to its lease running out, as lostReason reads it now,
- *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
-export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
-  const steps = stepIndex(state)
-  const mine = workerTasks(state).filter(({ worker }) => worker.machineId === machineId)
-  const ends = [...mine
-    .filter(({ group, worker, assignment }) => !waitingForReview(assignment) && !waitingForRevision(state, group)
-      && !waitingOnSteps(state, group, steps) && !waitingOnPerson(state, group, worker, assignment))
-    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker))),
-  // A task back with its Engineer and not picked up leaves it then, whatever it waits on (handed.ts).
-  ...mine.map(({ assignment }) => unclaimedAt(assignment))]
-    .filter((end): end is number => end !== undefined)
-  return ends.length ? Math.min(...ends) : undefined
-}
-
 /** A crew member whose session went down less than CREW_REOPEN_GRACE_MS ago, which its host is reopening: never one asleep
  *  (closed on purpose) or moved to another machine (task #3398 adds both marks), which its host leaves closed. */
 const reopening = (worker: Agent, now: number): boolean => {
@@ -394,27 +377,6 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
 }
 
-/** Every worker 2 hours without progress hears it once in its task, without waiting for the PM (dispatch.ts crewClock). */
-function crewNudges(state: SuperTabState, now: number, rulesFor: DispatchLookup): MessageDraft[] {
-  const workers = new Map(state.agents.filter(a => !isBuddy(a)).map(a => [a.id, a]))
-  let leaders: Set<string> | undefined, steps: StepIndex | undefined
-  return state.conversations.flatMap(group => {
-    const assignment = group.assignment, worker = assignment && workers.get(assignment.agentId)
-    if (!worker || !activeWork(group)) return []
-    const rules = rulesFor(group.projectId ?? 'lead')
-    if (!rules) return []
-    if (crewClock(group, worker, assignment, now, rules) !== 'nudge') return []
-    leaders ??= new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
-    if (leaders.has(worker.id)) return []
-    steps ??= stepIndex(state)
-    // Waiting on others is no lack of progress: the waits that stop a loss stop the line too (lostReason).
-    if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return []
-    assignment.nudgedAt = now
-    return [reachable(state, { id: stableId('crew-nudge', assignment.id, String(now)), conversationId: group.id, author: writtenBy(state, leadOf(state, worker) ?? worker),
-      replyTo: null, recipients: [worker.id], text: nudgeLine(laneOf(group, rules.lanes), rules), source: { kind: 'crew-nudge', assignmentId: assignment.id } })]
-  })
-}
-
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
  *  the agents of a machine that just reported. A task lost to that limit resumes at `resumeAt` when its screen said when the
  *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
@@ -460,15 +422,11 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
     text, source: { kind: 'system' } }]
 }
 
-/** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
- *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
-export function sweepLiveness(state: SuperTabState, now: number, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
-  const drafts = [...loseTasks(state, now, undefined, undefined, rulesFor), ...crewNudges(state, now, rulesFor), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now),
-    // A lost task whose own merge is recorded is done, never handed out again (mergedTasks.ts, task #4032); written as its PM.
-    ...closeMergedLost(state, now, task => {
-      const pm = projectChatOf(state, task)?.leadId, writer = state.agents.find(a => a.id === pm)
-      return writer ? writtenBy(state, writer) : null
-    })]
+/** The time checks, run on any machine's report once per Swarm sweep: every start dispatched over 3 minutes ago that is not running
+ *  fails, unless its machine is still preparing it; a Product Manager switch nobody answered, a model request nobody answered and a
+ *  removed confidential session whose data is not deleted say so once. Swarm v4 loses no task and nudges no worker. */
+export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
+  const drafts = [...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts

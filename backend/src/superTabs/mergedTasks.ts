@@ -6,8 +6,8 @@
  * (commands.ts conversation.merged), and its open steps close with it.
  */
 import { recordStatus } from './leaderboard/record.js'
-import { codePullRequests, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { endSteps, isStep, stepEndedRows, stepsOf } from './steps.js'
+import { codePullRequests, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { endSteps, stepEndedRows, stepsOf } from './steps.js'
 
 /** What a step of a merged task is told, and keeps as its result. */
 export const STEP_MERGED = 'Its task merged, so this step is closed.'
@@ -51,13 +51,4 @@ export function closeMerged(state: SuperTabState, task: Conversation, url: strin
   const done: MessageDraft[] = author ? [{ id: id('merged-done'), conversationId: task.id, author, text: `Done\n\n${assignment.result}`, replyTo: null,
     recipients: [], source: { kind: 'system', status: 'done' } }] : []
   return [...done, ...stepEndedRows(state, steps, STEP_MERGED, author, step => id(`merged-step-${step.id}`))]
-}
-
-/** The lost tasks whose own merge is recorded, set done (closeMerged), each written as [authorOf] it; their rows. */
-export function closeMergedLost(state: SuperTabState, now: number, authorOf: (task: Conversation) => Author | null): MessageDraft[] {
-  return state.conversations.flatMap(task => {
-    if (task.archived || isStep(task) || task.assignment?.status !== 'lost') return []
-    const url = ownMerge(task)
-    return url ? closeMerged(state, task, url, now, authorOf(task), part => stableId('merged-lost', task.assignment!.id, part)) : []
-  })
 }
