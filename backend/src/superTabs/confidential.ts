@@ -78,6 +78,6 @@ export async function otherRegistrations(tx: Transaction, state: SuperTabState, 
  *  registration of the same session committing in another Swarm meanwhile then conflicts with this write, so one of the
  *  two retries and is refused (projects.ts requireSingleRegistration). */
 export async function recordConfidential(tx: Transaction, state: SuperTabState, target: Agent, now: number): Promise<void> {
-  await bindSession(tx, state, target, now)
+  await bindSession(tx, state, target, now, true)
   await tx.superTabSessionScope.update({ where: { id: sessionRecordId(state, target) }, data: { confidential: true } })
 }

@@ -3642,6 +3642,27 @@ it('fences a shared native session globally while its release is pending', async
   expect(await db.superTabRun.findUnique({ where: { id: first.worker } })).toBeNull()
 })
 
+it('never refuses other commands for a stopping agent that joins a private chat (Swarm v4 agent chats, 11-09)', async () => {
+  // Swarm v4 gave every agent a private chat while 18 stops waited on hosts that never closed them: every command then marked
+  // those agents confidential, met their stop fence and was refused, people's messages to the PM included, for an hour.
+  const { tab } = await fixture(), native = randomUUID()
+  const group = (await run(tab, { type: 'conversation.create', title: 'Offline worker', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
+  const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Worker', configuration: config, lead: false })).result.agentId as string
+  const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+  await store.stopped(host, tab, assignmentId, 'completed-before-offline')
+  await run(tab, { type: 'agent.release', agentId: worker, decision: 'stop' })
+  const state = await storedState(tab)
+  state.conversations.push({ ...structuredClone(state.conversations.find(c => c.id === 'lead')!), id: randomUUID(), title: 'Worker',
+    leadId: null, agentIds: [worker], assignment: null, audience: { people: [{ id: owner.sub, generation: state.people.find(p => p.id === owner.sub)!.generation }] } })
+  await saveState(tab, state)
+  await run(tab, message('Still there?'))
+  expect((await storedState(tab)).agents.find(a => a.id === worker)!.confidential).toBe(true)
+  // Its stop still holds: the session keeps its stop fence, and a new contribution of it is still refused.
+  expect(await db.superTabRun.findUnique({ where: { id: worker } })).toMatchObject({ assignmentId: expect.stringMatching(/^release-/) })
+  await expect(run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: native, name: 'Again', configuration: config, lead: false }))
+    .rejects.toMatchObject({ code: 'STOP_REQUESTED' })
+})
+
 it('lets a person force-withdraw a stuck stop, clears its fence and retires the old session', async () => {
   const { tab, lead } = await fixture(), native = randomUUID()
   const group = (await run(tab, { type: 'conversation.create', title: 'Offline worker', brief: 'Work', checks: [{ description: 'Done', independent: false }] })).result.conversationId as string
