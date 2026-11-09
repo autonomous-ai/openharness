@@ -57,7 +57,7 @@ export const SWARM_ROW_READS_MS = 3_000
 const MAX_SWARM_ROW_READS = 2_000
 type SwarmRow = { format: number | null; deletedAt: Date | null }
 type SwarmRowRead = { at: number; read: Promise<SwarmRow | null> }
-type MachineReads = [teamMachines: string[], machineVersions: Record<string, string>]
+type MachineReads = Record<string, string>
 
 /** The conversations the reader can read now, a dormant one read by id included. */
 function readableGroups(read: Read): Set<string> {
@@ -238,8 +238,8 @@ export class SwarmReads {
       const state = parts.reassemble(loaded, { share: true })
       const actor = await this.store.actor(tx, user, state)
       author(state, actor)
-      const [teamMachines, machineVersions] = await this.machineLookups(state)
-      const view = readerView(loaded, actor, t0, { teamMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle })
+      const machineVersions = await this.machineLookups(state)
+      const view = readerView(loaded, actor, t0, { machineVersions })
       return await personalTasksPage(feedRead(tx, cached, tabId), view, actor, before)
         ?? fail('NOT_FOUND', 'Only a member has a Tasks feed.', 404)
     })
@@ -644,13 +644,13 @@ export class SwarmReads {
     const loaded = await loader(cached, tabId, opts)
     const state = parts.reassemble(loaded, { share: true })
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [[teamMachines, machineVersions], counts, newest] = await Promise.all([
+    const [machineVersions, counts, newest] = await Promise.all([
       this.machineLookups(state),
       actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0, waitingRows), decisionsWaiting(tx, tabId, state, actor),
         activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
-    const view = readerView(loaded, actor, t0, { teamMachines, machineVersions, teamAccountsIdle: this.store.teamAccountsIdle,
+    const view = readerView(loaded, actor, t0, { machineVersions,
       ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
         decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state)
     // People count a chat unread by its newest main row; agents keep no read marks.
@@ -658,11 +658,11 @@ export class SwarmReads {
     return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 
-  /** Which of the Swarm's machines are signed in as a team account (store.ts): the
+  /** The CLI version each of the Swarm's machines' daemons last connected with (store.ts): the
    *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
-   *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
+   *  MACHINE_READS_MS. A start's dispatch still looks up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
   private machineLookups(state: SuperTabState): Promise<MachineReads> {
-    if (!state.machines?.length) return Promise.resolve([[], {}])
+    if (!state.machines?.length) return Promise.resolve({})
     const now = this.now()
     const key = JSON.stringify([state.id, state.environment, state.machines.map(m => m.machineId).sort()])
     const kept = this.machineReads.get(key)
@@ -671,7 +671,7 @@ export class SwarmReads {
       if (now >= entry.at && now - entry.at < MACHINE_READS_MS) break
       this.machineReads.delete(old)
     }
-    const entry = { at: now, read: this.store.machineFacts(this.db, state).then((facts): MachineReads => [facts.team, facts.versions]) }
+    const entry = { at: now, read: this.store.machineVersions(this.db, state) }
     this.machineReads.delete(key)
     this.machineReads.set(key, entry)
     // A failed lookup is never reused.

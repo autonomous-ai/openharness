@@ -89,7 +89,7 @@ import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
-import '../super_tabs/controller.dart' show SuperTabController;
+import '../super_tabs/controller.dart' show SuperTabController, SuperTabFailure;
 import '../super_tabs/notifications.dart' show SuperTabMentions;
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
@@ -4710,6 +4710,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
         adding.swarmId == target &&
         selected.destination.agentId != null) {
       try {
+        if (adding.attach) {
+          final chosen = selected.destination;
+          final native = app
+              .stateOf(chosen.machineId ?? '')
+              ?.agents
+              .where((agent) => agent.id == chosen.agentId)
+              .firstOrNull;
+          if (native == null) {
+            throw const SuperTabFailure(
+              'AGENT_UNAVAILABLE',
+              'Choose a running agent.',
+            );
+          }
+          await swarmAttachAgent(app, adding.tabId, chosen.machineId!, native);
+          return;
+        }
         final agents = selected.agents.isEmpty
             ? [selected.destination]
             : selected.agents;
@@ -6391,7 +6407,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     PaneSplitRequest? split,
     String query = '',
     HarnessPlacement? placement,
-    ({String swarmId, String tabId, String groupId})? superTabTarget,
+    ({String swarmId, String tabId, String groupId, bool attach})?
+    superTabTarget,
   }) {
     if (_search != null ||
         !mounted ||
@@ -6422,10 +6439,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final contribution = superTabTarget == null
         ? null
         : app.superTabs.peek(superTabTarget.tabId);
-    final groupTitle = superTabTarget == null
+    final attach = superTabTarget?.attach == true;
+    final groupTitle = superTabTarget == null || attach
         ? null
         : contribution?.snapshot?.conversation(superTabTarget.groupId)?.title;
-    final contributionProject = superTabTarget == null
+    final contributionProject = superTabTarget == null || attach
         ? null
         : contribution?.snapshot?.projectFor(superTabTarget.groupId);
     _search = SwarmSearchController(
@@ -6433,6 +6451,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _navigation.recent,
       harnessContext: superTabTarget == null
           ? null
+          : attach
+          ? _attachContext(superTabTarget.tabId)
           : HarnessPickerContext(
               title:
                   'Add agent to ${contribution?.snapshot?.name ?? app.activeSwarm.name}',
@@ -6498,7 +6518,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               },
             ),
       additionalDestinations: [
-        if (superTabTarget != null)
+        if (superTabTarget != null && !attach)
           for (final agent
               in app.superTabs
                       .peek(superTabTarget.tabId)
@@ -6527,7 +6547,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       ),
       adding: adding,
       offersCreate: adding,
-      offersHarnessCreate: split != null || superTabTarget != null,
+      // + makes a new agent; Attach only brings one that runs.
+      offersHarnessCreate: split != null || (superTabTarget != null && !attach),
       activityFirst: split == null,
       selectOnEmptyQuery: split != null || superTabTarget != null,
       // Results read downward from the input.
@@ -6554,7 +6575,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         final group = contribution.snapshot?.conversation(
           superTabTarget.groupId,
         );
-        if (!contribution.canWrite || group == null || group.archived) {
+        if (!contribution.canWrite ||
+            (!attach && (group == null || group.archived))) {
           _closeSearch();
         } else {
           deviceSearch.refreshAvailability();
@@ -7202,7 +7224,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     FocusManager.instance.applyFocusChangesIfNeeded();
   }
 
-  ({String swarmId, String tabId, String groupId})? _superTabAddTarget;
+  ({String swarmId, String tabId, String groupId, bool attach})?
+  _superTabAddTarget;
   VoidCallback? _stopSuperTabPickerWatch;
 
   Future<void> _addAgent({String query = '#', String? conversationId}) async {
@@ -7225,6 +7248,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 conversationId ??
                 app.superTabs.peek(tab.superTabId!)?.selectedId ??
                 'lead',
+            attach: false,
           )
         : null;
     if (superTabTarget != null) {
@@ -7239,6 +7263,71 @@ class _SwarmScreenState extends State<SwarmScreen> {
       placement: HarnessPlacement.currentTab,
       query: superTabTarget == null ? query : '',
       superTabTarget: superTabTarget,
+    );
+  }
+
+  /// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"): ⌘P's
+  /// picker, of the agents running on this person's own computers that are not on the team yet. The one chosen joins with
+  /// its own chat (new_agent.dart [swarmAttachAgent]).
+  void _attachAgent() {
+    final tab = app.activeSwarm;
+    final tabId = tab.superTabId;
+    if (!tab.isSuperTab ||
+        tabId == null ||
+        app.superTabs.peek(tabId)?.canWrite != true) {
+      return;
+    }
+    _closeSearch(restoreFocus: false);
+    _openSearch(
+      adding: true,
+      placement: HarnessPlacement.currentTab,
+      superTabTarget: (
+        swarmId: tab.id,
+        tabId: tabId,
+        groupId: 'lead',
+        attach: true,
+      ),
+    );
+  }
+
+  /// What Attach's picker lists and allows: a Claude Code or Codex session running on one of this person's own computers
+  /// (the server takes no other, backend agent.add), and none already on the team, which it does not list.
+  HarnessPickerContext _attachContext(String tabId) {
+    bool inSwarm(SwarmDestination row) =>
+        app.superTabs
+            .peek(tabId)
+            ?.snapshot
+            ?.agents
+            .any(
+              (agent) =>
+                  agent.machineId == row.machineId &&
+                  agent.harnessId == row.agentId,
+            ) ==
+        true;
+    return HarnessPickerContext(
+      title: 'Attach agent',
+      description: 'It joins your team with its own chat.',
+      action: 'Attach',
+      hidden: inSwarm,
+      unavailable: (row) {
+        final machine = app.stateOf(row.machineId ?? '');
+        if (machine == null ||
+            machine.belongsToOtherAccount ||
+            machine.machine.isShared ||
+            machine.machine.isTeamAccount) {
+          return 'Only agents on your own computers.';
+        }
+        final native = machine.agents
+            .where((agent) => agent.id == row.agentId)
+            .firstOrNull;
+        final engine = native?.engine ?? row.engine;
+        if (engine != 'claude' && engine != 'codex') {
+          return 'Only Claude Code or Codex can join this Swarm.';
+        }
+        return native != null && native.terminalAvailable && !native.isStopped
+            ? null
+            : 'Choose a running agent.';
+      },
     );
   }
 
@@ -8448,6 +8537,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           onNewAgent: () => unawaited(
                                             _newAgent(newSwarmAgent: true),
                                           ),
+                                          onAttachAgent: _attachAgent,
                                           onNewSwarm: () =>
                                               _newTab(superTab: true),
                                           onAddAgent: (group) => unawaited(
