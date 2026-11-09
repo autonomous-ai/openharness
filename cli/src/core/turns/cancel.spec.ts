@@ -82,6 +82,14 @@ describe('cancelling a turn', () => {
     expect(ends.ended.mock.calls).toEqual([[{ agentId: 'a1', sessionId: 's1', aborted: true }]])
   })
 
+  it('leaves a stop that failed to its caller, and tells no end of it', async () => {
+    const ends = { ended: vi.fn() }
+    const { deps, cancelAgent } = setup({ ends })
+    vi.mocked(deps.input.cancelConfirmed).mockRejectedValueOnce(new Error('pane gone'))
+    await expect(cancelAgent('a1', true)).rejects.toThrow('pane gone')
+    expect(ends.ended).not.toHaveBeenCalled()
+  })
+
   it('says so, by what it was, when the end it could not tell was not an error', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { cancelAgent } = setup({ ends: { ended: vi.fn(() => { throw 'not an error' }) } })

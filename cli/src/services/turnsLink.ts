@@ -52,6 +52,7 @@ class AnswerFailure extends Error {
 export function turnsLink(query: (query: string, payload: Payload) => Promise<Payload>, log: (line: string) => void = (line) => console.warn(line)) {
   const listeners = new Set<(event: TurnDelivery) => void>()
   const endListeners = new Set<(event: TurnEnd) => void>()
+  let saidOlder = false
   const tell = (event: TurnDelivery): void => {
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
@@ -100,6 +101,11 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
           }
         }
         return true
+      }
+      // A core of the release before tells a turn end that names no turn: nothing here can answer for it until that core is restarted.
+      if (payload.kind === 'turn_end' && !saidOlder) {
+        saidOlder = true
+        log('[turns] a turn end named no turn: the core is older than this process, so no reply is posted for a turn until it is restarted')
       }
       const event = deliveryIn(payload)
       if (!event) return false

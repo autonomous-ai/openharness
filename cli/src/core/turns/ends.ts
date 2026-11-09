@@ -22,6 +22,9 @@ export const ANSWER_KEEP_MAX = 32_001
  *  together. And how many sessions are kept in all, ended turns and open ones, the least recent going first. */
 const TURNS_KEPT = 4
 const SESSIONS_KEPT = 256
+/** The engines whose texts reach the funnel as whole messages, each text a message the agent wrote. Another engine's may be chunks of
+ *  one, which joined with paragraphs between would be mangled: its answer is read from its transcript when its turn ends. */
+export const WHOLE_TEXT_ENGINES: ReadonlySet<string> = new Set(['claude', 'codex'])
 
 /** Texts, and how long they are together: no more is kept than [ANSWER_KEEP_MAX], the last text cut to what is left of it, so
  *  that a text of megabytes is not held for the turn's length. */
@@ -39,7 +42,8 @@ interface OpenTurn {
   prompt: string
   /** The number this turn is told by. */
   turnId: number
-  /** A turn the daemon picked up at attach, whose first part it never saw: what it sees of it is no answer. */
+  /** A turn whose words are not kept whole: one the daemon picked up at attach, whose first part it never saw, or an engine's whose
+   *  texts are not whole messages. What is seen of it is no answer. */
   partial: boolean
   /** What its agent has said since its last tool call, and what it said before them: the answer is the first, and the second
    *  only when the turn said nothing after its tools, as the recaps read a turn (engines/claude/normalize.ts). */
@@ -70,16 +74,27 @@ export function createTurnEnds(deps: TurnEndsDeps) {
   /** The answers of the turns that ended last in each session, the latest last. */
   const done = new Map<string, Array<{ prompt: string; turnId: number; answer: string }>>()
   let turns = 0
+  /** The services that hear turn ends and have connected in this core's life. Until one has, or something here listens, nobody can
+   *  ask what a turn said, so none is kept: a machine that never opens the Swarm pays nothing for it, and a Swarm process that
+   *  goes and comes back still has the turns that began while it was away. */
+  const hearing = new Set<string>()
+  const wanted = (): boolean => hearing.size > 0 || listeners.size > 0
   return {
+    /** A service connected (each time): one of those that hear turn ends is from now on someone. */
+    connected(service: string): void {
+      if (deps.hearers.has(service)) hearing.add(service)
+    },
     /** `CoreApi.turns.onEnd`. */
     onEnd(listener: (event: TurnEnd) => void): () => void {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    /** A turn began in [sessionId]: live, or ([resumed]) one the daemon found open at attach, which a restart interrupted. */
-    started(sessionId: string, userMessage: string, resumed: boolean): void {
+    /** A turn began in [sessionId]: live, or ([partial]) one whose words are not kept whole: one the daemon found open at attach, which
+     *  a restart interrupted, or an engine's whose texts are not whole messages (`WHOLE_TEXT_ENGINES`). */
+    started(sessionId: string, userMessage: string, partial: boolean): void {
+      if (!wanted()) return
       open.delete(sessionId)
-      open.set(sessionId, { prompt: promptHash(userMessage), turnId: ++turns, partial: resumed, now: none(), before: none() })
+      open.set(sessionId, { prompt: promptHash(userMessage), turnId: ++turns, partial, now: none(), before: none() })
       trim(open)
     },
     /** Its agent said [content] in the turn running in [sessionId]. */
@@ -120,8 +135,12 @@ export function createTurnEnds(deps: TurnEndsDeps) {
     /** `CoreApi.turns.answerOf`: what the turn that ended [end] said, as the core heard it; else, for a turn it did not see from
      *  its start or heard no words of, the session's last turn in its transcript if that was asked [end]'s prompt. */
     async answerOf(end: Pick<TurnEnd, 'sessionId' | 'prompt' | 'turnId'>): Promise<string | null> {
-      const kept = done.get(end.sessionId)?.find(turn => turn.turnId === end.turnId && turn.prompt === end.prompt)
+      const ended = done.get(end.sessionId) ?? [], running = open.get(end.sessionId)
+      const kept = ended.find(turn => turn.turnId === end.turnId && turn.prompt === end.prompt)
       if (kept?.answer) return kept.answer
+      // The transcript's last turn is found by its prompt, which a later turn asked the same words may share: then it may be that
+      // one's, and not this turn's to give.
+      if (ended.some(turn => turn.turnId > end.turnId && turn.prompt === end.prompt) || (running && running.turnId > end.turnId && running.prompt === end.prompt)) return null
       const last = await deps.lastTurn(end.sessionId)
       return (last && promptHash(last.userMessage) === end.prompt ? last.assistantText.trim().slice(0, ANSWER_KEEP_MAX) : '') || null
     },

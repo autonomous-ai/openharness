@@ -16,7 +16,7 @@ import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isDeviceInputBoundary } from '../deviceInput.js'
 import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
-import type { TurnEnds } from './ends.js'
+import { WHOLE_TEXT_ENGINES, type TurnEnds } from './ends.js'
 import type { TurnRecaps } from './recaps.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
@@ -160,8 +160,9 @@ export function funnelFor({
         outside('devices', () => device()?.turnStarted(agentId))
         startHeartbeat(sessionId)
         questionWatcher.start(sessionId)   // Claude opens its dialog INSIDE a turn
-        // A turn the daemon picks up at attach is told as one whose first part it never saw; a re-read of history is not told at all.
-        if (!opts?.replay) outside('turn-ends', () => ends?.started(sessionId, event.payload.userMessage, !!opts?.resumed))
+        // A turn the daemon picks up at attach is told as one whose first part it never saw, and so is one of an engine whose texts are
+        // not whole messages; a re-read of history is not told at all.
+        if (!opts?.replay) outside('turn-ends', () => ends?.started(sessionId, event.payload.userMessage, !!opts?.resumed || !WHOLE_TEXT_ENGINES.has(usageSession?.engine ?? '')))
         // ...and anything already drawn belongs to the turn BEFORE this one — unless this is a turn the
         // daemon is picking back up at attach: a dialog on the pane then is THIS turn's, still waiting,
         // and marking it pre-turn is how a restarted daemon never announced a question Codex had open.

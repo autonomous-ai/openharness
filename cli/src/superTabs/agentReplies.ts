@@ -216,14 +216,17 @@ export class AgentReplies {
     // Taken before its answer is read: a second hearing of this end finds nothing, and the ends of two messages of the same words
     // each take their own, in the order they were heard, whichever read comes back first. A turn nobody here asked, which its person
     // typed in the terminal or was automatic, is no reason to read anything. A turn that is over has no later end that would try
-    // again, so an answer that cannot be read, or is none, costs the reply: said, and no more owed.
+    // again, so an answer that cannot be read, or is none, costs the reply: said, and no more owed (its person is told when it was
+    // lost for a failure, as for a post that failed).
     const taken = this.take(event)
     if (!taken) return
     const [id, owed] = taken
     if (event.aborted) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn was interrupted.`)
     let answer: string | null
     try { answer = await bounded(this.core.turns.answerOf(event), READ_WAIT_MS) } catch (error) {
-      return this.log(`Could not read the answer of the turn that ended for agent ${owed.agentId}: ${named(error)}.`)
+      this.log(`Could not read the answer of the turn that ended for agent ${owed.agentId}: ${named(error)}.`)
+      // Lost for good, so its person is told, as for a post that failed (unless the host is going).
+      return this.stopped ? undefined : this.tell(id, owed)
     }
     if (!answer) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn ended without an answer.`)
     if (this.stopped) return this.log(`Dropped the reply to delivery ${id} of agent ${owed.agentId}: the host stopped.`)

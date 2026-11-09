@@ -466,6 +466,23 @@ describe('an answer that cannot be read', () => {
   })
 })
 
+describe('a read that fails as the host stops', () => {
+  it('tells its person nothing: the host is going, and the reply is said to be lost in the log', async () => {
+    const t = setup()
+    t.owe()
+    let fail!: (error: Error) => void
+    t.answerOf.mockImplementationOnce(() => new Promise<string>((_, reject) => { fail = reject }))
+    const done = t.end()
+    await vi.advanceTimersByTimeAsync(0)
+    t.replies.stop()
+    fail(new Error('Core disconnected'))
+    await done
+    expect(t.posts()).toHaveLength(0)
+    expect(t.lines()).toEqual(['Could not read the answer of the turn that ended for agent agent: Error.'])
+    expect(t.journal.replies).toBeUndefined()
+  })
+})
+
 describe('what is owed, kept small', () => {
   it('drops a reply never asked for within a day, saying so, when the agent next does anything', async () => {
     const t = setup()

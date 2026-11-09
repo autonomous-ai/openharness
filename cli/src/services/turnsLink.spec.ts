@@ -124,7 +124,7 @@ describe('delivered turns from a service in its own process', () => {
 
   it('takes nothing else for a turn end', () => {
     const heard = vi.fn()
-    const link = turnsLink(async () => ({}))
+    const link = turnsLink(async () => ({}), vi.fn())
     link.turns.onEnd(heard)
     const whole = { ...END, agentId: 'a', sessionId: 's' }
     for (const event of [undefined, null, 'end', {}, { ...whole, sessionId: 4 }, { ...whole, agentId: 3 }, { ...whole, aborted: undefined }, { ...whole, aborted: 'no' },

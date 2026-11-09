@@ -63,12 +63,16 @@ export function createCancel({
     turnActivity.observe(sessionId, 'turn_ended')
     const activity = turnActivity.snapshot(sessionId)
     if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
-    // The turn is over for whoever answers a person at its end (the Swarm's host): told as an interrupted one, so that a message whose
-    // turn it was is not owed an answer that never comes, and cannot take that of the same words sent again. Not a turn_ended to the
-    // windows, which would recap it, and told last: nothing it does can hold the stop back.
-    try { ends?.ended({ agentId: agentIdFor(sessionId), sessionId, aborted: true }) } catch (error) {
-      console.error(`[cancel] the end of the turn of ${agentIdFor(sessionId).slice(0, 40)} was not told · ${error instanceof Error ? error.message : String(error)}`)
-    }
+    // The turn is over for whoever answers a person at its end (the Swarm's host), once the interrupt was sent: told as an interrupted
+    // one, so that a message whose turn it was is not owed an answer that never comes, and cannot take that of the same words sent
+    // again. A stop that could not be sent leaves the turn running. Not a turn_ended to the windows, which would recap it, and told
+    // after everything that stops the agent: nothing it does can hold the stop back.
+    void cancelled.then(sent => {
+      if (!sent) return
+      try { ends?.ended({ agentId: agentIdFor(sessionId), sessionId, aborted: true }) } catch (error) {
+        console.error(`[cancel] the end of the turn of ${agentIdFor(sessionId).slice(0, 40)} was not told · ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }, () => {})
     return cancelled
   }
   return cancelAgent
