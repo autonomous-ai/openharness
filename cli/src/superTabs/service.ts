@@ -182,6 +182,9 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
       roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state }),
     get: github.get,
     relay: (tabId, operationId, command) => backend(api, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId, command }),
+    // As the agent, to itself only, in its chat with its person: as the host tells a skill notice (host.ts tellSkill).
+    tell: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
+      command: { type: 'message.send', conversationId: agent.chat, replyTo: null, recipientIds: [agent.agentId], text, agentOnly: true } }),
     file: join(api.dataDir, 'super-tab-github-news.json'),
   })))(core, sources)
   // The projects whose PM is this person's agent running here, which the merger and the assigner work for.
