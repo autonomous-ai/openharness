@@ -1,6 +1,6 @@
 /** Benchmark priors (docs/benchmark-priors.md): the public coding-benchmark scores of the models the Swarm routes, turned into
- * the 1-3 quality levels the routing policy uses, per job kind. The table is checked in (data.ts, refreshed by hand with
- * scripts/refresh-benchmark-priors.ts); nothing here reads the network, a Swarm's records or any task text. */
+ * the 1-3 quality levels the routing policy uses, per job kind. The table is checked in and edited by hand (data.ts); nothing
+ * here reads the network, a Swarm's records or any task text. */
 import { z } from 'zod'
 
 /** The fixed job kinds (evidence-routing spec, "Job kinds"). */
@@ -67,7 +67,7 @@ export const priorsSchema = z.object({
   }))
 })
 export type PriorsTable = z.infer<typeof priorsSchema>
-export type PriorScore = PriorsTable['models'][number]['scores'][number]
+type PriorScore = PriorsTable['models'][number]['scores'][number]
 export type PriorEngine = PriorsTable['models'][number]['engine']
 
 /** Reads the table. A table that fails its schema gives no priors at all, with a warning: never a partly read one. */
