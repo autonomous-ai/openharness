@@ -1102,9 +1102,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return KeyEventResult.ignored;
   }
 
-  /// The region the view sits in (the quick switcher's) with the unread chat
-  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
-  /// Move pane only while the chat has focus.
+  /// The region the view sits in, if any, with the unread chat keys added, so
+  /// the keymap runs them: listed, rebindable, and ahead of Move pane only
+  /// while the chat has focus.
   Widget _unreadKeys(Widget child) {
     final region = KeymapRegion.of(context);
     return KeymapRegion(
@@ -5800,7 +5800,7 @@ class _SuperTabViewState extends State<SuperTabView>
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && widget.board && _agentsOnly(group))
-          // It holds the chat's focus in the composer's place, so the chat's keys (find, unread, the switcher) work.
+          // It holds the chat's focus in the composer's place, so the chat's keys (find and unread) work.
           Focus(
             focusNode: _focus,
             child: GestureDetector(
