@@ -16,7 +16,7 @@ void main() {
   const pm = {'kind': 'agent', 'id': 'pm', 'name': 'Lead'};
 
   ConversationServer server({String chat = 'lead'}) {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     (server.state['agents'] as List).add({
       'id': 'pm',
       'name': 'Lead',
@@ -137,12 +137,12 @@ void main() {
   testWidgets('a chat with one other party shows no names or faces', (
     tester,
   ) async {
-    final s = server(chat: 'offline');
+    final s = server(chat: 'offline')..state.remove('projects');
     ((s.state['conversations'] as List)[1] as Map)
       ..['kind'] = 'buddy'
       ..['buddyOwnerId'] = 'owner'
       ..['agentIds'] = ['pm'];
-    final c = await showView(tester, s);
+    final c = await showView(tester, s, board: false);
     await c.select('offline');
     await tester.pumpAndSettle();
     final rows = find.byType(SuperTabMessageRow);

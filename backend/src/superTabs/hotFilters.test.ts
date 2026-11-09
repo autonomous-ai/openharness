@@ -458,7 +458,7 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     const models = hotModels(schema)
     const all = [...schema.matchAll(/^model\s+(\w+)\s*\{/gm)].map(match => match[1]!)
     expect(models).toEqual(all.filter(model => /^(SuperTab|Swarm)/.test(model)))
-    expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabRoleText', 'SuperTabDelivery', 'SwarmGroup', 'SwarmWorkspace']))
+    expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabRoleText', 'SuperTabDelivery', 'SwarmGroup']))
     expect(hotModels('model SwarmNew {\n  id String @id\n}\nmodel Machine {\n}\nmodel SuperTabLater {\n}\n')).toEqual(['SwarmNew', 'SuperTabLater'])
     const found = lint('await db.superTabRoleText.findMany({ where: { tabId: { in: ids } } })')
     expect(found.map(f => f.call)).toEqual(['superTabRoleText.findMany'])

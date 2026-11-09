@@ -29,6 +29,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
+              board: false,
               controller: controller,
               onInvite: () {},
               onAddAgent: (_) {},
@@ -152,6 +153,7 @@ void main() {
               home: Scaffold(
                 body: Builder(
                   builder: (context) => SuperTabView(
+                    board: false,
                     controller: controller,
                     onInvite: () => showSuperTabPeople(context, controller),
                     onAddAgent: (_) {},

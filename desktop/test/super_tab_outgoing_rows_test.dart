@@ -88,7 +88,7 @@ void main() {
 
   testWidgets('a quick line under my own line joins it while it sends and '
       'after, its bubble the same height', (tester) async {
-    final server = ConversationServer()..append('Earlier line');
+    final server = ConversationServer.chat()..append('Earlier line');
     server.messages.last['createdAt'] = DateTime.now()
         .toUtc()
         .toIso8601String();
@@ -118,7 +118,7 @@ void main() {
   testWidgets('a quick line that was not sent keeps its name and actions', (
     tester,
   ) async {
-    final server = ConversationServer()..append('Earlier line');
+    final server = ConversationServer.chat()..append('Earlier line');
     server.messages.last['createdAt'] = DateTime.now()
         .toUtc()
         .toIso8601String();
@@ -141,7 +141,7 @@ void main() {
   testWidgets('while a line sends only its text is dimmed; Sending… stays '
       'readable', (tester) async {
     final post = Completer<void>();
-    final c = controller(ConversationServer(), hold: () => post);
+    final c = controller(ConversationServer.chat(), hold: () => post);
     await show(tester, c);
     await type(tester, 'On its way');
     expect(find.text('Sending…'), findsOneWidget);
@@ -154,7 +154,7 @@ void main() {
 
   testWidgets('scrolling to the end reads through the last message, not a '
       'line still sending', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     for (var i = 1; i <= 40; i++) {
       server.append('Update $i: checking the offline queue and reconnect.');
     }
@@ -190,7 +190,7 @@ void main() {
 
   testWidgets('text left unsent when the window closed reads Not sent · '
       'Retry · Delete', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     final gate = Completer<void>();
     final first = controller(server, hold: () => gate);
     await first.refresh();
