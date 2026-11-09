@@ -26,7 +26,7 @@ const leads = (state: Record<string, unknown>, agentId: unknown) => {
 const swarmData = (agent: Record<string, unknown>, path: string, state: Record<string, unknown> = { agents: [agent] }): unknown =>
   path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent, lead: leads(state, agent.id) }], { tabs: ['tab'] })
     : /^\/api\/super-tabs\/tab\/(parts|changes)/.test(path) ? swarmReply(path, state) : { state }
-function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution; setMachineAgents?: typeof import('./contribution.js').setMachineAgents } = {}) {
+function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
   const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
   const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native' }
   const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(agent, path) } }))
@@ -105,45 +105,8 @@ describe('restart role lookup through the service', () => {
   })
 })
 
-describe('five-part task commands', () => {
-  const task = { goal: 'Save edits', changes: 'Persist drafts', constraints: 'No dependencies', owns: ['cli/src/superTabs'] }
-  const brief = 'Goal:\nSave edits\n\nChanges:\nPersist drafts\n\nConstraints:\nNo dependencies\n\nOwns:\n- cli/src/superTabs'
-  const checks = [{ description: 'Draft survives reconnect', independent: false }]
+describe('a post sent to an older backend', () => {
   const send = (t: ReturnType<typeof setup>, command: Record<string, unknown>) => t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'task-op', command }, owner)
-
-  for (const type of ['conversation.create', 'work.define']) {
-    const base = { type, ...(type === 'conversation.create' ? { title: 'Drafts' } : { conversationId: 'group' }) }
-    // Project instructions, phase 4: no part is required here; a task missing one goes as the brief of those it has.
-    it(`${type} sends a task missing a part, or with no checks, as written`, async () => {
-      for (const [missing, invalid] of [
-        ['Goal', { task: { ...task, goal: ' ' } }], ['Changes', { task: { ...task, changes: '' } }],
-        ['Constraints', { task: { ...task, constraints: null } }], ['Owns', { task: { ...task, owns: [] } }],
-      ] as const) {
-        const t = setup()
-        expect(await send(t, Object.assign({ ...base, task, checks }, invalid))).toMatchObject({ ok: true })
-        const sent = (t.call.mock.calls.filter(c => c[0] === 'POST').at(-1)![2] as { command: Record<string, unknown> }).command
-        expect(sent).not.toHaveProperty('task')
-        expect(String(sent.brief)).not.toContain(`${missing}:`)
-      }
-      const none = setup()
-      expect(await send(none, { ...base, task, checks: [] })).toMatchObject({ ok: true })
-      expect(none.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: none.agentId, command: { ...base, task, brief, checks: [] } })
-    })
-    it(`${type} sends the complete template and renders its compatibility brief`, async () => {
-      const t = setup()
-      expect(await send(t, { ...base, brief: 'ignored', task: { ...task, goal: ' Save edits ', owns: [' cli/src/superTabs '] }, checks })).toMatchObject({ ok: true })
-      expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, task, brief, checks } })
-    })
-    it(`${type} retries an old backend's task refusal once using the same operation`, async () => {
-      const t = setup(), original = t.call.getMockImplementation()!
-      t.call.mockImplementation(async (...args) => args[0] === 'POST' && (args[2] as { command: { task?: unknown } }).command.task
-        ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } } as never
-        : original(...args))
-      expect(await send(t, { ...base, task, checks })).toMatchObject({ ok: true })
-      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(2)
-      expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId, command: { ...base, brief, checks } })
-    })
-  }
   // A backend from before answers below (task #2929) refuses the field: the answer goes as a reply, which still settles it.
   it('sends an answer as a reply to a backend that refuses answers, once, with the same operation', async () => {
     const t = setup(), original = t.call.getMockImplementation()!
@@ -155,96 +118,6 @@ describe('five-part task commands', () => {
     expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(2)
     expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId,
       command: { type: 'message.send', conversationId: 'lead', text: 'Done.', replyTo: 'm1', recipientIds: [] } })
-  })
-  it('renders a task\'s review plan into its brief as the backend does', async () => {
-    const t = setup()
-    const review = { focus: ' Check revoked access first. ', reviews: 2 }
-    expect(await send(t, { type: 'conversation.create', title: 'Drafts', task: { ...task, review }, checks })).toMatchObject({ ok: true })
-    expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId,
-      command: { type: 'conversation.create', title: 'Drafts', task: { ...task, review }, checks,
-        brief: `${brief}\n\nReview:\nCheck revoked access first.\nTwo independent reviews, each by a different Reviewer.` } })
-  })
-  it('tells the Lead an older server takes no review plan, and sends nothing more', async () => {
-    const t = setup(), original = t.call.getMockImplementation()!
-    t.call.mockImplementation(async (...args) => args[0] === 'POST'
-      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command.task: Unrecognized key: "review"' } } } as never : original(...args))
-    expect(await send(t, { type: 'work.define', conversationId: 'group', task: { ...task, review: { reviews: 2 } }, checks }))
-      .toMatchObject({ error: 'REVIEW_PLAN_UNSUPPORTED', detail: expect.stringContaining('review focus in its constraints') })
-    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
-  })
-  it('preserves other errors and never repeats a failed compatibility retry', async () => {
-    for (const [status, code, message, count] of [
-      [403, 'FORBIDDEN', 'Unrecognized key: "task"', 1], [400, 'VALIDATION_ERROR', 'Invalid title', 1],
-      [503, 'BACKEND_UNAVAILABLE', 'Offline', 1], [400, 'VALIDATION_ERROR', 'Unrecognized key: "task"', 2],
-    ] as const) {
-      const t = setup(), original = t.call.getMockImplementation()!
-      t.call.mockImplementation(async (...args) => args[0] === 'POST'
-        ? { status, body: { success: false, error: { code, message } } } as never : original(...args))
-      expect(await send(t, { type: 'work.define', conversationId: 'group', task, checks })).toMatchObject({ error: code, detail: message })
-      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(count)
-    }
-  })
-  it('recovers a committed legacy receipt after a lost reply and backend upgrade', async () => {
-    const t = setup(), original = t.call.getMockImplementation()!
-    let upgraded = false, recorded: string | null = null
-    t.call.mockImplementation(async (...args) => {
-      if (args[0] !== 'POST') return original(...args)
-      const body = args[2] as { command: Record<string, unknown> }
-      if (!upgraded && body.command.task) return { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } }
-      if (!recorded) { recorded = JSON.stringify(body); upgraded = true; throw new Error('Reply lost after commit') }
-      return JSON.stringify(body) === recorded
-        ? { status: 200, body: { success: true, data: { result: { conversationId: 'only-group' } } } }
-        : { status: 409, body: { success: false, error: { code: 'OPERATION_REUSED', message: 'Choose a new operation ID for different content.' } } }
-    })
-    const command = { type: 'conversation.create', title: 'Drafts', task, checks }
-    expect(await send(t, command)).toMatchObject({ error: 'SUPER_TAB_UNAVAILABLE' })
-    expect(await send(t, command)).toMatchObject({ ok: true, value: { result: { conversationId: 'only-group' } } })
-    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(4)
-    // A real content change must still fail even when its receipt is checked in legacy form.
-    expect(await send(t, { ...command, title: 'Different work' })).toMatchObject({ error: 'OPERATION_REUSED' })
-  })
-  it('does not strip task fields from unrelated commands', async () => {
-    const t = setup(), original = t.call.getMockImplementation()!
-    t.call.mockImplementation(async (...args) => args[0] === 'POST'
-      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "task"' } } }
-      : original(...args))
-    expect(await send(t, { type: 'message.send', task })).toMatchObject({ error: 'VALIDATION_ERROR' })
-    expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
-  })
-  // Project instructions, phase 4: the template says what a good task has; the CLI refuses none. An incomplete task goes as
-  // its rendered brief, so an older backend that requires every part still takes it.
-  it('takes a task as written', async () => {
-    for (const type of ['conversation.create', 'work.define']) {
-      const base = { type, ...(type === 'conversation.create' ? { title: 'Drafts' } : { conversationId: 'group' }) }
-      const t = setup()
-      expect(await send(t, { ...base, task: { goal: 'Save edits' }, checks: [] })).toMatchObject({ ok: true })
-      expect(t.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: t.agentId,
-        command: { ...base, brief: 'Goal:\nSave edits', checks: [] } })
-      // The agent's own brief stays, before the parts it gave.
-      const own = setup()
-      expect(await send(own, { ...base, brief: 'Keep drafts.', task: { goal: ' Save edits ', owns: ['cli', ' '] }, checks })).toMatchObject({ ok: true })
-      expect(own.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: own.agentId,
-        command: { ...base, brief: 'Keep drafts.\n\nGoal:\nSave edits\n\nOwns:\n- cli', checks } })
-      // A complete task, as today.
-      const whole = setup()
-      expect(await send(whole, { ...base, task, checks })).toMatchObject({ ok: true })
-      expect(whole.call).toHaveBeenLastCalledWith('POST', '/api/super-tabs/tab/commands', { operationId: 'task-op', asAgentId: whole.agentId,
-        command: { ...base, task, brief, checks } })
-    }
-  })
-  it('documents all five parts in both command examples', async () => {
-    const t = setup(), answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
-    for (const type of ['conversation.create', 'work.define']) {
-      expect(answer.help.commands.find(c => c.type === type)).toMatchObject({ task: { goal: expect.any(String), changes: expect.any(String), constraints: expect.any(String), owns: expect.any(Array) }, checks: [expect.objectContaining({ description: expect.any(String) })] })
-    }
-  })
-  it('rejects oversized task sections, ownership and compatibility briefs before sending', async () => {
-    for (const invalid of [{ ...task, goal: 'x'.repeat(8001) }, { ...task, owns: Array(41).fill('path') },
-      { ...task, owns: ['x'.repeat(4097)] }, { ...task, owns: Array(40).fill('x'.repeat(200)) }]) {
-      const t = setup()
-      expect(await send(t, { type: 'conversation.create', title: 'Drafts', task: invalid, checks })).toMatchObject({ error: 'INVALID_TASK' })
-      expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(0)
-    }
   })
 })
 
@@ -263,7 +136,7 @@ it('lets a shared host be woken without exposing its account proxy or agent iden
   const t = setup()
   expect(await t.ask({ action: 'wake' }, visitor)).toEqual({ ok: true })
   expect(t.start).toHaveBeenCalledOnce()
-  for (const action of ['backend', 'status', 'command', 'help']) {
+  for (const action of ['backend', 'command', 'messages']) {
     expect(await t.ask({ action }, visitor)).toEqual({ error: 'OWNER_REQUIRED' })
   }
   expect(t.call).not.toHaveBeenCalled()
@@ -300,18 +173,6 @@ it('limits the owner proxy to Super Tab endpoints and preserves backend failures
   vi.mocked(t.core.account.backend).mockResolvedValueOnce({ status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Access withdrawn' } } })
   expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab' }, owner)).toEqual({ error: 'FORBIDDEN', detail: 'Access withdrawn', status: 403 })
 })
-it('sets a machine\'s agents only for the person at this computer, and says what the number means', async () => {
-  const setMachineAgents = vi.fn(async () => ({ ok: true, machineId: 'studio', maxAgents: 96, maximum: 96 }))
-  const t = setup({ setMachineAgents })
-  const ask = { action: 'setMachineAgents', tabId: 'tab', machineId: 'studio', maxAgents: 96 }
-  for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) expect(await t.ask(ask, asker)).toEqual({ error: 'OWNER_REQUIRED' })
-  expect(setMachineAgents).not.toHaveBeenCalled()
-  for (const maxAgents of [0, 2.5, '96', 1025]) expect(await t.ask({ ...ask, maxAgents }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
-  expect(await t.ask(ask, owner)).toEqual({ ok: true, machineId: 'studio', maxAgents: 96, maximum: 96 })
-  expect(setMachineAgents).toHaveBeenCalledWith(t.core, { tabId: 'tab', machineId: 'studio', maxAgents: 96 })
-  const help = (await t.ask({ action: 'help' }, owner) as { help: Record<string, string> }).help
-  expect(help.setAgents).toContain('how many Swarm agents may run on that machine at once')
-})
 describe('a machine offered with more than 16 agents', () => {
   const contribute = (maxAgents: number) => ({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { operationId: 'add-studio',
     command: { type: 'machine.contribute', machineId: 'studio', name: 'Studio', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents } } })
@@ -338,85 +199,11 @@ describe('a machine offered with more than 16 agents', () => {
     expect(t.call).toHaveBeenCalledTimes(3)
   })
 })
-// Project instructions, phase 4: what an agent may do is the server's to say, and it now lets any agent of the project tag,
-// ask and tell; the help names no rule, floor or step-up the server dropped.
-it('gives every agent the same help, with no rule the server dropped', async () => {
-  const t = setup()
-  const help = (await t.ask({ action: 'help', tabId: 'tab', agentId: t.agentId }, owner) as { help: Record<string, unknown> }).help
-  expect(String(help.post)).toContain('--mention')
-  // Task #2924: an agent with work in the project posts in its project chat itself, joining nobody there (#2207).
-  expect(String(help.post)).toContain('In the project chat, an agent with a task or step in the project posts and reacts without joining it, and a person\'s answer to its line reaches it; --to there adds no agent, so name only the PM.')
-  // Task #2963: an unnamed post no longer reaches the PM.
-  expect(String(help.post)).toContain('With no --to or @Name it reaches no agent, except the agent a reply answers and, in a task or step, its assignee. Your status tells the PM your work: never post it results, verdicts or acknowledgements.')
-  expect(String(help.post)).not.toContain('your post reaches the PM')
-  expect((help.commands as Array<{ type: string }>).map(c => c.type)).toEqual(expect.arrayContaining(['decision.ask']))
-  // Task #4547: a person's chat with their own agent is theirs alone; no help text teaches the retired private line.
-  expect(JSON.stringify(help)).not.toContain('person.tell')
-  const dropped = /prefer stop|agree an order|Only its project's Lead|without a routeDecisionId is refused|hard rule|top tier|steps the task up|"name":"Builder"|role "reviewer"/i
-  expect(JSON.stringify(help)).not.toMatch(dropped)
-  expect(Object.values(help).filter(v => typeof v === 'string').join('\n')).not.toMatch(dropped)
-  // Help asked with no agent behind it is the same.
-  expect((await t.ask({ action: 'help' }, owner) as { help: unknown }).help).toEqual(help)
-})
 it('sends no refusal the server dropped', () => {
   const dir = dirname(fileURLToPath(import.meta.url))
   const sources = readdirSync(dir, { recursive: true }).map(String).filter(f => f.endsWith('.ts') && !f.endsWith('.spec.ts'))
   expect(sources.length).toBeGreaterThan(20)
   expect(sources.filter(f => /'(LEAD_REQUIRED|TASK_REQUIRED)'/.test(readFileSync(join(dir, f), 'utf8')))).toEqual([])
-})
-it('documents how a lead shares its project repository for other machines', async () => {
-  const t = setup()
-  const answer = await t.ask({ action: 'help' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
-  expect(answer.help.commands).toContainEqual({ type: 'project.repository', projectId: 'PROJECT', repositoryUrl: 'https://github.com/OWNER/REPOSITORY' })
-})
-// Project instructions, phase 4: project.skills and rule.set leave the help (agents change the instructions); tab.tidy is still
-// the Swarm owner's setting, now about archiving alone.
-it('tells how the instructions are changed, and how the Swarm\'s tidying is turned off or on at its owner\'s own request', async () => {
-  const t = setup()
-  const answer = await t.ask({ action: 'help' }, owner) as { help: { command: string; commands: Array<Record<string, unknown>> } }
-  const types = answer.help.commands.map(c => c.type)
-  expect(types).not.toContain('project.skills')
-  expect(types).not.toContain('rule.set')
-  expect(types).not.toContain('rule.remove')
-  expect(answer.help.commands).toContainEqual(expect.objectContaining({ type: 'instructions.save', projectId: 'PROJECT', askedBy: 'PERSON' }))
-  expect(answer.help.commands).toContainEqual({ type: 'tab.tidy', enabled: false, askedIn: { conversationId: 'GROUP', messageId: 'OWNER_MESSAGE' } })
-  expect(answer.help.command).toContain('tab.tidy turns off, or back on, the Swarm\'s tidying: finished groups archive once their pull requests are merged or closed. The Swarm owner does, or the PM passing on the owner\'s own chat message, with askedIn naming it.')
-})
-// Task #3117: a task is created with its priority, and the PM or a person changes it.
-it('asks for a task\'s priority on conversation.create, says what P0 to P3 mean, and how work.priority changes it', async () => {
-  const t = setup()
-  const answer = await t.ask({ action: 'help' }, owner) as { help: { command: string; mine: string; commands: Array<Record<string, unknown>> } }
-  expect(answer.help.mine).toContain('one line per task, P0 first (number, priority, title,')
-  const creates = answer.help.commands.filter(c => c.type === 'conversation.create')
-  expect(creates.find(c => !('step' in c))).toMatchObject({ title: 'Outcome', priority: 'P0|P1|P2|P3', requesterId: 'PERSON' })
-  // A step carries no priority.
-  expect(creates.find(c => 'step' in c)).not.toHaveProperty('priority')
-  expect(answer.help.commands).toContainEqual({ type: 'work.priority', conversationId: 'GROUP', priority: 'P0' })
-  // Task #3389: an agent\'s task needs its goal, a check, a priority and who asked, or a reason nobody did.
-  expect(answer.help.command).toContain('TASK_CONTRACT_MISSING')
-  expect(answer.help.command).toContain('noRequesterReason')
-  expect(answer.help.command).not.toContain('checks may be empty')
-  expect(answer.help.command).toContain('A task\'s priority is P0 (hotfix: something shipped is broken, loses data, or stops people\'s or agents\' work), P1 (needed by users soon), P2 (planned goal) or P3 (tools, docs or process): give one on conversation.create (a person\'s without one gets P2); only the PM or a person sets P0, or changes a priority later with work.priority.')
-})
-it('tells the Lead that start works only on a machine in the Swarm\'s Machines list', async () => {
-  const t = setup()
-  const answer = await t.ask({ action: 'help' }, owner) as { help: { start: string } }
-  expect(answer.help.start).toContain('create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first.')
-  expect(answer.help.start).toContain('Repeat exactly after an interruption')
-})
-// Project instructions, phase 4: an agent starts in a role named by the instructions (roleName), never a kind.
-it('explains starting an agent in a role of the instructions', async () => {
-  const answer = await setup().ask({ action: 'help' }, owner) as { help: { status: string; start: string; command: string; startRequest: Record<string, unknown> } }
-  expect(answer.help.start).toContain('Set roleName to the role the project\'s instructions give the agent')
-  expect(answer.help.startRequest).toMatchObject({ roleName: 'ROLE' })
-  expect(JSON.stringify(answer.help)).not.toMatch(/Custom skills|roleId/)
-})
-// Dee, 10-31: the Leads (Product Managers) chat is gone; no help points an agent at it.
-it('explains to the PM other projects\' work, and points nobody at the removed Leads conversation', async () => {
-  const answer = await setup().ask({ action: 'help' }, owner) as { help: Record<string, unknown> }
-  expect(answer.help.status).toContain('The PM\'s status also lists otherProjectsWork: the active work of the Swarm\'s other projects')
-  expect(answer.help).not.toHaveProperty('leads')
-  expect(JSON.stringify(answer.help)).not.toMatch(/Leads conversation|leadsConversationId/)
 })
 // Swarm v4 (2026-11-09): an agent its person only talks to in their 1:1 chat is never told its Swarm's id, and the basics tell
 // it to post in its project's channel: in its own pane, the one Swarm it is in is meant.
@@ -437,7 +224,7 @@ it('asks an agent in two Swarms to name one', async () => {
 })
 it('resolves a native caller to its exact contribution and rechecks it before every agent command', async () => {
   const t = setup()
-  expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ ok: true })
+  expect(await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'lead' }, owner)).toMatchObject({ ok: true })
   expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/parts?asAgentId=${t.agentId}`, undefined)
   const command = { type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, recipientIds: [] }
   expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op', command }, owner)).toMatchObject({ ok: true, operationId: 'op' })
@@ -445,80 +232,17 @@ it('resolves a native caller to its exact contribution and rechecks it before ev
   expect(await t.ask({ action: 'message', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', messageId: 'old-question' }, owner)).toMatchObject({ ok: true })
   expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/lead/messages?asAgentId=${t.agentId}&messageId=old-question`, undefined)
   t.agent.machineId = 'another-machine'
-  expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
+  expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'lead' }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
   t.agent.machineId = 'machine-1'; vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
-  expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
-})
-
-// Leads see each other's work (spec 2026-10-23): a Lead's status carries other projects' active work, in the backend's own
-// fields and nothing more; an agent that leads nothing never sees it. Nobody reads the removed Leads conversation (10-31).
-describe('other projects\' work in status', () => {
-  const work = { conversationId: 'docs-roster', projectName: 'Docs', title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review',
-    agentName: 'Builder', pr: 'https://github.com/example/project/pull/12' }
-  /** A Swarm whose project Pilot is led, through its Lead conversation, by [leadId]; [groups] are further conversations. */
-  const swarm = (t: ReturnType<typeof setup>, leadId: string | null, groups: Record<string, unknown>[] = [], legacy = false) => {
-    const lead = legacy ? 'lead' : 'pilot'
-    const state = { agents: [t.agent], leadsConversationId: 'leads', ...(legacy ? {} : { projects: [{ id: 'pilot', name: 'Pilot', leadConversationId: 'pilot' }] }),
-      conversations: [{ id: lead, leadId, agentIds: [t.agentId] }, ...groups, { id: 'leads', kind: 'leads', title: 'Leads', leadId: null, agentIds: [t.agentId] }],
-      otherProjectsWork: [{ ...work, assignmentId: 'internal', brief: 'The whole brief' }] }
-    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(t.agent, path, state) } }))
-  }
-  const status = async (t: ReturnType<typeof setup>) => object(object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value).state)
-
-  it('shows a Lead each other project\'s active work in the agreed fields alone', async () => {
-    const t = setup()
-    swarm(t, t.agentId)
-    const state = await status(t)
-    expect(state.otherProjectsWork).toEqual([work])
-    // Dee, 10-31: the Leads conversation is removed; a Lead no longer reads it either, even from an older server.
-    expect(state).not.toHaveProperty('leadsConversationId')
-    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
-  })
-
-  it('shows the Lead of a Swarm from before projects that work too', async () => {
-    const t = setup()
-    swarm(t, t.agentId, [], true)
-    expect((await status(t)).otherProjectsWork).toEqual([work])
-  })
-
-  // The review of #1657: the backend's Lead is its project's Lead conversation's. A former Lead still named on an older
-  // work group is not one.
-  it('shows a former Lead that still leads an older work group neither that work nor the Leads conversation', async () => {
-    const t = setup()
-    swarm(t, 'new-lead', [{ id: 'older-work', projectId: 'pilot', leadId: t.agentId, agentIds: [t.agentId] }])
-    const state = await status(t)
-    expect(state).not.toHaveProperty('otherProjectsWork')
-    expect(state).not.toHaveProperty('leadsConversationId')
-    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot', 'older-work'])
-  })
-
-  it('shows an agent that leads nothing neither that work nor the Leads conversation, whatever the server sends', async () => {
-    const t = setup()
-    swarm(t, 'another-lead')
-    const state = await status(t)
-    expect(state).not.toHaveProperty('otherProjectsWork')
-    expect(state).not.toHaveProperty('leadsConversationId')
-    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
-  })
-
-  // Task #3117: a task's priority reaches the PM and every other agent as the backend sends it.
-  it('keeps a task\'s priority, for a Lead and for any other agent', async () => {
-    for (const leadId of ['self', 'another-lead']) {
-      const t = setup()
-      swarm(t, leadId === 'self' ? t.agentId : leadId, [{ id: 'hotfix', projectId: 'pilot', number: 7, title: 'Checkout fails', priority: 'P0', agentIds: [] }])
-      expect(list((await status(t)).conversations).find(c => c.id === 'hotfix'), leadId).toMatchObject({ priority: 'P0' })
-    }
-  })
+  expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'lead' }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
 })
 
 // Security review of #2087: a harness that names another agent with --agent spoke as it (a Buddy as its Builder). The CLI
 // now says which harness asks, and the agent it names must be that harness's own.
-it('refuses a harness that names another agent, for posts, commands, work status and message reads, and serves its own', async () => {
+it('refuses a harness that names another agent, for posts and message reads, and serves its own', async () => {
   const t = setup()
   const post = { type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: null, recipientIds: [] }
-  const status = { type: 'work.status', conversationId: 'g1', assignmentId: 'a1', status: 'done', result: 'r' }
-  const asks = [{ action: 'command', operationId: 'op-1', command: post }, { action: 'command', operationId: 'op-2', command: status },
-    { action: 'message', conversationId: 'lead', messageId: 'old-question' }, { action: 'messages', conversationId: 'lead' }]
+  const asks = [{ action: 'command', operationId: 'op-1', command: post }, { action: 'message', conversationId: 'lead', messageId: 'old-question' }, { action: 'messages', conversationId: 'lead' }]
   for (const ask of asks) {
     t.call.mockClear()
     expect(await t.ask({ ...ask, tabId: 'tab', agentId: t.agentId, harnessId: 'buddy-pane' }, owner)).toEqual({
@@ -542,8 +266,6 @@ it('refuses every agent request that came over the link from another computer, w
     }
     expect(t.call).not.toHaveBeenCalled()
   }
-  // Help reads nothing of the Swarm and stays the plain help.
-  expect(await t.ask({ action: 'help', tabId: 'tab', agentId: t.agentId }, relayed)).toMatchObject({ ok: true, help: { status: expect.any(String) } })
 })
 
 // The second review: a Buddy is known from this computer's own launch record (start.ts starts it with the Swarm role buddy,
@@ -585,23 +307,9 @@ describe('whether a harness is a Buddy', () => {
 it('resolves a replacement terminal to the original stable member', async () => {
   const t = setup()
   t.agent.harnessId = 'replacement'
-  expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'replacement' }, owner)).toMatchObject({ ok: true })
+  expect(await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'replacement', conversationId: 'lead' }, owner)).toMatchObject({ ok: true })
   expect(t.call).toHaveBeenLastCalledWith('GET', `/api/super-tabs/tab/parts?asAgentId=${t.agentId}`, undefined)
-  expect(await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
-})
-
-it('tells which branch a started agent works from, and how to choose another', async () => {
-  const t = setup()
-  const help = (await t.ask({ action: 'help' }, owner)).help as { start: string; startRequest: Record<string, unknown>; commands: unknown[] }
-  expect(help.start).toContain('default branch, fetched first')
-  expect(help.start).toContain('branchRef')
-  expect(help.startRequest).toMatchObject({ worktree: true, branchRef: 'refs/remotes/origin/BASE_BRANCH' })
-  // The template asks for memory and disk, not a CPU reading: one busy sample would refuse a start the route admits.
-  expect(help.startRequest.requirements).toMatchObject({ memoryBytes: 2147483648, diskBytes: 10737418240, maxCpuPercent: 100 })
-  // A linked group (a review) is opened with reviewOf; the agent's role is the instructions' (roleName), never a kind.
-  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'conversation.create', reviewOf: 'GROUP' }))
-  expect(help.start).toContain('roleName')
-  expect(help.start).not.toContain('"reviewer"')
+  expect(await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'lead' }, owner)).toMatchObject({ error: 'AGENT_UNAVAILABLE' })
 })
 
 it('keeps host capacity separate from account authority and closes it on disconnect or identity change', async () => {
@@ -671,14 +379,34 @@ it('lets a machine client prepare only a backend-verified terminal context', asy
   expect(core.account.backend).not.toHaveBeenCalled()
 })
 
-// The route is gone (the plan with it): no action reads its context, history, machine rules or CI load, and Jev is long gone.
-it('has no route actions: each is refused and nothing of the routing is read', async () => {
+// Swarm v4: an agent has the chat's reads and its posts, and no manual. A session from before gets INVALID_REQUEST, as the route's did.
+it('has no agent action but status and the chat\'s own: each other is refused, and the Swarm and the server are read for none', async () => {
   const t = setup()
-  for (const action of ['routeContext', 'routeHistory', 'machineRules', 'ciLoad', 'routeJev']) {
-    expect(await t.ask({ action, tabId: 'tab', harnessId: 'native', conversationId: 'g1', projectId: 'lead' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
+  for (const action of ['mine', 'task', 'decisions', 'instructions', 'costs', 'help', 'startStatus', 'proposalTarget', 'setMachineAgents',
+    'routeContext', 'routeHistory', 'machineRules', 'ciLoad', 'routeJev']) {
+    t.call.mockClear()
+    expect(await t.ask({ action, tabId: 'tab', agentId: t.agentId, conversationId: 'g1', startId: 'start-1', state: 'open', days: 7, machineId: 'studio', maxAgents: 8 }, owner), action)
+      .toEqual({ error: 'INVALID_REQUEST' })
+    // Only the host's roster is read, to know the caller: nothing of the Swarm, and nothing is sent.
+    expect(t.call.mock.calls.filter(([method, path]) => method !== 'GET' || !String(path).includes('/hosts/')), action).toEqual([])
   }
-  expect(t.call).not.toHaveBeenCalledWith('GET', expect.stringMatching(/routing-policy|route-decisions|machine-rules|ci-load/), undefined)
-  expect(vi.mocked(t.core.account.backend)).not.toHaveBeenCalledWith('POST', '/api/route/jev', expect.anything())
+})
+
+// A process that writes to the daemon's socket gets what the CLI's parser gives: only what an agent's commands send goes out as the agent.
+it('sends as the agent only a post, an answer and its terminal commands: every other command type is refused, and nothing is sent', async () => {
+  const t = setup()
+  for (const type of ['work.assign', 'agent.start', 'message.react', 'buddy.propose', 'agent.release', 'work.status', 'conversation.create',
+    'machine.remove', 'agent.setUp', 'tab.tidy', 'decision.ask', 'instructions.save', undefined, 7]) {
+    t.call.mockClear()
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op-1', command: { type, conversationId: 'g1' } }, owner), String(type))
+      .toEqual({ error: 'INVALID_REQUEST' })
+    // Only the host's roster is read, to know the caller: nothing is sent.
+    expect(t.call.mock.calls.filter(([method, path]) => method !== 'GET' || !String(path).includes('/hosts/')), String(type)).toEqual([])
+  }
+  for (const command of [{ type: 'message.send', conversationId: 'g1', text: 'Hi', replyTo: null, recipientIds: [] },
+    { type: 'agent.screen', agentId: 'other' }, { type: 'agent.input', agentId: 'other', text: 'y' }]) {
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: `op-${command.type.replace('.', '-')}`, command }, owner), command.type).toMatchObject({ ok: true })
+  }
 })
 
 it('prepares machines only for their owner and clears setup receipts on disconnect', async () => {
@@ -791,47 +519,6 @@ describe('post --attach steps', () => {
     expect(await t.ask({ action: 'attachment', step: 'sent', tabId: 'tab', agentId: t.agentId, conversationId: 'lead', operationId: 'op' }, owner))
       .toEqual({ ok: true, value: { agentId: t.agentId, attachmentIds: null } })
   })
-})
-
-it('teaches agents to say when their work needs a person or is stuck', async () => {
-  const t = setup()
-  const help = (await t.ask({ action: 'help' }, owner)) as { help: { command: string; commands: Array<Record<string, unknown>> } }
-  expect(help.help.commands.filter(c => c.type === 'work.status').map(c => c.status)).toEqual(['working', 'needs_human', 'needs_human', 'blocked', 'done'])
-  expect(help.help.command).toContain('needs_human')
-})
-
-it('says a server from before rules does not support them, and passes a malformed rule\'s refusal through', async () => {
-  const t = setup()
-  const refuse = (message: string) => t.call.mockImplementation(async (...args: unknown[]) => args[0] === 'POST'
-    ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message } } } as never
-    : { status: 200, body: { success: true, data: swarmData(t.agent, args[1] as string) } })
-  const send = (command: object) => t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'rule', command }, owner)
-  refuse("command.type: Invalid discriminator value. Expected 'machine.contribute'")
-  expect(await send({ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' })).toEqual({ error: 'RULES_UNSUPPORTED', detail: 'This Swarm\'s server does not support rules yet.' })
-  expect(await send({ type: 'rule.remove', ruleId: 'r' })).toMatchObject({ error: 'RULES_UNSUPPORTED' })
-  refuse('command.rule.effort: Invalid option')
-  expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
-})
-
-// Project instructions, phase 4: no build, review or grid rule is the help's, and the route is no part of it.
-it('offers every agent no route and no rule command', async () => {
-  const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: Array<{ type: string }> }
-  expect(help).not.toHaveProperty('route')
-  expect(help.commands.map(c => c.type)).not.toContain('rule.set')
-})
-
-it('documents finished worker decisions and explains an older backend without release support', async () => {
-  const t = setup()
-  const help = (await t.ask({ action: 'help' }, owner)).help as { commands: unknown[]; release: string }
-  expect(help.commands).toContainEqual({ type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' })
-  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'work.cancel', assignmentId: 'current' }))
-  expect(help.release).toContain('agent.release records keep, or requests stop, for an agent whose work ended')
-  expect(help.release).not.toContain('prefer stop')
-  t.call.mockImplementation(async (...args: unknown[]) => args[0] === 'POST'
-    ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid request' } } } as never
-    : { status: 200, body: { success: true, data: swarmData(t.agent, args[1] as string) } })
-  const reply = await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'release', command: { type: 'agent.release', agentId: 'worker', decision: 'stop' } }, owner)
-  expect(reply).toMatchObject({ detail: 'This backend does not support releasing Builders yet. Update the backend and try again.' })
 })
 
 describe('the Swarm cards the devices ask for', () => {
@@ -1074,8 +761,152 @@ describe('a Harness Team account, which Swarm v3 has none of (#4221)', () => {
   })
 })
 
-// Lead mentions (spec 2026-10-24-lead-mentions): a post names people by id or email; the backend gets their person ids,
-// and every agent's help offers it (project instructions, phase 4).
+// Leads see each other's work (spec 2026-10-23): a Lead's status carries other projects' active work, in the backend's own
+// fields and nothing more; an agent that leads nothing never sees it. Nobody reads the removed Leads conversation (10-31).
+describe('other projects\' work in status', () => {
+  const work = { conversationId: 'docs-roster', projectName: 'Docs', title: 'Roster', owns: ['desktop/lib/super_tabs'], status: 'review',
+    agentName: 'Builder', pr: 'https://github.com/example/project/pull/12' }
+  /** A Swarm whose project Pilot is led, through its Lead conversation, by [leadId]; [groups] are further conversations. */
+  const swarm = (t: ReturnType<typeof setup>, leadId: string | null, groups: Record<string, unknown>[] = [], legacy = false) => {
+    const lead = legacy ? 'lead' : 'pilot'
+    const state = { agents: [t.agent], leadsConversationId: 'leads', ...(legacy ? {} : { projects: [{ id: 'pilot', name: 'Pilot', leadConversationId: 'pilot' }] }),
+      conversations: [{ id: lead, leadId, agentIds: [t.agentId] }, ...groups, { id: 'leads', kind: 'leads', title: 'Leads', leadId: null, agentIds: [t.agentId] }],
+      otherProjectsWork: [{ ...work, assignmentId: 'internal', brief: 'The whole brief' }] }
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(t.agent, path, state) } }))
+  }
+  const status = async (t: ReturnType<typeof setup>) => object(object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value).state)
+
+  it('shows a Lead each other project\'s active work in the agreed fields alone', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const state = await status(t)
+    expect(state.otherProjectsWork).toEqual([work])
+    // Dee, 10-31: the Leads conversation is removed; a Lead no longer reads it either, even from an older server.
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
+  })
+
+  it('shows the Lead of a Swarm from before projects that work too', async () => {
+    const t = setup()
+    swarm(t, t.agentId, [], true)
+    expect((await status(t)).otherProjectsWork).toEqual([work])
+  })
+
+  // The review of #1657: the backend's Lead is its project's Lead conversation's. A former Lead still named on an older
+  // work group is not one.
+  it('shows a former Lead that still leads an older work group neither that work nor the Leads conversation', async () => {
+    const t = setup()
+    swarm(t, 'new-lead', [{ id: 'older-work', projectId: 'pilot', leadId: t.agentId, agentIds: [t.agentId] }])
+    const state = await status(t)
+    expect(state).not.toHaveProperty('otherProjectsWork')
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot', 'older-work'])
+  })
+
+  it('shows an agent that leads nothing neither that work nor the Leads conversation, whatever the server sends', async () => {
+    const t = setup()
+    swarm(t, 'another-lead')
+    const state = await status(t)
+    expect(state).not.toHaveProperty('otherProjectsWork')
+    expect(state).not.toHaveProperty('leadsConversationId')
+    expect(list(state.conversations).map(c => c.id)).toEqual(['pilot'])
+  })
+
+  // Task #3117: a task's priority reaches the PM and every other agent as the backend sends it.
+  it('keeps a task\'s priority, for a Lead and for any other agent', async () => {
+    for (const leadId of ['self', 'another-lead']) {
+      const t = setup()
+      swarm(t, leadId === 'self' ? t.agentId : leadId, [{ id: 'hotfix', projectId: 'pilot', number: 7, title: 'Checkout fails', priority: 'P0', agentIds: [] }])
+      expect(list((await status(t)).conversations).find(c => c.id === 'hotfix'), leadId).toMatchObject({ priority: 'P0' })
+    }
+  })
+})
+
+// A Buddy reads its project's work as its person (Ken, 10-29): its status is a bounded task summary, never the whole Swarm,
+// with pull requests read through its person's own GitHub on their machine; archived tasks and older messages on request.
+describe('a Buddy\'s status', () => {
+  const buddySetup = () => {
+    const t = setup()
+    Object.assign(t.agent, { projectId: 'app', buddyOf: { personId: 'peer', generation: 'g' } })
+    const state = { agents: [t.agent], projects: [{ id: 'app', name: 'App', leadConversationId: 'app-chat' }],
+      conversations: [{ id: 'app-chat', projectId: 'app', title: 'App', leadId: null, agentIds: [], checks: [] },
+        { id: 'offline', projectId: 'app', number: 12, title: 'Offline sync', brief: 'The whole brief', leadId: null, agentIds: [], checks: [],
+          assignment: { status: 'blocked', result: 'Waiting for the sync API' }, pullRequestUrls: ['https://github.com/acme/app/pull/12'] }] }
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/decisions?') ? { decisions: [], more: false }
+      : path.includes('/groups?dormant=1') ? { groups: [], next: null } : path.includes('/messages?') ? { messages: [], next: null } : swarmData(t.agent, path, state) } }))
+    const pullRequests = vi.fn(async (urls: string[]) => ({ rows: urls.map(url => ({ url, status: 'found' as const, state: 'Open' as const, ci: 'passing' as const })), checkedAt: 'now' }))
+    const service = superTabService(t.core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, pullRequests })
+    return { ...t, pullRequests, ask: service.requests.super_tabs }
+  }
+
+  it('is its project\'s tasks with their pull request state, and no Swarm state', async () => {
+    const t = buddySetup()
+    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
+    expect(value.state).toBeUndefined()
+    expect(object(value.summary).tasks).toEqual([expect.objectContaining({ number: 12, title: 'Offline sync', status: 'blocked', note: 'Waiting for the sync API',
+      pullRequests: [expect.objectContaining({ url: 'https://github.com/acme/app/pull/12', state: 'Open', ci: 'passing' })] })])
+    expect(JSON.stringify(value)).not.toContain('The whole brief')
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/decisions?state=open&asAgentId=${t.agentId}`, undefined)
+  })
+
+  it('reads its archived tasks a page at a time, in its own project only', async () => {
+    const t = buddySetup()
+    expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId, archived: true, before: 'page-2' }, owner)).toMatchObject({ ok: true, value: { summary: { tasks: [], next: null } } })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/groups?dormant=1&projectId=app&before=page-2&asAgentId=${t.agentId}`, undefined)
+  })
+
+  it('pages a task\'s older messages', async () => {
+    const t = buddySetup()
+    expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'offline', before: 40, beforeId: 'm-1' }, owner)).toMatchObject({ ok: true })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/offline/messages?asAgentId=${t.agentId}&before=40&beforeId=m-1`, undefined)
+    // A cursor that is not one is refused, never read as the newest page.
+    const calls = t.call.mock.calls.length
+    for (const bad of [{ before: 2 ** 53, beforeId: 'm-1' }, { before: 40 }, { before: 40, beforeId: 'a b' }, { before: -1, beforeId: 'm-1' }]) {
+      expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'offline', ...bad }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+    }
+    expect(t.call.mock.calls.slice(calls).filter(([, path]) => String(path).includes('/messages?'))).toEqual([])
+  })
+
+  it('reads one thread, with the main-chat messages a thread session started from, and refuses a thread that is not an id', async () => {
+    const t = buddySetup()
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method: string, path: string) => ({ status: 200, body: { success: true, data:
+      path.includes('/messages?') ? { messages: [{ id: 'root-1', thread: 'root-1' }], next: null, context: [{ id: 'older', text: 'earlier' }] }
+        : swarmData(t.agent, path) } }))
+    expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'chat', thread: 'root-1' }, owner))
+      .toMatchObject({ ok: true, value: { context: [{ id: 'older', text: 'earlier' }] } })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/chat/messages?asAgentId=${t.agentId}&thread=root-1`, undefined)
+    await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'chat', thread: 'root-1', before: 40, beforeId: 'm-1' }, owner)
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/chat/messages?asAgentId=${t.agentId}&before=40&beforeId=m-1&thread=root-1`, undefined)
+    const calls = t.call.mock.calls.length
+    expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'chat', thread: 'a&b=c' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+    expect(t.call.mock.calls.slice(calls).filter(([, path]) => String(path).includes('/messages?'))).toEqual([])
+  })
+
+  it('leaves every other agent\'s status as it was', async () => {
+    const t = setup()
+    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
+    expect(value.state).toBeDefined()
+    expect(value.summary).toBeUndefined()
+  })
+})
+
+describe('status with steps', () => {
+  it('prints a task\'s steps under it, not as rows', async () => {
+    const t = setup()
+    const conversations = [{ id: 'g1835', number: 1835, title: 'Fix login', archived: false, checks: [] },
+      { id: 'g1918', number: 1918, title: 'Review', reviewOf: 'g1835', step: 'Review', archived: false, checks: [] },
+      { id: 'g9', number: 9, title: 'Old review', reviewOf: 'g1835', archived: false, checks: [] }]
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
+      data: swarmData(t.agent, path, { agents: [t.agent], conversations }) } }) as never)
+    const answer = await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner) as { value: { state: { conversations: Array<Record<string, unknown>> } } }
+    const rows = answer.value.state.conversations
+    // Every linked group is a step, named or not (Ken, 2026-11-02).
+    expect(rows.map(c => c.id)).toEqual(['g1835'])
+    expect((rows[0]!.steps as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['g1918', 'g9'])
+  })
+})
+
+// Lead mentions (spec 2026-10-24-lead-mentions): a post names people by id or email; the backend gets their person ids.
 describe('mentions on a post', () => {
   const people: Array<Record<string, unknown>> = [{ id: 'person-ken', email: 'Ken@Example.com', role: 'owner', username: '0xken15', name: 'Ken' },
     { id: 'person-dee', email: 'dee@example.com', role: 'collaborator', username: 'dee' }]
@@ -1136,183 +967,18 @@ describe('mentions on a post', () => {
     expect(await post(t, ['person-ken'])).toEqual({ error: 'MENTIONS_UNSUPPORTED', detail: 'This Swarm\'s server does not support tagging people yet.' })
   })
 
-  const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>) => object(object(await t.ask({ action: 'help', ...payload }, owner)).help)
-  const mention = '[--mention PERSON]...'
-  // Project instructions, phase 4: any agent of the project tags people and asks a batch; the server says where not.
-  it('offers --mention and a batch of questions in every agent\'s help', async () => {
-    const t = setup()
-    swarm(t, t.agentId)
-    const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expect(lead.post).toContain(`post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
-    expect(lead.post).toContain('--answers puts your answer right below that message, in the main chat; --reply-to puts it in that message\'s thread.')
-    // 2026-10-30: TEXT - posted a literal dash; help says - reads the message from stdin (command.ts postStdin).
-    expect(lead.post).toContain("when it holds quotes, or is only -, put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG); an empty stdin is refused and nothing is posted.")
-    // By username, display name or id, never email (task #2954).
-    expect(lead.post).toContain('--mention tags a person, by the username, display name or id shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
-    // The server reads tags from the text too (backend mentions.ts).
-    expect(lead.post).toContain('An @username in TEXT tags that person as well, outside code and links. Never type a person\'s email.')
-    expect(lead.post).not.toMatch(/email shown|@email/)
-    expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
-    // An agent that coordinates nothing reads the same, and so does help outside a tab or with a caller that cannot be read.
-    swarm(t, 'new-lead')
-    expect(await help(t, { tabId: 'tab', agentId: t.agentId })).toEqual(lead)
-    expect(await help(t, {})).toEqual(lead)
-    expect(await help(t, { tabId: 'tab' })).toEqual(lead)
-    t.call.mockRejectedValue(new Error('Offline'))
-    expect(await help(t, { tabId: 'tab', agentId: t.agentId })).toEqual(lead)
-    t.call.mockResolvedValue({ status: 200, body: { success: true, data: hostForm([], { tabs: ['tab'] }) } })
-    expect(await help(t, { tabId: 'tab', agentId: t.agentId })).toEqual(lead)
-    expect(lead).not.toHaveProperty('leadOptions')
-  })
 
-  it('tells every agent how to read the project\'s decisions, ask one through needs_human, or ask a batch', async () => {
-    const t = setup()
-    swarm(t, t.agentId)
-    const each = await help(t, {})
-    expect(each.decisions).toContain('decisions [--answered]: the decisions asked of people in your project')
-    expect(each.decisions).toContain('A decision is not a private channel')
-    expect(each.commands).toContainEqual(expect.objectContaining({ type: 'work.status', status: 'needs_human',
-      ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } }))
-    expect(each.commands).toContainEqual(expect.objectContaining({ type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON' }))
-    expect(each.commands).not.toContainEqual(expect.objectContaining({ type: 'person.tell' }))
-    expect(each.decisions).not.toContain('person.tell')
-  })
 })
 
-// #2358: a Buddy's guard refuses a post whose TEXT is -, as its message on stdin would skip the secret check. Its help then
-// still offered - and stdin, so a Buddy that followed it was refused and tried again: a Buddy's help passes TEXT in quotes.
-describe('a Buddy\'s help', () => {
-  const STDIN_HINT = "put - in its place and send the message on stdin (post GROUP - OPERATION_ID <<'MSG' … MSG)"
-  const QUOTED = 'TEXT is one argument, the message itself in quotes: \'your message\', or "it\'s done" when it holds an apostrophe. A Buddy never passes - for TEXT'
-  const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>, asker: Parameters<ReturnType<typeof setup>['ask']>[1] = owner) =>
-    object(object(await t.ask({ action: 'help', ...payload }, asker)).help)
-  const expectBuddy = (each: Record<string, unknown>) => {
-    expect(each.post).toMatch(/^post GROUP TEXT OPERATION_ID \[--to AGENT\]\.\.\. \[--answers MESSAGE_ID \| --reply-to MESSAGE_ID\] \[--attach PATH\]\.\.\. \[--mention PERSON\]\.\.\.: /)
-    expect(String(each.post)).toContain(QUOTED)
-    expect(String(each.post)).not.toContain('TEXT|-')
-    expect(String(each.post)).not.toContain(STDIN_HINT)
+describe('a conversation\'s pages and threads', () => {
+  const pages = () => {
+    const t = setup()
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/messages?') ? { messages: [], next: null } : swarmData(t.agent, path) } }))
+    return t
   }
-  const expectStdin = (each: Record<string, unknown>) => {
-    expect(String(each.post)).toContain('post GROUP TEXT|- OPERATION_ID')
-    expect(String(each.post)).toContain(STDIN_HINT)
-    expect(String(each.post)).not.toContain(QUOTED)
-  }
-  const localBuddy = (t: ReturnType<typeof setup>) => vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'native', swarmSkill: { role: 'buddy', key: 'k' } } as never)
-
-  it('passes TEXT in quotes for a Buddy the server records, and keeps the stdin hint for a Builder and a Lead', async () => {
-    const builder = setup()
-    const plain = await help(builder, { tabId: 'tab', agentId: builder.agentId })
-    expectStdin(plain)
-    const t = setup()
-    Object.assign(t.agent, { buddyOf: { personId: 'peer', generation: 'g' } })
-    const buddy = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expectBuddy(buddy)
-    expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(buddy)
-    // Only the post and command lines differ: a Buddy reads the same help otherwise, and no Lead option.
-    expect({ ...buddy, post: null, command: null }).toEqual({ ...plain, post: null, command: null })
-    const lead = setup()
-    lead.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(lead.agent, path,
-      { agents: [lead.agent], projects: [{ id: 'pilot', leadConversationId: 'pilot' }], conversations: [{ id: 'pilot', leadId: lead.agentId, agentIds: [lead.agentId] }] }) } }))
-    const leadHelp = await help(lead, { tabId: 'tab', agentId: lead.agentId })
-    expectStdin(leadHelp)
-    expect(String(leadHelp.post)).toContain('--mention')
-  })
-
-  // A Buddy's help kept the command entry's stdin form (- in the JSON's place, a heredoc), which its guard refuses as well:
-  // it offers stdin nowhere, and everyone else's command entry keeps it.
-  it('offers a Buddy stdin nowhere, and keeps the command entry\'s stdin form for a Builder', async () => {
-    const COMMAND_STDIN = "put - in its place and send it on stdin (command OPERATION_ID - <<'JSON' … JSON)"
-    const builder = setup()
-    const plain = await help(builder, { tabId: 'tab', agentId: builder.agentId })
-    expect(String(plain.command)).toContain(COMMAND_STDIN)
-    const t = setup()
-    Object.assign(t.agent, { buddyOf: { personId: 'peer', generation: 'g' } })
-    const buddy = await help(t, { tabId: 'tab', agentId: t.agentId })
-    expect(String(buddy.command)).toMatch(/^command OPERATION_ID JSON: send one of the commands below\. The JSON is one argument, in single quotes/)
-    expect(String(buddy.command)).toContain("command OPERATION_ID '{...}' (an apostrophe inside it as \\u0027). Reuse exactly")
-    // The rest of the entry is everyone's: only how the JSON is passed differs.
-    const tail = (text: unknown) => String(text).slice(String(text).indexOf(' Reuse exactly the same ID'))
-    expect(tail(buddy.command)).toBe(tail(plain.command))
-    // No entry offers stdin: no heredoc, no - in an argument's place, no TEXT|-. Its post may still say stdin is refused.
-    for (const [key, text] of Object.entries(buddy)) expect(JSON.stringify(text), key).not.toMatch(/<<|in its place|send (it|the [a-zA-Z]+) on stdin|\|-/)
-    expect(JSON.stringify(plain)).toMatch(/<<'JSON'/)
-  })
-
-  it('is a Buddy\'s help for a harness this computer started as a Buddy, as its guard is', async () => {
-    const t = setup()
-    localBuddy(t)
-    expectBuddy(await help(t, { tabId: 'tab', agentId: t.agentId }))
-    // A Builder's own launch record keeps the plain help.
-    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'native', swarmSkill: { role: 'dev', key: 'k' } } as never)
-    expectStdin(await help(t, { tabId: 'tab', agentId: t.agentId }))
-  })
-
-  it('stays a Buddy\'s help when its roster cannot be read, and is the plain help for anyone else', async () => {
-    const t = setup()
-    localBuddy(t)
-    t.call.mockRejectedValue(new Error('Offline'))
-    expectBuddy(await help(t, { tabId: 'tab', harnessId: 'native' }))
-    // Off the roster, or not listed on this machine.
-    t.call.mockResolvedValue({ status: 200, body: { success: true, data: hostForm([], { tabs: ['tab'] }) } })
-    expectBuddy(await help(t, { tabId: 'tab', harnessId: 'native' }))
-    expectBuddy(await help(t, { harnessId: 'native' }))
-    // Without a harness, or from another computer, nothing tells a Buddy apart: the plain help, never an error.
-    expectStdin(await help(t, { tabId: 'tab' }))
-    expectStdin(await help(t, {}))
-    expectStdin(await help(t, { tabId: 'tab', harnessId: 'native' }, { local: false, owner: true, accountOwner: true, machine: { machineId: 'studio', label: 'Studio' } }))
-    vi.mocked(t.core.agents.byAgent).mockReturnValue(undefined)
-    expectStdin(await help(t, { tabId: 'tab', harnessId: 'native' }))
-  })
-})
-
-// A Buddy reads its project's work as its person (Ken, 10-29): its status is a bounded task summary, never the whole Swarm,
-// with pull requests read through its person's own GitHub on their machine; archived tasks and older messages on request.
-describe('a Buddy\'s status', () => {
-  const buddySetup = () => {
-    const t = setup()
-    Object.assign(t.agent, { projectId: 'app', buddyOf: { personId: 'peer', generation: 'g' } })
-    const state = { agents: [t.agent], projects: [{ id: 'app', name: 'App', leadConversationId: 'app-chat' }],
-      conversations: [{ id: 'app-chat', projectId: 'app', title: 'App', leadId: null, agentIds: [], checks: [] },
-        { id: 'offline', projectId: 'app', number: 12, title: 'Offline sync', brief: 'The whole brief', leadId: null, agentIds: [], checks: [],
-          assignment: { status: 'blocked', result: 'Waiting for the sync API' }, pullRequestUrls: ['https://github.com/acme/app/pull/12'] }] }
-    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/decisions?') ? { decisions: [], more: false }
-      : path.includes('/groups?dormant=1') ? { groups: [], next: null } : path.includes('/messages?') ? { messages: [], next: null } : swarmData(t.agent, path, state) } }))
-    const pullRequests = vi.fn(async (urls: string[]) => ({ rows: urls.map(url => ({ url, status: 'found' as const, state: 'Open' as const, ci: 'passing' as const })), checkedAt: 'now' }))
-    const service = superTabService(t.core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, pullRequests })
-    return { ...t, pullRequests, ask: service.requests.super_tabs }
-  }
-
-  it('is its project\'s tasks with their pull request state, and no Swarm state', async () => {
-    const t = buddySetup()
-    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
-    expect(value.state).toBeUndefined()
-    expect(object(value.summary).tasks).toEqual([expect.objectContaining({ number: 12, title: 'Offline sync', status: 'blocked', note: 'Waiting for the sync API',
-      pullRequests: [expect.objectContaining({ url: 'https://github.com/acme/app/pull/12', state: 'Open', ci: 'passing' })] })])
-    expect(JSON.stringify(value)).not.toContain('The whole brief')
-    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/decisions?state=open&asAgentId=${t.agentId}`, undefined)
-  })
-
-  // Huy 11-06 (#3872): a proposal's files are uploaded to the Buddy's chat for its project's PM, which the summary never names.
-  // This read answers just that: the chat it names when this Buddy reads it, its own record, and each project's chat.
-  it('answers a proposal\'s files with its chat, its own record and the projects\' chats, and nothing else of the Swarm', async () => {
-    const t = buddySetup()
-    const value = object(object(await t.ask({ action: 'proposalTarget', tabId: 'tab', agentId: t.agentId, conversationId: 'app-chat' }, owner)).value)
-    expect(value).toEqual({ chat: { id: 'app-chat', projectId: 'app' }, self: { id: t.agentId, projectId: 'app' },
-      projects: [{ id: 'app', leadConversationId: 'app-chat' }] })
-    expect(JSON.stringify(value)).not.toContain('Offline sync')
-    // A chat it does not read is none.
-    expect(object(object(await t.ask({ action: 'proposalTarget', tabId: 'tab', agentId: t.agentId, conversationId: 'elsewhere' }, owner)).value).chat).toBeNull()
-    expect(await t.ask({ action: 'proposalTarget', tabId: 'tab', agentId: t.agentId, conversationId: 'not an id' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
-  })
-
-  it('reads its archived tasks a page at a time, in its own project only', async () => {
-    const t = buddySetup()
-    expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId, archived: true, before: 'page-2' }, owner)).toMatchObject({ ok: true, value: { summary: { tasks: [], next: null } } })
-    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/groups?dormant=1&projectId=app&before=page-2&asAgentId=${t.agentId}`, undefined)
-  })
 
   it('pages a task\'s older messages', async () => {
-    const t = buddySetup()
+    const t = pages()
     expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'offline', before: 40, beforeId: 'm-1' }, owner)).toMatchObject({ ok: true })
     expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/offline/messages?asAgentId=${t.agentId}&before=40&beforeId=m-1`, undefined)
     // A cursor that is not one is refused, never read as the newest page.
@@ -1324,7 +990,7 @@ describe('a Buddy\'s status', () => {
   })
 
   it('reads one thread, with the main-chat messages a thread session started from, and refuses a thread that is not an id', async () => {
-    const t = buddySetup()
+    const t = pages()
     vi.mocked(t.core.account.backend).mockImplementation(async (_method: string, path: string) => ({ status: 200, body: { success: true, data:
       path.includes('/messages?') ? { messages: [{ id: 'root-1', thread: 'root-1' }], next: null, context: [{ id: 'older', text: 'earlier' }] }
         : swarmData(t.agent, path) } }))
@@ -1337,164 +1003,17 @@ describe('a Buddy\'s status', () => {
     expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'chat', thread: 'a&b=c' }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
     expect(t.call.mock.calls.slice(calls).filter(([, path]) => String(path).includes('/messages?'))).toEqual([])
   })
-
-  it('leaves every other agent\'s status as it was', async () => {
-    const t = setup()
-    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
-    expect(value.state).toBeDefined()
-    expect(value.summary).toBeUndefined()
-  })
 })
 
-// Swarm group #13, 2026-10-29: a Codex Builder on gpt-6-luna sent its start id, then a made-up one, as assignmentId; both were
-// refused as stale without the right id, and its finished task stayed open until the Lead cancelled it.
-describe('the assignment a command names', () => {
-  const live = '58c2d5f2bdc100771bc57de7'
-  const withTask = (t: ReturnType<typeof setup>, holder: string) => {
-    const state = { agents: [t.agent], conversations: [{ id: 'g1', agentIds: [t.agentId], assignment: { id: live, agentId: holder, status: 'working' } }] }
-    const answer = t.call.getMockImplementation()!
-    t.call.mockImplementation(async (method, path, body) => method === 'GET' && !path.includes('/hosts/')
-      ? { status: 200, body: { success: true, data: swarmData(t.agent, path, state) } } : answer(method, path, body))
-  }
-  const posted = (t: ReturnType<typeof setup>) => t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: Record<string, unknown> }).command)
-  const status = (assignmentId?: string) => ({ type: 'work.status', conversationId: 'g1', ...(assignmentId === undefined ? {} : { assignmentId }), status: 'review', result: 'PR #1' })
-
-  it('sends "current", or no id, as the task the agent holds', async () => {
-    const t = setup(); withTask(t, t.agentId)
-    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'a', command: status('current') }, owner)).toMatchObject({ ok: true })
-    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'b', command: status() }, owner)).toMatchObject({ ok: true })
-    expect(posted(t)).toEqual([{ ...status(), assignmentId: live }, { ...status(), assignmentId: live }])
-  })
-
-  it('answers a stale id with the one to use', async () => {
-    const t = setup(); withTask(t, t.agentId)
-    const answer = t.call.getMockImplementation()!
-    t.call.mockImplementation(async (method, path, body) => method === 'POST'
-      ? { status: 409, body: { success: false, error: { code: 'STALE_ASSIGNMENT', message: 'This is no longer the active assignment.' } } } : answer(method, path, body))
-    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'c', command: status('9887f5667a24ace0b589b7ff') }, owner)).toMatchObject({
-      error: 'STALE_ASSIGNMENT', detail: `This is no longer the active assignment. This group's active assignment is ${live}: send it again with "assignmentId": "${live}" (or "current").` })
-  })
-
-  it('sends a check with no group to the one task the agent holds', async () => {
-    const t = setup(); withTask(t, t.agentId)
-    const check = { type: 'work.check', assignmentId: 'current', checkId: 'c1', passed: true, evidence: 'Posted' }
-    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'e', command: check }, owner)).toMatchObject({ ok: true })
-    expect(posted(t)).toEqual([{ ...check, conversationId: 'g1', assignmentId: live }])
-  })
-
-  it('never fills in another agent\'s task for a status', async () => {
-    const t = setup(); withTask(t, 'someone-else')
-    await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'd', command: status('current') }, owner)
-    expect(posted(t)).toEqual([status('current')])
-  })
-})
-
-// Review of #2106: an attempt ends with every token its session used, read as it finishes, not the last machine report's.
-describe('finishing your own work', () => {
-  const opus = { 'claude-opus-5-5': { input: 7000, output: 1200, cacheRead: 0, cacheWrite: 0 } }
-  const status = (status: string) => ({ type: 'work.status', conversationId: 'g1', assignmentId: 'a1', status, result: 'Shipped.' })
-  const posts = (t: ReturnType<typeof setup>) => t.call.mock.calls.filter(c => c[0] === 'POST' && c[1] === '/api/super-tabs/tab/commands').map(c => (c[2] as { command: Record<string, unknown> }).command)
-
-  it('sends Done and Stopped with your session’s totals read now, and nothing with any other status or without a reading', async () => {
-    const t = setup()
-    const fresh = vi.fn(async (_agentId: string) => ({ totalTokens: 8200, updatedAt: '2026-10-29T00:00:00Z', models: opus }))
-    t.core.usageFresh = fresh
-    for (const s of ['done', 'stopped', 'review']) await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: `op-${s}`, command: status(s) }, owner)
-    expect(posts(t)).toEqual([{ ...status('done'), tokens: opus }, { ...status('stopped'), tokens: opus }, status('review')])
-    expect(fresh).toHaveBeenCalledWith('native')
-    fresh.mockResolvedValueOnce({ totalTokens: null, updatedAt: '2026-10-29T00:00:00Z' } as never)
-    await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op-none', command: status('done') }, owner)
-    fresh.mockRejectedValueOnce(new Error('unreadable'))
-    await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op-fail', command: status('done') }, owner)
-    expect(posts(t).slice(-2)).toEqual([status('done'), status('done')])
-  })
-
-  it('sends Done again without the totals to a backend from before them', async () => {
-    const t = setup()
-    t.core.usageFresh = async () => ({ totalTokens: 8200, updatedAt: '2026-10-29T00:00:00Z', models: opus })
-    const answer = t.call.getMockImplementation()!
-    t.call.mockImplementation(async (method, path, body) => (body as { command?: { tokens?: unknown } })?.command?.tokens
-      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'command: Unrecognized key: "tokens"' } } } : answer(method, path, body))
-    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op', command: status('done') }, owner)).toMatchObject({ ok: true })
-    expect(posts(t)).toEqual([{ ...status('done'), tokens: opus }, status('done')])
-  })
-})
-
-// Agent context design, section 1 (Ken, 2026-11-02: agents forgot their task; the PM read the whole Swarm for progress).
-describe('mine and task', () => {
-  const ok = (data: unknown) => ({ status: 200, body: { success: true, data } })
-  const withState = (t: ReturnType<typeof setup>, conversations: Array<Record<string, unknown>>, groupRead?: (path: string) => unknown) => {
-    const state = { agents: [{ ...t.agent, name: 'Dev1' }], conversations }
-    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
-      if (path.includes('/attempts')) return ok([]) as never
-      if (path.startsWith('/api/super-tabs/tab/groups/') && groupRead) return groupRead(path) as never
-      return ok(swarmData(t.agent, path, state)) as never
-    })
-  }
-  it('mine answers its text', async () => {
-    const t = setup()
-    withState(t, [{ id: 'g12', number: 12, title: 'Fix login', archived: false, checks: [], assignment: { agentId: t.agentId, status: 'working', result: null } }])
-    const answer = await t.ask({ action: 'mine', tabId: 'tab', harnessId: 'native' }, owner) as { value: { text: string } }
-    expect(answer.value.text).toMatch(/^#12 P2 Fix login \(conversation g12\) — working/)
-  })
-  it('task reads a dormant group from the group read', async () => {
-    const t = setup()
-    const dormant = { id: 'g9', number: 9, title: 'Old fix', archived: true, dormant: true, checks: [], brief: 'Goal:\nOld.', assignment: { agentId: t.agentId, status: 'done', result: 'Merged' } }
-    withState(t, [], path => path.startsWith('/api/super-tabs/tab/groups/g9?') ? ok({ group: { key: 'g9', version: 1, changedAt: 1, data: dormant } }) : ok({}))
-    const answer = await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g9' }, owner) as { value: { text: string } }
-    expect(answer.value.text.split('\n')[0]).toBe('#9 P2 Old fix (conversation g9)')
-    expect(answer.value.text).toContain('- Dev1, done (current): Merged')
-  })
-  it('task names a stopped assignee from the task\'s messages', async () => {
-    const t = setup()
-    const group = { id: 'g9', number: 9, title: 'Fix', archived: false, checks: [], assignment: { agentId: 'gone', status: 'done', result: null } }
-    withState(t, [group])
-    const answer = vi.mocked(t.core.account.backend).getMockImplementation()!
-    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => path.includes('/conversations/g9/messages')
-      ? ok({ messages: [{ id: 'm', conversationId: 'g9', author: { kind: 'agent', id: 'gone', name: 'Avery' }, text: 'Done' }], next: null }) as never
-      : answer(method, path, body))
-    const result = await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g9' }, owner) as { value: { text: string } }
-    expect(result.value.text).toContain('Assignee: Avery')
-  })
-  it('task of a group it cannot read answers NOT_FOUND', async () => {
-    const t = setup()
-    withState(t, [], () => ({ status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'This conversation is unavailable.' } } }))
-    expect(await t.ask({ action: 'task', tabId: 'tab', harnessId: 'native', conversationId: 'g404' }, owner)).toMatchObject({ error: 'NOT_FOUND' })
-  })
-  it('help names mine and task', async () => {
-    const t = setup()
-    const answer = await t.ask({ action: 'help', tabId: 'tab', harnessId: 'native' }, owner) as { help: Record<string, unknown> }
-    expect(answer.help.mine).toEqual(expect.stringContaining('mine'))
-    expect(answer.help.task).toEqual(expect.stringContaining('task GROUP'))
-  })
-})
-
-describe('status with steps', () => {
-  it('prints a task\'s steps under it, not as rows', async () => {
-    const t = setup()
-    const conversations = [{ id: 'g1835', number: 1835, title: 'Fix login', archived: false, checks: [] },
-      { id: 'g1918', number: 1918, title: 'Review', reviewOf: 'g1835', step: 'Review', archived: false, checks: [] },
-      { id: 'g9', number: 9, title: 'Old review', reviewOf: 'g1835', archived: false, checks: [] }]
-    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true,
-      data: swarmData(t.agent, path, { agents: [t.agent], conversations }) } }) as never)
-    const answer = await t.ask({ action: 'status', tabId: 'tab', harnessId: 'native' }, owner) as { value: { state: { conversations: Array<Record<string, unknown>> } } }
-    const rows = answer.value.state.conversations
-    // Every linked group is a step, named or not (Ken, 2026-11-02).
-    expect(rows.map(c => c.id)).toEqual(['g1835'])
-    expect((rows[0]!.steps as Array<Record<string, unknown>>).map(s => s.id)).toEqual(['g1918', 'g9'])
-  })
-})
-
-// Task steps design: a task's chat shows its steps' rows by time, and a step is opened only on a backend that has steps.
-describe('a task\'s steps in messages and commands', () => {
+// Task steps design: a task's chat shows its steps' rows by time.
+describe('a task\'s steps in messages', () => {
   const ok = (data: unknown) => ({ status: 200, body: { success: true, data } })
   const row = (id: string, conversationId: string, createdAt: string) => ({ id, conversationId, createdAt, text: id, author: { name: 'A' } })
   const conversations = [{ id: 'g1835', number: 1835, title: 'Fix login', archived: false, checks: [] },
     { id: 'g1918', number: 1918, title: 'Review', reviewOf: 'g1835', step: 'Thiết kế "v2"', archived: false, checks: [] },
     { id: 'g1919', number: 1919, title: 'Test', reviewOf: 'g1835', step: 'Test', archived: false, checks: [] }]
   function wired(t: ReturnType<typeof setup>, options: { steps?: boolean; failing?: string } = {}) {
-    const sent: Array<Record<string, unknown>> = []
-    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => {
+    vi.mocked(t.core.account.backend).mockImplementation(async (_method, path) => {
       const read = /\/conversations\/(g\d+)\/messages\?/.exec(path)
       if (read) {
         if (read[1] === options.failing) return { status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'No' } } } as never
@@ -1502,11 +1021,9 @@ describe('a task\'s steps in messages and commands', () => {
           g1918: [row('s1', 'g1918', '2026-11-02T09:05:00Z')], g1919: [row('u1', 'g1919', '2026-11-02T09:15:00Z')] }[read[1]!] ?? []
         return ok({ messages: rows, next: null, threads: [] }) as never
       }
-      if (method === 'POST' && path.endsWith('/commands')) { sent.push(object(body)); return ok({ revision: 1, result: {} }) as never }
       const data = swarmData(t.agent, path, { agents: [t.agent], conversations })
       return ok(options.steps && /\/parts/.test(path) ? { ...object(data), steps: true } : data) as never
     })
-    return sent
   }
   it('messages of a task merges its steps\' rows by time and tags them', async () => {
     const t = setup(); wired(t, { steps: true })
@@ -1536,40 +1053,4 @@ describe('a task\'s steps in messages and commands', () => {
     const answer = await t.ask({ action: 'messages', tabId: 'tab', harnessId: 'native', conversationId: 'g1918' }, owner) as { value: { messages: Array<Record<string, unknown>> } }
     expect(answer.value.messages.map(m => m.id)).toEqual(['s1'])
   })
-  it('step is dropped for a backend without steps', async () => {
-    const t = setup(); const sent = wired(t, { steps: false })
-    await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',
-      command: { type: 'conversation.create', title: 'Review', reviewOf: 'g1835', step: 'Review', checks: [] } }, owner)
-    expect(object(sent[0]!.command)).toMatchObject({ type: 'conversation.create', reviewOf: 'g1835' })
-    expect(object(sent[0]!.command)).not.toHaveProperty('step')
-  })
-  // Final review, minor 7: the flag is read at the first load, so a backend rolled back since refuses `step`; the command is
-  // sent once more without it, and the step opens as a plain linked task.
-  it('sends it again without step when the backend refuses the field', async () => {
-    const t = setup(); const sent = wired(t, { steps: true })
-    const answer = vi.mocked(t.core.account.backend).getMockImplementation()!
-    vi.mocked(t.core.account.backend).mockImplementation(async (method, path, body) => method === 'POST' && path.endsWith('/commands')
-      && 'step' in object(object(body).command)
-      ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Unrecognized key: "step"' } } } as never
-      : answer(method, path, body))
-    const result = await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',
-      command: { type: 'conversation.create', title: 'Review', reviewOf: 'g1835', step: 'Review', checks: [] } }, owner)
-    expect(result).toMatchObject({ ok: true })
-    expect(sent).toHaveLength(1)
-    expect(object(sent[0]!.command)).not.toHaveProperty('step')
-  })
-  it('step is sent to a backend that has steps', async () => {
-    const t = setup(); const sent = wired(t, { steps: true })
-    await t.ask({ action: 'command', tabId: 'tab', harnessId: 'native', operationId: 'op-1',
-      command: { type: 'conversation.create', title: 'Review', reviewOf: 'g1835', step: 'Review', checks: [] } }, owner)
-    expect(object(sent[0]!.command)).toMatchObject({ step: 'Review' })
-  })
-})
-
-it('help shows a step\'s example with neutral words', async () => {
-  const t = setup()
-  const answer = await t.ask({ action: 'help', tabId: 'tab', harnessId: 'native' }, owner) as { help: { commands: Array<Record<string, unknown>> } }
-  const step = answer.help.commands.find(c => c.type === 'conversation.create' && 'step' in c)!
-  expect(step).toMatchObject({ reviewOf: 'GROUP', step: 'STEP_NAME' })
-  expect(JSON.stringify(answer.help.commands)).not.toContain('Review: Outcome')
 })

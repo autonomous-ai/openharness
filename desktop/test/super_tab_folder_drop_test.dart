@@ -43,7 +43,7 @@ void main() {
     // needs no scaling on any host.
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetDevicePixelRatio);
-    server = ConversationServer();
+    server = ConversationServer.chat();
     (server.state['agents'] as List).add({
       'id': 'lead-agent',
       'name': 'Lead',
