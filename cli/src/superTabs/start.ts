@@ -201,7 +201,7 @@ const launchesWithModel = (capacity: Json, engine: unknown) => Array.isArray(cap
  * A start that fails before its agent exists is reported, never left unsaid (the round-device group, 2026-10-27: a
  * contributed host failed it in preparation, and the agent had been told only "queued"): a queued start is watched for a
  * short while. Since the project instructions (phase 4, decision 18) it is moved nowhere: until then this client started it
- * once more on the route's next machine by itself. The agent that made it decides what next, and the backend's failure
+ * once more on another machine by itself. The agent that made it decides what next, and the backend's failure
  * notice tells the coordinator too, with the model it asked for. */
 export async function startAgent(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon = openDaemon,
   pause: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<Json> {
@@ -243,40 +243,17 @@ export function untrustCheckout(home: string, checkout: string): void {
   if (tables.length) appendFileSync(file, `${config && !config.endsWith('\n') ? '\n' : ''}${tables.map(table => `${table}\ntrust_level = "untrusted"\n`).join('')}`, { mode: 0o600 })
 }
 
-/** How a backend from before `heavy` (backend superTabs/commands.ts startRequestSchema) refuses it, word for word. */
-export const HEAVY_REFUSED = 'command.request: Unrecognized key: "heavy"'
-export const HEAVY_NOT_RECORDED = 'This server cannot record that the start runs heavy work, so routes in the next minutes will not count it on its machine. Update the Harness server.'
-
 async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open: typeof openDaemon): Promise<Json> {
   let startId = input.startId
-  let routed: unknown
-  let heavyWarning: string | undefined
   if (input.action === 'start') {
-    // The routing decision belongs to the command, not to the machine-side request.
-    const { routeDecisionId, overrideReason, ...request } = object(input.request)
-    routed = routeDecisionId
-    const submit = (request: Json) => scoped({ action: 'command', operationId: input.operationId,
-      command: { type: 'agent.start', request, ...(routeDecisionId ? { routeDecisionId } : {}), ...(overrideReason ? { overrideReason } : {}) } })
     // Swarm v3 (task #4215): an agent starts with its owner's own permission settings, so the start names no mode, whatever
     // the caller sent; the backend refuses one.
-    const { permissionMode: _mode, ...own } = request
-    let sent: Json = own
-    let reply = await submit(sent)
-    // A backend from before heavy work was recorded refuses that field in its body check, before it records anything: that
-    // refusal alone sends the start again without it. A timeout or any other refusal may have started an agent, so it never
-    // does (Lead, 10-31).
-    if (reply.error === 'VALIDATION_ERROR' && reply.detail === HEAVY_REFUSED && sent.heavy !== undefined) {
-      const { heavy: _heavy, ...plain } = sent
-      sent = plain
-      heavyWarning = HEAVY_NOT_RECORDED
-      reply = await submit(sent)
-    }
-    const result = requireSuccess(reply)
+    const { permissionMode: _mode, ...request } = object(input.request)
+    const result = requireSuccess(await scoped({ action: 'command', operationId: input.operationId, command: { type: 'agent.start', request } }))
     startId = object(result.result).startId
   }
   if (!identifier(startId)) throw new Error('The start has no durable receipt. Do not create an agent without it.')
   const start = requireSuccess(await scoped({ action: 'startStatus', startId }))
-  routed ??= start.routeDecisionId
   const request = object(start.request), creationId = start.creationId
   if (!identifier(request.machineId) || !identifier(creationId)) throw new Error('This start receipt is invalid.')
   if (start.error) return { error: 'START_FAILED', startId, detail: start.error }
@@ -286,16 +263,14 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       command: { type: 'agent.startFailed', startId, error: detail } }))
     return { error: 'SWARM_ENGINE', startId, detail }
   }
-  if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId,
-    ...(heavyWarning ? { heavyWarning } : {}) }
+  if (start.harnessId && (!start.poolGeneration || start.poolSettled)) return { ok: true, startId, machineId: request.machineId, harnessId: start.harnessId }
   // Contributed capacity is executed by its owner. A collaborator receives no
   // machine credentials and cannot issue arbitrary commands to that computer.
   // Its machine reports it preparing (backend liveness.ts): the backend waits up to 15 minutes, and so should the Lead.
   if (start.poolGeneration && input.hostDispatch !== true) return start.preparing === true
-    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(heavyWarning ? { heavyWarning } : {}),
+    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId,
       detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' }
     : { ok: true, queued: true, startId, machineId: request.machineId,
-      ...(heavyWarning ? { heavyWarning } : {}),
       detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, and its frame, as the frame says; null when the frame cannot say. */
@@ -668,13 +643,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         const ran = await ranNow(nativeId, String(request.engine))
         if (ran?.model !== model || ran.effort !== effort) {
           modelWarning = `Started with the engine's own model; switching to ${model} ${effort} failed (${String(reply.error)}).`
-          // The decision log says who was actually started, so it must not keep the model that was asked for.
-          if (identifier(routed)) {
-            const corrected = ran && await scoped({ action: 'command', operationId: `model-result-${startId}`,
-              command: { type: 'route.modelResult', decisionId: routed, startId, model: ran.model, effort: ran.effort } })
-              .then(requireSuccess).then(() => true, () => false)
-            if (!corrected) modelWarning += ' The routing decision log could not be corrected to the model that ran.'
-          }
         }
       }
     }
@@ -688,6 +656,6 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       engineVersion: text(last.frame.engineVersion)?.slice(0, 160) ?? null } : null
     return { ok: true, startId, machineId: request.machineId, harnessId: nativeId, ...object(joined.result),
       ...(settledConfiguration ? { configuration: settledConfiguration } : {}),
-      ...(heavyWarning ? { heavyWarning } : {}), ...(modelWarning ? { modelWarning } : {}) }
+      ...(modelWarning ? { modelWarning } : {}) }
   } finally { target.close() }
 }

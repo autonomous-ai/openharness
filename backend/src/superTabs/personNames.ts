@@ -88,7 +88,8 @@ export const agentWrittenNameOf = (state: SuperTabState, id: string): string | u
 
 type Row = { author: unknown; source?: unknown }
 const personAuthor = (value: unknown): value is Author => !!value && typeof value === 'object' && (value as Author).kind === 'person'
-/** Whether a stored row names a person by email: its author, or the person who typed into an agent's terminal (native.ts). */
+/** Whether a stored row names a person by email: its author, or the person who typed into an agent's terminal (a row terminal
+ *  recording stored before Swarm v4 removed it). */
 export const namesPerson = (row: Row): boolean => personAuthor(row.author) || personAuthor((row.source as { operator?: unknown } | null)?.operator)
 /** A stored row as an agent reads it (authorForAgent): its author and, for input someone typed into an agent's terminal, its
  *  operator by name. */

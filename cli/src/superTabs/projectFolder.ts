@@ -108,8 +108,8 @@ export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   return github ? { requester: github.requester } : null
 }
 
-/** Whether a requested folder names this one. The Lead and the backend join a swarm folder with '/'
- * (routeCommand.ts, backend machines.ts), which on Windows arrives as C:\…\TAB/PROJECT; this machine's
+/** Whether a requested folder names this one. The backend joins a swarm folder with '/'
+ * (backend machines.ts), which on Windows arrives as C:\…\TAB/PROJECT; this machine's
  * own separators are applied here, where the folder is used. Only an absolute folder can match. */
 function sameFolder(requested: unknown, folder: unknown): boolean {
   return typeof requested === 'string' && typeof folder === 'string' && isAbsolute(requested) && resolve(requested) === resolve(folder)
