@@ -8,6 +8,8 @@ const IN_CORE = ['adoption', 'agents', 'attention', 'cards', 'deliveries', 'laun
 const FILES = ['src/superTabs/shortCommand.ts', ...IN_CORE,
   // The replies the host owes a person who talked to their agent in its own chat, posted when the agent's turn ends (anh Dee, 11-09).
   'src/superTabs/agentReplies.ts',
+  // The leaderboard's daemon half: what its person's agents shipped, read with their own gh and reported as counts.
+  'src/superTabs/shipping.ts', 'src/superTabs/shippingRead.ts',
 ]
 export default defineConfig({
   test: {
