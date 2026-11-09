@@ -32,7 +32,7 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     expect(first).toMatchObject({ minutes: SIZES.s.minutes, needs: { cpu: SIZES.s.cpu, ram: SIZES.s.ram, disk: SIZES.s.disk }, part: 'api', weight: 8,
       spend: { five_hour: SIZES.s.spend, seven_day: SIZES.s.spend / 5 }, notBuilders: [] })
     // Only a machine that reports Xcode builds what needs it.
-    expect(second).toMatchObject({ minutes: SIZES.l.minutes, weight: 1, notBuilders: ['atlas'] })
+    expect(second).toMatchObject({ minutes: SIZES.l.minutes, weight: 1, notBuilders: ['atlas'], notWhy: 'its builder\'s machine lacks one of: xcode' })
     // A dependency on an issue that is not open is not waited for.
     expect(fifth!.deps).toEqual(['#1'])
     expect([...read.free]).toEqual(['#1', '#2', '#5'])
@@ -47,6 +47,14 @@ describe('a team\'s tasks as GitHub and the Swarm say them (readProblem)', () =>
     expect(read.problem.builders.find(b => b.id === 'pip')!.busyUntil).toBe(SIZES.l.minutes / 2)
     expect(Object.fromEntries(read.open)).toEqual({ pip: 2, juno: 1, atlas: 0 })
     expect([...read.free]).toEqual(['#5'])
+  })
+
+  it('plans a machine by the cores it reports, and one from an older daemon as CORES', () => {
+    const team = crew()
+    team.machines = [machine('mac', { resources: { memoryTotalBytes: 32 * GiB, projectDiskFreeBytes: 200 * GiB, cpuCores: 4 } }),
+      machine('box', { resources: { memoryTotalBytes: 16 * GiB, projectDiskFreeBytes: 40 * GiB, cpuCores: 0 } })]
+    const { problem } = readProblem({ now: NOW, crew: team, closed: [], issues: [issue(1, ['size:s'])] })
+    expect(problem.machines.map(m => [m.id, m.capacity.cpu])).toEqual([['mac', 4], ['box', CORES]])
   })
 
   it('reads each machine\'s room and each subscription\'s windows, its person\'s reserve kept', () => {

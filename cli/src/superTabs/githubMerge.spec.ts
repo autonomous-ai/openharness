@@ -22,7 +22,9 @@ function fakeGitHub() {
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
     const body = p === '/repos/acme/app' ? { default_branch: 'main' }
-      : p === '/repos/acme/app/pulls' ? repo.pulls
+      // A page of the list, as GitHub pages it.
+      : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
+        Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
@@ -45,11 +47,12 @@ function setup() {
   const log = vi.fn()
   // Pip builds; Juno is the PM.
   const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+  const team = vi.fn(async () => crew)
   const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
-    crew: async () => crew, get: github.get, send: github.send, now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+    crew: team, get: github.get, send: github.send, now: () => Date.parse('2026-11-09T07:31:00Z'), log })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments }
+  return { github, merger, log, merges, comments, crew: team }
 }
 
 describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)', () => {
@@ -58,6 +61,33 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     await f.merger.tick()
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
     expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+  })
+
+  it('never merges on its author\'s own READ-OK, however its two-word name is written', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }], machines: [] })
+    f.github.repo.pulls = [pull({ labels: [{ name: 'builder:pip-two' }], head: { sha: HEAD, ref: 'pip-two/2' } })]
+    f.github.repo.comments.set(4, [comment('Pip Two, 14:20, to **Juno**: READ-OK f6edb44')])
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+  })
+
+  it('merges the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
+    const f = setup()
+    const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` } }))
+    f.github.repo.pulls = [...people.slice(0, 110), pull(), ...people.slice(110)]
+    await f.merger.tick()
+    expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
+  })
+
+  it('reads the team only when a pull request is open', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ draft: true })]
+    await f.merger.tick()
+    expect(f.crew).not.toHaveBeenCalled()
+    f.github.repo.pulls = [pull()]
+    await f.merger.tick()
+    expect(f.crew).toHaveBeenCalledTimes(1)
   })
 
   it('merges only the team\'s own pull requests: a person\'s, or a branch no builder of the team made, is theirs to merge', async () => {
@@ -109,7 +139,14 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.runs.set(HEAD, [{ name: 'test (ubuntu)', status: 'completed', conclusion: 'failure' }])
     await f.merger.tick()
     await f.merger.tick()
-    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet: checks failed on f6edb44: test \(ubuntu\)\. Fix them and push\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: checks failed: test \(ubuntu\)\. Fix them and push\.$/)])
+    // A restart (each release is one) finds it on the pull request, and says it no more.
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4) ?? [], comment(f.comments()[0]!, { author_association: 'OWNER' })])
+    const restarted = setup()
+    restarted.github.repo.runs.set(HEAD, [{ name: 'test (ubuntu)', status: 'completed', conclusion: 'failure' }])
+    restarted.github.repo.comments.set(4, f.github.repo.comments.get(4)!)
+    await restarted.merger.tick()
+    expect(restarted.comments()).toEqual([])
     for (const [state, words] of [['behind', 'it is behind main'], ['dirty', 'it conflicts with main'], ['blocked', 'GitHub\'s rules for main block the merge']]) {
       const g = setup()
       g.github.repo.state = state
