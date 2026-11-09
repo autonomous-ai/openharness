@@ -15,7 +15,6 @@ function fixture(board = true) {
   f.edit(state => {
     const reading = state.machines!.find(m => m.machineId === 'host')!.observation!
     reading.sessionKind = 'computer'
-    delete reading.privacy
   })
   if (board) f.state.projects![0]!.boardMode = true
   else delete f.state.projects![0]!.boardMode

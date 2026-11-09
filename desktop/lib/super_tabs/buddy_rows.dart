@@ -201,6 +201,9 @@ class SuperTabQuietHeading extends StatefulWidget {
     this.onAdd,
     this.addTooltip,
     this.addKey,
+    this.onAttach,
+    this.attachTooltip,
+    this.attachKey,
   }) : _org = false;
 
   const SuperTabQuietHeading.org(this.title, {super.key, required this.onTap})
@@ -208,6 +211,9 @@ class SuperTabQuietHeading extends StatefulWidget {
       onAdd = null,
       addTooltip = null,
       addKey = null,
+      onAttach = null,
+      attachTooltip = null,
+      attachKey = null,
       _org = true;
 
   final String title;
@@ -220,6 +226,11 @@ class SuperTabQuietHeading extends StatefulWidget {
   final VoidCallback? onAdd;
   final String? addTooltip;
   final Key? addKey;
+
+  /// Attach, before the + (Swarm v4, anh Dee 2026-11-09): what is already running joins, as ⌘P opens it where ⌘N makes it.
+  final VoidCallback? onAttach;
+  final String? attachTooltip;
+  final Key? attachKey;
   final bool _org;
 
   @override
@@ -281,17 +292,26 @@ class _SuperTabQuietHeadingState extends State<SuperTabQuietHeading> {
         ),
       ),
     );
-    if (onAdd == null) return heading;
+    final onAttach = widget.onAttach;
+    if (onAdd == null && onAttach == null) return heading;
     // The + ends where the rows' details end, so the heading's right edge is theirs.
     return Row(
       children: [
         Expanded(child: heading),
-        AppIconButton(
-          key: widget.addKey,
-          icon: AppIcons.plus,
-          tooltip: widget.addTooltip ?? widget.title,
-          onPressed: onAdd,
-        ),
+        if (onAttach != null)
+          AppIconButton(
+            key: widget.attachKey,
+            icon: AppIcons.link2,
+            tooltip: widget.attachTooltip ?? widget.title,
+            onPressed: onAttach,
+          ),
+        if (onAdd != null)
+          AppIconButton(
+            key: widget.addKey,
+            icon: AppIcons.plus,
+            tooltip: widget.addTooltip ?? widget.title,
+            onPressed: onAdd,
+          ),
       ],
     );
   }

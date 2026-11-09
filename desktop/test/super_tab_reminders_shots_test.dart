@@ -24,7 +24,7 @@ void main() {
   for (final brightness in Brightness.values) {
     testWidgets('screenshots for review (${brightness.name})', (tester) async {
       final picture = GlobalKey();
-      final server = ConversationServer()
+      final server = ConversationServer.chat()
         ..append('Planning the reminders for Huy.')
         ..append('Draft PR is up with the plan.')
         ..append('Should a reminder clear when it is opened?')

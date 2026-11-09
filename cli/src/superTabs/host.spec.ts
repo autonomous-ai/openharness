@@ -3660,6 +3660,8 @@ describe('plain agents: the host tells a Swarm agent nothing, and keeps only a B
 describe('an agent its person attached', () => {
   function attached(session: Record<string, unknown>, rowFields: Record<string, unknown> = {}) {
     const t = setup()
+    // Nothing waits for it: only the notice reads or writes here.
+    t.idle()
     Object.assign(t.row, rowFields)
     t.row.agent.chatId = 'chat-a'
     t.core.agents.byAgent = vi.fn(() => ({ agentId: 'harness', cwd: '/work/app', ...session }) as never)
@@ -3681,6 +3683,8 @@ describe('an agent its person attached', () => {
     const t = attached({ engine: 'claude' })
     const host = t.open()
     await host.tick(); await settle()
+    // Its roster row names its chat: nothing of the Swarm is read to find it.
+    expect(vi.mocked(t.core.account.backend).mock.calls.filter(([, path]) => String(path).includes('asAgentId='))).toEqual([])
     expect(t.told).toEqual([{ operationId: expect.stringMatching(/^skill-agent-[0-9a-f]{32}$/), asAgentId: 'agent',
       command: { type: 'message.send', conversationId: 'chat-a', replyTo: null, recipientIds: ['agent'], text: SWARM_BASICS,
         agentOnly: true, notice: 'skills' } }])
@@ -3769,8 +3773,9 @@ describe('an agent its person attached', () => {
     expect(t.saved().basics).toBeUndefined()
   })
 
-  it('is told again later when the Swarm could not be read', async () => {
+  it('is told again later when the Swarm could not be read, by a backend whose roster row names no chat', async () => {
     const t = attached({ engine: 'claude' })
+    delete t.row.agent.chatId
     let down = true
     const backend = t.core.account.backend
     t.core.account.backend = vi.fn(async (method: string, path: string, body?: unknown) => {

@@ -1860,7 +1860,8 @@ export class SuperTabHost {
       const notice = target.lead === true ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS
       try {
         // Named by its text alone: its own hash, so no Buddy notice shares its id.
-        const told = await this.tellSkill(target, { version: createHash('sha256').update(notice).digest('hex'), change: 0, notice }, current)
+        const told = await this.tellSkill(target, { version: createHash('sha256').update(notice).digest('hex'), change: 0, notice }, current,
+          identifier(target.agent.chatId) ? target.agent.chatId : undefined)
         if (told) {
           this.journal.basics = [...(this.journal.basics ?? []).filter(id => id !== target.agent.id), target.agent.id].slice(-BASICS_TOLD_MAX)
           this.persist()
@@ -1893,14 +1894,18 @@ export class SuperTabHost {
     else this.skillChecks.set(target.agent.harnessId, this.now() + SKILL_RETRY_MS)
   }
   /** False when nothing was sent: no open group, or the roster has moved on (`current`) and the next refresh decides. */
-  private async tellSkill(target: HostAgent, refresh: Pick<SkillRefresh, 'version' | 'change' | 'notice'>, current: () => boolean): Promise<boolean> {
+  private async tellSkill(target: HostAgent, refresh: Pick<SkillRefresh, 'version' | 'change' | 'notice'>, current: () => boolean,
+    chat?: string): Promise<boolean> {
     const id = target.agent.id
-    const { state } = await this.sources.reads.read(target.tabId, id)
-    const groups = (Array.isArray(state.conversations) ? state.conversations : []).map(object)
-      .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
-    // A PM's project chat, a crew member's task, else the agent's own chat with its person (Swarm v4).
-    const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id)
-      ?? groups.find(g => g.kind === 'agent-chat') ?? groups[0]
+    // An agent's own chat its roster row names (Swarm v4) needs no read of the Swarm to find.
+    const group = chat ? { id: chat } : await (async () => {
+      const { state } = await this.sources.reads.read(target.tabId, id)
+      const groups = (Array.isArray(state.conversations) ? state.conversations : []).map(object)
+        .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
+      // A PM's project chat, a crew member's task, else the agent's own chat with its person (Swarm v4).
+      return groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id)
+        ?? groups.find(g => g.kind === 'agent-chat') ?? groups[0]
+    })()
     if (!group || !current()) return false
     const send = (agentOnly: boolean, notice: boolean) => backend(this.core, 'POST', `/api/super-tabs/${target.tabId}/commands`, {
       // A switch back to an earlier mode's text is a new rewrite, so its count keeps it from reusing that text's id.

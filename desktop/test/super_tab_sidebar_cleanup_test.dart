@@ -26,6 +26,7 @@ Future<SuperTabController> showSwarm(WidgetTester tester) async {
       theme: grid.buildAppTheme(brightness: Brightness.dark),
       home: Scaffold(
         body: SuperTabView(
+          board: false,
           controller: c,
           app: app,
           onInvite: () {},

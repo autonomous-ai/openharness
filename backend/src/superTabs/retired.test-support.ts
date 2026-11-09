@@ -6,6 +6,9 @@ import type { RetiredCommand } from './retired.js'
 export const OLD_PAYLOADS = {
   'process.confirm': { projectId: 'lead', noteId: 'note-3' },
   'project.digest': { projectId: 'lead', time: '08:00', timeZone: 'Asia/Ho_Chi_Minh' },
+  'machine.projects': { machineId: 'mac-1', projectIds: ['lead'], askedIn: { conversationId: 'lead', messageId: 'm-1' } },
+  'machine.ownAccountWork': { machineId: 'mac-1', allowed: true },
+  'machine.access': { machineId: 'mac-1', action: 'add', name: 'Lamp', account: 'own', teammates: true, note: 'connection info in ~/.lamp' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */
