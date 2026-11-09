@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, isWriter, openPullsPath, PULL_PAGES, sameKey, verdicts, writersOf, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, notReaders, openPullsPath, PULL_PAGES, sameKey, verdicts, writersOf, type LedProject } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -282,9 +282,10 @@ export class GitHubAssign {
       // measured from its ask for this head; one that never gave one, from its last ask.
       const lastAsk = (name: string, thisHead: boolean) =>
         Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
-      // Its writers' own verdicts count for nothing, however their names are written, and a reader who signs two ways counts once,
-      // as the merger counts it.
-      const own = (name: string) => isWriter(writers, name)
+      // Its writers' own verdicts and its login's unsigned ones count for nothing, however the names are written, and a reader who
+      // signs two ways counts once, as the merger counts it.
+      const notOk = notReaders(pull)
+      const own = (name: string) => isWriter(notOk, name)
       const ok = [...new Set([...readers].filter(([reader, r]) => !own(reader) && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => sameKey(reader)))]
       const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
@@ -419,7 +420,7 @@ export class GitHubAssign {
     const key = `${repo}#${number}@${head}:${name.toLowerCase()}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
-      + `and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
+      + `and start your comment with your name, as in "${name}, ${this.clock()}: READ-OK ${head.slice(0, 7)}", or HOLD ${head.slice(0, 7)} with the file, line and fix.` })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
     this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)

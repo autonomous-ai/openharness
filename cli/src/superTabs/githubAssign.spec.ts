@@ -376,7 +376,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull()]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with your name, as in "Atlas, \d\d:\d\d: READ-OK f6edb44", or HOLD f6edb44 with the file, line and fix\.$/)])
       await f.assigner.tick()
       expect(asks(f)).toHaveLength(1)
     })
@@ -417,8 +417,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         f.github.state.pulls = [pull({ head: { sha: NEW, ref: 'pip/14' } })]
         f.github.state.comments.set(30, [comment(`Juno, 14:00: ${verdict} f6edb44${verdict === 'HOLD' ? ': the day count is off by one.' : ''}`)])
         await f.assigner.tick()
-        expect(asks(f).map(body => body.replace(/^Harness, \d\d:\d\d,/, 'Harness, HH:MM,'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
-          + `after your ${verdict} on f6edb44: please read it again, and start your comment with READ-OK abcdef1 or HOLD abcdef1 (with the file, line and fix).`])
+        expect(asks(f).map(body => body.replaceAll(/\d\d:\d\d/g, 'HH:MM'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
+          + `after your ${verdict} on f6edb44: please read it again, and start your comment with your name, as in "Juno, HH:MM: READ-OK abcdef1", or HOLD abcdef1 with the file, line and fix.`])
         // Once: GitHub shows the ask, and Juno is still reading.
         f.github.state.comments.set(30, [...f.github.state.comments.get(30)!, comment(asks(f)[0]!)])
         await f.make().tick()

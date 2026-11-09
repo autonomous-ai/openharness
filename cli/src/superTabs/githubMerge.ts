@@ -129,6 +129,14 @@ export function writersOf(pull: Json): string[] {
   return [...labels.map(name => name.slice('builder:'.length)), ...branch.includes('/') ? [branch.split('/')[0]!.toLowerCase()] : []]
 }
 
+/** Whose verdicts on a pull request count for nothing: its writers (writersOf), and the GitHub login that opened it, unsigned.
+ *  Every agent of a person posts as that person's login, so an unsigned READ-OK from it may be the author's own: a reader on
+ *  that login signs ("Juno, 14:20: READ-OK f6edb44"). Another login's unsigned READ-OK is that person's. */
+export function notReaders(pull: Json): string[] {
+  const login = String(object(pull.user).login ?? '')
+  return [...writersOf(pull), ...login ? [login] : []]
+}
+
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
@@ -224,8 +232,9 @@ export class GitHubMerge {
       const writers = writersOf(pull)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), writers)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
-      // Its writers' own READ-OKs count for nothing, and a reader who signs two ways is one, however the names are written.
-      const reads = new Map([...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(writers, reader))
+      // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.
+      const own = notReaders(pull)
+      const reads = new Map([...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(own, reader))
         .map(([reader, r]) => [sameKey(reader), r]))
       if (reads.size < (twoReads ? 2 : 1)) continue
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
