@@ -392,6 +392,23 @@ it('has no agent action but status and the chat\'s own: each other is refused, a
   }
 })
 
+// A process that writes to the daemon's socket gets what the CLI's parser gives: only what an agent's commands send goes out as the agent.
+it('sends as the agent only a post, an answer and its terminal commands: every other command type is refused, and nothing is sent', async () => {
+  const t = setup()
+  for (const type of ['work.assign', 'agent.start', 'message.react', 'buddy.propose', 'agent.release', 'work.status', 'conversation.create',
+    'machine.remove', 'agent.setUp', 'tab.tidy', 'decision.ask', 'instructions.save', undefined, 7]) {
+    t.call.mockClear()
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'op-1', command: { type, conversationId: 'g1' } }, owner), String(type))
+      .toEqual({ error: 'INVALID_REQUEST' })
+    // Only the host's roster is read, to know the caller: nothing is sent.
+    expect(t.call.mock.calls.filter(([method, path]) => method !== 'GET' || !String(path).includes('/hosts/')), String(type)).toEqual([])
+  }
+  for (const command of [{ type: 'message.send', conversationId: 'g1', text: 'Hi', replyTo: null, recipientIds: [] },
+    { type: 'agent.screen', agentId: 'other' }, { type: 'agent.input', agentId: 'other', text: 'y' }]) {
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: `op-${command.type.replace('.', '-')}`, command }, owner), command.type).toMatchObject({ ok: true })
+  }
+})
+
 it('prepares machines only for their owner and clears setup receipts on disconnect', async () => {
   const prepareContribution = vi.fn(async () => ({ ok: true, state: 'ready' }))
   const t = setup({ prepareContribution })

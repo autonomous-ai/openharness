@@ -157,7 +157,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
   // Swarm would take. The same start again resumes the same native receipt.
   async function startHere(startId: string, request: Record<string, unknown>) {
     if (!starts.has(startId)) starts.set(startId, { id: startId, creationId: `super-${startId}`, request, dispatched: false, harnessId: null })
-    const answer = await startAgent({ tabId: TAB, startId, hostDispatch: true }, async input => ({ ok: true,
+    const answer = await startAgent({ tabId: TAB, startId }, async input => ({ ok: true,
       value: input.action === 'startStatus' ? structuredClone(starts.get(startId)) : startReceipt(object(input.command)) }), where)
     return { code: answer.error ? 1 : 0, answer }
   }

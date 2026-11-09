@@ -274,7 +274,7 @@ describe('contributed machine executor', () => {
     const f = fixture()
     f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
     f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
     f.advance()
     await f.machine.tick()
@@ -314,7 +314,7 @@ describe('contributed machine executor', () => {
       await h.pass(16_000)
       expect(h.token).toHaveBeenCalledTimes(2)
       expect(h.failures()).toEqual([])
-      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
+      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
       // The read-only token is revoked once the start is prepared, as on a first try.
       expect(h.revoked.mock.calls.map(([url, init]) => [url, init.headers.Authorization])).toEqual([['https://api.github.com/installation/token', `Bearer ${TOKEN_ANSWER.token}`]])
     })
@@ -375,7 +375,7 @@ describe('contributed machine executor', () => {
     expect(body).toMatchObject({ generation: 'grant', runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'], quotas: [{ engine: 'codex', known: true }] })
     expect(JSON.stringify(body)).not.toMatch(/private@example|private-token|account_email/)
     const [input, scoped, where] = (f.start.mock.calls as unknown[][])[0]!
-    expect(input).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null })
+    expect(input).toEqual({ tabId: 'tab', startId: 'start', signedIn: null })
     expect(where).toMatchObject({ machineId: 'host', dataDir: '/isolated-pool-fixture' })
     await (scoped as (p: unknown) => Promise<unknown>)({ action: 'startStatus' })
     expect(f.backend).toHaveBeenLastCalledWith(f.core, 'GET', '/api/super-tabs/hosts/host/starts/tab/start', undefined)
@@ -395,7 +395,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
     await f.machine.tick()
     // No account signed in here (the fake has none): the start itself then refuses a Buddy (start.ts buddyOnOwnMachine).
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: null }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', signedIn: null }])
   })
   // Task #2832: a Buddy launches only where the account signed in here is its owner's; the host hands the start what it reads.
   it('hands each start the account signed in here, as this machine reads it', async () => {
@@ -403,13 +403,13 @@ describe('contributed machine executor', () => {
     Object.assign(f.core.account, { identity: vi.fn(async () => ({ accountId: 'peer' })) })
     Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: 'peer' }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', signedIn: 'peer' }])
   })
   it('launches a Product Manager\'s start, which the backend lists apart so that a host from before them never does', async () => {
     const f = fixture()
     Object.assign(f.pool, { starts: [], leadStarts: [{ id: 'lead-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true, signedIn: null }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', signedIn: null }])
   })
   it('says in its reading that it starts Product Managers, a Buddy\'s thread sessions and a person\'s one Buddy, to a backend that asks, and to no other', async () => {
     const f = fixture()
@@ -1886,7 +1886,7 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(posts(f)).toHaveLength(2)
       expect(f.start).toHaveBeenCalledOnce()
-      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', hostDispatch: true, signedIn: null })
+      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', signedIn: null })
       // Settled: that too is a change, and is sent.
       f.pool.starts.length = 0
       await after(f, 5_000)
@@ -2745,7 +2745,6 @@ describe('removed machine cleanup', () => {
       const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
       const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
       const start = vi.fn(async (input: Record<string, unknown>) => {
-        expect(input.memberHere).toBe(memberHere)
         await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
         return { ok: true, harnessId: 'h-new' }
       })
@@ -2782,8 +2781,6 @@ describe('removed machine cleanup', () => {
       const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
       const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
       const start = vi.fn(async (input: Record<string, unknown>) => {
-        // Its Member's commands only for a start that makes the helper a worktree of its own.
-        expect(input.memberHere).toBe(request.worktree === true)
         await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
         return { ok: true, harnessId: 'h-new' }
       })

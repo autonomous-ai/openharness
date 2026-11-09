@@ -208,7 +208,8 @@ export class LeadSwitchRequests {
       const startPrompt = buddy
         ? `You are a person's ${row.agent.buddyScope === 'swarm' ? 'one Buddy for every project they read' : 'Buddy'} in a shared Super Tab. Your chat with your owner is conversation ${conversation}: read it with harness super-tab --tab ${row.tabId} messages ${conversation}, and reply there with harness super-tab --tab ${row.tabId} post ${conversation} 'your message' UNIQUE_OPERATION_ID. Continue helping your owner in that chat.`
         : startNote(old.defaultName)
-      const prompt = `${startPrompt}${!buddy && skill.github ? ` ${githubPromptLine()}` : ''}${handoff ? ` ${handoff}` : ''}`
+      // A PM that has no name to give has its handoff alone: no line of it starts with a space.
+      const prompt = [startPrompt, !buddy && skill.github ? githubPromptLine() : '', handoff].filter(Boolean).join(' ')
       // Desktop's rule (_changeAgent): a mode the new engine lacks becomes ask, and bypass follows the mode.
       const mode = old.permissionMode && permissionModeFlags(engine as AgentEngine, old.permissionMode) ? old.permissionMode : old.permissionMode ? 'ask' : undefined
       // A Team user's Codex PM keeps an engine home of its own, as at its first start (start.ts, security re-check 2 of #2089).

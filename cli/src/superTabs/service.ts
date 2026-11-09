@@ -136,6 +136,10 @@ export interface SuperTabServiceOptions {
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
+/** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
+ *  Nothing else of the old manual (assign, start, react, propose, release, ...) goes out through here, whatever a process
+ *  writes to the daemon's socket. */
+const AGENT_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'agent.screen', 'agent.input'])
 
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
@@ -485,6 +489,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           } catch { return { ok: true, value: page } }
         }
         if (payload.action === 'command' && identifier(payload.operationId) && payload.command && typeof payload.command === 'object' && !Array.isArray(payload.command)) {
+          if (!AGENT_COMMANDS.has(String(object(payload.command).type))) return { error: 'INVALID_REQUEST' }
           const command = await mentionCommand(object(payload.command), async () => (await swarm()).state)
           const send = (command: Record<string, unknown>) => backend(core, 'POST', `${path}/commands`,
             { operationId: payload.operationId, command, asAgentId: agentId })

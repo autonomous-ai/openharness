@@ -97,5 +97,3 @@ describe('what each action reads of the Swarm', () => {
       .toEqual({ error: 'UPDATE_REQUIRED', detail: 'Update Harness to keep using this Swarm.', status: 426 })
   })
 })
-
-const object = (v: unknown): Json => v && typeof v === 'object' && !Array.isArray(v) ? v as Json : {}

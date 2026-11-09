@@ -101,6 +101,18 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(prompt.indexOf('Context handoff')).toBeGreaterThan(prompt.indexOf('Harness GitHub App token'))
   })
 
+  it('starts a PM that has no name to give with the token line and its handoff alone, no line of it opening with a space', async () => {
+    for (const [name, github] of [[undefined, true], ['', true], ['  ', false]] as const) {
+      const t = setup({ old: { defaultName: name, swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github } } })
+      await t.switches.serve(row())
+      const create = t.calls.find(c => c[0] === 'agent_create')![1]
+      const prompt = String(create.prompt)
+      expect(prompt, `${JSON.stringify(name)} ${github}`).toMatch(github ? /^git and gh here use a Harness GitHub App token/ : /^Context handoff:/)
+      expect(prompt).toContain('Context handoff:')
+      expect(prompt).not.toContain('You are')
+    }
+  })
+
   it('keeps a PM without GitHub off the token', async () => {
     const t = setup({ old: { swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } })
     await t.switches.serve(row())
