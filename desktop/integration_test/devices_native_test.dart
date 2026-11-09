@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/devices/devices_screen.dart';
 import 'package:harness/screens/swarm_screen.dart';
-import 'package:harness/settings/experimental_features.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
 import 'package:harness/state/swarm_catalog.dart';

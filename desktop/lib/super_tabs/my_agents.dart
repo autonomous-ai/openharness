@@ -33,16 +33,7 @@ SuperTabConversation? superTabAgentChat(
   SuperTabSnapshot snapshot,
   SuperTabAgent agent,
 ) {
-  // The chat the backend names is the one its person talks to it in (#4116); an older backend names none.
-  if (agent.chatId case final id? when snapshot.conversation(id) != null) {
-    return snapshot.conversation(id);
-  }
-  if (snapshot.leadProjectForAgent(agent.id) case final project?) {
-    return snapshot.conversation(project.leadConversationId);
-  }
-  final tasks = [
-    for (final group in snapshot.conversations)
-      if (!group.closed && group.assignment?['agentId'] == agent.id) group,
-  ]..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
-  return tasks.firstOrNull;
+  // Swarm v4: an agent's row opens its own chat with its person (#4116), never its project's channel or a task's chat.
+  if (agent.chatId case final id?) return snapshot.conversation(id);
+  return null;
 }

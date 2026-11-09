@@ -17,6 +17,7 @@ class SuperTabMessageText extends StatelessWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.agents = const [],
     this.addresses = const {},
     this.labels = const {},
     this.taggedYou = false,
@@ -29,6 +30,10 @@ class SuperTabMessageText extends StatelessWidget {
   /// The names a Lead tagged in this message. Each reads highlighted where
   /// the text says it; one the text does not say opens its first line.
   final List<String> mentions;
+
+  /// The Swarm's agents' names: an `@name` of one reads as a tag too (Swarm v4: agents talk to each other by name), and
+  /// unlike [mentions] an agent the text does not name is never added.
+  final List<String> agents;
 
   /// The address of each person in [mentions], by name: a tag by full
   /// address is theirs only when it is this one.
@@ -118,7 +123,8 @@ class SuperTabMessageText extends StatelessWidget {
       inlineSyntaxes: [
         _WebAutolink(),
         _WorkgroupReference(references),
-        if (mentions.isNotEmpty) _Mention(mentions, addresses, labels),
+        if (mentions.isNotEmpty || agents.isNotEmpty)
+          _Mention([...mentions, ...agents], addresses, labels),
       ],
       builders: {
         'pre': _CodeBlock(),

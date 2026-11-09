@@ -229,7 +229,6 @@ void main() {
         final controller = await projectSidebar(server);
         var created = 0;
         var openedManage = 0;
-        var openedActivity = 0;
         await pumpSidebar(
           tester,
           controller,
@@ -237,17 +236,12 @@ void main() {
           scale: scale,
           onNewProject: () => created++,
           onManage: () => openedManage++,
-          onPage: (_) => openedActivity++,
+          onPage: (_) {},
         );
         final project = find.byKey(const ValueKey('super-group-lead'));
         final empty = find.byKey(const ValueKey('super-group-empty-lead'));
         final manage = find.byKey(const ValueKey('super-manage'));
-        final activity = find.byKey(const ValueKey('super-decisions'));
         expect(find.byType(OutlinedButton), findsNothing);
-        expect(
-          tester.getBottomLeft(activity).dy,
-          lessThan(tester.getTopLeft(find.text('Projects')).dy),
-        );
         expect(
           tester.getTopLeft(manage).dy,
           greaterThan(tester.getBottomLeft(empty).dy),
@@ -275,16 +269,12 @@ void main() {
         final textX = tester
             .getTopLeft(inRow('super-group-lead', find.text('web-project')))
             .dx;
-        for (final label in [
-          find.text('Decisions'),
-          find.text('Manage'),
-          sample,
-        ]) {
+        for (final label in [find.text('Manage'), sample]) {
           expect(tester.getTopLeft(label).dx, textX, reason: '$label');
         }
         // Unread is a bold name, with no dot (Dee, 2026-10-29).
         expect(unreadDot('lead'), findsNothing);
-        for (final row in [activity, manage, empty]) {
+        for (final row in [manage, empty]) {
           final bounds = tester.getRect(row);
           expect(bounds.left, tester.getRect(project).left);
           expect(bounds.right, tester.getRect(project).right);
@@ -303,11 +293,6 @@ void main() {
         }
 
         // The plain rows retain keyboard operation and do not create tabs.
-        Focus.of(tester.element(find.text('Decisions'))).requestFocus();
-        await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-        await tester.pumpAndSettle();
-        expect(openedActivity, 1);
         await tester.tap(find.byTooltip('New project'));
         await tester.pumpAndSettle();
         expect(created, 1);
@@ -383,7 +368,7 @@ void main() {
     await disposeSidebar(tester, controller);
   });
 
-  testWidgets('reads like a chat app: Activity, Projects A to Z, Buddies, '
+  testWidgets('reads like a chat app: Projects A to Z, Buddies, '
       'then Manage; no # product-managers, no tasks', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = createApp(connected: true);
@@ -400,7 +385,6 @@ void main() {
     await pumpSidebar(tester, controller, app);
 
     final order = [
-      find.byKey(const ValueKey('super-decisions')),
       find.text('Projects'),
       find.byKey(const ValueKey('super-group-empty-lead')),
       find.byKey(const ValueKey('super-group-lead')),
@@ -663,7 +647,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(buddy, findsNothing);
     expect(controller.buddiesGroupOpen, isFalse);
-    expect(find.text('Decisions'), findsOneWidget);
     expect(find.text('Manage'), findsOneWidget);
 
     await controller.flush();
