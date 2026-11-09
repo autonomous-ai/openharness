@@ -476,7 +476,7 @@ export class SuperTabHost {
   private readonly file: string
   private readonly journal: Journal
   private readonly now: () => number
-  /** When this host started: the measure of an agent's basics when its core noted none (lib/swarmSkills.ts noteSwarmBasics). */
+  /** When this host started: the measure of an agent's basics before any launch noted them (lib/swarmSkills.ts noteSwarmBasics). */
   private readonly started: number
   private readonly write: (file: string, journal: Journal) => void
   private readonly log: (message: string) => void
@@ -1847,8 +1847,8 @@ export class SuperTabHost {
     if (session && agent && this.now() >= due) {
       this.skillChecks.set(target.agent.harnessId, Infinity)
       const { text: basics, version } = swarmBasics(target.lead === true)
-      // Started by the Swarm since this computer first ran these basics (as its core noted them, else as this host started):
-      // its launch carried them. A session not bound yet is starting now, with them.
+      // Launched by the Swarm since this computer first launched one with these basics (lib/swarmSkills.ts noteSwarmBasics;
+      // with no launch yet, since this host started): its launch carried them. A session not bound yet is starting now.
       if (skill && (typeof session.boundAt !== 'number' || session.boundAt >= (swarmBasicsSince(this.core.dataDir, version) ?? this.started))) return
       const notice = skill ? `The team's ways have changed since you started. From now on:\n${basics}` : basics
       try {

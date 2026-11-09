@@ -3739,7 +3739,7 @@ describe('an agent its person attached', () => {
   })
 
   it('is told nothing when its core launched it with the basics before the Swarm\'s service started', async () => {
-    // The core starts at 0.5 s and notes the basics, launches the agent at 1 s; the Swarm's service starts on demand at 3 s.
+    // The core launches the agent at 0.5 s, noting the basics, and it binds at 1 s; the Swarm's service starts on demand at 3 s.
     const t = attached({ engine: 'codex', swarmSkill: { role: 'agent', key: 'harness' }, boundAt: 1_000 })
     noteSwarmBasics(t.dir, 500)
     t.wait(3_000)

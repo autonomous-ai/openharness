@@ -265,11 +265,11 @@ export function swarmBasics(lead: boolean): { text: string; version: string } {
 const BASICS_FILE = 'super-tab-basics.json'
 
 /**
- * Notes when this computer first ran this release's basics, in the daemon's data folder: the core calls it as it starts
- * (core/main.ts, through superTabs/inCore.ts), before it launches any agent with them. An agent bound before then was
- * launched by an older release with older basics, and keeps them while it runs, so the Swarm's host tells it the new ones
- * once (superTabs/host.ts refreshSkill). The host can start later than the core, after the core launched agents with these
- * basics (it starts on demand), so its own start is no measure. The first moment is kept: a restart changes nothing.
+ * Notes when this computer first launched an agent with this release's basics, in the daemon's data folder: the Swarm's
+ * launch hook calls it as it prepares each launch and relaunch (superTabs/inCore/launch.ts), before the engine starts. An
+ * agent bound before then was launched by an older release with older basics, and keeps them while it runs, so the Swarm's
+ * host tells it the new ones once (superTabs/host.ts refreshSkill). The host starts on demand, after the core may have
+ * launched agents with these basics (the end-to-end agent chat), so its own start is no measure. The first moment is kept.
  */
 export function noteSwarmBasics(dataDir: string, at: number): void {
   const file = join(dataDir, BASICS_FILE)
