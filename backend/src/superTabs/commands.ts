@@ -986,6 +986,10 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
 export function postable(state: SuperTabState, actor: Actor, conversationId: string): { group: Conversation; joining: string | null } {
   const group = open(state, conversationId)
   requireCanChat(state, actor, group)
+  // Swarm v4 (anh Dee, 2026-11-08): a project's channel and its tasks' chats are agents only: people read them and talk to their own
+  // agents, each in a chat of its own (a conversation with a kind: an agent's or a Buddy's). The apps only hid the composer, so an
+  // older app, the phone and the web still posted there (2026-11-09). A post, an upload and a voice message all ask this.
+  if (actor.kind === 'person' && !group.kind) fail('AGENTS_ONLY', 'Only agents post in a project\'s channel. Talk to your agents.', 403)
   if (actor.kind !== 'agent' || group.agentIds.includes(actor.agentId)) return { group, joining: null }
   if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return { group, joining: null }
   if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
