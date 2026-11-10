@@ -31,6 +31,7 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-plain-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-start-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-start.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
+  'screen-plain-win32.txt': { key: 'agent:main:win-check', url: 'ws://127.0.0.1:18789' },
   'screen-plain.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-remote-no-credentials.txt': { key: null, url: null },
   'screen-remote.txt': { key: 'agent:main:remote', url: 'ws://172.17.0.3:18789' },
