@@ -31,7 +31,7 @@ const OSES = {
 /** A machine as its reading lists it: online, signed in, with quota. */
 const machine = (machineId: string, os: string, contributorId = 'owner', extra: Record<string, unknown> = {}) => ({ machineId, name: machineId, contributorId,
   membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-  observation: { generation: 'g1', receivedAt: NOW - 1000, sessionKind: 'computer', resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+  observation: { generation: 'g1', receivedAt: NOW - 1000, resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
     readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
     quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] }, ...extra })
 
@@ -84,7 +84,6 @@ for (const [os, { reports, step: osStep, line, field, rules }] of Object.entries
     it(`counts no ${reports} machine that no Tester of the project can reach`, () => {
       const cases = {
         'another person\'s, with no agent of the project': machine('box1', reports, 'dan'),
-        'a Team account\'s': machine('box1', reports, 'owner', { hostMachineId: 'mac1' }),
         'offline': machine('box1', reports, 'owner', { observation: { ...machine('box1', reports).observation, receivedAt: NOW - 10 * 60_000 } }),
         'paused': machine('box1', reports, 'owner', { paused: true }),
       }

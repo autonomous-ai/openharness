@@ -96,7 +96,7 @@ export interface Derived {
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A project agent only: the account each project's PM runs on, a project it may not read named "another project". */
-  pmAccounts?: Array<{ machineId: string; hostMachineId?: string; engine: string; project: string; pm: string }>
+  pmAccounts?: Array<{ machineId: string; engine: string; project: string; pm: string }>
   /** The Swarm's owner only: projects nobody owns, which they may delete but never read (projects.ts ownerlessProjects). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   /** A person only. */

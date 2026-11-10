@@ -173,7 +173,7 @@ describe('reviewerCandidates', () => {
     const f = fixture()
     const machine = (machineId: string, usedPercent: number, extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId, name: machineId,
       contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-      observation: { generation: 'g1', receivedAt: f.now - 1000, sessionKind: 'computer', resources: {}, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+      observation: { generation: 'g1', receivedAt: f.now - 1000, resources: {}, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
         readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
         quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent, resetsAt: null }] }] }, ...extra } as unknown as ContributedMachine)
     f.add('tired-rev', f.task, opus, { roleName: 'Reviewer', machineId: 'tired' })

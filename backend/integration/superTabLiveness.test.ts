@@ -1190,19 +1190,6 @@ describe('a session reopened after its agent was removed', () => {
     expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
   })
 
-  it('never past a hold: a session its Team account is held for stays out, and the hold stands', async () => {
-    const f = await removed()
-    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
-    const data = structuredClone(row.data) as { closingSessions: Array<Record<string, unknown>> }
-    for (const close of data.closingSessions) if (close.harnessId === f.harness.other) Object.assign(close, { heldFor: 'lead', since: f.clock.now })
-    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
-    await resume(f)
-    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
-    const after = (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })).data as { closingSessions: Array<Record<string, unknown>>; removedSessions?: unknown[] }
-    expect(after.closingSessions.find(c => c.harnessId === f.harness.other)).toMatchObject({ heldFor: 'lead' })
-    expect(after.removedSessions ?? []).toEqual([])
-  })
-
   // Security review 1 of #2601: the record every Swarm registering this session writes (sessionScope.ts bindSession).
   it.each([
     ['withdrawn from this Swarm', (tab: string) => ({ releasedTabIds: [tab] })],

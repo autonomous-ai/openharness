@@ -33,7 +33,7 @@ function swarm() {
   const generation = (userId: string) => state.people.find(p => p.id === userId)!.generation
   state.machines = [{ machineId: 'mate-mac', name: 'mate-mac', contributorId: 'mate', membershipGeneration: generation('mate'), generation: 'g1',
     cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-    observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['regularAgent'] } } as ContributedMachine]
+    observation: { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['regularAgent'] } } as ContributedMachine]
   // Mate's Regular agent Ada, running in its chat.
   const made = run({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'mate-mac' } as Command, mate, own('mate'))
   const startId = made.result.startId as string

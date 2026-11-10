@@ -13,8 +13,7 @@ const config: AgentConfiguration = { engine: 'claude', model: 'fixture-model', e
 const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
 const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
-const reading = (sessionKind: 'team' | 'computer') => ({ generation: 'g1', receivedAt: NOW, sessionKind, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [],
-  ...(sessionKind === 'team' ? { privacy: { mode: 'account' as const, passed: true as const, checkedAt: NOW - 1000, seenAt: NOW - 1000 } } : {}) })
+const reading = { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] }
 const INSTALL = 'https://github.com/apps/harness-for-autonomous/installations/new'
 const notInstalled: RepositoryReach = { state: 'not-installed', repository: 'ngochuy13/groupme', installUrl: INSTALL }
 const notApproved: RepositoryReach = { state: 'not-approved', repository: 'ngochuy13/groupme' }
@@ -23,9 +22,8 @@ function swarm() {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
   const generation = state.people.find(p => p.id === 'owner')!.generation
-  const pool = (machineId: string, sessionKind: 'team' | 'computer', extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId, name: machineId, contributorId: 'owner',
-    membershipGeneration: generation, generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false, observation: reading(sessionKind), ...extra })
-  state.machines = [pool('mac', 'computer'), pool('mac-team', 'team', { hostMachineId: 'mac' })]
+  state.machines = [{ machineId: 'mac', name: 'mac', contributorId: 'owner', membershipGeneration: generation, generation: 'g1', cwd: '/swarm', scope: 'swarm',
+    engines: ['claude'], maxAgents: 4, paused: false, observation: reading } satisfies ContributedMachine]
   state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/ngochuy13/groupme' }
   const run = (command: Command, context: Partial<CommandContext> = {}) => {
     const effects = applyCommand(state, owner, command, { now: NOW, operationId: `op-${++sequence}`,
@@ -65,12 +63,8 @@ describe('a start whose account cannot reach the project repository', () => {
 })
 
 describe('an assignment whose agent cannot reach the project repository', () => {
-  // A Team account's agent takes no new work at all in Swarm v3 (task #4120).
-  it('is refused for a Team agent, and taken by the owner\'s agent in their own account', () => {
+  it('is taken by the owner\'s agent in their own account', () => {
     const f = swarm(), task = f.group()
-    expect(refused(() => f.run({ type: 'work.assign', conversationId: task, agentId: f.member('team-builder', 'mac-team') }))?.code)
-      .toBe('TEAM_ACCOUNTS_REMOVED')
-    expect(f.state.conversations.find(c => c.id === task)!.assignment).toBeNull()
     f.run({ type: 'work.assign', conversationId: task, agentId: f.member('own-builder', 'mac') }, { repositoryReach: notInstalled })
     expect(f.state.conversations.find(c => c.id === task)!.assignment?.agentId).toBe('own-builder')
   })

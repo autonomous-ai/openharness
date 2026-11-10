@@ -19,7 +19,6 @@ let replica: MongoMemoryReplSet
 let db: PrismaClient
 let store: SuperTabStore
 let pushes: SwarmChanged[] = []
-const TEAM_COMPUTER = 'tttttttttttttttttttttttttttttttt'
 const dee: AuthUser = { sub: '400000000000000000000001', email: 'dee@example.com', autonomousEnv: 'prod', role: 'user' }
 const huy: AuthUser = { sub: '400000000000000000000002', email: 'huy@example.com', autonomousEnv: 'prod', role: 'user' }
 const run = (tab: string, command: Command, user: AuthUser = dee) => store.execute(user, tab, { operationId: randomUUID(), command })
@@ -52,11 +51,10 @@ beforeAll(async () => {
   store = new SuperTabStore(db, Date.now, null, { reports: { get: (t, m) => memory.get(t, m), set: (t, m, r) => memory.set(t, m, r), sweepDue: async () => false },
     swarmChanged: change => pushes.push(change) })
   for (const user of [dee, huy]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`, email: user.email, autonomousEnv: 'prod' } })
-  const machine = (machineId: string, userId: string, computerId: string, sessionKind: string, hostMachineId?: string) => db.machine.create({ data: {
-    machineId, userId, computerId, sessionKind, ...hostMachineId ? { hostMachineId } : {}, hostname: 'Macs-Mac-Studio-2.local',
+  const machine = (machineId: string, userId: string, computerId: string, sessionKind: string) => db.machine.create({ data: {
+    machineId, userId, computerId, sessionKind, hostname: 'Macs-Mac-Studio-2.local',
     apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   await machine('studio-2', dee.sub, 'ssssssssssssssssssssssssssssssss', 'computer')
-  await machine('studio-2-team', dee.sub, TEAM_COMPUTER, 'team', 'studio-2')
   await machine('huy-mini', huy.sub, 'hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh', 'computer')
 })
 afterAll(async () => {
@@ -66,7 +64,6 @@ afterAll(async () => {
 beforeEach(async () => {
   // Seeded from the computer's hostname on its first connect (MachineService), as an account row is until its owner renames it.
   await rename('studio-2', 'Macs-Mac-Studio-2.local')
-  await rename('studio-2-team', 'Macs-Mac-Studio-2 · Team')
   await rename('huy-mini', 'Huy Mini')
 })
 
@@ -131,16 +128,6 @@ describe('a rename after joining', () => {
     expect([await nameIn(one, 'studio-2'), await nameIn(two, 'studio-2')]).toEqual(['Mac 3', 'Mac 3'])
   })
 
-  it('renames its Mac\'s Team account with it', async () => {
-    const tab = await swarm()
-    await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
-    await contribute(tab, 'studio-2-team', 'Macs-Mac-Studio-2 · Team', dee, { ifMissing: true, maxAgents: 1 })
-    expect(await nameIn(tab, 'studio-2-team')).toBe('Macs-Mac-Studio-2.local · Team account')
-    await rename('studio-2', 'Mac 3')
-    await report(tab, 'studio-2')
-    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3 · Team account')
-  })
-
   it('keeps the Swarm\'s name when its owner clears it back to none', async () => {
     const tab = await swarm()
     await rename('studio-2', 'Mac 3')
@@ -156,18 +143,17 @@ describe('a rename after joining', () => {
 describe('a rename in Machines', () => {
   const renamed = (machineId: string, owner: AuthUser = dee) => store.machineRenamed({ machineId, ownerId: owner.sub, autonomousEnv: 'prod' })
 
-  it('reaches every Swarm the machine is in at once, its Team account with it, with no reading', async () => {
+  it('reaches every Swarm the machine is in at once, with no reading', async () => {
     const [one, two] = [await swarm(), await swarm()]
     for (const tab of [one, two]) {
       await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
-      await contribute(tab, 'studio-2-team', 'Macs-Mac-Studio-2 · Team', dee, { ifMissing: true, maxAgents: 1 })
       await contribute(tab, 'huy-mini', 'Huy Mini', huy)
     }
     await rename('studio-2', 'Mac 3')
     pushes = []
     await renamed('studio-2')
     for (const tab of [one, two]) {
-      expect([await nameIn(tab, 'studio-2', huy), await nameIn(tab, 'studio-2-team'), await nameIn(tab, 'huy-mini')]).toEqual(['Mac 3', 'Mac 3 · Team account', 'Huy Mini'])
+      expect([await nameIn(tab, 'studio-2', huy), await nameIn(tab, 'huy-mini')]).toEqual(['Mac 3', 'Huy Mini'])
       expect(pushes.find(p => p.tabId === tab)).toMatchObject({ userIds: expect.arrayContaining([dee.sub, huy.sub]), parts: expect.arrayContaining(['main']) })
     }
   })

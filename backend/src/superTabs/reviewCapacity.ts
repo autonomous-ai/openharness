@@ -8,7 +8,6 @@ import { canReadProject, groupProject } from './projects.js'
 import { STANDING, standing, type Standing } from './reviewSeats.js'
 import { usernameOf } from './usernames.js'
 
-export { RELAYED_QUOTA } from './reviewSeats.js'
 const ENGINES = ['claude', 'codex'] as const
 /** The key the project keeps what it last said under. Before 2026-10-30 it kept one per engine (`claude`, `codex`); those
  *  are dropped the next time it writes. */
@@ -17,16 +16,15 @@ const ANY = 'any'
 export type Cause = 'out' | 'low'
 export interface ReviewCapacityNotice { conversationId: string; text: string; mentions: string[]; source: { kind: 'review-capacity'; engine: string; cause: Cause } }
 
-/** Each machine the project may start an agent on ([teamOk]: machines.ts teamWorkCheck), of either engine it has, as one: a
- *  Mac and its Harness Team account are one machine (machines.ts teamStartRequest), standing as the best of its engines and
- *  accounts. */
+/** Each machine the project may start an agent on ([teamOk]: machines.ts teamWorkCheck), of either engine it has, as one,
+ *  standing as the best of its engines. */
 function seats(state: SuperTabState, now: number, teamOk: (machineId: string, contributorId: string) => boolean) {
   const byMac = new Map<string, { name: string; contributorId: string; standing: Standing }>()
   for (const pool of state.machines ?? []) {
     if (pool.buddyOnly || pool.removal || !teamOk(pool.machineId, pool.contributorId)) continue
     for (const engine of ENGINES) {
       if (!pool.engines.includes(engine)) continue
-      const key = pool.hostMachineId ?? pool.machineId, here = standing(state, pool, engine, now), seen = byMac.get(key)
+      const key = pool.machineId, here = standing(pool, engine, now), seen = byMac.get(key)
       if (!seen) byMac.set(key, { name: pool.name, contributorId: pool.contributorId, standing: here })
       else if (STANDING.indexOf(here) < STANDING.indexOf(seen.standing)) seen.standing = here
     }

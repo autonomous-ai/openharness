@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, type Conversation, type SuperTabState } from './model.js'
-import { RELAYED_QUOTA, reviewCapacityNotice } from './reviewCapacity.js'
+import { reviewCapacityNotice } from './reviewCapacity.js'
 
 // Overnight 2026-10-30, 12 pull requests waited hours for a review while every Codex Reviewer was out of weekly quota, and
 // nobody was told until people noticed in the morning (Tony: "don't let the workflow get stuck"). The notice speaks only when
@@ -20,7 +20,7 @@ function machine(id: string, name: string, contributorId: string, engines: { cla
   const windows = (r: Reading) => (Array.isArray(r) ? r : r === 'unknown' ? [] : r.signedOut).map(w => ({ ...w, resetsAt: null as string | null }))
   return { machineId: id, name, contributorId, membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: names,
     maxAgents: 4, paused: false, ...extra,
-    observation: { generation: 'g1', receivedAt: NOW - 1000, sessionKind: 'computer',
+    observation: { generation: 'g1', receivedAt: NOW - 1000,
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
         deviceType: null, chip: null, os: null, gpuPercent: null },
       tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
@@ -133,19 +133,6 @@ describe('the notice that new agents cannot start', () => {
     expect(notice(unread.state, unread.built)).toBeNull()
     const { state, built } = swarm([])
     expect(notice(state, built)).toBeNull()
-  })
-
-  it('reads a Team account\'s quota from its Mac when the account spends that subscription through the relay', () => {
-    const mac = machine('tony-mac', 'MacBook Pro 19', 'tony', { codex: out })
-    const team = machine('tony-team', 'MacBook Pro 19', 'tony', { codex: 'unknown' }, { hostMachineId: 'tony-mac' })
-    team.observation!.quotaReasons = { codex: RELAYED_QUOTA }
-    const { state, built } = swarm([machine('studio', 'Mac Studio', 'ken', both(out)), mac, team])
-    // The Mac is named once: the account is that Mac.
-    expect(notice(state, built)!.text).toContain('(Mac Studio: out of quota; MacBook Pro 19: out of quota)')
-    // Unknown for another reason, the account stays usable, as a start there is.
-    team.observation!.quotaReasons = { codex: 'The allowance reader on this machine did not answer.' }
-    const again = swarm([machine('studio', 'Mac Studio', 'ken', both(out)), mac, team])
-    expect(notice(again.state, again.built)).toBeNull()
   })
 
   it('says nothing while a used-up window resets inside the start window', () => {

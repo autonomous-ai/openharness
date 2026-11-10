@@ -10,13 +10,13 @@ import type { SuperTabState } from './model.js'
 type Reader = Pick<Prisma.TransactionClient, 'machine'>
 
 /**
- * The live rows of other accounts signed in on [computerId] before, never [ownerId]'s own or a Harness Team sign-in's.
+ * The live rows of other accounts signed in on [computerId] before, never [ownerId]'s own.
  * A plain `$match` on the (computerId, userId) index: Prisma sends `not` and the deletedAt OR as $expr, which no index bounds.
  */
 export async function otherAccountsOnComputer(db: Reader, { computerId, ownerId, autonomousEnv }: { computerId: string; ownerId: string; autonomousEnv: string }):
   Promise<Array<{ machineId: string; userId: string }>> {
   const rows = await db.machine.aggregateRaw({ pipeline: [
-    { $match: { computerId, userId: { $ne: ownerId }, autonomousEnv, authMode: 'remote', sessionKind: { $ne: 'team' }, deletedAt: null } },
+    { $match: { computerId, userId: { $ne: ownerId }, autonomousEnv, authMode: 'remote', deletedAt: null } },
     { $sort: { userId: 1 } }, { $limit: 16 }, { $project: { _id: 0, machineId: 1, userId: 1 } }],
   options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ machineId: string; userId: string }>
   return rows.map(row => ({ machineId: row.machineId, userId: row.userId }))
@@ -32,12 +32,12 @@ export interface LeftMove extends ComputerMove { code: string }
 
 /**
  * The entry of [ownerId]'s machine [machineId] that a sign-in of [to] on the same computer moves, or none: the computer's own
- * entry (not a Team account's), not being removed, still [ownerId]'s, and not reporting, since two live accounts on one
+ * entry, not being removed, still [ownerId]'s, and not reporting, since two live accounts on one
  * computer id are no switch. machine.moved and the cleanup's dry run both decide by it.
  */
 export function movableEntry(state: SuperTabState, machineId: string, ownerId: string, to: { machineId: string; ownerId: string }, now: number):
   ContributedMachine | undefined {
-  const pool = state.machines?.find(m => m.machineId === machineId && !m.hostMachineId && !m.removal)
+  const pool = state.machines?.find(m => m.machineId === machineId && !m.removal)
   if (!pool || pool.contributorId !== ownerId || ownerId === to.ownerId || machineId === to.machineId || !machineOffline(pool, now)) return undefined
   return pool
 }
@@ -59,7 +59,7 @@ export async function sameComputerKey(keys: MachineKeys, from: { userId: string;
   return !!pub && pub === of(to)
 }
 
-/** An account's ordinary sign-in connecting from a computer (lib/adapterWs.ts): never a Harness Team session's. */
+/** An account's sign-in connecting from a computer (lib/adapterWs.ts). */
 export interface ComputerSignIn { machineId: string; ownerId: string; computerId: string; autonomousEnv: string }
 
 type Listener = (signIn: ComputerSignIn) => Promise<unknown>
@@ -90,7 +90,7 @@ export async function cleanUpComputers(db: Reader, store: { computerSignedIn(sig
   autonomousEnv: string,
   { write }: { write: boolean }): Promise<CleanUp> {
   const groups = await db.machine.aggregateRaw({ pipeline: [
-    { $match: { computerId: { $type: 'string' }, autonomousEnv, authMode: 'remote', sessionKind: { $ne: 'team' }, deletedAt: null } },
+    { $match: { computerId: { $type: 'string' }, autonomousEnv, authMode: 'remote', deletedAt: null } },
     { $group: { _id: '$computerId', accounts: { $addToSet: '$userId' }, rows: { $push: { machineId: '$machineId', userId: '$userId', seen: '$lastSeenAt' } } } },
     { $match: { 'accounts.1': { $exists: true } } }],
   options: { hint: { computerId: 1, userId: 1 } } }) as unknown as Array<{ _id: string; rows: Array<{ machineId: string; userId: string; seen?: { $date: string } | null }> }>

@@ -3,12 +3,12 @@ import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { handoffAsk, pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { linesOf } from './statusCard.js'
-import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, markTeamWritten, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
+import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, stepMark, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember, wakeCrewMember } from './crewKeep.js'
 import { moveTimingRow, startWake } from './crewTimes.js'
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { requireRepositoryReach, unknownPushReason, type RepositoryReach } from './repositoryReach.js'
-import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamAccountPool, teamPoolsOf, teamWorkCheck, TEAM_ACCOUNTS_GONE, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
+import { admitByRoom, admitMachineStart, AGENT_MEMORY_BYTES, noRepositoryStart, defaultProfileId, storedProfileId, BUDDY_WINDOWS_REFUSAL, refusesWindowsBuddy, buddyHomeFolder, buddyProjectsOn, SWARM_BUDDY_CAPABILITY, cleanupOverdue, dropIdleBuddyMachines, machineLimitReached, MACHINE_LIMIT_MESSAGE, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, machineContribution, machineOffline, machineSlots, contributedEngines, ownedMachine, projectFolder, requireTeamWork, teamWorkCheck, NOT_YOUR_COMPUTER, type ContributedMachine } from './machines.js'
 import { movableEntry } from './computerMoves.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { acceptedByRequester, ACCEPT_ALL_REFUSAL, askedByAnother, HELPER_REFUSALS, helperCheck, mayAcceptAll, memberMachine, memberOf, memberQueue } from './members.js'
@@ -69,7 +69,7 @@ import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged }
 import { avatarChoice, setAgentAvatar, setMemberAvatar } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, regularCodeLine, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, regularCodeLine, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing, sessionClosed } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -224,6 +224,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
   // The store's alone (context.computerMove): another account signed in on the computer [machineId] is on (#3122).
   z.object({ type: z.literal('machine.moved'), machineId: id }).strict(),
+  // The store's alone (context.teamMachineGone): a Harness Team account's machine leaves (migration/teamMachinesJob.ts; goes
+  // with that job, on or after 2026-12-10).
+  z.object({ type: z.literal('machine.teamGone'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
@@ -658,14 +661,12 @@ export interface CommandContext {
   /** For `machine.moved`: the machine of the account signed in now on the computer the command's machine is on, read by the
    *  store from their account rows (store.ts computerSignedIn), never from a request. `name`: its account row's name, if any. */
   computerMove?: { to: { machineId: string; ownerId: string; name: string | null } }
+  /** For `machine.teamGone`: set by the store's one-time job alone (store.ts takeOutTeamMachines), never from a request. */
+  teamMachineGone?: true
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** The name the machine's owner gave it, from its account row (machines.ts accountMachineName); absent when it has none. */
-    machineName?: string
-    /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
-    hostMachineId?: string
-    /** The machine's account row was last served by a Harness Team account's sign-in, with or without a Mac. */
-    teamSession?: true }
+    machineName?: string }
   /** Loaded from this tab and conversation by the store. */
   /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies), and
    *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). */
@@ -1278,14 +1279,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   }
   /** An agent added to a task may work on it, so one added by a post or by opening it takes that project's work only where
    *  conversation.agent would add it (machines.ts teamWorkCheck; spec, "Kept as access"). */
-  /** A Team account's agent keeps the conversations it is in and joins no new one, but its project's coordinator, which keeps
-   *  coordinating until it is stopped after the release (task #4120). [joiningNew]: [member] is not yet in where it joins. */
-  const teamAgentStays = (member: Agent, joiningNew: boolean) => {
-    if (joiningNew && onTeamAccount(state, member) && !ledProject(state, member.id)) failTeamWork(TEAM_ACCOUNTS_GONE)
-  }
-  const teamJoin = (project: SwarmProject, agentId: string, group?: Conversation, joiningNew = true) => {
+  const teamJoin = (project: SwarmProject, agentId: string, group?: Conversation) => {
     const member = agent(state, agentId)
-    teamAgentStays(member, joiningNew)
     requireTeamWork(state, member.machineId, member.contributorId, project)
     // A named agent or a poster joins a task as an assignment would: Team-written code stays in a Team account (audit H2).
     // Joining a chat is not writing its code, so it marks nothing: a Team agent's push shows in GitHub's record (#3304).
@@ -1307,7 +1302,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const pushedRefusal = (group: Conversation, worker: Agent) => {
     marking(group, () => applyPushOrigin(state, group, context.pushOrigin, context.pushOriginPulls, context.pushOriginTask))
     // The project owner's own agent may take it too (teamWritten.ts, task #4120, the PM's ruling).
-    if (onTeamAccount(state, worker) || ledProject(state, worker.id)?.id === groupProject(state, group).id || ownersOwnAgent(state, group, worker)) return
+    if (ledProject(state, worker.id)?.id === groupProject(state, group).id || ownersOwnAgent(state, group, worker)) return
     if (context.pushOrigin === 'unknown') failPushUnknown(unknownPushReason(context.repositoryReach))
     if (context.pushOrigin === 'team') failTeamWritten({ pushed: true })
   }
@@ -1319,7 +1314,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (isBuddy(member)) fail('BUDDY_CHAT_ONLY', 'A Buddy stays in its own chat: its owner\'s alone.', 403)
     sameProject(state, group, member)
     if (member.workDecision === 'stop') fail('STOP_REQUESTED', 'This agent is stopping. Wait for its execution host.')
-    teamAgentStays(member, !group.agentIds.includes(member.id))
     requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group))
     requireTeamWrittenAccount(state, group, member)
   }
@@ -1515,11 +1509,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (candidate.kind === 'member' && !member) return null
     // A new agent never starts on a Buddy-only machine; an agent its person added there runs as one on a machine outside the Swarm.
     if (!member && state.machines?.some(m => m.machineId === candidate.machineId && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
-    // Where it would run is where it names: no start moves to a Team account any more, and none starts in one (task #4120).
     const group = conversation(state, conversationId), written = teamWrittenTask(state, group)
     const machineId = member?.machineId ?? candidate.machineId
     const pool = state.machines?.find(m => m.machineId === machineId)
-    if (teamAccountPool(pool) || (member && onTeamAccount(state, member))) return TEAM_ACCOUNTS_GONE
     // A new agent starts only on its starter's own computer, as them (task #4120, the PM's ruling).
     if (!member && pool && pool.contributorId !== starter) return { code: 'NOT_YOUR_COMPUTER' as const, reason: NOT_YOUR_COMPUTER }
     // Code a Team agent wrote: only the project owner's own agent, on their own computer (teamWritten.ts, the PM's ruling; audit H2).
@@ -1771,7 +1763,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
     }
     if (!lead) protectLead(state, target.id, actor)
-    if (close) recordClosing(state, target, context.now)
+    if (close) recordClosing(state, target)
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
     for (const group of state.conversations) {
@@ -2020,13 +2012,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // A step named for an OS runs on a machine of that OS (reviewTable.ts, task #3926).
     const wrongOs = stepOsRefusal(state, group, worker.machineId, worker.contributorId)
     if (wrongOs) fail('STEP_OS', wrongOs)
-    requireRepositoryReach(state, onTeamAccount(state, worker), worker.machineOwnerId, home, context.repositoryReach)
+    requireRepositoryReach(state, worker.machineOwnerId, home, context.repositoryReach)
     // Team-written code: only the project owner's own agent (teamWritten.ts, task #4120; audit H2).
     pushedRefusal(group, worker)
     requireTeamWrittenAccount(state, group, worker)
     if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
-    // A Team account's agent keeps what it holds and takes nothing new (task #4120); it is stopped after the release.
-    if (onTeamAccount(state, worker)) failTeamWork(TEAM_ACCOUNTS_GONE)
     // A handed task does not occupy its Engineer (#3399 handed.ts): it may take this.
     if (!suggestion && state.conversations.some(c => occupiesAgent(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')
   }
@@ -2059,8 +2049,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     // An asleep crew member wakes for it: its host reopens the session in place (crewKeep.ts). The wake is timed from here to
     // the first reading that shows it running (crewTimes.ts, task #3462).
     if (wakeCrewMember(worker, context.now)) startWake(worker, group.id, context.now)
-    // A Team agent's work marks the task (teamWritten.ts, audit H2).
-    marking(group, () => markTeamWritten(state, group, worker))
     delete worker.workDecision
     delete worker.releaseId
     // Any assignment, an agent's or a person's, takes a worker that lost its task back into routing (model.ts lostTask).
@@ -2293,8 +2281,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // project's instructions cannot choose a model before any agent reads them (project instructions, design call).
       const asked = leadEffort(withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead), name)
       const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
-      // A branch a Team agent pushed, or GitHub cannot place, never starts a PM in the main account (audit H2).
-      if (context.pushOrigin && context.pushOrigin !== 'clean' && !teamAccountPool(state.machines?.find(m => m.machineId === start.request.machineId))) failTeamWritten()
+      // A branch a Team agent pushed, or GitHub cannot place, never starts a PM (audit H2).
+      if (context.pushOrigin && context.pushOrigin !== 'clean') failTeamWritten()
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
     }
@@ -2347,15 +2335,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (previousPlacement) project.lead = previousPlacement
         else delete project.lead
         destination = state.machines!.find(m => m.machineId === start.request.machineId)!
-        if (destination.machineId === pool.machineId) {
-          // A Mac whose Team account already runs it placed it back there: a switch where it runs, with no candidate to start
-          // (security review 2 of #2705).
-          state.starts = state.starts!.filter(candidate => candidate.id !== start.id)
-        } else {
-          // A refused command keeps none of its writes, the start above included.
-          if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
-          start.request.leadFor!.switchId = operationId
-        }
+        // A refused command keeps none of its writes, the start above included.
+        if (!destination.observation?.capabilities?.includes(SWITCH_CAPABILITY)) fail('HOST_OUTDATED', `Update Harness on ${destination.name} to move the ${name}.`, 409)
+        start.request.leadFor!.switchId = operationId
       }
       if (!contributedEngines(destination).includes(command.engine)) fail('ENGINE_NOT_OFFERED', `${ENGINE_NAMES[command.engine]} isn’t offered on ${destination.name}.`, 403)
       // The default account has one id per destination machine (a literal 'default' is the same account).
@@ -2672,15 +2654,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // its own owner's add: it goes, and the add takes its place (machines.ts cleanupOverdue).
       const cleaning = state.machines.some(m => m.machineId === command.machineId && m.removal)
         || !!state.machineCleanups?.some(c => c.machineId === command.machineId && !(c.machineOwnerId === actor.userId && cleanupOverdue(c, context.now)))
-      // A Mac's Harness Team account joins by itself wherever its owner added the Mac, as that Mac (cli/src/superTabs/host.ts).
-      const mac = context.contribution?.hostMachineId
-        ? state.machines.find(m => m.machineId === context.contribution!.hostMachineId && m.contributorId === actor.userId && !m.removal) : undefined
-      // A Mac's Team account never joins through a Buddy-only record: that Mac is not in the Swarm (security review 2 of #2234).
-      if (context.contribution?.hostMachineId && state.machines.some(m => m.machineId === context.contribution!.hostMachineId && m.buddyOnly)) {
-        fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
-      }
       if (command.ifMissing) {
-        if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
+        if (actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
         // A Buddy-only record is not the machine in the Swarm: it becomes an ordinary one below.
         if (cleaning || state.machines.some(m => m.machineId === command.machineId && !m.buddyOnly)) break
         if (command.unlessRemoved && state.removedMachines?.some(r => r.machineId === command.machineId)) break
@@ -2692,7 +2667,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
       // A machine already here, a Buddy-only record included, is counted already: saving it again is never refused.
-      if (!state.machines.some(m => m.machineId === command.machineId) && machineLimitReached(state, actor.userId, { team: !!context.contribution?.hostMachineId })) {
+      if (!state.machines.some(m => m.machineId === command.machineId) && machineLimitReached(state, actor.userId)) {
         fail('MACHINE_LIMIT_PER_PERSON', MACHINE_LIMIT_MESSAGE)
       }
       // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
@@ -2717,7 +2692,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const carried = buddyOnlyHere ? pendingHere.filter(s => s.request.buddyOf?.personId === actor.userId && s.contributorId === actor.userId) : []
       if (pendingHere.length > carried.length) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       // Saving settings sends the whole contribution again; only machine.pause changes its pause (review of #2084).
-      const paused = mac?.paused ?? state.machines.find(m => m.machineId === command.machineId)?.paused ?? false
+      const paused = state.machines.find(m => m.machineId === command.machineId)?.paused ?? false
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
       // it stays contributed. Saving its settings sends the contribution without the field, and must not drop the rule.
       const teamAccountOnly = command.teamAccountOnly || state.machines.find(m => m.machineId === command.machineId)?.teamAccountOnly
@@ -2727,12 +2702,11 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.machines = state.machines.filter(m => m.machineId !== command.machineId)
       state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
       if (!state.machineCleanups?.length) delete state.machineCleanups
-      const host = context.contribution?.hostMachineId
-      state.machines.push({ machineId: command.machineId, name: mac?.name ?? context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
-        maxAgents: mac?.maxAgents ?? command.maxAgents, ...(mac ? (mac.agents ? { agents: mac.agents } : {}) : agents ? { agents } : {}),
+      state.machines.push({ machineId: command.machineId, name: context.contribution?.machineName ?? command.name, cwd: command.cwd, engines: [...new Set(command.engines)],
+        maxAgents: command.maxAgents, ...(agents ? { agents } : {}),
         ...(command.scope ? { scope: command.scope } : {}),
         contributorId: actor.userId, membershipGeneration: contributor.generation, generation: operationId, paused,
-        ...(host ? { hostMachineId: host } : {}), ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}),
+        ...(teamAccountOnly ? { teamAccountOnly: true as const } : {}),
         // What its readings and starts recorded is not a setting: saving the settings keeps the Lent ledger, the engines'
         // failures and suspensions and the last reading (#3043). A machine not listed yet, or Buddy-only, starts clean.
         ...(previous?.lent ? { lent: previous.lent } : {}), ...(previous?.lentDays ? { lentDays: previous.lentDays } : {}),
@@ -2744,13 +2718,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(previous?.engineSuspensions ? { engineSuspensions: previous.engineSuspensions } : {}),
         ...(previous?.observation ? { observation: previous.observation } : {}) })
       for (const start of carried) if (start.poolGeneration) start.poolGeneration = operationId
-      // A Mac given other slots or a new name gives its team account the same, and its pause; its own folder, engines and grant stay.
-      const added = state.machines.at(-1)!
-      for (const team of teamPoolsOf(state, added)) if (!team.removal) {
-        Object.assign(team, { name: added.name, maxAgents: added.maxAgents, paused: added.paused })
-        if (added.agents) team.agents = added.agents
-        else delete team.agents
-      }
       break
     }
     case 'machine.pause': {
@@ -2758,8 +2725,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person' || actor.userId !== pool.contributorId) fail('OWNER_REQUIRED', 'Only its contributor can change this machine.', 403)
       if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
       pool.paused = command.paused
-      // Its Harness Team account is the same Mac.
-      for (const team of teamPoolsOf(state, pool)) if (!team.removal) team.paused = command.paused
       break
     }
     case 'machine.engineResume': {
@@ -2779,14 +2744,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person removes a machine from the Swarm.', 403)
       const { pool, members } = ownedMachine(state, actor, command.machineId)
       if (pool?.removal) fail('MACHINE_REMOVED', 'This machine is already being removed from the Swarm.')
-      // The Mac leaves with its Harness Team account and the agents there, told once as the Mac; that account's host cleans
-      // its own folders.
-      const moving = pool ? teamPoolsOf(state, pool).filter(m => !m.removal) : []
-      const removingAgents = [...members, ...state.agents.filter(a => moving.some(m => m.machineId === a.machineId))]
-      const readableAgentIds = new Set(removingAgents.filter(a => canReadAgent(state, actor, a)).map(a => a.id))
-      const removed = removeMachine(command.machineId, pool, removingAgents,
-        machine => `${who} removed ${machine} from the Swarm`)
-      for (const team of moving) removeMachine(team.machineId, team, [], machine => `${who} removed ${machine} from the Swarm`)
+      const readableAgentIds = new Set(members.filter(a => canReadAgent(state, actor, a)).map(a => a.id))
+      const removed = removeMachine(command.machineId, pool, members, machine => `${who} removed ${machine} from the Swarm`)
       if (pool) result.removalId = operationId
       result.removedAgents = [...removed].filter(id => readableAgentIds.has(id))
       // So a Personal Swarm's sync, on any computer, never adds it back by itself (#2181). What deletes it: adding it again, the
@@ -2797,6 +2756,24 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       break
     }
+    case 'machine.teamGone': {
+      // Harness Team accounts are gone (anh Dee, 2026-11-10: "remove all team accounts"): what a Swarm still records of one's
+      // machine leaves with its agents, whose daemon can no longer connect. Its folders are that account's, which its person
+      // removes from the computer, so nothing waits for a host to clean up or to confirm a close.
+      if (!context.teamMachineGone || actor.kind !== 'person') fail('FORBIDDEN', 'Harness takes Team accounts\' machines out by itself.', 403)
+      const pool = state.machines?.find(m => m.machineId === command.machineId)
+      const members = state.agents.filter(a => a.machineId === command.machineId)
+      if (!pool && !members.length) break
+      // A launch its host took never arrives.
+      for (const start of state.starts?.filter(s => s.request.machineId === command.machineId && !s.harnessId && !s.error && s.dispatched) ?? []) {
+        start.error = MACHINE_REMOVED
+      }
+      removeMachine(command.machineId, pool, members, machine => `Harness Team accounts are gone, so the one on ${machine} left the Swarm`, true, true)
+      dropClosing(state, c => c.machineId !== command.machineId)
+      state.machineCleanups = state.machineCleanups?.filter(c => c.machineId !== command.machineId)
+      if (!state.machineCleanups?.length) delete state.machineCleanups
+      break
+    }
     case 'machine.moved': {
       // A computer is signed in as one account at a time (Scholes, #3122): the store found another account's sign-in on the
       // computer of this entry and runs this as the entry's owner. Nothing here is the request's: the store read the computer's
@@ -2805,31 +2782,23 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!move || actor.kind !== 'person') fail('FORBIDDEN', 'Harness moves a computer to the account signed in on it.', 403)
       const pool = movableEntry(state, command.machineId, actor.userId, move.to, context.now)
       if (!pool) break
-      const teams = teamPoolsOf(state, pool).filter(m => !m.removal)
-      const here = new Set([pool.machineId, ...teams.map(t => t.machineId)])
       // Its host is gone, so a start it launched never arrives: each fails now, launched or not.
-      for (const start of state.starts?.filter(s => here.has(s.request.machineId) && !s.harnessId && !s.error) ?? []) {
+      for (const start of state.starts?.filter(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error) ?? []) {
         start.error = MACHINE_MOVED
         effects.messages.push({ id: stableId(operationId, 'start', start.id), conversationId: start.request.conversationId, author: sender,
           text: `${start.request.name} will not start: its machine is signed in to another account now.`, replyTo: null, recipients: [], source: SYSTEM_ROW })
       }
-      const leaving = state.agents.filter(a => here.has(a.machineId))
+      const leaving = state.agents.filter(a => a.machineId === pool.machineId)
       const how = (machine: string) => `${machine} is signed in to another account now, so it left the Swarm under its old account`
       // The old account's agents stop first, Product Managers too: they ran under a login this computer no longer has.
       removeMachine(pool.machineId, pool, leaving, how, true, true)
-      // Its Team account's host still runs as the old account: it deletes its own folders, and the entry leaves the list now.
-      for (const team of teams) {
-        removeMachine(team.machineId, team, [], how, true)
-        if (state.machines?.includes(team)) expireRemoval(state, team)
-      }
       const newOwner = state.people.find(p => p.id === move.to.ownerId)
       const until = new Date(context.now).toISOString()
       const existing = state.machines?.find(m => m.machineId === move.to.machineId && !m.removal)
       if (existing) existing.previousOwner = { personId: pool.contributorId, until }
       else if (newOwner && !existing && !state.machines?.some(m => m.machineId === move.to.machineId)
         && !state.removedMachines?.some(r => r.machineId === move.to.machineId) && !machineLimitReached(state, newOwner.id)) {
-        // The computer's own settings move with it; what was granted to or recorded for its old owner does not. Teammates' work
-        // runs here only through a Team account of the new owner's, as when a person's join adds their computer.
+        // The computer's own settings move with it; what was granted to or recorded for its old owner does not.
         ;(state.machines ??= []).push({ machineId: move.to.machineId, name: move.to.name ?? pool.name, cwd: pool.cwd, engines: [...pool.engines],
           maxAgents: pool.maxAgents, ...(pool.agents ? { agents: pool.agents } : {}), ...(pool.scope ? { scope: pool.scope } : {}),
           contributorId: newOwner.id, membershipGeneration: newOwner.generation, generation: operationId, paused: pool.paused,
@@ -3006,7 +2975,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A step a Team agent opens for the task it holds is part of that task, not new work (task #4120).
       for (const id of creator) {
         const of = command.reviewOf ? conversation(state, command.reviewOf) : undefined
-        teamJoin(project, id, of, !of?.agentIds.includes(id))
+        teamJoin(project, id, of)
       }
       // A step's opener is in its task too: the task's chat is where the step's work is talked over (task steps design).
       if (command.step && command.reviewOf) {
@@ -3374,7 +3343,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const me = person(state, actor.userId)
         if (me.role === 'viewer') fail('READ_ONLY', 'A viewer cannot contribute agents.', 403)
         const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose your own computer.', 403)
-        if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
+        if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant) {
           fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
         }
         if (command.lead) fail('AGENT_CHAT_LEAD', 'An agent\'s own chat has no lead.', 400)
@@ -3416,21 +3385,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const roleKind = command.roleId ? project.roles?.find(r => r.id === command.roleId)?.kind : undefined
       const roleName = command.roleName ?? legacyRoleName(project, { roleId: command.roleId })
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
-      // A Harness Team account hosting a Product Manager serves only its project, and one is never added where another
-      // project's work runs (machines.ts productManagerOn, as admitMachineStart holds a start; security re-review of #2089).
-      const teamPool = teamAccountPool(machineContribution(state, command.machineId))
-      if (!existing && teamPool) {
-        const held = productManagerOn(state, command.machineId)
-        if (held && held !== project.id) fail('TEAM_ACCOUNT_HELD', 'This machine\'s Harness Team account runs another project\'s Product Manager, so it takes only that project\'s work for now.', 403)
-        if (command.lead && [...projectsOnMachine(state, command.machineId)].some(id => id !== project.id)) {
-          fail('TEAM_ACCOUNT_BUSY', 'This machine\'s Harness Team account runs other projects\' agents, so it cannot host this Product Manager now.', 409)
-        }
-      }
-      // A confidential session removed from a Team account stays held until its host confirms its data deleted: added back,
-      // even to the project it is held for, the hold would end with its private chats still there (review of #2142).
-      if (!existing && state.closingSessions?.some(c => c.machineId === command.machineId && c.harnessId === command.harnessId && c.heldFor)) {
-        fail('TEAM_ACCOUNT_HELD', 'This session held people\'s private chats and is being deleted from this machine\'s Harness Team account, so it cannot be added back.', 403)
-      }
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
       // Added back by hand: what they chose now stands over what its removal kept.
       dropRemovedRecord(state, command.machineId, command.harnessId)
@@ -3442,8 +3396,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         hostGrant: grant.hostGrant ?? null,
         name: addedName, configuration: command.configuration, configurationVersion: operationId,
         ...(roleKind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(command.roleId ? { roleId: command.roleId } : {}),
-        ...(roleName ? { roleName } : {}),
-        ...(teamPool ? { teamAccount: true as const } : {}) })
+        ...(roleName ? { roleName } : {}) })
       if (existing && (existing.machineOwnerId !== grant.machineOwnerId || existing.contributorId !== grant.contributorId)) {
         fail('ALREADY_SHARED', 'This session already has a contributor. Use the existing tab agent.')
       }
@@ -3528,11 +3481,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       marking(startGroup, () => applyPushOrigin(state, startGroup, context.pushOrigin, context.pushOriginPulls, context.pushOriginTask))
       const written = teamWrittenTask(state, startGroup)
       // A new agent starts only on its own person's computer, as them (task #4120, the PM's ruling): never the PM on another
-      // person's, and never in a Team account (machines.ts admitMachineStart).
-      // The machine's own owner, as its contributor, with no machine share, Team account or Team session, as agent.new checks
+      // person's (machines.ts admitMachineStart).
+      // The machine's own owner, as its contributor, with no machine share, as agent.new checks
       // (security review 2 of #3446: off the Machines list, or through a share, the contributor is not the machine's owner).
       const starter = actor.kind === 'person' ? actor.userId : agent(state, actor.agentId).contributorId
-      if (grant.hostMachineId || grant.teamSession) failTeamWork(TEAM_ACCOUNTS_GONE)
       if (starter !== grant.contributorId || starter !== grant.machineOwnerId || grant.hostGrant) failTeamWork({ code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER })
       // Code a Team agent wrote, or a branch GitHub cannot place, runs only on the project owner's own computer, with its project
       // settings off (teamWritten.ts, the PM's ruling; audit H2, security review 2 of #3081).
@@ -3544,7 +3496,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const wrongOs = stepOsRefusal(state, startGroup, request.machineId)
       if (wrongOs) fail('STEP_OS', wrongOs)
       // Before it is queued: a machine that cannot get the app's token for it would fail it, and count that against its engine.
-      requireRepositoryReach(state, false, grant.machineOwnerId, home, context.repositoryReach)
+      requireRepositoryReach(state, grant.machineOwnerId, home, context.repositoryReach)
       // The project's machine rules (machineRules.ts).
       refuseByMachineRules(context, { machineId: request.machineId, engine: request.engine, review: isReview(startGroup) })
       const pool = admitMachineStart(state, request, context.now)
@@ -3556,7 +3508,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       leadActed(command.request.conversationId, 'start')
       result.startId = operationId
       if (command.routeDecisionId) {
-        // The pick names the machine the Lead named: the Mac, when the start then went to its team account.
         const r = command.request
         const model = r.model ?? 'default', effort = r.effort ?? 'default'
         const { decision, override, instead, routed } = linkDecision(r.conversationId,
@@ -3783,15 +3734,15 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       // Like a Lead, a Buddy runs only on its owner's own machine, in their own account, for Claude and Codex alike: never a
-      // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28). The grant is the store's reading of
+      // machine shared with them (Ken's ruling, 10-28). The grant is the store's reading of
       // the machine's account row (store.ts contribution), never the request's.
       const listed = machineContribution(state, command.machineId)
       const notOwn = () => fail('BUDDY_OWN_MACHINE', BUDDY_OWN_MACHINE_REFUSAL, 403)
-      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) notOwn()
+      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant) notOwn()
       // Off the Swarm's list it is recorded Buddy-only (Dee, 10-29): its host starts and watches the Buddy there, and nothing
       // else of the Swarm reaches it.
       const pool = listed ?? (command.setup ? addBuddyMachine(command.machineId, command.setup, me) : fail('BUDDY_MACHINE', 'Update Harness, then add your Buddy again.', 403))
-      if (pool.contributorId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') notOwn()
+      if (pool.contributorId !== me.id) notOwn()
       // A Windows host from before its caller check refused every agent's Swarm command while a Buddy ran there (security
       // review of #2093; Lead's ruling, 10-29): none is added on one, and its launch is checked again (machines.ts).
       if (refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
@@ -3804,7 +3755,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
       const named = chosenBuddyName(state, chat, context.buddyNames)
-      // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: named.name, cwd: buddyHomeFolder(pool, me), worktree: false,
         requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation }, buddyScope: 'swarm',
@@ -3823,13 +3773,13 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'agent.new': {
       // + New agent (Swarm v3, task #4116; anh Dee 11-07): the person's own agent, on their own listed computer and account, as
-      // a Buddy is (Ken's ruling, 10-28): never a machine shared with them, and never a Harness Team account.
+      // a Buddy is (Ken's ruling, 10-28): never a machine shared with them.
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person makes their own agent.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
       const me = person(state, actor.userId)
       if (me.role === 'viewer') fail('READ_ONLY', 'A viewer cannot start agents.', 403)
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose your own computer.', 403)
-      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) {
+      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant) {
         fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
       }
       // Cmd-N starts a Member through the Swarm, as Join does (task #4540): a local start or a Lead, which leads its own, takes none.
@@ -4063,7 +4013,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
         ...(start.request.buddySession ? { buddySession: start.request.buddySession } : {}),
         ...(start.request.profileId ? { profileId: storedProfileId(start.request.machineId, command.configuration.engine, start.request.profileId) } : {}),
-        ...(teamAccountPool(machineContribution(state, start.request.machineId)) ? { teamAccount: true as const } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       // A main Buddy stays first, as older clients take a Buddy chat's first agent for its Buddy (buddySessions.ts).
       if (start.request.buddyOf && !start.request.buddySession) group.agentIds.unshift(agentId)
@@ -4402,8 +4351,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           fail('AUDIENCE_LEAD_ONLY', 'A private conversation holds only the Lead among agents.', 403)
         }
         // An agent added to a task may work on it, so a teammate's agent is added only where it may take that project's work,
-        // as an assignment checks (machines.ts teamWorkCheck). A Team account's agent joins nothing new (task #4120).
-        teamAgentStays(member, !group.agentIds.includes(member.id))
+        // as an assignment checks (machines.ts teamWorkCheck).
         requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group))
         pushedRefusal(group, member)
         requireTeamWrittenAccount(state, group, member)
@@ -4737,7 +4685,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'route.record': {
       chatOnly(command.conversationId)
       projectChatWork(command.conversationId)
-      // Candidates that cannot take the work (a Team account, another person's computer, task #4120) leave the decision for its
+      // Candidates that cannot take the work (another person's computer, task #4120) leave the decision for its
       // exclusions, with why, so the Lead and people see it. A pick among them is left out too and the record keeps no pick, so
       // the coordinator chooses among the rest by the Routing rules: refusing the whole route stopped every PM (task #4194).
       const starter = actor.kind === 'agent' ? agent(state, actor.agentId).contributorId : actor.userId

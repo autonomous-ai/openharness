@@ -210,9 +210,6 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     ['its record is older than two minutes, whatever other machines wrote since', async f => {
       await f.reports.set(f.tab, 'test-host', { ...(await f.reports.get(f.tab, 'test-host'))!, at: f.clock.now - RECORD_TTL_MS })
     }],
-    ['the record says a Team account runs its agents', async f => {
-      await f.reports.set(f.tab, 'test-host', { ...(await f.reports.get(f.tab, 'test-host'))!, team: true })
-    }],
     ['a bump of its Swarm is owed here', async f => {
       const bump = stamps.bump.bind(stamps)
       stamps.bump = async () => { throw new Error('Redis is unreachable') }
@@ -262,24 +259,6 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     expect(paths[0]).toBe('full')
     expect(paths[3]).toBe('fast')
     expect(paths[4]).toBe('full')
-  })
-
-  it('a Team account\'s reading came in since: the owner\'s own sign-in is refused as the full report refuses it', async () => {
-    const f = await swarm()
-    expect((await settle(f)).at(-1)).toBe('fast')
-    // As a fast reading from the machine's Harness Team account stores it: same sessions, signed in as the team account.
-    const row = await f.part()
-    const data = structuredClone(row.data) as unknown as MachineData
-    data.contribution!.observation!.sessionKind = 'team'
-    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as never } })
-    try {
-      machineReportLine(0)
-      await expect(f.beat()).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY' })
-      expect(machineReportLine(0)).toMatchObject({ fast: 0, full: 1 })
-    } finally {
-      // The machine's host form reads every Swarm it is in, and refuses this sign-in for one that records a Team account.
-      await db.swarmMachine.update({ where: { id: row.id }, data: { data: row.data as never } })
-    }
   })
 
   it('its contribution was regenerated: refused as revoked', async () => {

@@ -10,7 +10,7 @@ import { firstMachines, isReview, machineRuleRefusal } from './machineRules.js'
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
 import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, NO_PROJECT, onTeamAccount, projectOf, projectsOf, regularMayWorkIn } from './projects.js'
+import { agentProjectId, NO_PROJECT, projectOf, projectsOf, regularMayWorkIn } from './projects.js'
 import { barredFromTeamWritten } from './teamWritten.js'
 import { localNow } from './localTime.js'
 import { DEFAULT_TIME_ZONE } from './costs/reflection.js'
@@ -106,11 +106,6 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
     if (occupiesAgent(group)) busy.add(holder)
     else if (activeWork(group) && handed(group)) handedBy.set(holder, (handedBy.get(holder) ?? 0) + 1)
   }
-  // A PM in a Harness Team account assigns only agents of its own machine or another Team account (store.ts teamCommand,
-  // security review 2 of #2089): the main account stays out of its reach.
-  const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
-  const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
-  const reachable = (agent: Agent) => !lead || !onTeamAccount(state, lead) || agent.machineId === lead.machineId || onTeamAccount(state, agent)
   const launching = (agent: Agent) => !!state.starts?.some(s => !s.poolSettled && s.poolGeneration && s.request.machineId === agent.machineId && s.harnessId === agent.harnessId)
   // An idle Regular agent is in no project until a task places it (task #4116): it is free in each project it may work in, so a
   // task its PM routed to it is handed over (task #4218). The assignment checks the same again (projects.ts sameProject).
@@ -120,9 +115,8 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
   }
   return state.agents
     .filter(agent => inProject(agent) && !leads.has(agent.id) && !isBuddy(agent)
-      // Nor a Team account's, which takes no new work (task #4120).
-      && agent.workDecision !== 'stop' && !onTeamAccount(state, agent) && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
-      && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded && reachable(agent)
+      && agent.workDecision !== 'stop' && !moving(agent) && (asleep(agent) || !sessionClosed(state, agent, now)) && !launching(agent)
+      && !busy.has(agent.id) && (handedBy.get(agent.id) ?? 0) < rules.maxHanded
       // A member its machine or engine cannot serve now would lose the task at once (liveness.ts): until that clears.
       && !unavailableReason(state, agent, now, asleep(agent)))
     .map((agent, at) => ({ agent, at, handed: handedBy.get(agent.id) ?? 0 }))

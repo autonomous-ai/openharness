@@ -9,7 +9,7 @@ import { isBuddy } from './buddies.js'
 import { MODEL_CATALOG, namedDefault } from './catalog.js'
 import { roleNameOf } from './instructions.js'
 import { activeWork, workerIndex, type Agent, type CheckVerdict, type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject, onTeamAccount } from './projects.js'
+import { agentProjectId, groupProject } from './projects.js'
 import { agentTarget, modelMatches } from './rules.js'
 import { canStart, standing } from './reviewSeats.js'
 import { stepName, stepsOf } from './steps.js'
@@ -97,8 +97,7 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
   const otherSecurity = kind === 'security' ? otherSecurityReviewers(state, task, stepId) : new Set<string>()
   const ranked = state.agents.flatMap(agent => {
     if (built.has(agent.id) || index.leaders.has(agent.id) || index.working.has(agent.id) || holding.has(agent.id)) return []
-    // Nor a Team account's agent, which takes no new work (task #4120).
-    if (isBuddy(agent) || agent.workDecision === 'stop' || onTeamAccount(state, agent) || agentProjectId(state, agent) !== projectId) return []
+    if (isBuddy(agent) || agent.workDecision === 'stop' || agentProjectId(state, agent) !== projectId) return []
     if (judged.has(`agent:${agent.id}`) || otherSecurity.has(agent.id)) return []
     const role = roleNameOf(state, agent)
     if (NEVER.test(role) || NEVER_NAMED.test(agent.name) || NEVER_NAMED.test(agent.displayName ?? '')) return []
@@ -107,7 +106,7 @@ export function reviewerCandidates(state: SuperTabState, task: Conversation, kin
     // Its machine can start work within the review's wait (reviewSeats.ts): not offline, paused, signed out, suspended or
     // out of quota. A machine the state does not list is not judged here; work.assign's checks still hold it.
     const pool = state.machines?.find(m => m.machineId === agent.machineId && m.contributorId === agent.contributorId)
-    if (pool && !canStart(standing(state, pool, agent.configuration.engine, now))) return []
+    if (pool && !canStart(standing(pool, agent.configuration.engine, now))) return []
     // A test step for an OS goes to a machine that reports that OS: one reporting another, none, or not listed is never it.
     if (os && !reportsOs(pool?.observation?.resources?.os, os)) return []
     const row = catalogRow(state, agent)

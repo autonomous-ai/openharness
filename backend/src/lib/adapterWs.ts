@@ -200,7 +200,8 @@ export function handleAdapterUpgrade(req: IncomingMessage, socket: Duplex, head:
     }
     let machine = (await machineService.resolveOrCreateForComputer(user.sub, user.autonomousEnv, computerId, label ?? 'computer', claimedMachineId, 'computer')).machine
     // Before it attaches: a Harness Team account's former machine now served by the person's own sign-in is theirs, listed
-    // again (MachineService.listForUser). Any other row is stamped by the connect's own update below.
+    // again (MachineService.listForUser), and kept by the job that soft-deletes the rest (superTabs/migration/teamMachinesJob.ts;
+    // this goes with it, on or after 2026-12-10). Any other row is stamped by the connect's own update below.
     if (machine.sessionKind === 'team') {
       await prisma.machine.update({ where: { machineId: machine.machineId }, data: { sessionKind: 'computer' } })
       machine = { ...machine, sessionKind: 'computer' }

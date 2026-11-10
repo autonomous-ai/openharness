@@ -110,7 +110,7 @@ describe('a handed task opens its review steps', () => {
     const tester = f.add('tst', f.task, 'Tester')
     // A Desktop test runs on a Mac: its Tester's machine says it is one (task #3602; an unlisted machine takes no OS step).
     f.state.machines = [{ machineId: 'host', name: 'host', contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm',
-      engines: ['claude'], maxAgents: 8, paused: false, observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os: 'macOS' },
+      engines: ['claude'], maxAgents: 8, paused: false, observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, resources: { os: 'macOS' },
         tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
         quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never
     f.ready(['desktop/lib/super_tabs/view.dart'])
@@ -279,7 +279,7 @@ describe('a handed task opens its review steps', () => {
     const mac = tester('mac-tst', 'mac1'), linux = tester('linux-tst', 'linux1')
     const machine = (machineId: string, os: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
       scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
         readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
         quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })
     f.state.machines = [machine('mac1', 'macOS'), machine('linux1', 'Linux')] as never
@@ -294,7 +294,7 @@ describe('a handed task opens its review steps', () => {
 
   const machine = (machineId: string, os: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
     scope: 'swarm', engines: ['claude'], maxAgents: 8, paused: false,
-    observation: { generation: 'g1', receivedAt: 999_000, sessionKind: 'computer', resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+    observation: { generation: 'g1', receivedAt: 999_000, resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
       readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
       quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })
 
@@ -414,7 +414,7 @@ describe('a test step\'s Tester runs a mid-strength model or stronger, whatever 
     /** The Linux machine as its report lists it, once its agents joined. */
     const listed = () => { f.state.machines = [{ machineId: 'linux1', name: 'linux1', contributorId: 'owner', membershipGeneration: 'g', generation: 'g1', cwd: '/swarm',
       scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, sessionKind: 'computer', resources: { os: 'Linux' }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+      observation: { generation: 'g1', receivedAt: 1_000_000 - 1000, resources: { os: 'Linux' }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
         readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
         quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } }] as never }
     return Object.assign(f, { join, listed })

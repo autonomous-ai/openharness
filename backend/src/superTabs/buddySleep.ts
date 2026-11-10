@@ -3,15 +3,15 @@ import { isBuddy, isBuddyChat, isSwarmBuddy } from './buddies.js'
 import { switched } from './boardRights.js'
 import { SLEEP_IDLE_MS } from './crewRules.js'
 import { MACHINE_FRESH_MS } from './machines.js'
-import { agentProjectId, canReadGroup, canReadProject, onTeamAccount, projectsOf } from './projects.js'
+import { agentProjectId, canReadGroup, canReadProject, projectsOf } from './projects.js'
 import { groupsOf, idleSince } from './tidy.js'
 import { wakeCrewMember } from './crewKeep.js'
 import { startWake } from './crewTimes.js'
 import { buddiesHearing } from './buddyNews.js'
 
-/** Only a current main Buddy in Board projects can rest (#3824). A Team close purges its resumable session data. */
+/** Only a current main Buddy in Board projects can rest (#3824). */
 export function buddySleepManaged(state: SuperTabState, agent: Agent): boolean {
-  if (!isBuddy(agent) || agent.buddySession || agent.workDecision === 'stop' || agent.movedTo || onTeamAccount(state, agent)) return false
+  if (!isBuddy(agent) || agent.buddySession || agent.workDecision === 'stop' || agent.movedTo) return false
   const person = state.people.find(p => p.id === agent.buddyOf!.personId && p.generation === agent.buddyOf!.generation)
   if (!person) return false
   const reader = { kind: 'person' as const, userId: person.id, email: person.email }

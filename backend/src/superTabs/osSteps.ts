@@ -9,7 +9,7 @@
 import { isBuddy } from './buddies.js'
 import { machineOffline, swarmMachines } from './machines.js'
 import { type Conversation, type SuperTabState } from './model.js'
-import { agentProjectId, onTeamAccount, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, type SwarmProject } from './projects.js'
 import { reportsOs, type PlannedStep, type StepOs } from './reviewTable.js'
 import { type StepPull } from './stepOpen.js'
 
@@ -45,9 +45,9 @@ const coordinatorOf = (state: SuperTabState, project: SwarmProject) =>
 export function testsOn(state: SuperTabState, project: SwarmProject, now: number, os: WaitingOs): boolean {
   const pm = coordinatorOf(state, project)
   return swarmMachines(state).some(pool => reportsOs(pool.observation?.resources?.os, os) && !machineOffline(pool, now) && !pool.paused
-    && !pool.removal && !teamAccountPool(pool)
+    && !pool.removal
     && (pool.contributorId === pm?.contributorId || state.agents.some(a => a.machineId === pool.machineId && a.contributorId === pool.contributorId
-      && !isBuddy(a) && a.workDecision !== 'stop' && !onTeamAccount(state, a) && agentProjectId(state, a) === project.id)))
+      && !isBuddy(a) && a.workDecision !== 'stop' && agentProjectId(state, a) === project.id)))
 }
 
 /** Records [step] of [task], of a waiting OS, as waiting for a machine of it, briefed on [pulls]; true when it was not waiting

@@ -30,9 +30,8 @@ let db: PrismaClient
 const owner: AuthUser = { sub: '300000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '300000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
 const watcher: AuthUser = { sub: '300000000000000000000003', email: 'watcher@example.com', autonomousEnv: 'prod', role: 'user' }
-// peer's own Mac's daemon, which relays their web app's Swarm requests; and the Harness Team account's machine on that Mac,
-// from before Team accounts went (anh Dee, 2026-11-10).
-const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', PEER_TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+// peer's own Mac's daemon, which relays their web app's Swarm requests.
+const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const peerMac: AuthUser = { ...peer, harnessSessionId: 'peer-mac-session', harnessSessionKind: 'computer' }
 const config = { engine: 'claude', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
@@ -49,11 +48,8 @@ beforeAll(async () => {
     await db.machine.create({ data: { machineId, userId: user.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote',
       ...(machineId === 'peer-mac' ? { computerId: PEER_COMPUTER, sessionKind: 'computer' } : {}) } })
   }
-  await db.machine.create({ data: { machineId: 'peer-team', userId: peer.sub, computerId: PEER_TEAM_COMPUTER, sessionKind: 'team', hostMachineId: 'peer-mac',
-    apiKey: 'fixture-peer-team', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  // Machines in no Swarm (Dee, 10-29): peer's own laptop, a machine of peer's account given over to team work (`harness team
-  // on`, no Mac), and the owner's own laptop.
-  for (const [machineId, user, sessionKind] of [['peer-laptop', peer, 'computer'], ['peer-dedicated', peer, 'team'], ['owner-laptop', owner, 'computer']] as const) {
+  // Machines in no Swarm (Dee, 10-29): peer's own laptop and the owner's own laptop.
+  for (const [machineId, user, sessionKind] of [['peer-laptop', peer, 'computer'], ['owner-laptop', owner, 'computer']] as const) {
     await db.machine.create({ data: { machineId, userId: user.sub, sessionKind, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   }
 })
@@ -1176,15 +1172,15 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     expect(JSON.stringify(await reads.firstLoad(owner, f.tab))).not.toContain('peer-laptop')
   })
 
-  it('is refused in the same words on someone else\'s machine, a Team sign-in with or without a Mac, and no machine at all, adding nothing', async () => {
+  it('is refused in the same words on someone else\'s machine and no machine at all, adding nothing', async () => {
     const f = await swarm()
-    // The same words for someone else's machine, a Team sign-in and a machine that does not exist, so they never say which
-    // (security review 2 of #2234).
+    // The same words for someone else's machine and a machine that does not exist, so they never say which (security review 2
+    // of #2234).
     const refusals = []
-    for (const machineId of ['owner-laptop', 'peer-team', 'peer-dedicated', 'ffffffffffffffffffffffffffffffff']) {
+    for (const machineId of ['owner-laptop', 'ffffffffffffffffffffffffffffffff']) {
       refusals.push(await add(f, machineId).then(() => null, (e: { code: string; message: string; status: number }) => [e.code, e.message, e.status]))
     }
-    expect(refusals).toEqual(Array(4).fill(['BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403]))
+    expect(refusals).toEqual(Array(2).fill(['BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403]))
     const read = await f.store.read(peer, f.tab)
     expect([read.state.starts ?? [], read.state.agents.filter(a => a.buddyOf)]).toEqual([[], []])
     expect(await poolRows(f.store, owner, 'owner-laptop')).toEqual([])
@@ -1269,7 +1265,7 @@ describe('idle Buddy sleep (#3824)', () => {
     const { main, swarmChat, pool } = await swarmBuddy(f)
     const agent = (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
     const sent = await f.execute({ type: 'message.send', conversationId: swarmChat, text: 'Remember this', replyTo: null, recipientIds: [] }, peer)
-    const { receivedAt: _, sessionKind: __, ...report } = pool.machine.observation!
+    const { receivedAt: _, ...report } = pool.machine.observation!
     const idle = { ...report, runningHarnessIds: [agent.harnessId], idleBuddyHarnessIds: [agent.harnessId] }
     const current = async () => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
     now += 3_600_000 - 1
@@ -1305,7 +1301,7 @@ describe('Buddy input and sleep race (#3824)', () => {
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
     const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
-    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const { receivedAt: _, ...report } = first.pool.machine.observation!
     const idle = { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) }
     const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
     now += 3_600_000
@@ -1351,7 +1347,7 @@ describe('a sleeping proposal sender (#3824)', () => {
     await f.execute({ type: 'buddy.default', conversationId: second.swarmChat }, peer)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
     await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: { in: agents.map(a => a.id) } }, data: { status: 'answered' } })
-    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const { receivedAt: _, ...report } = first.pool.machine.observation!
     now += 3_600_001
     await f.store.observeMachine(peer, f.tab, 'peer-mac', { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) })
     const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!

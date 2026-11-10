@@ -21,7 +21,7 @@ const MODEL = 'deepseek-4.1-flash'
 type Reading = NonNullable<ContributedMachine['observation']>
 type LocalModel = NonNullable<Reading['localModels']>[number]
 const reading = (receivedAt: number, localModels: LocalModel[] = [], capabilities = ['buddySessions', 'swarmBuddy', 'buddyModel']): Reading => ({
-  generation: 'g1', receivedAt, sessionKind: 'computer',
+  generation: 'g1', receivedAt,
   resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null,
     projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
   tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], capabilities, localModels })

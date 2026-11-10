@@ -19,10 +19,10 @@ const ownerOf = (repository: string) => repository.split('/')[0]
 const install = (reach: Extract<RepositoryReach, { state: 'not-installed' }>) =>
   `An owner of ${ownerOf(reach.repository)} installs it${reach.installUrl ? ` (${reach.installUrl})` : ''}`
 
-/** Refuses an agent in a Team account ([team]), or of a machine owner who does not own [project], when the app does not reach its repository. */
-export function requireRepositoryReach(state: SuperTabState, team: boolean, machineOwnerId: string, project: SwarmProject, reach: RepositoryReach | undefined): void {
+/** Refuses an agent of a machine owner who does not own [project], when the app does not reach its repository. */
+export function requireRepositoryReach(state: SuperTabState, machineOwnerId: string, project: SwarmProject, reach: RepositoryReach | undefined): void {
   if (!reach || (reach.state !== 'not-installed' && reach.state !== 'not-approved')) return
-  if (!team && ownsProject(state, machineOwnerId, project)) return
+  if (ownsProject(state, machineOwnerId, project)) return
   const through = `An agent in this account reaches ${reach.repository} only through the Harness GitHub App`
   fail(REPOSITORY_UNREACHABLE, reach.state === 'not-installed'
     ? `${through}, which is not installed on it. ${install(reach)}, then start or assign it again.`

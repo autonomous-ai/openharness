@@ -241,8 +241,9 @@ model Machine {
   // box reconnects to THAT machine instead of minting a second one. Null on rows that predate it.
   computerId                      String?
   // How the computer signed in on its LAST adapter-ws connect: `computer`. `team` on a row a Harness Team account's
-  // session served before Team accounts went (anh Dee, 2026-11-10): never listed (MachineService.listForUser), and set
-  // to `computer` before a normal sign-in's socket attaches. Null on rows that predate it (never a team machine).
+  // session served before Team accounts went (anh Dee, 2026-11-10): never listed (MachineService.listForUser), set
+  // to `computer` before a normal sign-in's socket attaches, and soft-deleted once by superTabs/migration/teamMachinesJob.ts.
+  // Null on rows that predate it (never a team machine).
   sessionKind                     String?
   // A Harness Team account's machine's Mac: the machineId of the owner's own machine on that computer, written by Team
   // sessions until they went (2026-11-10); written by nothing now. Null for every other machine.

@@ -538,7 +538,7 @@ describe('lost work goes to an ordinary project worker', () => {
       step: 'Test on Windows', checks: [] }).result.conversationId as string
     const machines = (list: Array<[string, string | null]>) => list.map(([machineId, platform]) => ({ machineId, name: machineId, contributorId: 'owner',
       membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 8, paused: false,
-      observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources: { os: platform }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+      observation: { generation: 'g1', receivedAt: NOW, resources: { os: platform }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
         readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
         quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })) as never
     // Old took the step on a Windows machine (a Windows step is assigned only there, #3926), then was lost.

@@ -4,9 +4,8 @@ import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { startFinished } from './parts/write.js'
-import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, startProject, teamAccountPool, type SwarmProject } from './projects.js'
+import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, startProject, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
-export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -26,15 +25,7 @@ export interface ContributedMachine {
    *  `atMost`, its owner's own [maxAgents]. Absent on a row saved by an older client: agentLimit reads it. */
   agents?: 'memory' | 'atMost'
   paused: boolean
-  /** `sessionKind` is how the reporting machine is signed in, stamped by the store, never taken from the report: `computer`;
-   *  `team` on a reading a Harness Team account's session stored before they went (anh Dee, 2026-11-10). Absent on older
-   *  readings. */
-  observation?: Omit<MachineObservation, 'privacy'> & { receivedAt: number; sessionKind?: 'team' | 'computer' }
-  /** A Mac's Harness Team account: the machine of the Mac it lives on, stamped by the store from its account row
-   *  (`Machine.hostMachineId`), never taken from the command. Such a pool is that Mac under the scenes ("One machine",
-   *  docs/plans/2026-10-24-swarm-team-account.md): it shows the Mac's name, joins where the Mac was added, follows the
-   *  Mac's pause, slots and removal, and runs teammates' projects started on the Mac (teamStartRequest). */
-  hostMachineId?: string
+  observation?: MachineObservation & { receivedAt: number }
   /** Set by machine.remove: an online machine stays listed, paused, while its host deletes the Swarm's folders there, until
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). No chat hears how it ended (#2742). */
@@ -112,21 +103,6 @@ const quota = z.object({ engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), kn
   windows: z.array(z.object({ name: z.string().max(80), usedPercent: z.number().min(0).max(100),
     resetsAt: z.union([z.string().max(80), z.number().finite(), z.null()]) }).strict()).max(10),
 }).strict()
-/** Milliseconds since the epoch, on the reporting Mac's clock. */
-const checkedAt = z.number().finite().nonnegative()
-/**
- * What a Harness Team daemon says about its privacy check with each reading (cli/src/team/privacy.ts, docs/plans/
- * 2026-10-24-swarm-team-account.md Task 2): `account`, it runs in a Mac's Harness Team account and the check passed, or
- * failed with the first failing item (`unchecked` when it could not run); `dedicated`, the whole machine is for agents
- * (`harness team on`). The owner's own daemon sends none. `item` is a short slug, so a newer CLI's item still reads. Swarm v4 keeps
- * none of it: a reading is accepted with it and stored without (storedObservation).
- */
-export const machinePrivacySchema = z.union([
-  z.object({ mode: z.literal('account'), passed: z.literal(true), checkedAt }).strict(),
-  z.object({ mode: z.literal('account'), passed: z.literal(false), item: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/), detail: z.string().max(1000), checkedAt }).strict(),
-  z.object({ mode: z.literal('dedicated') }).strict(),
-])
-export type MachinePrivacy = z.infer<typeof machinePrivacySchema>
 /** What the machine is ready for (cli/src/superTabs/machines.ts readiness), for the route to leave out one that cannot do
  *  the work: per engine whether it is installed and signed in, and per folder in its Swarm workspace (one per project)
  *  the repository it checks out (an address without credentials), whether it is a git checkout, and whether this
@@ -174,9 +150,6 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  agent (cli/src/lib/codingModel.ts), with why: so the route can tell a Lead asked for one why it is not offered. */
   refusedModels: z.array(z.object({ grid: z.string().min(1).max(160), model: z.string().min(1).max(200),
     name: z.string().max(200).optional(), why: z.string().min(1).max(300) }).strict()).max(16).optional(),
-  /** A Harness Team daemon's privacy check; absent from the owner's own daemon and from hosts before it. Swarm v4 accepts it and
-   *  keeps none (storedObservation). */
-  privacy: machinePrivacySchema.optional(),
   readiness: readiness.optional(),
   /** The starts this machine launched and is still preparing (fetching the project, checking its worktree out, starting
    *  the engine), as of this report. Such a start waits past the 3 minutes while reports keep naming it (liveness.ts);
@@ -214,13 +187,12 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
 
 /**
  * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
- * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, the contributed engines' quotas, and that
- * the machine is signed in as a computer (Harness Team accounts' sessions are gone, anh Dee 2026-11-10).
+ * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, and the contributed engines' quotas.
  * A full report and a reading-only one (DB 2.5) store the same.
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
-  const { privacy: _reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
+  const { harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
@@ -231,7 +203,7 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
     ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
-    sessionKind: 'computer', ...(progress ? { harnessProgress: progress } : {}),
+    ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
     ...(refused?.length ? { refusedStarts: refused } : {}) }
 }
@@ -248,10 +220,8 @@ const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => {
  * last full report saw.
  */
 export function readingOnly(previous: StoredReading | undefined, next: StoredReading): boolean {
-  // How the machine is signed in decides who may host it (store.ts teamByRecord reads the stored one): a reading from the
-  // other kind of session runs in full, so the full report's refusal is never skipped (review of #2378).
   // A refused start fails in the full report, which reads the Swarm's starts (store.ts fullReading).
-  if (!previous || next.stoppedReservations?.length || next.refusedStarts?.length || previous.sessionKind !== next.sessionKind) return false
+  if (!previous || next.stoppedReservations?.length || next.refusedStarts?.length) return false
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.closedHarnessIds ?? [], next.closedHarnessIds ?? [])
     || !sameSet(previous.preparingStartIds, next.preparingStartIds)
@@ -269,7 +239,7 @@ export function startPreparing(state: SuperTabState, start: AgentStart, now: num
   return !!report?.preparingStartIds?.includes(start.id) && now - report.receivedAt <= MACHINE_FRESH_MS
 }
 
-export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'NOT_SWARM_MACHINE' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
+export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'NOT_SWARM_MACHINE' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 
 /**
@@ -297,8 +267,6 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's
   // (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
   if (pool?.buddyOnly) return ownsProject(state, pool.contributorId, project) ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
-  // A Team account's agent already in the Swarm keeps working in what it holds until it is stopped after the release; it gets no
-  // new work and no new agent starts there, which their own gates refuse (admitMachineStart, work.assign, the route, the picks).
   if (pool && pool.contributorId !== contributorId) return { code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER }
   const person = state.people.find(p => p.id === contributorId)
   // Reading is not working: a viewer's agent takes no work (security review 1 of #3446).
@@ -307,22 +275,8 @@ export function teamWorkCheck(state: SuperTabState, machineId: string, contribut
   return { code: 'NOT_YOUR_COMPUTER', reason: `${pool?.name ?? 'This machine'}'s person cannot read this project, so its agents take none of its work.` }
 }
 
-/** Why a Team account's entry takes no new agent and no new work (task #4120). */
-export const TEAM_ACCOUNTS_GONE: TeamWorkRefusal = { code: 'TEAM_ACCOUNTS_REMOVED',
-  reason: 'Harness Team accounts are gone: an agent runs on its own person\'s computer, in their own account.' }
 /** Why a new agent does not start on another person's computer (task #4120): it would run as that computer's person. */
 export const NOT_YOUR_COMPUTER = 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s.'
-
-// ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────
-// The team account is how a Mac runs teammates' work without its owner's files, not a machine of its own to anyone: a
-// Lead names the Mac, and the work for another person's project lands in the Mac's team account.
-
-/** Every pool of a Harness Team account on the Mac [pool] is, under the same grant: one, or more once the account was
- *  removed and set up again (a new account and machine, the old one's pool still listed). They go with the Mac. */
-export function teamPoolsOf(state: SuperTabState, pool: ContributedMachine): ContributedMachine[] {
-  if (pool.hostMachineId) return []
-  return state.machines?.filter(m => m.hostMachineId === pool.machineId && m.contributorId === pool.contributorId) ?? []
-}
 
 /** The name a machine's owner gave it in Machines (its account row, routes/machines.ts rename), which every Swarm list shows
  *  (Dee, #2308): seeded from its computer's hostname, so a machine never renamed keeps that. Null when the row has none. */
@@ -330,24 +284,17 @@ export function accountMachineName(row: { name: string | null } | null | undefin
   return row?.name?.trim() || null
 }
 
-/** Whether [pool] shows another name than [name], its owner's (accountMachineName). A Team account's pool goes by its Mac's
- *  name, never its own account's "<Mac> · Team": it follows its Mac (followAccountName). */
+/** Whether [pool] shows another name than [name], its owner's (accountMachineName). */
 export function renamedBy(pool: ContributedMachine, name: string | null): name is string {
-  return !!name && !pool.hostMachineId && pool.name !== name
+  return !!name && pool.name !== name
 }
 
-/** Renames [pool], and its Mac's Team account pools, to [name] when its owner renamed it (renamedBy); whether it did. Its
- *  host's readings call it, so a rename shows in every Swarm the machine is in by its next heartbeat. */
-export function followAccountName(state: SuperTabState, pool: ContributedMachine, name: string | null): boolean {
+/** Renames [pool] to [name] when its owner renamed it (renamedBy); whether it did. Its host's readings call it, so a rename
+ *  shows in every Swarm the machine is in by its next heartbeat. */
+export function followAccountName(pool: ContributedMachine, name: string | null): boolean {
   if (!renamedBy(pool, name)) return false
-  for (const each of [pool, ...teamPoolsOf(state, pool)]) each.name = name
+  pool.name = name
   return true
-}
-
-/** The one of them that runs teammates' work on the Mac: not being removed, and the last to report. Undefined when none. */
-export function teamPoolOf(state: SuperTabState, pool: ContributedMachine): ContributedMachine | undefined {
-  return teamPoolsOf(state, pool).filter(m => !m.removal)
-    .reduce<ContributedMachine | undefined>((best, m) => !best || (m.observation?.receivedAt ?? -1) >= (best.observation?.receivedAt ?? -1) ? m : best, undefined)
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
@@ -358,15 +305,10 @@ export function projectsOnMachine(state: SuperTabState, machineId: string): Set<
   return new Set([...state.agents.filter(a => a.machineId === machineId).map(a => agentProjectId(state, a)), ...pending])
 }
 
-/** The project whose Product Manager runs, or is starting, on [machineId]; null when none does. In a Harness Team account it
- *  serves only that project: every agent there is one macOS user, which reads the others' files, the Product Manager's
- *  saved sessions with people's private chats among them (#895). */
+/** The project whose Product Manager runs, or is starting, on [machineId]; null when none does. */
 export function productManagerOn(state: SuperTabState, machineId: string): string | null {
   const led = state.agents.find(a => a.machineId === machineId && ledProject(state, a.id))
   if (led) return ledProject(state, led.id)!.id
-  // One removed whose host has not yet confirmed its data there is deleted (commands.ts removeAgent).
-  const closing = state.closingSessions?.find(c => c.machineId === machineId && c.heldFor)
-  if (closing) return closing.heldFor!
   return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
 }
 
@@ -458,16 +400,15 @@ export const refusesWindowsBuddy = (pool: ContributedMachine): boolean => pool.o
   && !pool.observation.capabilities?.includes(WINDOWS_BUDDY_CAPABILITY)
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
 /** The most machines one person adds to one Swarm (#2637, Ken, 2026-11-04). The Swarm-wide 32 dated from one 16 MB
- *  document; each machine is its own part now. Team accounts' entries count apart, so a Mac's Team account never uses up
- *  its owner's 20, and still have a bound. Review again when one Swarm passes 100 entries (plan 2026-11-04). */
+ *  document; each machine is its own part now. Review again when one Swarm passes 100 entries (plan 2026-11-04). */
 export const MACHINES_PER_PERSON = 20
 export const MACHINE_LIMIT_MESSAGE = `You have ${MACHINES_PER_PERSON} machines in this Swarm, the most one person can add. Remove one before adding another.`
-/** How many more machines [contributorId] may add to [state], or with [team] Team accounts' entries. Buddy-only records count
- *  as the person's machines. The command's check and the host's join rows both read this, so they never disagree. */
-export const machineRoom = (state: SuperTabState, contributorId: string, { team = false } = {}): number =>
-  Math.max(0, MACHINES_PER_PERSON - (state.machines ?? []).filter(m => m.contributorId === contributorId && !!m.hostMachineId === team).length)
-export const machineLimitReached = (state: SuperTabState, contributorId: string, options: { team?: boolean } = {}): boolean =>
-  machineRoom(state, contributorId, options) === 0
+/** How many more machines [contributorId] may add to [state]. Buddy-only records count as the person's machines. The command's
+ *  check and the host's join rows both read this, so they never disagree. */
+export const machineRoom = (state: SuperTabState, contributorId: string): number =>
+  Math.max(0, MACHINES_PER_PERSON - (state.machines ?? []).filter(m => m.contributorId === contributorId).length)
+export const machineLimitReached = (state: SuperTabState, contributorId: string): boolean =>
+  machineRoom(state, contributorId) === 0
 
 /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
  *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
@@ -518,10 +459,7 @@ export function ownedMachine(state: SuperTabState, actor: Actor, machineId: stri
 
 /** What removing the machine would do, for its owner's confirmation. */
 export function removalPreview(state: SuperTabState, actor: Actor, machineId: string) {
-  const owned = ownedMachine(state, actor, machineId)
-  // A Mac leaves with its Harness Team account and the agents there (commands.ts machine.remove).
-  const teams = owned.pool ? teamPoolsOf(state, owned.pool).filter(m => !m.removal).map(m => m.machineId) : []
-  const members = [...owned.members, ...state.agents.filter(a => teams.includes(a.machineId))]
+  const { members } = ownedMachine(state, actor, machineId)
   const led = members.map(a => ledProject(state, a.id)).find(Boolean)
   const visibleAgents = members.filter(a => canReadAgent(state, actor, a))
   const soleSourceProjects = projectsOf(state).filter(p => p.repository?.machineId === machineId && !p.repository.repositoryUrl)
@@ -564,8 +502,7 @@ export function expireRemovals(state: SuperTabState, now: number): void {
     && (machineOffline(m, now) || now - Date.parse(m.removal.requestedAt) >= REMOVAL_FALLBACK_MS)) ?? []) expireRemoval(state, pool)
 }
 
-/** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. A Mac and its Harness Team account
- *  share the Mac's slots (One machine, teamStartRequest): each counts what runs on both. */
+/** Pending intents reserve slots too. Only an explicit host stop frees a launched slot. */
 export function machineSlots(state: SuperTabState, pool: ContributedMachine) {
   return slotCounter(state)(pool)
 }
@@ -617,11 +554,7 @@ export function slotCounter(state: SuperTabState): (pool: ContributedMachine) =>
     counted.set(pool, running.size + pending)
     return running.size + pending
   }
-  return pool => {
-    const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
-    const team = mac && teamPoolOf(state, mac)
-    return [...new Set([pool, mac, team])].reduce((sum, each) => sum + (each ? poolSlots(each) : 0), 0)
-  }
+  return poolSlots
 }
 
 /** Machines of the Swarm serving models on its grid now, by model: only fresh readings count. */
@@ -661,8 +594,6 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
-  // No new agent in a Harness Team account, whoever asks (task #4120): its agents keep what they hold until they are stopped.
-  if (teamAccountPool(pool)) failTeamWork(TEAM_ACCOUNTS_GONE)
   if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
   // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
   if (request.buddyOf && refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
@@ -677,13 +608,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const project = forProject ?? (request.member ? projectOf(state, request.member.projectId) : isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
     : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
-  const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
-  if (held && held !== project?.id) {
-    fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
-  }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
   // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
-  // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
+  // a Product Manager: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
   if (!request.buddyOf && !request.leadFor && !request.regular) requireTeamWork(state, pool.machineId, pool.contributorId, project!)
   const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf?.personId ?? pool.contributorId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
@@ -743,26 +670,18 @@ export function freeMemoryBytes(pool: Pick<ContributedMachine, 'observation'>): 
   return r && typeof r.memoryTotalBytes === 'number' && typeof r.memoryUsedBytes === 'number' ? Math.max(0, r.memoryTotalBytes - r.memoryUsedBytes) : null
 }
 
-/** A Mac and its Harness Team account: one machine, one memory (slotCounter counts their slots together too). */
-function memoryPair(state: SuperTabState, pool: ContributedMachine): ContributedMachine[] {
-  const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
-  return [...new Set([pool, mac, mac && teamPoolOf(state, mac)])].filter((m): m is ContributedMachine => !!m)
-}
-
-/** What a new start can use on [pool] as memory allows: the least free memory its Mac and Team account last read, less what
+/** What a new start can use on [pool] as memory allows: the free memory it last read, less what
  *  starts admitted there and not yet launched will take, which no reading shows yet (review of #3001: three 2 GiB starts
  *  were all admitted on 5 GiB free). Null with no reading. */
 export function startableMemoryBytes(state: SuperTabState, pool: ContributedMachine): number | null {
-  const pair = memoryPair(state, pool)
-  const readings = pair.map(freeMemoryBytes).filter((free): free is number => free !== null)
-  if (!readings.length) return null
-  const machines = new Set(pair.map(m => m.machineId))
+  const free = freeMemoryBytes(pool)
+  if (free === null) return null
   let held = 0
   for (const start of state.starts ?? []) {
-    if (start.error || start.harnessId || !machines.has(start.request.machineId)) continue
+    if (start.error || start.harnessId || start.request.machineId !== pool.machineId) continue
     held += start.request.requirements?.memoryBytes || AGENT_MEMORY_BYTES
   }
-  return Math.max(0, Math.min(...readings) - held)
+  return Math.max(0, free - held)
 }
 
 /** How many more agents it takes now, for the route and Desktop: its owner's count less what runs, or, as memory allows,

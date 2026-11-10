@@ -20,7 +20,7 @@ const ownComputer = { contribution: { machineOwnerId: 'owner', contributorId: 'o
 
 const machine = (machineId: string, os: string) => ({ machineId, name: machineId, contributorId: 'owner', membershipGeneration: 'g', generation: 'g1',
   cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-  observation: { generation: 'g1', receivedAt: NOW - 1000, sessionKind: 'computer', resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
+  observation: { generation: 'g1', receivedAt: NOW - 1000, resources: { os }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
     readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
     quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })
 
