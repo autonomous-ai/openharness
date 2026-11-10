@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-const m = vi.hoisted(() => ({ devicesOf: vi.fn(), forget: vi.fn(), sandbox: vi.fn(), count: vi.fn(), warn: vi.fn(), info: vi.fn() }))
+const m = vi.hoisted(() => ({ devicesOf: vi.fn(), forget: vi.fn(), sandbox: vi.fn(), count: vi.fn(), warn: vi.fn(), info: vi.fn(),
+  muted: vi.fn(async (_db: unknown, n: unknown) => n), unread: vi.fn(async (_db: unknown, n: unknown) => n) }))
 vi.mock('./devices.js', () => ({ devicesOf: m.devicesOf, forgetPushDevice: m.forget, markSandbox: m.sandbox }))
 vi.mock('../lib/metrics.js', () => ({ metrics: { phonePush: m.count } }))
 vi.mock('../utils/logger.js', () => ({ logger: { warn: m.warn, info: m.info, error: m.warn } }))
+vi.mock('./muted.js', () => ({ dropMuted: m.muted }))
+vi.mock('./unread.js', () => ({ quietUnread: m.unread }))
 import { sendPhoneNotices } from './send.js'
 import type { PushDevice } from './devices.js'
 import type { PhoneNotice, Sender, SendResult } from './sender.js'
@@ -18,7 +21,25 @@ const answering = (results: Record<string, SendResult>) => {
 }
 
 describe('sendPhoneNotices (task #2905)', () => {
-  beforeEach(() => vi.resetAllMocks())
+  beforeEach(() => {
+    vi.resetAllMocks()
+    m.muted.mockImplementation(async (_db, n) => n)
+    m.unread.mockImplementation(async (_db, n) => n)
+  })
+
+  // Both are read by key, at once (review of #3811): what a muted chat drops stays dropped, and what is unread goes quiet.
+  it('leaves out a muted chat\'s notice and sends an unread chat\'s quiet, reading both from what was given', async () => {
+    m.devicesOf.mockResolvedValue([phone('a1', 'a')])
+    const seen: PhoneNotice[] = []
+    const sender: Sender = { send: async (_device, n) => { seen.push(n); return { outcome: 'sent' } } }
+    const [kept, muted, unread] = [notice('a', 'chat:t:kept'), notice('a', 'chat:t:muted'), notice('a', 'chat:t:unread')]
+    m.muted.mockImplementation(async (_db, n) => (n as PhoneNotice[]).filter(x => x.key !== muted.key))
+    m.unread.mockImplementation(async (_db, n) => (n as PhoneNotice[]).map(x => x.key === unread.key || x.key === muted.key ? { ...x, quiet: true } : x))
+    await sendPhoneNotices(db, { ios: sender, android: null }, [kept, muted, unread])
+    expect(m.muted).toHaveBeenCalledWith(db, [kept, muted, unread])
+    expect(m.unread).toHaveBeenCalledWith(db, [kept, muted, unread])
+    expect(seen).toEqual([kept, { ...unread, quiet: true }])
+  })
 
   it('sends each notice as phoneNotices made it, a quiet one quiet: nothing read but the phones (2026-11-09)', async () => {
     m.devicesOf.mockResolvedValue([phone('a1', 'a')])
