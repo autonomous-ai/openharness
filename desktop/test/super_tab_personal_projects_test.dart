@@ -742,6 +742,39 @@ void main() {
       expect(project['name'], 'Backend');
     });
 
+    test('an agent of Your Team works in its own pane\'s repo: where its tasks are read', () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      (f.connection.server.state['agents'] ??= <dynamic>[]).addAll([
+        for (final (machine, harness) in [('laptop', 'n1'), ('m', 'n2')])
+          {
+            'id': 'agent-$harness',
+            'projectId': 'lead',
+            'name': harness,
+            'displayName': harness,
+            'machineId': machine,
+            'harnessId': harness,
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+            'kind': 'regular',
+            'myAgent': true,
+          },
+      ]);
+      await c.refresh();
+      final projects = PersonalProjects.of(f.app);
+      SuperTabAgent agent(String id) => c.snapshot!.agent(id)!;
+      expect(
+        projects.agentRepository(c, agent('agent-n1')),
+        'github.com/acme/api',
+      );
+      // Notes, in a folder: no repo, no tasks.
+      expect(projects.agentRepository(c, agent('agent-n2')), isNull);
+      // Never outside the person's own Personal Swarm.
+      c.accessRevoked = true;
+      expect(projects.agentRepository(c, agent('agent-n1')), isNull);
+    });
+
     test('a pane whose repo changes moves to that repo\'s project', () async {
       final f = SuperTabLaunchFixture();
       final p = _desk(f);

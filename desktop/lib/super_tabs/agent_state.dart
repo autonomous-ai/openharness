@@ -26,6 +26,7 @@ class SwarmAgentStates extends ChangeNotifier {
   SwarmAgentStates({
     required this.controller,
     required this.github,
+    this.localRepository,
     this.boardEvery = const Duration(minutes: 1),
     this.settle = const Duration(milliseconds: 400),
   }) {
@@ -35,6 +36,10 @@ class SwarmAgentStates extends ChangeNotifier {
 
   final SuperTabController controller;
   final SwarmGitHub github;
+
+  /// The repo an agent's own pane works in, as this Desktop reads it (`github.com/owner/name`), for an agent whose project
+  /// names none: in the person's Personal Swarm the server never learns it (personal_projects.dart).
+  final String? Function(SuperTabAgent agent)? localRepository;
 
   /// How long a board's read stands before it is read again; null reads each once.
   final Duration? boardEvery;
@@ -63,7 +68,7 @@ class SwarmAgentStates extends ChangeNotifier {
   final _free = <String, bool>{};
   final _channelRead = <String, int>{};
 
-  /// Each repository's taken tasks by agent, and when they were read; and the repository of each project read for, worked out
+  /// Each repository's taken tasks by agent, and when they were read; and the repository of each agent read for, worked out
   /// once a run, not once a row.
   final _taken = <String, Map<String, int>>{};
   final _repositories = <String, String?>{};
@@ -82,7 +87,7 @@ class SwarmAgentStates extends ChangeNotifier {
   /// The state of [agent] as its row says it, or null for none.
   String? of(SuperTabAgent agent) {
     if (offlineOf(agent) case final offline?) return offline;
-    final tasks = _taken[_repositories[agent.projectId]];
+    final tasks = _taken[_repositories[agent.id]];
     final number = tasks?[(agent.displayName ?? agent.name).toLowerCase()];
     if (number != null) return 'on #$number';
     return _free[agent.id] == true ? 'free' : null;
@@ -93,15 +98,15 @@ class SwarmAgentStates extends ChangeNotifier {
     _settling ??= Timer(settle, _run);
   }
 
-  /// The projects the person's own agents are in, the ones read for, and those agents.
-  (List<SuperTabProject>, Set<String>) _watched() {
+  /// The projects the person's own agents are in, the ones read for, and those agents by id.
+  (List<SuperTabProject>, Map<String, SuperTabAgent>) _watched() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return (const [], const {});
     final projects = <String, SuperTabProject>{};
-    final agents = <String>{};
+    final agents = <String, SuperTabAgent>{};
     for (final agent in superTabMyAgents(snapshot, controller.accountId)) {
       if (agent.buddyOf != null) continue;
-      agents.add(agent.id);
+      agents[agent.id] = agent;
       if (snapshot.projectById(agent.projectId) case final project?) {
         projects.putIfAbsent(project.id, () => project);
       }
@@ -123,16 +128,22 @@ class SwarmAgentStates extends ChangeNotifier {
       do {
         _again = false;
         final (projects, agents) = _watched();
+        final named = {
+          for (final project in projects) project.id: _repository(project),
+        };
         _repositories
           ..clear()
           ..addAll({
-            for (final project in projects) project.id: _repository(project),
+            for (final agent in agents.values)
+              agent.id:
+                  named[agent.projectId] ??
+                  SwarmGitHub.repositoryOf(localRepository?.call(agent)),
           });
         final repositories = {
           for (final repository in _repositories.values) ?repository,
         };
         _forget(
-          agents: agents,
+          agents: agents.keys.toSet(),
           channels: {for (final p in projects) p.leadConversationId},
           repositories: repositories,
         );

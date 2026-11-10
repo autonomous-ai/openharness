@@ -208,6 +208,24 @@ class PersonalProjects extends ChangeNotifier {
     return _reposOf(c.accountId, c.tabId, projectId).firstOrNull;
   }
 
+  /// The repo agent [agent] of [c]'s own pane works in (`github.com/owner/name`): where its tasks are, since the project
+  /// it is in, Your Team's, names none. Null outside the person's Personal Swarm, or for a session in no repo.
+  String? agentRepository(SuperTabController c, SuperTabAgent agent) {
+    if (!eligible(c)) return null;
+    final machine = app.stateOf(agent.machineId);
+    if (machine == null ||
+        machine.belongsToOtherAccount ||
+        machine.machine.isTeamAccount) {
+      return null;
+    }
+    final project = machine.agents
+        .where((a) => a.id == agent.harnessId)
+        .firstOrNull
+        ?.project;
+    return normalizedRemote(project?.repository) ??
+        normalizedRemote(project?.remote);
+  }
+
   /// The panes project [conversationId] of [c] shows behind [term], in their
   /// tabs' order: its lead conversation in the person's own Personal Swarm,
   /// else none. The very panes the tabs hold.
