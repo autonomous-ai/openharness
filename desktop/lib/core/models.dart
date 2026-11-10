@@ -492,6 +492,10 @@ class Agent {
   /// title. Null from a daemon that does not say; only a true one is sent to
   /// the Swarm (task #2920).
   final bool? nameChosen;
+
+  /// What a message to it waits for now (the daemon's `waitingFor`): `engine` while its engine starts, else null. The daemon
+  /// sends the agent's frame again when it changes, so a client that reconnects reads it as it is.
+  final String? waitingFor;
   final String? closePlanState;
   final String? closePlanDetail;
 
@@ -607,6 +611,7 @@ class Agent {
     this.createdAt,
     this.closeSupported = false,
     this.nameChosen,
+    this.waitingFor,
     this.closePlanState,
     this.closePlanDetail,
     this.lastOpenedAt,
@@ -783,6 +788,7 @@ class Agent {
           : null,
       closeSupported: j['closeSupported'] == true,
       nameChosen: j['nameChosen'] is bool ? j['nameChosen'] as bool : null,
+      waitingFor: j['waitingFor'] is String ? j['waitingFor'] as String : null,
       closePlanState:
           j['closePlan'] is Map &&
               const {'waiting', 'failed'}.contains(j['closePlan']['state'])
@@ -869,6 +875,7 @@ class Agent {
     createdAt: createdAt,
     closeSupported: closeSupported,
     nameChosen: nameChosen,
+    waitingFor: waitingFor,
     closePlanState: clearClosePlan ? null : closePlanState,
     closePlanDetail: clearClosePlan ? null : closePlanDetail,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,

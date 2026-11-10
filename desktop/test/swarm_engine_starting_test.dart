@@ -1,6 +1,3 @@
-import 'dart:async';
-
-import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -12,54 +9,62 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/swarm_v4_data.dart';
 import 'swarm_state_test.dart' show createApp;
 
-/// A message to an agent whose engine is still starting waits for it (the daemon's `message_waiting`, reason
-/// `engine_starting`): the agent reads as Starting until its turn starts, or the daemon says it could not be typed.
+/// A message to an agent whose engine is still starting waits for it, and the agent's frame says so (the daemon's
+/// `waitingFor: engine`): the agent reads as Starting while it does. The frame is the agent's state, sent again whenever it
+/// changes and read whole on a reconnect, so a person who comes back mid-start still sees Starting.
 void main() {
-  Map<String, dynamic> waiting(String agentId) => {
-    'type': 'message_waiting',
-    'agentId': agentId,
-    'dbSessionId': 'session-$agentId',
-    'payload': {'reason': 'engine_starting'},
+  Map<String, dynamic> frame(String agentId, {String? waitingFor}) => {
+    'id': agentId,
+    'name': agentId,
+    'engine': 'claude',
+    'status': 'running',
+    'sessionId': 'session-$agentId',
+    'terminal': {'available': true},
+    'waitingFor': waitingFor,
   };
 
-  test(
-    'waiting for its engine, an agent is Starting until its turn starts',
-    () async {
-      final app = createApp(connected: true);
-      addTearDown(app.dispose);
-      expect(harnessActivity(app, 'm', 'a1'), HarnessActivity.idle);
-      await app.handleEventForTest('m', waiting('a1'));
-      expect(harnessActivity(app, 'm', 'a1'), HarnessActivity.starting);
-      // Another agent of the same computer is not.
-      expect(harnessActivity(app, 'm', 'a2'), HarnessActivity.idle);
-      await app.handleEventForTest('m', {
-        'type': 'turn_started',
-        'agentId': 'a1',
-        'payload': <String, dynamic>{},
-      });
-      expect(harnessActivity(app, 'm', 'a1'), isNot(HarnessActivity.starting));
-    },
-  );
+  Map<String, dynamic> synced(String agentId, {String? waitingFor}) => {
+    'type': 'agent_synced',
+    'payload': {'agent': frame(agentId, waitingFor: waitingFor)},
+  };
 
-  test('the error that it could not be typed ends the wait', () async {
+  test('while its frame says it waits for its engine, an agent is Starting', () async {
     final app = createApp(connected: true);
     addTearDown(app.dispose);
-    await app.handleEventForTest('m', waiting('a3'));
-    await app.handleEventForTest('m', {
-      'type': 'error',
-      'agentId': 'a3',
-      'dbSessionId': 'session-a3',
-      'payload': {'message': 'Claude Code did not start in time.'},
-    });
+    await app.handleEventForTest('m', synced('a1'));
+    expect(harnessActivity(app, 'm', 'a1'), HarnessActivity.idle);
+    await app.handleEventForTest('m', synced('a1', waitingFor: 'engine'));
+    expect(harnessActivity(app, 'm', 'a1'), HarnessActivity.starting);
+    expect(app.engineStarting('m', 'a1'), isTrue);
+    // Another agent of the same computer is not.
+    expect(harnessActivity(app, 'm', 'a2'), isNot(HarnessActivity.starting));
+    // Its engine is up: the daemon sends the frame again, waiting for nothing.
+    await app.handleEventForTest('m', synced('a1'));
+    expect(harnessActivity(app, 'm', 'a1'), isNot(HarnessActivity.starting));
+    expect(app.engineStarting('m', 'a1'), isFalse);
+  });
+
+  test('a list read on reconnecting brings the wait back', () {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final machine = app.machineStates['m']!;
+    machine.agents = [Agent.fromJson(frame('a4', waitingFor: 'engine'))];
+    expect(harnessActivity(app, 'm', 'a4'), HarnessActivity.starting);
+  });
+
+  test('a computer that is off says offline, not starting', () async {
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    await app.handleEventForTest('m', synced('a3', waitingFor: 'engine'));
+    app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
     expect(harnessActivity(app, 'm', 'a3'), isNot(HarnessActivity.starting));
   });
 
-  test('a computer that disconnects ends every wait on it', () async {
+  test('a wait for anything else is not a start', () async {
     final app = createApp(connected: true);
     addTearDown(app.dispose);
-    await app.handleEventForTest('m', waiting('a4'));
-    app.connectionStatusForTest('m', ConnectionStatus.reconnecting);
-    expect(harnessActivity(app, 'm', 'a4'), isNot(HarnessActivity.starting));
+    await app.handleEventForTest('m', synced('a5', waitingFor: 'turn'));
+    expect(harnessActivity(app, 'm', 'a5'), isNot(HarnessActivity.starting));
   });
 
   testWidgets(
@@ -125,18 +130,17 @@ void main() {
       expect(starting('super-agent-second'), findsNothing);
       expect(starting('swarm-agent-header'), findsNothing);
 
-      await app.handleEventForTest('host', waiting('session-second'));
+      await app.handleEventForTest(
+        'host',
+        synced('session-second', waitingFor: 'engine'),
+      );
       await tester.pumpAndSettle();
       expect(starting('super-agent-second'), findsOneWidget);
       expect(starting('swarm-agent-header'), findsOneWidget);
       // Never a failure while it waits.
       expect(find.textContaining('Failed'), findsNothing);
 
-      await app.handleEventForTest('host', {
-        'type': 'turn_started',
-        'agentId': 'session-second',
-        'payload': <String, dynamic>{},
-      });
+      await app.handleEventForTest('host', synced('session-second'));
       await tester.pump();
       expect(starting('super-agent-second'), findsNothing);
       expect(starting('swarm-agent-header'), findsNothing);
@@ -147,56 +151,4 @@ void main() {
       await tester.pump();
     },
   );
-
-  test('a wait that ends without a word ends after two minutes', () {
-    fakeAsync((async) {
-      final app = createApp(connected: true);
-      unawaited(app.handleEventForTest('m', waiting('a6')));
-      async.flushMicrotasks();
-      expect(harnessActivity(app, 'm', 'a6'), HarnessActivity.starting);
-      async.elapse(AppNotifier.engineWaitFor - const Duration(seconds: 1));
-      expect(harnessActivity(app, 'm', 'a6'), HarnessActivity.starting);
-      async.elapse(const Duration(seconds: 2));
-      expect(harnessActivity(app, 'm', 'a6'), HarnessActivity.idle);
-      app.dispose();
-    });
-  });
-
-  test(
-    'another conversation\'s late turn frame does not end the wait',
-    () async {
-      final app = createApp(connected: true);
-      addTearDown(app.dispose);
-      final machine = app.machineStates['m']!;
-      machine.agents = [
-        for (final agent in machine.agents)
-          if (agent.id != 'a7') agent,
-        Agent(
-          id: 'a7',
-          name: 'Agent 7',
-          engine: 'codex',
-          terminalAvailable: true,
-          sessionId: 'now',
-        ),
-      ];
-      await app.handleEventForTest('m', waiting('a7'));
-      await app.handleEventForTest('m', {
-        'type': 'turn_ended',
-        'agentId': 'a7',
-        'dbSessionId': 'before',
-        'payload': <String, dynamic>{},
-      });
-      expect(harnessActivity(app, 'm', 'a7'), HarnessActivity.starting);
-    },
-  );
-
-  test('another reason to wait is not a start', () async {
-    final app = createApp(connected: true);
-    addTearDown(app.dispose);
-    await app.handleEventForTest('m', {
-      ...waiting('a5'),
-      'payload': {'reason': 'busy'},
-    });
-    expect(harnessActivity(app, 'm', 'a5'), HarnessActivity.idle);
-  });
 }
