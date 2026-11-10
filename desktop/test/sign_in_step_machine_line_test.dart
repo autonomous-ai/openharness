@@ -318,23 +318,27 @@ void main() {
     testWidgets('follows this computer’s row as it arrives and changes', (
       tester,
     ) async {
+      // A name no host name can hold (host names have no spaces): before the row arrives the line
+      // falls back to this computer's host name, and on a Mac named Macs-Mac-Studio-2 the row's old
+      // name, Studio-2, was already there (task #3724).
+      const rowName = 'Studio row 2';
       final app = _app();
       addTearDown(app.dispose);
       await _mountScreen(tester, app);
       final before = _lineText(tester);
-      expect(before, isNot(contains('Studio-2')));
+      expect(before, isNot(contains(rowName)));
 
-      _thisComputer(app, 'Studio-2');
+      _thisComputer(app, rowName);
       app.notifyListeners();
       await tester.pump();
-      expect(_lineText(tester), expected('Studio-2', setUp: true));
+      expect(_lineText(tester), expected(rowName, setUp: true));
 
       // A sign-out clears the rows: the old row's name goes with them.
       app.machineStates.clear();
       app.machines = [];
       app.notifyListeners();
       await tester.pump();
-      expect(_lineText(tester), isNot(contains('Studio-2')));
+      expect(_lineText(tester), isNot(contains(rowName)));
       await tester.pumpWidget(const SizedBox());
     });
   });
