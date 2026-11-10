@@ -647,7 +647,7 @@ class SuperTabConversation {
 }
 
 /// The zone a project's day is read in when its digest names none (backend
-/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+/// superTabs/localTime.ts `DEFAULT_TIME_ZONE`).
 const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
 
 class SuperTabProject {

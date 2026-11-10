@@ -3609,7 +3609,7 @@ describe('the owner\'s rules, after review', () => {
     const own = f.run({ type: 'agent.start', request: request({ conversationId: task }) } as Command, owner, { contribution: f.contribution }).result.startId as string
     expect(f.run({ type: 'agent.startDispatch', startId: own }, owner, { contribution: f.contribution }).messages).toEqual([])
   })
-  // The nightly reflection still names models as the owner did (costs/reflection.ts).
+  // A model is named as the owner named it (rules.ts).
   it('matches a model as the owner named it: an alias for a full id, and never an unknown default', () => {
     expect(modelMatches('claude-haiku-4-5', 'haiku')).toBe(true)
     expect(modelMatches('haiku', 'claude-haiku-4-5')).toBe(true)

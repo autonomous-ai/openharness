@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { CREW_NEED_KIND, crewNeedOf } from './crewNeeds.js'
 import { agentOnly, createSuperTab, type Actor, type MessageDraft } from './model.js'
 
@@ -127,6 +127,18 @@ describe('an agent’s needs_human and line to a person go to the PM', () => {
     const plain = f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human', result: 'Which database?' }, asAgent(f.worker))
     const plainRow = plain.messages.find(m => (m.source as { status?: string } | null)?.status === 'needs_human')!
     expect(crewNeedOf(plainRow.source)).toMatchObject({ agentId: f.worker, personIds: [], question: 'Which database?' })
+  })
+
+  // As a decision's were (until Swarm v4, 2026-11-10): the recommended option is one of them, and a default time gives the person
+  // 15 minutes. What an older CLI still sends for a decision (unblocks, mustAgree) is taken and kept nowhere.
+  it('refuses an ask that recommends no option of its own or defaults within 15 minutes, and keeps nothing of unblocks', () => {
+    const f = assigned()
+    const status = (ask: Record<string, unknown>) => ({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
+      result: 'Ship how?', ask: { personId: 'peer', ...ask } })
+    expect(commandSchema.safeParse(status({ ...choices, recommended: 2 })).success).toBe(false)
+    expect(() => f.run(commandSchema.parse(status({ ...choices, defaultAt: new Date(1000 + 60_000).toISOString() })), asAgent(f.worker))).toThrow('15 minutes')
+    const sent = f.run(commandSchema.parse(status({ ...choices, mustAgree: true, defaultAt: new Date(1000 + 3_600_000).toISOString() })), asAgent(f.worker))
+    expect(JSON.stringify(sent.messages)).not.toContain('The release')
   })
 
   // Review of #3223, Important 1: routing is by who sends it, not whose assignment it is.

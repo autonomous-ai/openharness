@@ -83,7 +83,8 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
     case 'needs_human': {
       // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): a question routed to the PM is its crew need, so its line tells
       // nobody it is their call; the PM's own question still tags the person (review of #3223). No decision opens (2026-11-10).
-      const routed = effects.messages.some(m => crewNeedOf(m.source)?.conversationId === group.id)
+      // Its needs_human's crew need is the one about this task that carries a question (work.status); a tag's or a line's has none.
+      const routed = effects.messages.some(m => { const need = crewNeedOf(m.source); return need?.conversationId === group.id && need.question !== undefined })
       if (projectPm(state, group) && (routed || !assignment.askedOf)) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
       const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
       return `${asked ? `@${asked} ` : ''}Your call: ${sentence(assignment.result) || 'a decision is needed.'}`
