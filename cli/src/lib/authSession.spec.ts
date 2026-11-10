@@ -13,7 +13,6 @@ const {
   AuthSessionManager,
   clearAuthSession,
   ensureSignInEpoch,
-  teamSignInEpoch,
   hasAuthSession,
   markSignedOut,
   newSignInEpoch,
@@ -79,13 +78,6 @@ describe('sign-in epoch', () => {
       writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: 'next@2' })
       await manager().updateMachineId('machine-old', undefined)
       expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
-    })
-
-    it('is dropped by a Team sign-in when the lookup started with no epoch, though its epoch reads as adopted', async () => {
-      writeAuthSession({ ...baseSession(), machineId: 'machine-new', signInEpoch: teamSignInEpoch() })
-      await manager().updateMachineId('machine-old', undefined)
-      expect(readAuthSession()).toMatchObject({ machineId: 'machine-new' })
-      expect(signInOf(readAuthSession()!.signInEpoch)?.adopted).toBe(true)
     })
 
     it('is kept when the session from before epochs was only given one meanwhile', async () => {
@@ -181,14 +173,12 @@ describe('AuthSessionManager', () => {
     expect(readAuthSession()).not.toHaveProperty('clientId')
   })
 
-  // A Harness Team sign-in (cli/src/team/) keeps its kind through every rewrite; any other kind reads as a computer's.
-  it('keeps a team sign-in\'s kind, and reads no other', async () => {
-    writeAuthSession({ ...baseSession(), kind: 'team' })
-    expect(readAuthSession()?.kind).toBe('team')
-    new AuthSessionManager('http://backend.invalid').updateMachineId('machine-2', undefined)
-    expect(readAuthSession()).toMatchObject({ kind: 'team', machineId: 'machine-2' })
-    await writeFile(AUTH_SESSION_FILE, JSON.stringify({ ...baseSession(), kind: 'admin' }))
-    expect(readAuthSession()).not.toHaveProperty('kind')
+  // Harness Team accounts are gone (backend #3837 refuses their sign-ins): a session file one wrote reads as a computer's.
+  it('reads no sign-in kind, a Team sign-in\'s included', async () => {
+    for (const kind of ['team', 'admin']) {
+      await writeFile(AUTH_SESSION_FILE, JSON.stringify({ ...baseSession(), kind }))
+      expect(readAuthSession()).not.toHaveProperty('kind')
+    }
   })
 
   // `process.exit` skips `finally`: a daemon that exited mid-refresh left the lock for the next

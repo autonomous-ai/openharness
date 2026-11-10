@@ -165,10 +165,8 @@ const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm
 export const READINGS_RETRY_MS = 10 * 60_000
 /** The most Swarms' readings the backend takes in one call (backend routes/superTabs.ts READINGS_MAX). */
 const READINGS_MAX = 64
-/** The batch route is not there: an older backend answers 404, and its team gate 403 for a route it does not list. A body
- *  past its limit (413) is sent per Swarm too. */
-const readingsMissing = (error: unknown) => error instanceof SuperTabHostError
-  && (error.status === 404 || error.status === 413 || (error.status === 403 && error.code === 'TEAM_SESSION_LIMITED'))
+/** The batch route is not there: an older backend answers 404. A body past its limit (413) is sent per Swarm too. */
+const readingsMissing = (error: unknown) => error instanceof SuperTabHostError && (error.status === 404 || error.status === 413)
 /** A reading the backend would not validate: the next, older form of it is tried (an older backend refusing a newer field). */
 /** One Swarm's reading of this pass, to send. */
 interface Reading { tab: string; observation: Record<string, unknown>; localModels: LocalModelReading[] | null; signature: string }

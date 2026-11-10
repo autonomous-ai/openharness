@@ -16,9 +16,8 @@ interface AccountHttpDeps {
   base?: () => string
   changed?(state: GatewayMachines): void
   reachable?(machineIds: string[] | null): void
-  /** Every machine list the backend answered (its body), and null on a sign-out: the trust group reads which of the
-   *  account's machines are team machines from it (lib/e2ee/machineKinds.ts). */
-  listed?(body: Record<string, unknown> | null): void
+  /** The machines every list the backend answers names: the relay pins again one it had marked gone (lib/remoteRelay.ts). */
+  listed?(machineIds: string[]): void
   /** The machines the backend's list shows offline, and null when the list is not the backend's: the relay answers
    *  their selects without a dial (lib/remoteRelay.ts). */
   offline?(machineIds: string[] | null): void
@@ -100,7 +99,7 @@ export function createAccountHttp(deps: AccountHttpDeps) {
   cache.listen((body) => {
     const { machines, source } = cache.list()
     deps.reachable?.(source !== 'backend' ? null : machines.filter(m => m.state !== 'offline').map(m => m.machineId))
-    deps.listed?.(source === 'backend' ? body : null)
+    if (source === 'backend') deps.listed?.(machines.map(m => m.machineId))
     deps.offline?.(source !== 'backend' ? null : machines.filter(m => m.state === 'offline').map(m => m.machineId))
     deps.changed?.({ owner: deps.account().machineId, body, fetchedAt: cache.lastResponse()?.fetchedAt ?? Date.now() })
   })

@@ -55,13 +55,12 @@ function refusedByBackend(error: unknown): error is Error & { code: string } {
   return error instanceof Error && typeof code === 'string' && code !== 'START_CLAIMED' && typeof status === 'number' && status >= 400 && status < 500
 }
 /** The backend's dispatch refusals (commands.ts agent.startDispatch, machines.ts admitMachineStart) that this start can never
- *  pass: a routing rule, its engine, its machine grant revoked or gone, the machine removed or outside the contribution, and
- *  the Team refusals the backend itself fails a start for (machines.ts LASTING_TEAM_REFUSALS). Any other code, unknown ones
- *  included, may pass by itself (a pause, an offline or full machine, a held Team account, a decision the Lead owes): that
+ *  pass: a routing rule, its engine, its machine grant revoked or gone, the machine removed or outside the contribution. Any
+ *  other code, unknown ones included, may pass by itself (a pause, an offline or full machine, a decision the Lead owes): that
  *  start keeps waiting, as its host retries it on every pass (superTabs/machines.ts). */
 const LASTING_REFUSALS = new Set(['RULE_BROKEN', 'REQUIREMENT_UNMET', 'REVIEW_REFUSED', 'STEPPED_UP', 'BUILD_REFUSED', 'SWARM_ENGINE',
   'FORBIDDEN', 'HOST_REQUIRED', 'CONTRIBUTION_REVOKED', 'MACHINE_REMOVED', 'OUTSIDE_CONTRIBUTION', 'NOT_SWARM_MACHINE', 'BUDDY_WINDOWS',
-  'TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE'])
+  'MACHINE_IN_OTHER_WORKSPACE'])
 /** The marks that reorder text (bidi overrides and isolates, LRM and RLM) or hide it (zero-width space, word joiner, invisible
  *  operators, the byte order mark). ZWNJ and ZWJ stay: scripts and emoji sequences need them. */
 const HIDING_MARKS = /[\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g
