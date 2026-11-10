@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+
+import 'package:clock/clock.dart';
 
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
+import 'github_pulls.dart';
 
 /// A Swarm project's tasks are its repository's GitHub issues (Swarm v4, anh Dee 2026-11-09), read with the GitHub CLI
 /// on this computer, signed in as its person: each person sees exactly what github.com shows them, and nothing goes
@@ -16,8 +20,11 @@ class SwarmIssue {
     required this.title,
     required this.labels,
     required this.url,
+    this.labelColors = const {},
     this.author,
+    this.createdAt,
     this.updatedAt,
+    this.comments = 0,
   });
 
   final int number;
@@ -25,9 +32,18 @@ class SwarmIssue {
   final List<String> labels;
   final String url;
 
+  /// Each label's colour as GitHub gives it, six hex digits with no `#`: the chips are drawn in it, as github.com draws them.
+  final Map<String, String> labelColors;
+
   /// Its GitHub author's login.
   final String? author;
+
+  /// When it was opened, as github.com's "opened 6h ago".
+  final DateTime? createdAt;
   final DateTime? updatedAt;
+
+  /// How many comments it has.
+  final int comments;
 
   /// The agent it is for: its `builder:<name>` label, as lampOS's first builder labels them. Null when none.
   String? get agent {
@@ -48,17 +64,29 @@ class SwarmIssue {
     final number = value['number'], title = value['title'];
     final url = value['url'];
     if (number is! int || title is! String || url is! String) return null;
+    final labels = _nodes(value['labels']);
+    final comments = value['comments'];
     return SwarmIssue(
       number: number,
       title: title,
       url: url,
       labels: [
-        for (final label
-            in value['labels'] is List ? value['labels'] as List : const [])
+        for (final label in labels)
           if (label is Map && label['name'] is String) label['name'] as String,
       ],
+      labelColors: {
+        for (final label in labels)
+          if (label is Map &&
+              label['name'] is String &&
+              label['color'] is String)
+            label['name'] as String: label['color'] as String,
+      },
       author: _login(value['author']),
+      createdAt: _time(value['createdAt']),
       updatedAt: _time(value['updatedAt']),
+      comments: comments is Map && comments['totalCount'] is int
+          ? comments['totalCount'] as int
+          : 0,
     );
   }
 }
@@ -94,13 +122,28 @@ class SwarmIssueThread {
     required this.comments,
     required this.open,
     this.createdAt,
+    this.earlier,
   });
 
   final SwarmIssue issue;
   final String body;
+
+  /// The newest comments, oldest first: [SwarmGitHub.lastComments] of them, the rest through [SwarmGitHub.earlierComments].
   final List<SwarmIssueComment> comments;
   final bool open;
   final DateTime? createdAt;
+
+  /// Where the comments before [comments] start, or null when it holds them all.
+  final String? earlier;
+}
+
+/// A page of the comments before the ones a thread holds, oldest first.
+class SwarmIssueEarlier {
+  const SwarmIssueEarlier({required this.comments, this.earlier});
+  final List<SwarmIssueComment> comments;
+
+  /// Where the page before this one starts, or null when there is none.
+  final String? earlier;
 }
 
 /// Why GitHub could not be read, in the words the person sees.
@@ -128,6 +171,19 @@ class SwarmGitHub {
   /// At most this many open issues: lampOS had 144 open on 2026-11-09.
   static const issuesMax = 500;
 
+  /// How many of a thread's newest comments are read at once. Reading all of one (lampOS #5385: 1,576 comments, 1.8 MB) took
+  /// 22 s with `gh issue view`; its newest 30 take 0.7 s (2026-11-09).
+  static const lastComments = 30;
+
+  /// How many comments one "earlier" read brings.
+  static const earlierComments = 100;
+
+  /// How many threads are kept to open again at once.
+  static const threadsKept = 60;
+
+  /// How many repositories' issue lists are kept to show again at once.
+  static const listsKept = 20;
+
   /// `owner/name` of a GitHub repository address (https or ssh, with or without `.git`). Null for anything else.
   static String? repositoryOf(String? url) {
     if (url == null) return null;
@@ -136,61 +192,284 @@ class SwarmGitHub {
     return match == null ? null : '${match.group(1)}/${match.group(2)}';
   }
 
-  /// [repository]'s open issues, newest activity first.
-  Future<List<SwarmIssue>> issues(String repository) async {
-    final answer = await _call([
-      'issue',
-      'list',
-      '--repo',
-      repository,
-      '--state',
-      'open',
-      '--limit',
-      '$issuesMax',
-      '--json',
-      'number,title,labels,author,updatedAt,url',
-    ], repository);
-    final issues = [for (final row in _list(answer)) ?SwarmIssue.read(row)];
-    issues.sort(
-      (a, b) =>
-          (b.updatedAt ?? DateTime(0)).compareTo(a.updatedAt ?? DateTime(0)),
-    );
-    return issues;
+  /// At most this many open pull requests are read for a board: newest activity first, a team's open ones at once.
+  static const pullsMax = 50;
+
+  /// At most this many taken tasks are read ([taken]): a crew is a handful, and each holds one or two.
+  static const takenMax = 100;
+
+  final _lists = <String, List<SwarmIssue>>{};
+  final _pulls = <String, Map<int, SwarmPull>>{};
+  final _threads = <String, SwarmIssueThread>{};
+  final _reading = <String>{};
+
+  /// [repository]'s issues as they were last read, to show at once while [issues] reads them again. Null before the first.
+  List<SwarmIssue>? kept(String repository) => _lists[repository];
+
+  /// [repository]'s open pull requests by the task each is for, as they were last read. Null before the first.
+  Map<int, SwarmPull>? keptPulls(String repository) => _pulls[repository];
+
+  /// Issue [number]'s thread as it was last read, to show at once while [thread] reads it again. Null before the first.
+  SwarmIssueThread? keptThread(String repository, int number) =>
+      _threads['$repository#$number'];
+
+  /// [repository]'s open issues, newest activity first, each with its labels in their colours, who opened it and when, and how
+  /// many comments it has: one GraphQL read of up to 100 a page, [onPage] told the issues so far after each, so the newest show
+  /// while the rest are read.
+  Future<List<SwarmIssue>> issues(
+    String repository, {
+    void Function(List<SwarmIssue> sofar)? onPage,
+  }) async {
+    final (owner, name) = _split(repository);
+    final issues = <SwarmIssue>[];
+    String? after;
+    do {
+      final answer = await _call([
+        'api',
+        'graphql',
+        '-f',
+        'query=$_issuesQuery',
+        '-f',
+        'owner=$owner',
+        '-f',
+        'name=$name',
+        '-F',
+        'first=${min(100, issuesMax - issues.length)}',
+        if (after != null) ...['-f', 'after=$after'],
+      ], repository);
+      final page = _data(answer, ['repository', 'issues']);
+      for (final row in _nodes(page)) {
+        if (SwarmIssue.read(row) case final issue?) issues.add(issue);
+      }
+      final info = page['pageInfo'];
+      after = info is Map && info['hasNextPage'] == true
+          ? info['endCursor'] as String?
+          : null;
+      if (after != null && issues.length < issuesMax) {
+        onPage?.call(_newestFirst([...issues]));
+      }
+    } while (after != null && issues.length < issuesMax);
+    final list = _newestFirst(issues);
+    _lists.remove(repository);
+    _lists[repository] = list;
+    while (_lists.length > listsKept) {
+      _lists.remove(_lists.keys.first);
+    }
+    return list;
   }
 
-  /// Issue [number] of [repository] with its comments.
-  Future<SwarmIssueThread> thread(String repository, int number) async {
+  /// The tasks someone is on in [repository]: its open issues labelled `status:taken`, by the agent each is for (its
+  /// `builder:<name>` label, lower case), the one with the newest activity when an agent has two. One small GraphQL read of at
+  /// most [takenMax] issues, which Your Team's rows ask once a minute.
+  Future<Map<String, int>> taken(String repository) async {
+    final (owner, name) = _split(repository);
     final answer = await _call([
-      'issue',
-      'view',
-      '$number',
-      '--repo',
-      repository,
-      '--json',
-      'number,title,body,labels,author,createdAt,updatedAt,url,state,comments',
+      'api',
+      'graphql',
+      '-f',
+      'query=$_takenQuery',
+      '-f',
+      'owner=$owner',
+      '-f',
+      'name=$name',
+      '-F',
+      'first=$takenMax',
     ], repository);
-    final Object? value;
-    try {
-      value = jsonDecode(answer);
-    } on FormatException {
-      throw const SwarmGitHubError(
-        'GitHub sent something unreadable. Try again.',
-      );
+    final byAgent = <String, int>{};
+    for (final row in _nodes(_data(answer, ['repository', 'issues']))) {
+      if (row is! Map || row['number'] is! int) continue;
+      final labels = [
+        for (final label in _nodes(row['labels']))
+          if (label is Map && label['name'] is String) label['name'] as String,
+      ];
+      // The read asks for taken issues only; an answer that holds another is not trusted to be taken.
+      if (!labels.contains('status:taken')) continue;
+      for (final label in labels) {
+        if (label.startsWith('builder:')) {
+          byAgent.putIfAbsent(
+            label.substring(8).trim().toLowerCase(),
+            () => row['number'] as int,
+          );
+        }
+      }
     }
+    return byAgent;
+  }
+
+  /// [repository]'s open pull requests, by the task each is for ([SwarmPull.tasks]); a task with two has the one with the
+  /// newest activity. One GraphQL read of the newest [pullsMax], each with its head's checks, whether it conflicts, and its
+  /// newest comments, where its readers' verdicts are.
+  ///
+  /// [team] names the agents of its project ([SwarmPull.teamOf]): from the login that opened a pull request, only their signed
+  /// READ-OK counts.
+  Future<Map<int, SwarmPull>> pulls(
+    String repository, {
+    Set<String>? team,
+  }) async {
+    final (owner, name) = _split(repository);
+    final answer = await _call([
+      'api',
+      'graphql',
+      '-f',
+      'query=$_pullsQuery',
+      '-f',
+      'owner=$owner',
+      '-f',
+      'name=$name',
+      '-F',
+      'first=$pullsMax',
+    ], repository);
+    final map = _data(answer, ['repository']);
+    final branch = map['defaultBranchRef'];
+    final defaultBranch = branch is Map && branch['name'] is String
+        ? branch['name'] as String
+        : null;
+    final byTask = <int, SwarmPull>{};
+    for (final row in _nodes(map['pullRequests'])) {
+      final pull = SwarmPull.read(
+        row,
+        defaultBranch: defaultBranch,
+        team: team,
+      );
+      if (pull == null) continue;
+      for (final task in pull.tasks) {
+        byTask.putIfAbsent(task, () => pull);
+      }
+    }
+    _pulls.remove(repository);
+    _pulls[repository] = byTask;
+    while (_pulls.length > listsKept) {
+      _pulls.remove(_pulls.keys.first);
+    }
+    return byTask;
+  }
+
+  /// Issue [number] of [repository]: its text, and its newest [lastComments] comments, oldest first.
+  Future<SwarmIssueThread> thread(String repository, int number) async {
+    final (owner, name) = _split(repository);
+    final answer = await _call([
+      'api',
+      'graphql',
+      '-f',
+      'query=$_threadQuery',
+      '-f',
+      'owner=$owner',
+      '-f',
+      'name=$name',
+      '-F',
+      'number=$number',
+      '-F',
+      'last=$lastComments',
+    ], repository);
+    final map = _data(answer, ['repository', 'issue']);
     final issue =
-        SwarmIssue.read(value) ??
+        SwarmIssue.read(map) ??
         (throw const SwarmGitHubError(
           'GitHub sent something unreadable. Try again.',
         ));
-    final map = value as Map;
-    return SwarmIssueThread(
+    final comments = _commentsOf(map['comments']);
+    final thread = SwarmIssueThread(
       issue: issue,
       body: map['body'] is String ? map['body'] as String : '',
       open: map['state'] != 'CLOSED',
-      createdAt: _time(map['createdAt']),
+      createdAt: issue.createdAt,
+      comments: comments.comments,
+      earlier: comments.earlier,
+    );
+    final key = '$repository#$number';
+    _threads.remove(key);
+    _threads[key] = thread;
+    while (_threads.length > threadsKept) {
+      _threads.remove(_threads.keys.first);
+    }
+    return thread;
+  }
+
+  /// The [earlierComments] comments before [cursor] (a thread's or an earlier page's `earlier`), oldest first.
+  Future<SwarmIssueEarlier> earlier(
+    String repository,
+    int number,
+    String cursor,
+  ) async {
+    final (owner, name) = _split(repository);
+    final answer = await _call([
+      'api',
+      'graphql',
+      '-f',
+      'query=$_earlierQuery',
+      '-f',
+      'owner=$owner',
+      '-f',
+      'name=$name',
+      '-F',
+      'number=$number',
+      '-F',
+      'last=$earlierComments',
+      '-f',
+      'before=$cursor',
+    ], repository);
+    final page = _commentsOf(
+      _data(answer, ['repository', 'issue'])['comments'],
+    );
+    return SwarmIssueEarlier(comments: page.comments, earlier: page.earlier);
+  }
+
+  /// Reads the threads of the first [count] of [issues] that are not kept as they stand (their newest activity is newer than
+  /// the kept copy), two at a time, so opening one is instant. A read that fails is left for when the person opens it.
+  Future<void> prefetch(
+    String repository,
+    List<SwarmIssue> issues, {
+    int count = 6,
+  }) async {
+    final wanted = [
+      for (final issue in issues.take(count))
+        if (!_reading.contains('$repository#${issue.number}') &&
+            (keptThread(repository, issue.number)?.issue.updatedAt !=
+                issue.updatedAt))
+          issue.number,
+    ];
+    Future<void> work() async {
+      while (wanted.isNotEmpty) {
+        final number = wanted.removeAt(0);
+        final key = '$repository#$number';
+        _reading.add(key);
+        try {
+          await thread(repository, number);
+        } on SwarmGitHubError {
+          // Opening it reads it again and says why it could not be read.
+        } catch (error) {
+          // A thread GitHub sent in a shape this app does not read: opening it says so; the others are still read ahead.
+          appLog.warn(
+            'super-tabs',
+            'GitHub thread not read ahead: ${error.runtimeType}',
+          );
+        } finally {
+          _reading.remove(key);
+        }
+      }
+    }
+
+    await Future.wait([work(), work()]);
+  }
+
+  static List<SwarmIssue> _newestFirst(List<SwarmIssue> issues) => issues
+    ..sort(
+      (a, b) =>
+          (b.updatedAt ?? DateTime(0)).compareTo(a.updatedAt ?? DateTime(0)),
+    );
+
+  static (String, String) _split(String repository) {
+    final at = repository.indexOf('/');
+    return (repository.substring(0, at), repository.substring(at + 1));
+  }
+
+  static ({List<SwarmIssueComment> comments, String? earlier}) _commentsOf(
+    Object? value,
+  ) {
+    final info = value is Map ? value['pageInfo'] : null;
+    return (
       comments: [
-        for (final row
-            in map['comments'] is List ? map['comments'] as List : const [])
+        for (final row in _nodes(value))
           if (row is Map && row['body'] is String)
             SwarmIssueComment(
               body: row['body'] as String,
@@ -199,10 +478,89 @@ class SwarmGitHub {
               url: row['url'] is String ? row['url'] as String : null,
             ),
       ],
+      earlier: info is Map && info['hasPreviousPage'] == true
+          ? info['startCursor'] as String?
+          : null,
     );
   }
 
+  /// The value [path] names in a GraphQL answer's `data`; unreadable when the answer, or it, is not what was asked for.
+  static Map<Object?, Object?> _data(String answer, List<String> path) {
+    Object? value;
+    try {
+      value = jsonDecode(answer);
+    } on FormatException {
+      throw const SwarmGitHubError(
+        'GitHub sent something unreadable. Try again.',
+      );
+    }
+    if (value is Map) value = value['data'];
+    for (final key in path) {
+      value = value is Map ? value[key] : null;
+    }
+    if (value is Map) return value;
+    throw const SwarmGitHubError(
+      'GitHub sent something unreadable. Try again.',
+    );
+  }
+
+  static const _issueFields =
+      'number title url createdAt updatedAt author{login} '
+      'labels(first:100){nodes{name color}}';
+
+  static const _issuesQuery =
+      r'query($owner:String!,$name:String!,$first:Int!,$after:String){'
+      r'repository(owner:$owner,name:$name){issues(first:$first,after:$after,'
+      r'states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){'
+      'pageInfo{hasNextPage endCursor} nodes{$_issueFields comments{totalCount}}}}}';
+
+  /// The open issues someone has taken ([taken]): each one's number and the names of its labels.
+  static const _takenQuery =
+      r'query($owner:String!,$name:String!,$first:Int!){'
+      r'repository(owner:$owner,name:$name){issues(first:$first,'
+      r'states:OPEN,labels:["status:taken"],orderBy:{field:UPDATED_AT,direction:DESC}){'
+      'nodes{number labels(first:100){nodes{name}}}}}}';
+
+  /// A repository's open pull requests for its board ([pulls]): each one's head, checks, conflict and labels, the issues it
+  /// closes, and its newest comments, where lampOS's readers write `READ-OK <sha>` as a first line.
+  static const _pullsQuery =
+      r'query($owner:String!,$name:String!,$first:Int!){'
+      r'repository(owner:$owner,name:$name){defaultBranchRef{name} '
+      r'pullRequests(states:OPEN,first:$first,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{'
+      'number title url isDraft headRefName headRefOid baseRefName body mergeable author{login} '
+      'labels(first:20){nodes{name}} closingIssuesReferences(first:5){nodes{number}} '
+      'commits(last:1){nodes{commit{statusCheckRollup{state}}}} '
+      'comments(last:30){nodes{body createdAt authorAssociation author{login}}}}}}}';
+
+  static const _commentFields =
+      'pageInfo{hasPreviousPage startCursor} nodes{body createdAt url author{login}}';
+
+  static const _threadQuery =
+      r'query($owner:String!,$name:String!,$number:Int!,$last:Int!){'
+      r'repository(owner:$owner,name:$name){issue(number:$number){'
+      '$_issueFields body state '
+      'comments(last:\$last){totalCount $_commentFields}}}}';
+
+  static const _earlierQuery =
+      r'query($owner:String!,$name:String!,$number:Int!,$last:Int!,$before:String){'
+      r'repository(owner:$owner,name:$name){issue(number:$number){'
+      'comments(last:\$last,before:\$before){$_commentFields}}}}';
+
+  /// What a read says while GitHub limits this person's requests.
+  static const limitedWords =
+      'GitHub is limiting requests. Wait a few minutes.';
+
+  /// How long no `gh` runs after GitHub said it is limiting requests: the board reads every minute and a task's panel every
+  /// 30 s, and asking again at once only spends what the limit leaves.
+  static const limitedFor = Duration(minutes: 2);
+
+  /// Until when GitHub limits this person's requests ([limitedFor]); null when it does not.
+  DateTime? _limitedUntil;
+
   Future<String> _call(List<String> arguments, String repository) async {
+    if (_limitedUntil case final until? when clock.now().isBefore(until)) {
+      throw const SwarmGitHubError(limitedWords);
+    }
     final ProcessResult result;
     try {
       result = await _run(arguments).timeout(timeout);
@@ -217,36 +575,66 @@ class SwarmGitHub {
       throw const SwarmGitHubError('GitHub didn\'t answer. Try again.');
     }
     if (result.exitCode == 0) return '${result.stdout}';
-    final said = '${result.stderr}';
+    final (kind, refusal) = _refusal(
+      result.exitCode,
+      '${result.stderr}',
+      repository,
+    );
+    // Its kind names the failure in the log; what gh printed stays out of it.
     appLog.warn(
       'super-tabs',
-      'GitHub issues not read: gh exited ${result.exitCode}',
+      'GitHub issues not read: $kind (gh exited ${result.exitCode})',
     );
-    if (result.exitCode == 4 ||
+    if (kind == 'rate limited') _limitedUntil = clock.now().add(limitedFor);
+    throw refusal;
+  }
+
+  /// What a failed `gh` call means, from its exit code and what it printed: its kind for the log and the words the person
+  /// sees. A limit or an organization's SSO comes first: GitHub can answer either beside a repository it then cannot find.
+  static (String, SwarmGitHubError) _refusal(
+    int exitCode,
+    String said,
+    String repository,
+  ) {
+    if (exitCode == 4 ||
         said.contains('gh auth login') ||
         said.contains('not logged in')) {
-      throw const SwarmGitHubError('Sign in to GitHub: run gh auth login.');
+      return (
+        'signed out',
+        const SwarmGitHubError('Sign in to GitHub: run gh auth login.'),
+      );
+    }
+    if (said.contains('rate limit') || said.contains('HTTP 429')) {
+      return ('rate limited', const SwarmGitHubError(limitedWords));
+    }
+    if (said.contains('SAML')) {
+      return (
+        'SSO',
+        const SwarmGitHubError(
+          'Authorize gh for this organization\'s SSO: run gh auth refresh.',
+        ),
+      );
     }
     if (said.contains('Could not resolve to a Repository') ||
         said.contains('HTTP 404')) {
-      throw SwarmGitHubError('You can\'t see $repository on GitHub.');
+      return (
+        'no repository',
+        SwarmGitHubError('You can\'t see $repository on GitHub.'),
+      );
+    }
+    if (said.contains('Could not resolve to an Issue')) {
+      return ('no issue', const SwarmGitHubError('That issue is gone.'));
     }
     if (said.contains('disabled issues') ||
         said.contains('has disabled issues')) {
-      throw SwarmGitHubError('$repository has issues turned off.');
+      return (
+        'issues off',
+        SwarmGitHubError('$repository has issues turned off.'),
+      );
     }
-    throw const SwarmGitHubError('GitHub didn\'t answer. Try again.');
-  }
-
-  static List<Object?> _list(String answer) {
-    try {
-      final value = jsonDecode(answer);
-      if (value is List) return value;
-    } on FormatException {
-      // Read as unreadable below.
-    }
-    throw const SwarmGitHubError(
-      'GitHub sent something unreadable. Try again.',
+    return (
+      'failed',
+      const SwarmGitHubError('GitHub didn\'t answer. Try again.'),
     );
   }
 
@@ -276,6 +664,13 @@ class SwarmGitHub {
       environment: const {'GH_PROMPT_DISABLED': '1', 'NO_COLOR': '1'},
     );
   }
+}
+
+/// A GraphQL connection's `nodes`, or a plain list: what both shapes of a list of rows hold.
+List<Object?> _nodes(Object? value) {
+  if (value is List) return value;
+  if (value is Map && value['nodes'] is List) return value['nodes'] as List;
+  return const [];
 }
 
 String? _login(Object? author) => author is Map && author['login'] is String

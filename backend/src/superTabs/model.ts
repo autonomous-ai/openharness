@@ -5,12 +5,11 @@ import { autoJoinOn } from './autoJoinDomain.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { withAvatarView } from './profile.js'
+import { personView, withAvatarView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
-import { downSince, expireRemovals, startPreparing } from './machines.js'
+import { downSince, expireRemovals, RETIRED_MACHINE_FIELDS, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
-import { visibleAccess } from './machineAccess.js'
 import { projectCard, withExtra } from './statusCard.js'
 import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
@@ -23,16 +22,13 @@ export interface Person {
   email: string
   role: Role
   generation: string
-  /** Their own short status (profile.ts); only Swarm members read it. */
-  status?: import('./profile.js').PersonStatus
-  /** Their time zone's IANA name ("Asia/Ho_Chi_Minh"), as their own app reports it (profile.ts); absent until it has.
-   *  Only Swarm members read it, for the local time on a person's card. */
-  timeZone?: string
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
-  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
+  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Nothing sets a chosen one any
+   *  more (2026-11-09): those chosen before stay. Only members read it. */
   username?: string
-  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Only members read it. */
+  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Nothing sets one any more
+   *  (2026-11-09): those set before stay. Only members read it. */
   name?: string
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
@@ -278,7 +274,7 @@ export interface AgentStart {
   /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
    *  reports it preparing (liveness.ts). */
   dispatchedAt?: number
-  /** The CLI version its machine's daemon had connected with when it was dispatched (store.ts machineFacts): a failed start
+  /** The CLI version its machine's daemon had connected with when it was dispatched (store.ts machineVersions): a failed start
    *  says nothing about that machine once it runs another version (cli routeCommand.ts `stalled`). */
   dispatchedVersion?: string
   /** When it was asked for (absent on starts from before 2026-10-29): a Buddy's fails if its machine never takes it, and a
@@ -408,7 +404,8 @@ export const reviewsWanted = (task: WorkTask | undefined): number => task?.revie
  *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
  *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
-/** `access`: what the work needs to reach, by the names machines list it under (machineAccess.ts, task #3047). */
+/** `access`: an older client's: the names of what the work needs to reach, stored and read by nothing since machine.access went.
+ *  Delete it with the task records (slice S13). */
 export interface TaskRequirement { machines?: string[]; devices?: string[]; access?: string[]; unseenMachines?: number }
 
 /** The machines a reader sees: listed in their visible state, or running an agent they see. */
@@ -558,12 +555,9 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
-  /** When a verified release carried its last recorded merge to people, and the release tags that did (releases.ts, task #3405):
-   *  the board's Shipped. Absent while a release it needs has not gone out, and on work merged before the server recorded it. */
+  /** When a verified release carried its last recorded merge to people, and the release tags that did: the board's Shipped. Only
+   *  on work the release watch settled before Swarm v4 removed it; nothing writes it now. */
   released?: { at: number; tags: string[] }
-  /** While it is on its project's release list (releases.ts): the parts it still waits for, as `desktop` or `cli`; empty until
-   *  its pull request's files are read. Absent otherwise, and cleared once it is released or leaves the list (River, 11-05). */
-  releasing?: import('./releases.js').ReleaseComponentId[]
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
   /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
@@ -672,9 +666,6 @@ export interface Invitation {
   role: 'collaborator' | 'viewer'
   conversationId: string
   expiresAt: number
-  /** Who sent it: the Workspace check at acceptance reads their role then (store.ts invite.accept). Absent on invitations
-   *  from before it was recorded. */
-  invitedBy?: string
 }
 /** An agent a machine's report removed as closed: as it was, and where it was (closedAgents.ts). */
 export interface RemovedSession {
@@ -705,10 +696,6 @@ export interface SuperTabState {
   /** Read-only, for the Swarm owner's reads (visibleState): the projects nobody owns, by name and size (projects.ts). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
-  /** The Workspace it belongs to (workspaceStore.ts); absent on a Swarm from before Workspaces until the migration gives it one. */
-  workspaceId?: string
-  /** Who in the Workspace may find and join it by themselves: `workspace` lets members and up join; absent reads as invite-only. */
-  workspaceVisibility?: 'invite-only' | 'workspace'
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
@@ -822,7 +809,7 @@ export interface MessageDraft {
   recipients: string[]
   /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
   buddyRecipients?: string[]
-  /** Structured row kind for clients; `native` is written by native.ts, `route`/`route-override` by commands. */
+  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
@@ -855,10 +842,13 @@ export const AGENT_ONLY = { kind: 'agent-only' }
 export const NOTICE_READERS = {
   // Only its agent: a skill update (cli host.ts), a decision answered (decisions.ts).
   'agent-only': 'agent',
+  // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
+  github: 'people',
   // The Lead's wakes and requests, and the worker's "moved" line (liveness.ts, tidy.ts, projectUpdates.ts); two
   // projects changing the same code, to both their Leads in the Leads chat (commands.ts).
   'work-stalled': 'recipients', 'work-lost': 'recipients', 'work-resumed': 'recipients', 'idle-stop': 'recipients',
-  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock, liveness.ts).
+  // A crew member's 2 hours without progress on its task, to that member (dispatch.ts crewClock): written until Swarm v4, read still.
+  // Delete it with the notice readers of v1-v3 (slice S18).
   'crew-nudge': 'recipients',
   // An agent with no open task for 15 minutes, and a grid attempt's failed first review, told to the coordinator (tidy.ts
   // idleNotices, commands.ts work.check; project instructions, phase 4). `idle-stop` rows are from before.
@@ -869,7 +859,7 @@ export const NOTICE_READERS = {
   'schedule-request': 'recipients', 'tidy-request': 'recipients', 'digest-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
-  // A crew member's finished wake or move, timed for the daily scorecard (crewTimes.ts, task #3462): read by nobody.
+  // A crew member's finished wake or move, timed for the daily scorecard Swarm v4 removed (crewTimes.ts, task #3462): read by nobody.
   'crew-timing': 'agent',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
   'notice-digest': 'recipients',
@@ -910,7 +900,7 @@ export const NOTICE_READERS = {
   // Their one Buddy cannot start in a person's older project chat, told to them there once per outage (commands.ts buddyDownLine).
   'buddy-cannot-start': 'people',
   'auto-archive': 'people', native: 'people',
-  // A release step the Swarm opened for the Integrator, and its verified release's line (releases.ts, task #3405).
+  // A release step the Swarm opened for the Integrator, and its verified release's line (the release watch Swarm v4 removed, task #3405).
   release: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
@@ -923,7 +913,8 @@ export const NOTICE_READERS = {
   switch: 'people',
   // The machine owner's one line when another person moves a PM onto one of their non-default accounts (commands.ts agent.switchResult).
   'pm-switch-notice': 'people',
-  // The machine owner's line, once a week, when someone else's work starts on their machine (othersWork.ts).
+  // The machine owner's line, once a week, when someone else's work started on their machine: written until Swarm v4, read still.
+  // Delete it with the notice readers of v1-v3 (slice S18).
   'others-work-notice': 'people',
   'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
@@ -1221,25 +1212,14 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   const ownRemoved = actor.kind === 'person' ? (visible.removedMachines ?? []).filter(r => r.contributorId === actor.userId).map(r => r.machineId) : []
   if (ownRemoved.length) (visible as { removedMachines?: unknown }).removedMachines = ownRemoved
   else delete visible.removedMachines
-  // What a machine can reach: its notes and checks only to those section 4 of the design names (machineAccess.ts).
-  for (const pool of visible.machines ?? []) {
-    const access = visibleAccess(state, pool, actor)
-    if (access) pool.access = access
-  }
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
-  // Where teammates' work ran was a Team-account choice; Swarm v3 runs every agent as its own person (#4120, #4289). It stays
-  // stored for teamWorkRefusal until the Team entries go (#4290), and no reader gets it.
-  for (const pool of visible.machines ?? []) delete pool.ownAccountChoice
+  // What Swarm v4 retired on a machine (RETIRED_MACHINE_FIELDS) stays stored until the contribution is saved again, and no reader gets it.
+  for (const pool of visible.machines ?? []) for (const field of RETIRED_MACHINE_FIELDS) delete (pool as unknown as Record<string, unknown>)[field]
   // A Mac's Harness Team account is stored under its Mac's name (machines.ts followAccountName), and read so it named two
   // entries alike: a lamp start picked the Team account's thinking it was the Mac (task #3060). Every read tells them apart;
   // the stored name, which renames and the server's own sentences read, stays the Mac's.
   for (const pool of visible.machines ?? []) if (pool.hostMachineId) pool.name = teamEntryName(pool.name)
-  // A machine kept for some projects names to each reader only those they may read (machines.ts projects): a private
-  // project's id is not another member's to see.
-  for (const pool of visible.machines ?? []) {
-    if (pool.projects) pool.projects = pool.projects.filter(id => projectsOf(state).some(p => p.id === id && canReadProject(state, actor, p)))
-  }
   // Nor its id, which a Buddy's row carries (machineHiddenFrom).
   visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
@@ -1257,13 +1237,11 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
   }
   visible.buddies = true
-  // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
-  // else reads which item failed (machines.ts teamWorkRefusal).
   for (const pool of visible.machines ?? []) {
     // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
     if (pool.observation) delete pool.observation.idleBuddyHarnessIds
-    const privacy = pool.observation?.privacy
-    if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
+    // A Team daemon's privacy check, stored by an older release, can name paths on its Mac: Swarm v4 keeps none and shows none.
+    if (pool.observation) delete (pool.observation as { privacy?: unknown }).privacy
   }
   // A machine's accounts (labels, percent left) are for those who may switch a PM running there: its owner, and the owners of
   // projects whose PM runs on it. Agents and everyone else read the machine without them.
@@ -1340,7 +1318,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)
-  visible.people = visible.people.map(p => ({ ...withAvatarView(p), username: names.get(p.id) })) as Person[]
+  visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) })) as Person[]
   visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
   for (const target of visible.agents) {

@@ -11,7 +11,6 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
-import 'package:harness/super_tabs/chat/fold.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -19,13 +18,13 @@ import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/task_list.dart';
+import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/personal_agents.dart';
 import 'package:harness/super_tabs/reply_box.dart';
-import 'package:harness/super_tabs/tasks/personal_task_card.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
 import 'support/swarm_v4_data.dart';
@@ -46,25 +45,6 @@ void main() {
     final mono = rootBundle.load('assets/fonts/roboto-mono/RobotoMono.ttf');
     for (final family in {AppType.sansFamily, terminalFontFamily, 'Roboto'}) {
       await (FontLoader(family)..addFont(mono)).load();
-    }
-    // The activity marks' symbols (◌ ✓ ■ ⊘ and the spinner) come from the
-    // host's symbol font, as in the app; they are a few dozen pixels, inside
-    // the comparator's tolerance where hosts differ.
-    for (final (family, paths) in [
-      ('Apple Symbols', ['/System/Library/Fonts/Apple Symbols.ttf']),
-      (
-        'DejaVu Sans',
-        [
-          '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-          // macOS has no DejaVu; this face carries the same marks (✓).
-          '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
-        ],
-      ),
-    ]) {
-      final file = paths.map(File.new).where((f) => f.existsSync()).firstOrNull;
-      if (file == null) continue;
-      final bytes = ByteData.sublistView(file.readAsBytesSync());
-      await (FontLoader(family)..addFont(Future.value(bytes))).load();
     }
     await (FontLoader('packages/lucide_icons_flutter/Lucide400')..addFont(
           rootBundle.load(
@@ -179,8 +159,6 @@ Future<List<SuperTabController>> _show(
     ),
   );
   await tester.pump();
-  // A fold says More a frame after it measures what it holds.
-  await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
 }
@@ -227,10 +205,6 @@ const _rest = .0001;
 List<GalleryRegion> _regions(WidgetTester tester) {
   final faces = find.byType(SuperTabAvatarFace);
   final avatars = find.byType(SuperTabAvatar);
-  final marks = find.descendant(
-    of: find.byType(SuperTabTaskStatusMark),
-    matching: find.byType(Icon),
-  );
   return [
     for (var i = 0; i < faces.evaluate().length; i++)
       if (tester.widget<SuperTabAvatarFace>(faces.at(i)) case final face)
@@ -254,12 +228,6 @@ List<GalleryRegion> _regions(WidgetTester tester) {
           rect: tester.getRect(avatars.at(i)).inflate(avatar.size * .12 + 1),
           limit: _art,
         ),
-    for (var i = 0; i < marks.evaluate().length; i++)
-      (
-        name: 'status mark ${tester.widget<Icon>(marks.at(i)).semanticLabel}',
-        rect: tester.getRect(marks.at(i)),
-        limit: _glyph,
-      ),
   ];
 }
 
@@ -345,28 +313,17 @@ const _faces = [
   'Nova',
 ];
 
-const _statuses = [
-  'proposal',
-  'planned',
-  'working',
-  'needs_human',
-  'review',
-  'blocked',
-  'done',
-  'stopped',
-  'lost',
-  'rejected',
-];
-
-SuperTabAgent _agent(String name, {String? kind}) => SuperTabAgent.fromJson({
-  'id': 'id-$name',
-  'name': name,
-  'machineId': 'm',
-  'harnessId': 'h',
-  'contributorId': 'p',
-  'configuration': {'engine': 'claude'},
-  'kind': ?kind,
-});
+SuperTabAgent _agent(String name, {String? kind, bool offline = false}) =>
+    SuperTabAgent.fromJson({
+      'id': 'id-$name',
+      'name': name,
+      'machineId': 'm',
+      'harnessId': 'h',
+      'contributorId': 'p',
+      'configuration': {'engine': 'claude'},
+      'kind': ?kind,
+      if (offline) 'downSince': '2026-11-09T05:00:00Z',
+    });
 
 final _person = SuperTabPerson.fromJson({
   'id': 'p1',
@@ -442,28 +399,6 @@ class _Gallery extends StatelessWidget {
                   ],
                 ],
               ),
-              title('Task status marks'),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final status in _statuses)
-                    SizedBox(
-                      width: 72,
-                      child: Column(
-                        children: [
-                          SuperTabTaskStatusMark(status),
-                          const SizedBox(height: 4),
-                          Text(
-                            superTabTaskStatusLabel(status),
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
               title('Left pane rows'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -473,32 +408,71 @@ class _Gallery extends StatelessWidget {
                     width: 280,
                     child: Column(
                       children: [
-                        // The v4 left pane (anh Dee 2026-11-08): your agents by face and name, then projects.
+                        // The v4 left pane (anh Dee 2026-11-08): your team by face and name, then projects.
                         SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
                         SuperTabQuietHeading(
-                          'Your agents',
-                          onTap: null,
+                          'Your Team',
+                          collapsed: false,
+                          onTap: () {},
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
-                        for (final (name, lead, unread, selected) in [
-                          ('River', true, false, false),
-                          ('Quinn', false, false, true),
-                          ('Kai', false, true, false),
+                        for (final (name, lead, unread, selected, state) in [
+                          ('River', true, false, false, null),
+                          ('Quinn', false, false, true, 'on #12'),
+                          ('Kai', false, true, false, 'free'),
+                          ('Wren', false, false, false, 'offline'),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
-                              _agent(name, kind: lead ? 'pm' : null),
+                              _agent(
+                                name,
+                                kind: lead ? 'pm' : null,
+                                offline: state == 'offline',
+                              ),
                               size: SuperTabQuietRow.faceSize,
                               engineBadge: false,
                               lead: lead,
                             ),
                             name: name,
+                            detail: state,
                             selected: selected,
                             unread: unread,
                             onTap: () {},
                           ),
-                        SuperTabQuietHeading('Humans', onTap: () {}),
+                        // Your Personal Swarm only: a pane you run that is not in the Swarm yet, with its computer.
+                        SuperTabQuietRow(
+                          leading: SuperTabAvatar(
+                            identity: 'agent:${swarmAgentId('m', 'docs')}',
+                            name: 'Docs bot',
+                            size: SuperTabQuietRow.faceSize,
+                            face: true,
+                          ),
+                          name: 'Docs bot',
+                          detail: 'Mac Studio',
+                          onTap: () {},
+                        ),
+                        // Open by itself: a computer is off.
+                        SuperTabQuietHeading(
+                          'Your Machines',
+                          collapsed: false,
+                          onTap: () {},
+                        ),
+                        SuperTabQuietRow(
+                          leading: Icon(
+                            AppIcons.monitorOff,
+                            size: AppIcons.inlineSize,
+                            color: grid.SidebarInk.inkMuted,
+                          ),
+                          name: 'Old Rig',
+                          detail: 'offline',
+                          onTap: () {},
+                        ),
+                        SuperTabQuietHeading(
+                          'Top Teams',
+                          collapsed: false,
+                          onTap: () {},
+                        ),
                         SuperTabQuietRow(
                           leading: SuperTabAvatar.person(
                             _person,
@@ -514,12 +488,12 @@ class _Gallery extends StatelessWidget {
                 ],
               ),
               title(
-                'Tasks: the project\'s GitHub issues, read with gh; a card opens one',
+                'Tasks: a board of the project\'s GitHub issues, read with gh; a card opens one',
               ),
               SizedBox(
-                width: 520,
+                width: 760,
                 height: 330,
-                child: SwarmTaskList(
+                child: SwarmTaskBoard(
                   controller: swarm,
                   conversationId: 'lead',
                   github: swarmV4GitHub(),
@@ -529,7 +503,7 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              title('Chat: bubbles, a time after a pause, cards'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -577,12 +551,13 @@ class _Gallery extends StatelessWidget {
                           details: SizedBox.shrink(),
                         ),
                         const SizedBox(height: 8),
-                        SwarmFold(
-                          child: Text(
-                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
-                                .join('\n'),
-                            style: SwarmType.body(context),
-                          ),
+                        // What GitHub said to your agent (github_row.dart).
+                        const SwarmChatCard(
+                          icon: AppIcons.gitPullRequest,
+                          label: 'PR #4 · deehw',
+                          title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
+                          action: 'Read',
+                          details: SizedBox.shrink(),
                         ),
                       ],
                     ),

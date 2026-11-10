@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TurnDelivery } from '../core/api.js'
-import { deliveryIn, turnsLink } from './turnsLink.js'
+import type { TurnDelivery, TurnEnd } from '../core/api.js'
+import { deliveryIn, endIn, turnsLink } from './turnsLink.js'
 
 const flush = () => new Promise((settle) => setTimeout(settle, 0))
 
@@ -90,6 +90,46 @@ describe('delivered turns from a service in its own process', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+
+  // The Swarm's host posts an agent's answer when its turn ends (core/turns/ends.ts tells it, `service_event` kind `turn_end`).
+  it('hands each live turn end the core tells to each listener, until it stops listening', () => {
+    const link = turnsLink(async () => ({}))
+    const heard: TurnEnd[] = []
+    const stop = link.turns.onEnd((event) => heard.push(event))
+    expect(link.heard({ kind: 'turn_end', event: { agentId: 'agent-1', sessionId: 's1', aborted: false } })).toBe(true)
+    expect(link.heard({ kind: 'turn_end', event: { agentId: 'agent-2', sessionId: 's2', aborted: true } })).toBe(true)
+    stop()
+    expect(link.heard({ kind: 'turn_end', event: { agentId: 'agent-1', sessionId: 's1', aborted: false } })).toBe(true)
+    expect(heard).toEqual([{ agentId: 'agent-1', sessionId: 's1', aborted: false }, { agentId: 'agent-2', sessionId: 's2', aborted: true }])
+  })
+
+  it('costs a turn-end listener that throws that end alone', () => {
+    const log = vi.fn()
+    const link = turnsLink(async () => ({}), log)
+    const after = vi.fn()
+    link.turns.onEnd(() => { throw new Error('boom') })
+    link.turns.onEnd(() => { throw 'not an error' })
+    link.turns.onEnd(after)
+    link.heard({ kind: 'turn_end', event: { agentId: 'agent-1', sessionId: 's1', aborted: false } })
+    expect(after).toHaveBeenCalledOnce()
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      '[turns] a turn-end listener failed on agent-1 · boom',
+      '[turns] a turn-end listener failed on agent-1 · not an error',
+    ])
+  })
+
+  it('takes nothing else for a turn end', () => {
+    const heard = vi.fn()
+    const link = turnsLink(async () => ({}))
+    link.turns.onEnd(heard)
+    for (const event of [undefined, null, 'end', {}, { agentId: 'a', sessionId: 4, aborted: false }, { agentId: 3, sessionId: 's', aborted: false },
+      { agentId: 'a', sessionId: 's' }, { agentId: 'a', sessionId: 's', aborted: 'no' }]) {
+      expect(link.heard({ kind: 'turn_end', event })).toBe(false)
+    }
+    expect(link.heard({ kind: 'turn_end' })).toBe(false)
+    expect(heard).not.toHaveBeenCalled()
+    expect(endIn({ kind: 'delivery', event: { agentId: 'a', sessionId: 's', aborted: false } })).toBeNull()
   })
 
   it('takes nothing else for a delivery\'s progress', () => {

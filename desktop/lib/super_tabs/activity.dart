@@ -118,8 +118,8 @@ class SuperTabNotice {
 /// * Mentions: the tags of them, folded by author and chat.
 /// * Threads: the followed threads with replies they have not read.
 ///
-/// Leaving the view marks nothing read: it shows no reply or reaction row,
-/// and a thread is read when it is opened. One per controller.
+/// Leaving the view marks nothing read: it shows no reply row, and a thread
+/// is read when it is opened. One per controller.
 class SuperTabActivity extends ChangeNotifier {
   SuperTabActivity._(this.controller)
     : mentions = SuperTabMentions.of(controller),
@@ -379,16 +379,6 @@ class SuperTabActivity extends ChangeNotifier {
     ];
   }
 
-  /// The followed threads with news today.
-  List<SuperTabFollowedThread> get threadRows => newReplies;
-
-  /// The followed threads the reader has read, newest reply first, below the
-  /// new ones (Darren, task #2835).
-  List<SuperTabFollowedThread> get readThreadRows => [
-    for (final t in attention.shown)
-      if (!attention.isNew(t)) t,
-  ];
-
   /// What the listed [decided] call their PM: the coordinator of their
   /// project, or `the PMs` when they come from several.
   String coordinatorFor(Iterable<SuperTabDecision> decided) {
@@ -407,8 +397,8 @@ class SuperTabActivity extends ChangeNotifier {
     unawaited(decisions.load());
   }
 
-  /// The view was left. It marks nothing read: it showed no reply or reaction
-  /// row, and a thread is read when it is opened.
+  /// The view was left. It marks nothing read: it showed no reply row, and a
+  /// thread is read when it is opened.
   void closed() {
     if (!_open) return;
     _open = false;

@@ -27,7 +27,7 @@ describe('the Windows release workflows', () => {
     for (const spec of ['src/lib/hostMove/hostMove.real.spec.ts', 'src/lib/ptyHost/drain.spec.ts', 'src/lib/windows/ptyInstall.windows.real.spec.ts']) expect(pty).toContain(spec)
   })
 
-  it('publishes the Windows bits to staging only, beside a CLI publish that never waits for them', () => {
+  it('publishes the Windows bits to staging, and to production only when a dispatch asks', () => {
     const release = read('release.yml')
     expect(release).toContain('uses: ./.github/workflows/windows.yml')
     expect(release).toContain('staging_prefix=')
@@ -36,7 +36,16 @@ describe('the Windows release workflows', () => {
     // a dry run's under harness/staging-dry-run, so it never takes a real version's immutable harness/pty/<version>/.
     expect(release).toContain('OBJECT_PREFIX="$STAGING_PREFIX" METADATA_PATH="$STAGING_PREFIX/pty/metadata.json" bash cli/scripts/publish-pty-payload.sh')
     expect(release).toMatch(/staging=harness\/staging; else staging=harness\/staging-dry-run; fi/)
-    expect(release).not.toMatch(/bash cli\/scripts\/promote-pty-payload\.sh/)
+    // The terminal host reaches production only through a dispatch that asks for it, never on a tag: pushing vX.Y.Z_cli
+    // publishes the CLI, and the host — a binary in every Windows pane — waits for the owner's staging E2E. It needs
+    // no build job: promote-pty-payload.sh re-checks every zip's sha256 and size itself, so a version released earlier
+    // can be promoted without republishing bytes the bucket holds as immutable.
+    expect(release).toMatch(/promote_pty:\n\s+description:[\s\S]*?\n\s+type: boolean\n\s+default: false/)
+    expect(release).toMatch(/promote-pty:\n\s+needs: \[version\]\n\s+if: >-\n\s+inputs\.promote_pty &&\n\s+needs\.version\.outputs\.metadata_path == 'harness\/cli\/metadata\.json'/)
+    // A promote-only dispatch builds nothing: the bytes are already published, and the bucket refuses a republish.
+    expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]\n(?:\s+#[^\n]*\n)*\s+if: \$\{\{ !inputs\.promote_pty \}\}/)
+    expect(release).toMatch(/pty-build:\n\s+needs: version\n\s+if: \$\{\{ !inputs\.promote_pty \}\}/)
+    expect(release).toContain('bash cli/scripts/promote-pty-payload.sh')
     expect(release).toMatch(/windows-staging:\n\s+needs: \[version, preflight, publish, pty-build, pty-sign\]/)
     expect(release).toMatch(/github-release:\n\s+needs: \[version, publish\]/)
     expect(release).toMatch(/publish:\n\s+needs: \[version, preflight, process-images\]/)

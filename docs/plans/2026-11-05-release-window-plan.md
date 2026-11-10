@@ -1,5 +1,8 @@
 # Release window guard Implementation Plan
 
+> **Superseded 2026-11-09:** anh Dee removed the release window. `scripts/release-window.*`, `--urgent`, `Release-Urgent:` and the
+> workflows' `Release window` steps are gone; releases run at any hour. Kept as history.
+
 **Goal:** A release outside 09:00-18:00 Asia/Ho_Chi_Minh, or a backend release within 2 hours of the last one, is
 refused with the next allowed time. A P0 may release at night with `--urgent "<reason>"`; the reason is recorded and
 printed as the one line the releaser posts in the project chat (Dee, 2026-11-05).

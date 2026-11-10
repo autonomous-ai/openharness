@@ -28,19 +28,12 @@ export const GRANTED_TOKEN_PERMISSIONS = { workflows: 'write', issues: 'write' }
  *  token only (github/repositoryCreate.ts), so a token minted from the app's key can never create, delete or transfer a
  *  repository, nor widen which repositories the installation covers. */
 export const NEVER_ON_INSTALLATION_TOKENS = ['administration', 'repository_creation', 'installation_repositories'] as const
-/** What preparing an agent's folder may do before the agent has a task: clone and fetch the repository, nothing more. */
-export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
 /** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
 export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
-/** What the route's read of running CI jobs may do: read workflow runs and their jobs, nothing more. */
-export const ACTIONS_READ_PERMISSIONS = { actions: 'read', metadata: 'read' } as const
 /** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
  *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
-/** The release watch (superTabs/releaseWatch.ts): release workflow runs, where their tags sit on the default branch, and a
- *  pull request's files. */
-export const RELEASE_READ_PERMISSIONS = { contents: 'read', pull_requests: 'read', actions: 'read', metadata: 'read' } as const
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
 /** What reading a pull request head's patch may do (superTabs/pullRequestPatch.ts, #3394): read the pull request, and the
  *  comparison of its base and head commits, which is repository contents. Read only, revoked when the watch's pass ends. */
@@ -65,8 +58,6 @@ function filesOf(body: unknown[]): PullRequestFile[] | null {
 }
 const PUSH_UNKNOWN_MS = 60_000
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
-/** Jobs running and waiting on a repository's GitHub Actions, in all and on macOS runners: counts only. */
-export interface CiLoad { running: number; queued: number; macosRunning: number; macosQueued: number }
 
 /** A refusal with the code clients act on; `details` adds fields beside it, such as the install link. */
 export class GitHubAppError extends Error {
@@ -136,23 +127,6 @@ const NOT_INSTALLED_TTL_MS = 60_000
 const REFRESH_MS = 15_000
 const BRANCH_TTL_MS = 10 * 60_000
 const REQUEST_TIMEOUT_MS = 10_000
-/** How long a CI load is kept: routes come minutes apart, and a job takes minutes. */
-export const CI_LOAD_TTL_MS = 30_000
-/** The most GitHub calls one CI load makes: the token, the two run lists, the jobs of at most [CI_MAX_RUNS] runs, and the
- *  revoke (Lead, 10-31: a read's calls are counted and capped). The installation lookup is kept ten minutes apart. */
-export const CI_MAX_CALLS = 10
-/** The most runs whose jobs are read in one CI load; a run beyond it counts as one waiting job, on no particular runner. */
-export const CI_MAX_RUNS = CI_MAX_CALLS - 4
-/** The most CI loads one server process reads for one repository in an hour: past it, the last load is answered while it is
- *  at most [CI_STALE_MS] old, and after that none, which the route says as "not checked". The count, like the 30 s cache, is
- *  per server process, and production runs 2 to 8 pods (security review 2 of #2428): the worst case is 8 × 3 = 24 reads and,
- *  with [CI_MAX_CALLS], 240 calls an hour per repository, about 5% of an installation's 5,000. */
-export const CI_READS_PER_HOUR = 3
-/** The most server processes production runs (its autoscaler's maximum), for the worst case above. */
-export const SERVER_PROCESSES_MAX = 8
-export const CI_STALE_MS = 5 * 60_000
-const CI_WAITING = new Set(['queued', 'waiting', 'requested', 'pending'])
-
 /** A git author and committer. */
 export interface CommitIdentity { name: string; email: string }
 
@@ -177,11 +151,7 @@ export class GitHubApp {
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
   private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
   private readonly shownNames = new Map<string, { name: string; until: number }>()
-  /** Each repository's CI load while fresh, or being read ([ciLoad]), by its name in lower case; per server process. */
-  private readonly ciLoads = new Map<string, { value: Promise<CiLoad | null>; until: number }>()
   private readonly pushOrigins = new Map<string, { origin: PushOrigin; until: number }>()
-  /** Each repository's CI reads in the last hour, and its last load read, for [CI_READS_PER_HOUR]. */
-  private readonly ciReads = new Map<string, { at: number[]; last: { load: CiLoad | null; at: number } | null }>()
   /** The app's installation on each organization, by its login in lower case, for [ownerReadiness]; null when not installed. */
   private readonly orgInstallations = new Map<string, { id: number | null; until: number }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
@@ -469,16 +439,7 @@ export class GitHubApp {
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub could not create a token for ${repository.fullName}.`, 502)
   }
 
-  /** One call with an installation [token] this server minted (the merge train's, github/train.ts): its status and JSON body.
-   *  Throws [GitHubAppError] GITHUB_UNAVAILABLE when GitHub does not answer. */
-  async installationCall(token: string, method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
-    const answer = await this.call(method, path, `Bearer ${token}`, body)
-    return { status: answer.status, body: answer.body }
-  }
-
-  /** Ends [token] at once (DELETE /installation/token, authorised by the token itself). One GitHub already ended reads as
-   *  done. */
-  /** One GET of [path] with an installation [token], for readers that page and judge answers themselves (superTabs/releaseWatch.ts):
+  /** One GET of [path] with an installation [token], for readers that page and judge answers themselves (superTabs/ruleMoves.ts):
    *  its status, body, and the next page's path from the Link header. Throws [GitHubAppError] when GitHub does not answer. */
   async get(path: string, token: string): Promise<{ status: number; body: unknown; next?: string }> {
     const answer = await this.call('GET', path, `Bearer ${token}`)
@@ -486,37 +447,12 @@ export class GitHubApp {
     return { status: answer.status, body: answer.body, ...(next ? { next } : {}) }
   }
 
+  /** Ends [token] at once (DELETE /installation/token, authorised by the token itself). One GitHub already ended reads as
+   *  done. */
   async revoke(token: string): Promise<void> {
     const answer = await this.call('DELETE', '/installation/token', `Bearer ${token}`)
     if (answer.status === 204 || answer.status === 401) return
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub did not revoke the token (HTTP ${answer.status}).`, 502)
-  }
-
-  /** The jobs running and waiting on [repository]'s GitHub Actions (Scholes's goals, piece 5: work that starts heavy CI waits
-   *  for the account's limit), or null when the app is not installed there. Read with a token that can only read workflow
-   *  runs, revoked as soon as the counts are in; the token, run names and branches never leave this method. Kept
-   *  [CI_LOAD_TTL_MS], and routes asking at once share one read; a failed read is not kept. Throws [GitHubAppError] when
-   *  GitHub cannot say. */
-  async ciLoad(repository: GitHubRepository): Promise<CiLoad | null> {
-    const key = repository.fullName.toLowerCase(), now = this.now()
-    const known = this.ciLoads.get(key)
-    if (known && known.until > now) return known.value
-    // Kept per repository a Swarm routes for; the expired ones go once there are many.
-    if (this.ciLoads.size >= 200) for (const [k, v] of this.ciLoads) if (v.until <= now) this.ciLoads.delete(k)
-    if (this.ciReads.size >= 200) for (const [k, v] of this.ciReads) if (!v.at.some(t => now - t < 3_600_000)) this.ciReads.delete(k)
-    const reads = this.ciReads.get(key) ?? { at: [], last: null }
-    reads.at = reads.at.filter(t => now - t < 3_600_000)
-    this.ciReads.set(key, reads)
-    if (reads.at.length >= CI_READS_PER_HOUR) {
-      if (reads.last && now - reads.last.at <= CI_STALE_MS) return reads.last.load
-      throw new GitHubAppError('GITHUB_CI_BUDGET', `This hour's CI reads for ${repository.fullName} are spent.`, 429)
-    }
-    reads.at.push(now)
-    const value = this.readCiLoad(repository)
-    this.ciLoads.set(key, { value, until: now + CI_LOAD_TTL_MS })
-    // A failed read leaves the cache only if it is still this read's: one that fails late never drops a newer read's entry.
-    value.then(load => { reads.last = { load, at: now } }, () => { if (this.ciLoads.get(key)?.value === value) this.ciLoads.delete(key) })
-    return value
   }
 
   /**
@@ -567,45 +503,6 @@ export class GitHubApp {
       return listed.status === 200 && typeof number === 'number' ? await this.pushOrigin(repository, number) : 'unknown'
     } catch {
       return 'unknown'
-    }
-  }
-
-  private async readCiLoad(repository: GitHubRepository): Promise<CiLoad | null> {
-    const resolved = await this.resolve(repository)
-    if (!resolved) return null
-    const { token } = await this.createToken(resolved.installation, resolved.repository, ACTIONS_READ_PERMISSIONS)
-    const auth = `Bearer ${token}`, runs = `/repos/${resolved.repository.owner}/${resolved.repository.name}/actions/runs`
-    const read = (path: string) => this.call('GET', path, auth)
-    const unavailable = () => new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub did not say what runs on ${resolved.repository.fullName}.`, 502)
-    const listOf = (body: unknown, field: string) => {
-      const items = (body as Record<string, unknown>)[field]
-      return Array.isArray(items) ? items.filter((i): i is Record<string, unknown> => !!i && typeof i === 'object') : []
-    }
-    try {
-      const pages = await Promise.all(['in_progress', 'queued'].map(async status => {
-        const answer = await read(`${runs}?status=${status}&per_page=${CI_MAX_RUNS}`)
-        if (answer.status !== 200) throw unavailable()
-        const listed = listOf(answer.body, 'workflow_runs'), total = (answer.body as Record<string, unknown>).total_count
-        return { ids: listed.map(r => r.id).filter((id): id is number => Number.isSafeInteger(id)),
-          more: Math.max(0, (Number.isSafeInteger(total) ? total as number : 0) - listed.length) }
-      }))
-      const ids = [...new Set(pages.flatMap(p => p.ids))]
-      const counted = ids.slice(0, CI_MAX_RUNS)
-      const load: CiLoad = { running: 0, queued: ids.length - counted.length + pages.reduce((n, p) => n + p.more, 0), macosRunning: 0, macosQueued: 0 }
-      for (const jobs of await Promise.all(counted.map(async id => {
-        const answer = await read(`${runs}/${id}/jobs?filter=latest&per_page=100`)
-        if (answer.status !== 200) throw unavailable()
-        return listOf(answer.body, 'jobs')
-      }))) {
-        for (const job of jobs) {
-          const mac = Array.isArray(job.labels) && job.labels.some(l => typeof l === 'string' && /macos/i.test(l))
-          if (job.status === 'in_progress') { load.running++; if (mac) load.macosRunning++ }
-          else if (CI_WAITING.has(String(job.status))) { load.queued++; if (mac) load.macosQueued++ }
-        }
-      }
-      return load
-    } finally {
-      await this.revoke(token).catch(() => { console.warn(`[github] a CI read's token for ${resolved.repository.fullName} was not revoked; it expires within the hour`) })
     }
   }
 

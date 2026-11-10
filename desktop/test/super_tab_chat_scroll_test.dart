@@ -63,10 +63,11 @@ void main() {
   void fromAgent(ConversationServer server) => server.messages.last['author'] =
       {'kind': 'agent', 'id': 'lead-agent', 'name': 'Lead'};
 
-  /// A reaction changes somewhere in the conversation: the next read takes
-  /// the page shown again, with every receipt in it as it is now. A receipt
-  /// alone is no reason to (spec 2026-11-02-poll-cost, Part 2).
-  void reacted(ConversationServer server) {
+  /// A row changes somewhere in the conversation (an edit or a delete moves
+  /// the counter): the next read takes the page shown again, with every
+  /// receipt in it as it is now. A receipt alone is no reason to (spec
+  /// 2026-11-02-poll-cost, Part 2).
+  void rowChanged(ConversationServer server) {
     final group = (server.state['conversations'] as List).first as Map;
     group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
   }
@@ -95,7 +96,7 @@ void main() {
   testWidgets(
     'the receipt moving off a row above the view leaves the view in place',
     (tester) async {
-      final server = ConversationServer()..append('My first question');
+      final server = ConversationServer.chat()..append('My first question');
       agentUpdates(server, 30);
       final c = await show(tester, server);
       await justAbove(tester, 'message-1');
@@ -131,7 +132,7 @@ void main() {
   testWidgets(
     'a receipt growing in a row above the view leaves the view in place',
     (tester) async {
-      final server = ConversationServer()..append('My first question');
+      final server = ConversationServer.chat()..append('My first question');
       server.messages.last['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'delivered'},
       ];
@@ -144,7 +145,7 @@ void main() {
       server.messages.first['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
-      reacted(server);
+      rowChanged(server);
       await c.refresh();
       await tester.pumpAndSettle();
 
@@ -163,7 +164,7 @@ void main() {
     'at the end, the newest row growing keeps the end in view and the next '
     'reply follows',
     (tester) async {
-      final server = ConversationServer();
+      final server = ConversationServer.chat();
       agentUpdates(server, 30);
       server.append('Is the reconnect fixed?');
       server.messages.last['deliveries'] = [
@@ -175,7 +176,7 @@ void main() {
       server.messages.last['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
-      reacted(server);
+      rowChanged(server);
       await c.refresh();
       await tester.pumpAndSettle();
       expect(find.text("Couldn't confirm delivery"), findsOneWidget);
@@ -196,7 +197,7 @@ void main() {
   testWidgets('reading older messages, the end growing does not scroll', (
     tester,
   ) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     server.append('Is the reconnect fixed?');
     final c = await show(tester, server);
@@ -219,7 +220,7 @@ void main() {
   testWidgets('a page read in above keeps the rows on screen, state and all', (
     tester,
   ) async {
-    final server = ConversationServer()..messagePage = 20;
+    final server = ConversationServer.chat()..messagePage = 20;
     agentUpdates(server, 40);
     final c = await show(tester, server);
     expect(c.messages('lead').length, 20);
@@ -242,7 +243,7 @@ void main() {
     tester,
   ) async {
     // One agent's run of short updates: every third shows its name.
-    final server = ConversationServer()..messagePage = 20;
+    final server = ConversationServer.chat()..messagePage = 20;
     agentUpdates(server, 41);
     final c = await show(tester, server);
     position(tester).jumpTo(0);
@@ -268,7 +269,7 @@ void main() {
   testWidgets('paging with the keyboard across the dividing row moves rows '
       'only by the page', (tester) async {
     // Two pages: the one read first, and one read in above it.
-    final server = ConversationServer()..messagePage = 20;
+    final server = ConversationServer.chat()..messagePage = 20;
     agentUpdates(server, 60);
     final c = await show(tester, server);
     position(tester).jumpTo(position(tester).minScrollExtent);
@@ -331,7 +332,7 @@ void main() {
 
   testWidgets('sending while reading older messages shows the message at the '
       'end', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     final c = await show(tester, server);
     position(tester).jumpTo(200);
@@ -401,7 +402,7 @@ void main() {
 
   testWidgets('a reader at the end stays at the end as polls cut the oldest '
       'rows', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     final c = await show(tester, server);
     final end = bottomOf(tester, 'message-30');
@@ -422,7 +423,7 @@ void main() {
 
   testWidgets('a reader scrolled up keeps every row, in place, as polls pass '
       'the cap', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     final c = await show(tester, server);
     position(tester).jumpTo(position(tester).maxScrollExtent / 2);
@@ -441,7 +442,7 @@ void main() {
 
   testWidgets('back at the end after reading up, the cut with nothing new '
       'moves and regroups no row', (tester) async {
-    final server = ConversationServer();
+    final server = ConversationServer.chat();
     agentUpdates(server, 30);
     // A reading that asks for the messages after every state read: one with
     // nothing new still cuts. Desktop's asks only when the conversation's

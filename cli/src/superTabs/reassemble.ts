@@ -1,6 +1,6 @@
 /**
  * The Swarm state in the shape the full read gave it (`SuperTabState` as `visibleState` made it), built from the parts the
- * client holds, so `status`, routing, the host and the Pro cards read what they always read (design
+ * client holds, so `status`, the host and the Pro cards read what they always read (design
  * 2026-10-26-swarm-state-parts sections 5.1 and 6.2; the backend's `parts/shape.ts` is the reference). `derived` carries
  * what changes without a part changing (time and values across parts) and is laid over the parts here.
  */
@@ -64,8 +64,6 @@ export function reassemble(store: PartsStore): Json {
     })
   }
   if (derived.otherProjectsWork !== undefined) state.otherProjectsWork = derived.otherProjectsWork
-  // Every project's PM account, for the route's notes (pmAccounts.ts).
-  if (derived.pmAccounts !== undefined) state.pmAccounts = derived.pmAccounts
   if (derived.mentionsWaiting !== undefined) state.mentionsWaiting = derived.mentionsWaiting
   if (derived.mentionsDigest !== undefined) state.mentionsDigest = derived.mentionsDigest
   if (derived.decisionsDigest !== undefined) state.decisionsDigest = derived.decisionsDigest

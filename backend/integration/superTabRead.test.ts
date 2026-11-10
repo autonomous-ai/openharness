@@ -18,7 +18,8 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { recordPulse } from '../src/superTabs/pulse.js'
-import { decisionsWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION } from '../src/superTabs/decisions.js'
+import { decisionsWaiting } from '../src/superTabs/decisions.js'
+import { missingVerbs } from '../src/superTabs/cliVerbs.test-support.js'
 import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
@@ -467,7 +468,7 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
   it('lists the caller\'s Swarms with their newest change', async () => {
     const s = await scene()
     const { body } = await get('/api/super-tabs/list', outsider)
-    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
+    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, paused: false, lastChangedAt: MIGRATED })
   })
 
   it('sends no empty id list to the database, for a person with no Swarm or with Swarms all in parts', async () => {
@@ -884,11 +885,12 @@ describe('decisions asked of one person (v2)', () => {
     // Nor the person who answered, beyond their own decision; nor the worker, which neither asked nor leads.
     expect(shows((await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages`, peer)).body.data)).toEqual([])
     expect(shows((await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages?asAgentId=${s.worker}`, owner)).body.data)).toEqual([])
-    // The Lead gets a notice with no content, pointing to the decisions read, which has the answer.
+    // The Lead gets a notice with no content of the answer, naming no command the CLI lacks; the decisions read has the answer.
     const lead = (await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages?asAgentId=${s.lead}`, owner)).body.data.messages as Array<{ id: string; text: string }>
     const notice = lead.find(m => m.id === answered.body.data.result.messageId)!
     expect(shows(notice)).toEqual([])
-    expect(notice.text).toContain('harness super-tab decisions --answered')
+    expect(notice.text).toBe('A decision asked in this conversation was answered.')
+    expect(missingVerbs(notice.text)).toEqual([])
     expect(await decisions(s.tabId, owner, 'answered', s.lead)).toEqual([expect.objectContaining({ id, choice: 1, note: 'Only for the Lead.' })])
   })
 
@@ -1017,44 +1019,6 @@ describe('decisions asked of one person (v2)', () => {
     expect((await decisions(s.tabId, peer)).map(d => d.id)).toEqual([again])
     expect(await db.superTabDecision.findUnique({ where: { id: first } })).toMatchObject({ withdrawn: true, choice: null })
     expect((await post(s.tabId, { type: 'decision.answer', decisionId: again, choice: 1 }, peer)).status).toBe(200)
-  })
-
-  // Review of #2454: closed only where work ends from then on, those of work already over stayed open, hidden: they counted
-  // toward the asker's open limit and came back when the task reopened. The worker closes them once at startup.
-  it('closes, once at startup, the decisions still waiting in work over before decisions closed, and no other', async () => {
-    const s = await scene(), other = await scene()
-    clock = Date.now()
-    await writeGroup(s.tabId, s.secretGroup, Date.now(), group => { group.archived = true; group.dormant = true })
-    await writeGroup(s.tabId, 'lead', Date.now(), group => { group.assignment = { ...(group.assignment ?? { id: 'x', agentId: s.lead, configuration: {} as never,
-      execution: { machineId: 'host', harnessId: 'h', machineOwnerId: owner.sub }, result: null }), status: 'cancelled' } })
-    // As an older server left them: the PM's open limit for peer filled by decisions in work since done.
-    const row = (tabId: string, conversationId: string, n: string, extra: Record<string, unknown> = {}) => ({ id: `${tabId}-${n}`, tabId, batchId: `b-${n}`,
-      projectId: 'lead', conversationId, assignmentId: null, personId: peer.sub, askerAgentId: s.lead, ...question(`Q ${n}?`), createdAt: new Date(clock - 60_000), ...extra })
-    const stale = Array.from({ length: MAX_OPEN_DECISIONS - 1 }, (_, i) => row(s.tabId, s.done, `done-${i}`))
-    const kept = [row(s.tabId, s.web, 'open-work'), row(s.tabId, 'lead', 'project-chat'), row(s.tabId, s.buddyId, 'buddy-chat'),
-      row(s.tabId, s.privateId, 'chat-with-pm'), row(s.tabId, s.done, 'reflection', { kind: REFLECTION_DECISION }),
-      // Asked after the pass read the work as over: in work reopened since, so it stays.
-      row(s.tabId, s.done, 'later', { createdAt: new Date(clock + 60_000) })]
-    const archived = row(s.tabId, s.secretGroup, 'archived'), elsewhere = [row(other.tabId, other.done, 'done'), row(other.tabId, other.web, 'open-work')]
-    await db.superTabDecision.createMany({ data: [...stale, ...kept, archived, ...elsewhere] })
-    const full = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead)
-    expect(full.body.error?.code).toBe('DECISIONS_FULL')
-
-    // At least these: the pass reads every Swarm of the database, where earlier tests left theirs.
-    expect(await new SuperTabStore(db, () => clock).withdrawEndedDecisions()).toBeGreaterThanOrEqual(stale.length + 2)
-    const withdrawn = [...stale, archived, elsewhere[0]!].map(r => r.id)
-    for (const id of withdrawn) expect(await db.superTabDecision.findUnique({ where: { id } })).toMatchObject({ withdrawn: true, choice: null, answeredAt: new Date(clock) })
-    for (const { id } of [...kept, elsewhere[1]!]) expect(await db.superTabDecision.findUnique({ where: { id } })).toMatchObject({ answeredAt: null, withdrawn: null })
-    // Once: a second start finds nothing more to close.
-    expect(await new SuperTabStore(db, () => clock).withdrawEndedDecisions()).toBe(0)
-    // The limit has room again, and a reopened task does not bring them back.
-    const asked = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead)
-    expect(asked.status, JSON.stringify(asked.body)).toBe(200)
-    // Reopened as stored (the fixture's worker is busy in other tests' Swarms, so no work.assign here).
-    await writeGroup(s.tabId, s.done, Date.now(), group => { group.assignment = { ...group.assignment!, status: 'working' } })
-    const open = (await decisions(s.tabId, peer)).map(d => d.id)
-    for (const id of withdrawn) expect(open).not.toContain(id)
-    expect(open).toContain(`${s.tabId}-later`)
   })
 
   it('stops counting one in work that ended before decisions closed (no command closed it): not counted, listed, in catch-up or answerable', async () => {

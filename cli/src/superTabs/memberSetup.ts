@@ -1,8 +1,6 @@
 /**
  * A Member sets its project up once on its person's computer, and its helpers start from that setup (anh Dee's agent model,
- * task #4693, part B #4698). How to install and build a project is judgment, so the Member's engine does it, as the project's
- * own docs say, and reports the commands it ran. What a helper reuses is code: its worktree gets copies of the Member's
- * installed and built folders, and its start note carries the Member's commands for whatever is still missing.
+ * task #4693, part B #4698). What a helper reuses is code: its worktree gets copies of the Member's installed and built folders.
  */
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
@@ -74,24 +72,4 @@ async function freshInside(root: string, folder: string): Promise<boolean> {
     if (!info) return true
   }
   return false
-}
-
-/** A Member's start note: set up once, here, and say so with the commands it ran. */
-export function memberLine(tabId: string, projectId: string): string {
-  return `You are your person's Member for this project: you set the project up once in this folder, then do its tasks here, one at a time. Before your first task, set the project up once as its own docs say (README, AGENTS.md, CONTRIBUTING): install its dependencies and build it in this folder. Then report it once with harness super-tab --tab ${tabId} command OPERATION_ID - <<'JSON' and this JSON, naming each command you ran: {"type":"agent.setUp","projectId":"${projectId}","ok":true,"steps":["…"]}. If it cannot be set up, send {"type":"agent.setUp","projectId":"${projectId}","ok":false,"reason":"…"} with the reason in one line. Start each task on a new branch from the default branch, in this same folder.`
-}
-
-/** A helper's start note: its folder came from its Member's setup, and these are the commands that made it, quoted as data. Null
- *  [steps]: its Member is not this computer's own, so its words are not run here (security review 1 of #3579); it sets up itself. */
-export function helperLine(steps: string[] | null): string {
-  if (!steps) return 'You are a helper: before your task, set the project up in this folder as its own docs say (README, AGENTS.md, CONTRIBUTING). You end when no task waits, so leave nothing running.'
-  const listed = steps.length ? ` Your Member set the project up with these commands; run only the ones still needed:\n${steps.map(step => `> ${step}`).join('\n')}\n` : ' '
-  return `You are a helper: your folder was made from your Member's set-up copy of this project, with its installed folders copied where this computer could.${listed}You end when no task waits, so leave nothing running.`
-}
-
-/** The Member's reported commands, as the server keeps them: at most ten, each one plain line of 300 characters or fewer. */
-export function setUpSteps(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((step): step is string => typeof step === 'string' && !!step.trim() && step.length <= 300
-    && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(step)).slice(0, 10)
 }

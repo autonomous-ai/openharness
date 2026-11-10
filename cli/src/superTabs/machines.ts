@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { availableParallelism, homedir } from 'node:os'
 import { lstat, readdir, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CoreApi } from '../core/api.js'
@@ -26,8 +26,8 @@ import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { teamPrivacyObserver } from '../team/observer.js'
 import type { PrivacyObservation } from '../team/privacy.js'
-import { repositoryKey } from './route.js'
 import { cleanupClosed } from './cleanupCloses.js'
+import { repositoryKey } from './repositoryKey.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
@@ -35,8 +35,8 @@ import { folderTrust } from '../engines/launchPrep.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
-// The route's requirements are not known before the Lead routes. Include common tools in each snapshot, then
-// include tools from pending starts. An uncommon tool first named during routing remains unverified and is refused.
+// A start's requirements are not known before it is queued. Include common tools in each snapshot, then
+// include tools from pending starts. An uncommon tool first named by a start remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
 /** After a backend refuses a new field (privacy, from before the Harness Team account; harnessProgress, from before
@@ -57,7 +57,7 @@ const UNCOMMITTED_PARALLEL = 4
  *  machine is left to show as offline rather than kept healthy by a loop that no longer reads anything. */
 const BEAT_LIMIT_MS = 3 * 60_000
 /** How long this machine refuses a start before failing it with its reason, so the Lead starts it elsewhere: a minute of
- *  busy CPU or memory may pass, and routing saw this machine able a moment ago. A refusal no one reported left starts
+ *  busy CPU or memory may pass, and the Swarm saw this machine able a moment ago. A refusal no one reported left starts
  *  "Queued" for hours (DESKTOP-0TFH0OJ, 2026-10-23). */
 const START_REFUSED_MS = 60_000
 /** How long a fault of this machine (its creation folder cannot be used, say) may hold an undispatched start before it fails with the
@@ -283,6 +283,8 @@ export class ContributedMachines {
   private readingsRefusedUntil = 0
   /** Until when the reading leaves out its privacy field, which the backend refused. */
   private privacyRefusedUntil = 0
+  /** Until when this machine's cores are left out of its resources: a backend before them refused them (sendAlone). */
+  private coresRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
   private tokensRefusedUntil = 0
@@ -383,7 +385,7 @@ export class ContributedMachines {
   private quotaFor(read: { value: Record<string, unknown>; at: number }, engine: string) {
     const q = quotaOf(read.value, engine, false)
     if (q.known) { this.goodQuota.set(engine, { windows: q.windows, at: read.at }); return { engine, known: true, windows: q.windows } }
-    // Windows that could not be read on an API key are metered: known, with none (route.ts quotaOf2).
+    // Windows that could not be read on an API key are metered: known, with none.
     if (meteredEngine(engine, this.deps.env ?? process.env)) return { engine, known: true, windows: [] }
     if (list(read.value.providers).find(p => p.provider === engine)?.outcome === 'signedOut') this.goodQuota.delete(engine)
     const kept = this.goodQuota.get(engine)
@@ -439,7 +441,7 @@ export class ContributedMachines {
     this.waiting.set(startId, reason)
     this.log(`Swarm start ${startId} is waiting: ${reason}`)
   }
-  /** Tells the Swarm why a start waits on this machine, once per reason: the PM sees it on the start and in the route instead of
+  /** Tells the Swarm why a start waits on this machine, once per reason: the PM sees it on the start instead of
    *  only "Queued". A server that does not know the report (an older backend) is not asked again; any other failure is retried. */
   private async tell(scoped: ScopedRequest, startId: string, reason: string) {
     if (this.told.get(startId) === reason) return
@@ -674,8 +676,8 @@ export class ContributedMachines {
         // it again). Unknown — the grid could not be read — keeps the reading as it is.
         const live = typeof row.localGrid === 'string'
           ? liveOn(await local.request('grid_swarm_heal', { grid: row.localGrid }, 30_000).catch(() => ({}))) : null
-        // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows and
-        // the route never offers, rather than left out until the grid lists it.
+        // Not yet listed by the grid (a start or a share still registering): sent as starting, which the panel shows,
+        // rather than left out until the grid lists it.
         const marked = (m: LocalModelReading): LocalModelReading => !live || live.has(m.model) ? m : { ...m, starting: true }
         const fleet = typeof row.localGrid === 'string' ? await local.request('grid_fleet_models_list', {}, 20_000).catch(() => ({})) : null
         const refusedModels = typeof row.localGrid === 'string' ? refusedOn(fleet, row.localGrid) : []
@@ -717,7 +719,9 @@ export class ContributedMachines {
           ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
-          resources: { cpuPercent: finite(resources.cpuPercent), memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
+          // Its logical cores, which the PM's Harness plans this machine's work against (assign/crew.ts).
+          resources: { cpuPercent: finite(resources.cpuPercent), ...(began >= this.coresRefusedUntil ? { cpuCores: availableParallelism() } : {}),
+            memoryUsedBytes: finite(resources.memoryUsedBytes), memoryTotalBytes: finite(resources.memoryTotalBytes),
             diskFreeBytes: finite(resources.diskFreeBytes), diskTotalBytes: finite(resources.diskTotalBytes), projectDiskFreeBytes: finite(resources.projectDiskFreeBytes), projectDiskTotalBytes: finite(resources.projectDiskTotalBytes),
             deviceType: typeof resources.deviceType === 'string' ? resources.deviceType : null,
             chip: typeof resources.chip === 'string' ? resources.chip : null, os: typeof resources.os === 'string' ? resources.os : null,
@@ -778,7 +782,7 @@ export class ContributedMachines {
             }
             try {
               // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
-              // here as well as by routing, and never moved to the owner's account instead.
+              // here as well as by the server, and never moved to the owner's account instead.
               if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
                 await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
                   command: { type: 'agent.startFailed', startId: start.id,
@@ -813,10 +817,7 @@ export class ContributedMachines {
               const helperOf = object(object(start.request).helperOf)
               const helperRequest = object(start.request)
               const beforeJoin = identifier(helperOf.harnessId) ? (harnessId: string) => this.readyHelper(String(row.tabId), String(helperOf.harnessId), harnessId, helperRequest) : null
-              // Its Member's commands reach a helper only from a Member this machine's Swarm started here (security review 1 of #3579),
-              // and only in a worktree of its own.
-              const memberHere = beforeJoin ? helperRequest.worktree === true && !!this.worktreeOf(String(row.tabId), String(helperOf.harnessId)) : null
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, hostDispatch: true, signedIn, ...(github ? { github } : {}), ...(beforeJoin ? { beforeJoin, memberHere } : {}) },
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn, ...(github ? { github } : {}), ...(beforeJoin ? { beforeJoin } : {}) },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
@@ -1017,18 +1018,37 @@ export class ContributedMachines {
       else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
       else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
     }
-    // The batch sent the newest form, which is the first attempt: it is not sent again.
-    if (refused) {
+    // The machine's cores sit inside its resources, whose schema refuses a key it does not know, and a backend before them
+    // names them in its refusal ('Unrecognized key: "cpuCores"'): that form goes again without them, and they are left out
+    // for a while, as any refused field is. Every other field falls back as before.
+    const coresRefused = (error: unknown) => fieldRefused(error) && /\bcpuCores\b/.test(error instanceof Error ? error.message : '')
+    let coreless = false
+    const formOf = (attempt: Record<string, unknown>): Record<string, unknown> => {
+      if (!coreless || !('cpuCores' in object(attempt.resources))) return attempt
+      const { cpuCores: _cores, ...resources } = object(attempt.resources)
+      return { ...attempt, resources }
+    }
+    // The batch sent the newest form, which is the first attempt: it is not sent again, unless only its cores were refused.
+    if (refused && coresRefused(refused)) {
+      this.coresRefusedUntil = began + FIELD_REFUSED_MS
+      coreless = true
+    } else if (refused) {
       if (attempts.length === 1) throw refused
       refuse(attempts[0]!)
     }
-    for (const [index, attempt] of attempts.entries()) {
-      if (refused && index === 0) continue
+    for (let index = refused && !coreless ? 1 : 0; index < attempts.length; index++) {
+      const attempt = formOf(attempts[index]!)
       try {
         await this.deps.backend(this.core, 'POST', path, attempt)
         this.taken(tab, attempt)
         return
       } catch (error) {
+        if (!coreless && 'cpuCores' in object(attempt.resources) && coresRefused(error)) {
+          this.coresRefusedUntil = began + FIELD_REFUSED_MS
+          coreless = true
+          index--
+          continue
+        }
         if (!fieldRefused(error) || index === attempts.length - 1) throw error
         refuse(attempt)
       }
@@ -1423,10 +1443,10 @@ export class ContributedMachines {
   }
 }
 
-// ── Readiness (#229 v1 routing) ─────────────────────────────────────────────────────────────────────────────────────
-// The route picked a Windows machine that never started agents, machines without the project and machines that could not
-// push, because nothing told it so. The reading says what this machine is ready for; the route leaves out only what it
-// says cannot work (routeCommand.ts), and anything unknown stays a candidate.
+// ── Readiness (#229) ─────────────────────────────────────────────────────────────────────────────────────────────────
+// A Windows machine that never started agents, machines without the project and machines that could not push were chosen
+// because nothing told the Swarm so. The reading says what this machine is ready for (Desktop places a PM by it,
+// state/lead_placement.dart), and anything unknown stays unknown.
 
 /** How long an engine's sign-in and a checkout's push access stand before they are read again, and how soon an engine
  *  probe that failed is tried again. */
@@ -1499,8 +1519,8 @@ const NOT_A_REPOSITORY = /not a git repository/i
 /** Each project folder in a Swarm folder: the repository its origin names (without credentials), whether it is a
  *  checkout of its own, and whether this machine's login can push there, by a dry run that runs no hooks. git's own
  *  words never leave the machine. A folder whose probe failed (a timeout, git that would not start, an unreadable
- *  repository) is left out, which the route reads as unknown, and [unsure] says to read it again soon. */
-export async function readCheckouts(root: string, run: GitRun): Promise<{ checkouts: ReadyCheckout[]; unsure: boolean }> {
+ *  repository) is left out, which reads as unknown, and [unsure] says to read it again soon. */
+async function readCheckouts(root: string, run: GitRun): Promise<{ checkouts: ReadyCheckout[]; unsure: boolean }> {
   const folders = (await readdir(root, { withFileTypes: true })).filter(e => e.isDirectory() && !e.name.startsWith('.'))
     .map(e => e.name).sort().slice(0, MAX_CHECKOUTS)
   const out: ReadyCheckout[] = []
@@ -1601,13 +1621,12 @@ function fleetOn(answer: unknown, grid: string): Array<LocalModelReading & { why
 }
 
 /** The models this machine serves on [grid] that can drive a coding agent. One too small or too slow is reported apart
- *  ([refusedOn]), and the route offers it with that note (project instructions, phase 4, decision 19). */
+ *  ([refusedOn]). */
 export function servedOn(answer: unknown, grid: string): LocalModelReading[] {
   return fleetOn(answer, grid).filter(m => m.why === null).map(({ why: _why, ...reading }) => reading)
 }
 
-/** The models this machine serves on [grid] too small or too slow for a coding agent, with why: the route offers them with
- *  that note (routeCommand.ts servedModels), rather than telling the agent to share a model the Swarm already has (2026-10-24). */
+/** The models this machine serves on [grid] too small or too slow for a coding agent, with why. */
 export function refusedOn(answer: unknown, grid: string): Array<{ grid: string; model: string; name?: string; why: string }> {
   return fleetOn(answer, grid).flatMap(({ grid: g, model, name, why }) => why === null ? [] : [{ grid: g, model, ...(name ? { name } : {}), why: why.slice(0, 300) }])
 }

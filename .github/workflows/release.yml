@@ -56,10 +56,14 @@ on:
         description: 'Manifest to write. Leave as-is for a real release; metadata-test.json for a dry run.'
         required: false
         default: harness/cli/metadata.json
-      urgent_reason:
-        description: 'A P0 only: why this real release runs outside the release window (recorded in the run summary).'
-        required: false
-        default: ''
+      promote_pty:
+        description: 'Also point the PRODUCTION Windows terminal-host manifest at this version, after the staging read-back verifies it. The staging E2E (docs/testing/windows-cli-e2e.md) is still the gate before using it.'
+        type: boolean
+        default: false
+      promote_pty_allow_downgrade:
+        description: 'With promote_pty: promote an older payload over a newer one (a rollback)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -92,25 +96,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-
-      # A tag pushed by hand skips the release scripts, so the window is checked here too
-      # (scripts/release-window.py). An emergency release carries `Emergency: <reason>` (or the scripts' `Release-Urgent: <reason>`) in its annotated tag.
-      - name: Release window
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.metadata_path == '' || inputs.metadata_path == 'harness/cli/metadata.json')) }}
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          EVENT_NAME: ${{ github.event_name }}
-          URGENT_REASON: ${{ inputs.urgent_reason }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = push ]; then
-            git fetch --quiet --force --depth=1 origin tag "$REF_NAME"
-            python3 scripts/release-window.py --kind cli --from-tag "$REF_NAME" --exclude-tag "$REF_NAME"
-          elif [ -n "$URGENT_REASON" ]; then
-            python3 scripts/release-window.py --kind cli --urgent "$URGENT_REASON"
-          else
-            python3 scripts/release-window.py --kind cli
-          fi
 
       - id: resolve
         # Through env, never `${{ }}` inline in run:. Git permits quotes, backticks and $() in a ref
@@ -198,6 +183,9 @@ jobs:
   # minute and that cannot be undone.
   publish:
     needs: [version, preflight, process-images]
+    # promote_pty alone re-points the terminal host at bytes a release already published: there is nothing to build,
+    # and the bucket refuses to republish an existing version's files.
+    if: ${{ !inputs.promote_pty }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -334,11 +322,14 @@ jobs:
 
   # The Windows half (sub-project B). The pty payload (harness-pty.exe, harness-launch.exe, harness.exe and ConPTY)
   # is built on each architecture's own runner by the Windows workflow. The payload, this release's `cli` entry
-  # and install.ps1 then go to STAGING, never to production: production is the owner's step after the staging E2E
-  # (docs/testing/windows-cli-e2e.md). These jobs are separate from `publish`, so a Windows failure never holds up
-  # the macOS and Linux fleet's release. Like `publish`, they fail loudly, and the next version fixes them.
+  # and install.ps1 then go to STAGING, never to production on their own: production is the owner's step after the
+  # staging E2E (docs/testing/windows-cli-e2e.md), and `promote-pty` below is that step when the dispatch asks for
+  # it (`promote_pty`), on this workflow's own credential rather than a maintainer's laptop. These jobs are separate
+  # from `publish`, so a Windows failure never holds up the macOS and Linux fleet's release. Like `publish`, they
+  # fail loudly, and the next version fixes them.
   pty-build:
     needs: version
+    if: ${{ !inputs.promote_pty }}
     uses: ./.github/workflows/windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
@@ -468,6 +459,67 @@ jobs:
             main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
           JS
 
+  # The owner's production step for the terminal host, on the repository's own credential instead of a laptop's
+  # gcloud. It runs only when the dispatch asks (promote_pty) and on a real (not dry-run) metadata path.
+  #
+  # It needs only `version`, not the build jobs: the script checks every zip it promotes — it fetches both from the
+  # CDN and refuses unless their sha256 and size are the ones the staging manifest names — so promoting a version
+  # that was released earlier works without rebuilding it, and without republishing bytes the bucket refuses.
+  #
+  # A tag push never does this: the host is a binary in every Windows pane, and the staging E2E
+  # (docs/testing/windows-cli-e2e.md) is the owner's gate before it is worth promoting.
+  promote-pty:
+    needs: [version]
+    if: >-
+      inputs.promote_pty &&
+      needs.version.outputs.metadata_path == 'harness/cli/metadata.json'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+      - name: Authenticate to GCP (workload identity federation)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - name: Promote the pty payload
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.promote_pty_allow_downgrade }}" = true ]; then
+            bash cli/scripts/promote-pty-payload.sh --allow-downgrade "$VERSION"
+          else
+            bash cli/scripts/promote-pty-payload.sh "$VERSION"
+          fi
+      # What a Windows machine's updater reads, checked the way it reads it: production now names this version on
+      # both architectures, and the bytes those entries point at are the bytes the manifest describes.
+      - name: Read production back the way the updater does
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://storage.googleapis.com/${GCS_BUCKET}/harness/pty/metadata.json" -o manifest.json
+          node --input-type=commonjs - <<'JS'
+            const fs = require("node:fs"), crypto = require("node:crypto")
+            const main = async () => {
+              const pty = JSON.parse(fs.readFileSync("manifest.json", "utf8")).pty || {}
+              for (const key of ["win32-x64", "win32-arm64"]) {
+                const entry = pty[key]
+                if (!entry || entry.version !== process.env.VERSION) throw new Error(`${key}: ${JSON.stringify(entry)}`)
+                const response = await fetch(entry.url, { cache: "no-store" })
+                if (!response.ok) throw new Error(`${key}: GET ${entry.url} -> ${response.status}`)
+                const bytes = Buffer.from(await response.arrayBuffer())
+                if (crypto.createHash("sha256").update(bytes).digest("hex") !== entry.sha256 || bytes.length !== entry.size) throw new Error(`${key}: served bytes differ`)
+                console.log(`  ${key}: ${entry.version} ok`)
+              }
+            }
+            main().catch((error) => { console.error(`::error::${error.message}`); process.exit(1) })
+          JS
+          echo "### Promoted the terminal host $VERSION to production" >> "$GITHUB_STEP_SUMMARY"
+
   # The GitHub Release. Notes are the tag's OWN message, verbatim — the same rule the desktop repo
   # follows. CI generates nothing: what a human wrote and reviewed at tag time is exactly what
   # publishes, and `generate_release_notes` would append a second, differently-built list under it
@@ -504,7 +556,7 @@ jobs:
           # 2026-09-21). So fall back to the same commit list the script would have generated —
           # everything since the previous _cli tag — and warn, rather than leave the release half done.
           if [ "$(git cat-file -t "$REF_NAME")" = tag ]; then
-            git tag -l --format='%(contents)' "$REF_NAME" | { grep -v '^Release-Urgent: ' || true; } > RELEASE_NOTES.md
+            git tag -l --format='%(contents)' "$REF_NAME" > RELEASE_NOTES.md
           else
             : > RELEASE_NOTES.md
           fi

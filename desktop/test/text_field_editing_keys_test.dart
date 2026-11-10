@@ -212,7 +212,7 @@ void main() {
 
     /// A root with one reply, so the thread line is there to open.
     ConversationServer server() {
-      final server = ConversationServer()..threads = true;
+      final server = ConversationServer.chat()..threads = true;
       server.append('Should we do thread replies?');
       server.append('Yes, like Slack.');
       server.messages.last

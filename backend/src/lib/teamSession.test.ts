@@ -80,18 +80,15 @@ const authenticate = vi.fn(async (token: string, _env?: unknown, opts?: { allowT
 /** A Super Tab store that records what reached it, for every method the routes call. */
 function recorder() {
   const calls: Array<{ method: string; args: unknown[] }> = []
-  const methods = (prefix = ''): Record<string, unknown> => new Proxy({}, { get: (_t, name: string) => name === 'then' ? undefined
-    : name === 'native' && !prefix ? methods('native.')
-      : async (...args: unknown[]) => {
-        calls.push({ method: `${prefix}${name}`, args })
-        // What the GitHub token route goes on to use from a grant (routes/superTabs.ts `github-token`).
-        return name === 'githubAssignment'
-          ? { tabId: 'tab-1', agentId: 'agent-1', assignmentId: 'assignment-1', repositoryUrl: 'https://github.com/example/project',
-            requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
-          : name === 'githubStart'
-            ? { tabId: 'tab-1', startId: 'start-1', repositoryUrl: 'https://github.com/example/project', own: true, requester: { name: 'Owner', email: 'owner@example.com' } }
-            : { ok: true }
-      } })
+  const methods = (): Record<string, unknown> => new Proxy({}, { get: (_t, name: string) => name === 'then' ? undefined
+    : async (...args: unknown[]) => {
+      calls.push({ method: name, args })
+      // What the GitHub token route goes on to use from a grant (routes/superTabs.ts `github-token`).
+      return name === 'githubAssignment'
+        ? { tabId: 'tab-1', agentId: 'agent-1', assignmentId: 'assignment-1', repositoryUrl: 'https://github.com/example/project',
+          requester: { name: 'Owner', email: 'owner@example.com' }, agentName: 'Builder', machineName: 'MacBook Pro · Team' }
+        : { ok: true }
+    } })
   return { store: methods() as unknown as SuperTabStore, calls }
 }
 
@@ -119,8 +116,7 @@ beforeEach(async () => {
   // carry the app's bot identity (github/app.ts `commitIdentity`).
   const github = { app: { config: { appId: '424242', privateKey: appKey, slug: null },
     commitIdentity: vi.fn(() => ({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })) },
-    issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
-    prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
+    issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}) }
   // The read API by parts is recorded the same way: its classes reach the store only through it.
   await app.register(superTabRoutes, { store: store.store, reads: store.store as never, hosts: store.store as never, github: github as never })
   await app.register(harnessShareRoutes)
@@ -171,8 +167,6 @@ describe('a team session on its own machine', () => {
     ['GET', '/api/super-tabs/tab-1/agents/agent-1/deliveries/delivery-1', undefined, 'deliveryReceipt'],
     ['POST', '/api/super-tabs/tab-1/agents/agent-1/deliveries/delivery-1', { type: 'claim', claimId: 'claim-1' }, 'delivery'],
     ['POST', '/api/super-tabs/tab-1/stopped', { assignmentId: 'assignment-1', receipt: 'stopped' }, 'stopped'],
-    ['GET', '/api/super-tabs/tab-1/native/context-1', undefined, 'native.read'],
-    ['POST', '/api/super-tabs/tab-1/native/context-1', { turnId: 't1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false }, 'native.append'],
     ['GET', '/api/super-tabs/tab-1/projects/project-1/roles/dev', undefined, 'roleText'],
     // The project's instructions, which its agents work by: the launch line runs `instructions`, and the host installs each
     // revision as the agent's swarm-instructions skill (2026-11-02: a teammate's agent read neither, refused here).
@@ -197,6 +191,18 @@ describe('a team session on its own machine', () => {
     })
   }
 
+  // Terminal recording is gone with Swarm v4: an old team daemon's recorder is answered ok and ignored, not refused, and the store
+  // is never reached.
+  for (const [method, url, payload] of [['GET', '/api/super-tabs/tab-1/native/context-1', undefined],
+    ['POST', '/api/super-tabs/tab-1/native/context-1', { turnId: 't1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false }]] as const) {
+    it(`${method} ${url} tells an old team daemon's recorder it was ignored`, async () => {
+      const res = await call(method, url, payload)
+      expect(res.statusCode, res.body).toBe(200)
+      expect(res.json().data).toMatchObject({ ok: true, ignored: true })
+      expect(store.calls).toEqual([])
+    })
+  }
+
   // Kept on the team session's list, so an old team daemon learns to update rather than being refused.
   for (const url of ['/api/super-tabs/hosts/team-mac', '/api/super-tabs/hosts/team-mac/pools', '/api/super-tabs/hosts/team-mac/assignments',
     '/api/super-tabs/tab-1?asAgentId=agent-1']) {
@@ -214,11 +220,12 @@ describe('a team session on its own machine', () => {
     expect(store.calls).toEqual([{ method: 'githubAssignment', args: [expect.objectContaining({ harnessSessionKind: 'team' }), 'tab-1', 'agent-1', 'team-mac'] }])
   })
 
-  it('asks for a queued start\'s read-only token on its own machine, always: it has no git login of its own', async () => {
+  // Swarm v4 (slice S6): a start's token is retired; a Team host, which has no login of its own, hears the server has no app.
+  it('hears there is no app when it asks for a queued start\'s token on its own machine, and nothing reaches the store', async () => {
     const res = await call('POST', '/api/super-tabs/hosts/team-mac/starts/tab-1/start-1/github-token', { always: true })
-    expect(res.statusCode, res.body).toBe(200)
-    expect(res.json().data).toMatchObject({ github: true, token: 'fixture-read-token', repository: 'example/project' })
-    expect(store.calls).toEqual([{ method: 'githubStart', args: [expect.objectContaining({ harnessSessionKind: 'team' }), 'tab-1', 'start-1', 'team-mac'] }])
+    expect(res.statusCode, res.body).toBe(503)
+    expect(res.json().error.code).toBe('GITHUB_APP_NOT_CONFIGURED')
+    expect(store.calls).toEqual([])
   })
 
   it('registers its own computer, as a team machine', async () => {

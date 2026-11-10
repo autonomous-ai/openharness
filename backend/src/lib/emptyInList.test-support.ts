@@ -15,7 +15,7 @@
 import ts from 'typescript'
 
 /** The collections the slow log names. */
-export const GUARDED_MODELS = new Set(['machine', 'user', 'superTab', 'productUsageReceipt', 'swarmHead', 'swarmMember', 'swarmWorkspace'])
+export const GUARDED_MODELS = new Set(['machine', 'user', 'superTab', 'productUsageReceipt', 'swarmHead', 'swarmMember'])
 
 export interface Unguarded { file: string; line: number; list: string }
 

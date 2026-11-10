@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../core/models.dart';
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_launch_integration.dart';
@@ -129,4 +130,117 @@ HarnessLaunchIntegration swarmNewAgent(
     },
   );
   return integration;
+}
+
+/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"): an agent
+/// already running on one of its person's own computers joins their team as + New agent's does, with its own 1:1 chat,
+/// which opens. A stopped one is resumed first, in the same step (anh Dee 2026-11-10). It keeps its own name (anh Dee
+/// 2026-11-10, attaching juno and pip: "they got different name?") unless that name is automatic or the Swarm already
+/// uses or refuses it, when it gets one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and
+/// its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection lost is tried again
+/// as the same operation, which never adds it twice.
+/// The server's refusals of a name (backend superTabs/agentRename.ts).
+const _nameRefusals = {
+  'AGENT_NAME_TAKEN',
+  'AGENT_NAME_ROLE',
+  'INVALID_AGENT_NAME',
+};
+
+Future<void> swarmAttachAgent(
+  AppNotifier app,
+  String tabId,
+  String machineId,
+  Agent native, {
+  Future<void> Function(Duration) wait = Future<void>.delayed,
+}) async {
+  final engine = native.engine;
+  if (engine != 'claude' && engine != 'codex') {
+    throw const SuperTabFailure(
+      'SWARM_ENGINE',
+      'Only Claude Code or Codex can join this Swarm.',
+    );
+  }
+  final started = DateTime.now();
+  if (native.isStopped) {
+    final refused = await app.resumeStoppedSession(machineId, native.id);
+    if (refused != null) throw SuperTabFailure('AGENT_UNAVAILABLE', refused);
+  }
+  final creationId = superTabOperationId();
+  final snapshot = await app.superTabs.readSnapshot(tabId);
+  final taken = [
+    for (final agent in snapshot.agents) agent.displayName ?? agent.name,
+  ];
+  final own = native.name.trim();
+  final keepOwn =
+      own.isNotEmpty &&
+      !isAutomaticHarnessName(own) &&
+      !taken.any((name) => name.toLowerCase() == own.toLowerCase());
+  var name = keepOwn ? own : freshAgentName(taken);
+
+  Future<Map<String, dynamic>> run(
+    String step,
+    Map<String, Object?> command,
+  ) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        final answer = await app.superTabs.map(
+          'POST',
+          '/api/super-tabs/$tabId/commands',
+          body: {'operationId': '$creationId-$step', 'command': command},
+        );
+        return superTabMap(answer['result']);
+      } catch (failure) {
+        // A refusal is the answer; only a lost connection or a busy server is worth another try.
+        final refused =
+            failure is SuperTabFailure &&
+            failure.statusCode >= 400 &&
+            failure.statusCode < 500;
+        if (refused || attempt == swarmJoinRetries.length) rethrow;
+        await wait(swarmJoinRetries[attempt]);
+      }
+    }
+  }
+
+  Future<Map<String, dynamic>> newChat(String step) => run(step, {
+    'type': 'agent.new',
+    'kind': 'regular',
+    'machineId': machineId,
+    'engine': engine,
+    'name': name,
+    'local': true,
+  });
+  Map<String, dynamic> chat;
+  try {
+    chat = await newChat('chat');
+  } on SuperTabFailure catch (failure) {
+    // The server refuses names Desktop cannot see (a person's here, a reserved
+    // word): its own name then gives way, as an automatic one does.
+    if (!keepOwn || !_nameRefusals.contains(failure.code)) rethrow;
+    name = freshAgentName([...taken, own]);
+    chat = await newChat('chat-named');
+  }
+  final chatId = chat['conversationId'] as String;
+  await run('join', {
+    'type': 'agent.add',
+    'conversationId': chatId,
+    'machineId': machineId,
+    'harnessId': native.id,
+    'name': name,
+    'lead': false,
+    'configuration': {
+      'engine': engine,
+      'model': native.modelName,
+      'effort': native.modelEffort,
+      'contextWindow': null,
+      'engineVersion': null,
+    },
+  });
+  await app.wakeSuperTabHost(machineId);
+  final controller = await app.superTabs.open(tabId);
+  await controller.refresh();
+  await controller.select(chatId);
+  appLog.info(
+    'super-tabs',
+    'Agent attached in ${DateTime.now().difference(started).inMilliseconds} ms',
+  );
 }

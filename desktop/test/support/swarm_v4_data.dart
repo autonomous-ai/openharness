@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/instructions_link.dart';
+import 'package:harness/ws/ws_conn.dart';
 
 import '../super_tab_activity_lists_test.dart' show swarm;
 import 'super_tab_fixture.dart';
@@ -172,81 +174,248 @@ ConversationServer swarmV4Server() {
   return server;
 }
 
-/// What `gh` answers for lampOS's issues in these tests: two open tasks, and #5759's text with two comments signed by
-/// their agents, as lampOS's builders sign them. Every other call fails as an unknown issue does.
+/// What `gh` answers for lampOS's issues in these tests, as GitHub's GraphQL does: three open tasks (one nobody has, one for
+/// the seventh builder, one the first builder is on), and #5759's text with its newest two comments, signed by their agents as
+/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does.
 SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
   run: (arguments) async {
     calls?.add(arguments);
-    if (arguments.take(2).join(' ') == 'issue list') {
-      return ProcessResult(
-        1,
-        0,
-        jsonEncode([
-          {
-            'number': 5754,
-            'title': 'No bathroom-break reminder skill ships',
-            'labels': [
-              {'name': 'builder:seventh'},
+    final query = arguments
+        .firstWhere((a) => a.startsWith('query='), orElse: () => '')
+        .substring(6);
+    const url = 'https://github.com/autonomous-ai/lampOS/issues';
+    Map<String, Object?> issue(int number, String title, String updated) => {
+      'number': number,
+      'title': title,
+      'url': '$url/$number',
+      'createdAt': '2026-11-09T01:00:00Z',
+      'updatedAt': updated,
+    };
+    Map<String, Object?> label(String name, String color) => {
+      'name': name,
+      'color': color,
+    };
+    Map<String, Object?> comment(int n, String who, String body, String at) => {
+      'author': {'login': who},
+      'body': body,
+      'createdAt': at,
+      'url': '$url/5759#issuecomment-$n',
+    };
+    ProcessResult answer(Object? data) =>
+        ProcessResult(1, 0, jsonEncode({'data': data}), '');
+    if (query.contains('issues(first:')) {
+      return answer({
+        'repository': {
+          'issues': {
+            'pageInfo': {'hasNextPage': false, 'endCursor': null},
+            'nodes': [
+              {
+                ...issue(
+                  5754,
+                  'No bathroom-break reminder skill ships',
+                  '2026-11-09T06:05:08Z',
+                ),
+                'labels': {
+                  'nodes': [label('builder:seventh', '0e8a16')],
+                },
+                'author': {'login': 'deehw'},
+                'comments': {'totalCount': 6},
+              },
+              {
+                ...issue(
+                  5759,
+                  'The two update rows were scored down for #5539 and #5476',
+                  '2026-11-09T07:20:06Z',
+                ),
+                'labels': {
+                  'nodes': [
+                    label('status:taken', 'fbca04'),
+                    label('builder:first builder', '1d76db'),
+                  ],
+                },
+                'author': {'login': '69tc'},
+                'comments': {'totalCount': 3},
+              },
+              {
+                ...issue(
+                  5760,
+                  'Play your music through Spotify by voice',
+                  '2026-11-09T05:00:00Z',
+                ),
+                'labels': {'nodes': <Object?>[]},
+                'author': {'login': 'deehw'},
+                'comments': {'totalCount': 0},
+              },
             ],
-            'author': {'login': 'deehw'},
-            'updatedAt': '2026-11-09T06:05:08Z',
-            'url': 'https://github.com/autonomous-ai/lampOS/issues/5754',
           },
-          {
-            'number': 5759,
-            'title': 'The two update rows were scored down for #5539 and #5476',
-            'labels': [
-              {'name': 'status:taken'},
-              {'name': 'builder:first builder'},
-            ],
-            'author': {'login': '69tc'},
-            'updatedAt': '2026-11-09T07:20:06Z',
-            'url': 'https://github.com/autonomous-ai/lampOS/issues/5759',
-          },
-        ]),
-        '',
-      );
+        },
+      });
     }
-    if (arguments.take(3).join(' ') == 'issue view 5759') {
-      return ProcessResult(
-        2,
-        0,
-        jsonEncode({
-          'number': 5759,
-          'title': 'The two update rows were scored down for #5539 and #5476',
-          'body': 'Score both rows again once a lamp shows the fix.',
-          'labels': [
-            {'name': 'status:taken'},
-            {'name': 'builder:first builder'},
-          ],
-          'author': {'login': '69tc'},
-          'state': 'OPEN',
-          'createdAt': '2026-11-09T01:00:00Z',
-          'updatedAt': '2026-11-09T07:20:06Z',
-          'url': 'https://github.com/autonomous-ai/lampOS/issues/5759',
-          'comments': [
-            {
-              'author': {'login': '69tc'},
-              'body': 'Migrate, 09:3x GMT+7, taken by Migrate. The first step: what each row still lacks.',
-              'createdAt': '2026-11-09T02:11:20Z',
-              'url': 'https://github.com/autonomous-ai/lampOS/issues/5759#issuecomment-1',
+    // One open pull request, for 5759: green, with a READ-OK on its head from a reader other than its builder.
+    if (query.contains('pullRequests(')) {
+      return answer({
+        'repository': {
+          'defaultBranchRef': {'name': 'main'},
+          'pullRequests': {
+            'nodes': [
+              {
+                'number': 5770,
+                'title': 'Score the update rows again',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5770',
+                'isDraft': false,
+                'headRefName': 'first-builder/5759',
+                'headRefOid': 'f6edb44a1b2c3d4e5f60718293a4b5c6d7e8f901',
+                'baseRefName': 'main',
+                'body': 'Closes #5759',
+                'mergeable': 'MERGEABLE',
+                'labels': {
+                  'nodes': [
+                    {'name': 'builder:first builder'},
+                  ],
+                },
+                'closingIssuesReferences': {
+                  'nodes': [
+                    {'number': 5759},
+                  ],
+                },
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'SUCCESS'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {
+                  'nodes': [
+                    {
+                      'body': 'Migrate, 10:05 GMT+7: READ-OK f6edb44',
+                      'createdAt': '2026-11-09T03:05:00Z',
+                      'authorAssociation': 'MEMBER',
+                      'author': {'login': '69tc'},
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      });
+    }
+    if (query.contains(r'before:$before')) {
+      return answer({
+        'repository': {
+          'issue': {
+            'comments': {
+              'pageInfo': {'hasPreviousPage': false, 'startCursor': 'c0'},
+              'nodes': [
+                comment(
+                  0,
+                  'deehw',
+                  'Opened by deehw, 09:0x GMT+7: the rows need a lamp check.',
+                  '2026-11-09T01:30:00Z',
+                ),
+              ],
             },
-            {
-              'author': {'login': 'deehw'},
-              'body': 'First builder, 09:4x: I\'m taking this one.',
-              'createdAt': '2026-11-09T02:27:00Z',
-              'url': 'https://github.com/autonomous-ai/lampOS/issues/5759#issuecomment-2',
+          },
+        },
+      });
+    }
+    if (query.contains('body state') && arguments.contains('number=5759')) {
+      return answer({
+        'repository': {
+          'issue': {
+            ...issue(
+              5759,
+              'The two update rows were scored down for #5539 and #5476',
+              '2026-11-09T07:20:06Z',
+            ),
+            'body': 'Score both rows again once a lamp shows the fix.',
+            'labels': {
+              'nodes': [
+                label('status:taken', 'fbca04'),
+                label('builder:first builder', '1d76db'),
+              ],
             },
-          ],
-        }),
-        '',
-      );
+            'author': {'login': '69tc'},
+            'state': 'OPEN',
+            'comments': {
+              'totalCount': 3,
+              'pageInfo': {'hasPreviousPage': true, 'startCursor': 'c1'},
+              'nodes': [
+                comment(
+                  1,
+                  '69tc',
+                  'Migrate, 09:3x GMT+7, taken by Migrate. The first step: what each row still lacks.',
+                  '2026-11-09T02:11:20Z',
+                ),
+                comment(
+                  2,
+                  'deehw',
+                  'First builder, 09:4x: I\'m taking this one.',
+                  '2026-11-09T02:27:00Z',
+                ),
+              ],
+            },
+          },
+        },
+      });
     }
     return ProcessResult(
       3,
       1,
       '',
-      'GraphQL: Could not resolve to an issue or pull request with the number of 0.',
+      'GraphQL: Could not resolve to an Issue with the number of 0.',
     );
   },
 );
+
+/// An agent's computer, as it answers the instructions link in these tests (Swarm v4): the files it holds, by agent
+/// id and name, and every request it was sent. A computer changes a file by itself (`files[...] = ...`), as its agent does.
+class SwarmV4Computer {
+  SwarmV4Computer({Map<String, String>? files}) : files = files ?? {};
+
+  /// `harnessId/name` -> the file's text.
+  final Map<String, String> files;
+  final requests =
+      <(String machineId, String type, Map<String, Object?> payload)>[];
+
+  /// A code to refuse every request with (`UNSUPPORTED`, `OFFLINE`, ...) until it is null again.
+  String? refuse;
+
+  /// A code the app's own gate refuses with before anything is sent (`UPDATE_HERE`), until it is null again.
+  String? gate;
+
+  /// The next save is applied but its answer never comes, as when a link drops after the computer wrote the file.
+  bool loseNextReply = false;
+
+  static String versionOf(String? text) =>
+      text == null ? '' : 'v${text.hashCode}';
+
+  late final link = SwarmInstructionsLink(gate: (_) => gate, (
+    machineId,
+    type,
+    payload,
+  ) async {
+    requests.add((machineId, type, payload));
+    if (refuse case final code?) {
+      throw WsRequestFailure(responseType: '${type}_result', code: code);
+    }
+    final key = '${payload['agentId']}/${payload['name']}';
+    final text = files[key];
+    if (type == 'agent_instructions_read') {
+      return {'text': text, 'version': versionOf(text)};
+    }
+    if (payload['version'] != versionOf(text)) {
+      throw WsRequestFailure(responseType: '${type}_result', code: 'CHANGED');
+    }
+    final next = payload['text'] as String;
+    files[key] = next;
+    if (loseNextReply) {
+      loseNextReply = false;
+      throw const WsRequestTimeout('agent_instructions_write');
+    }
+    return {'version': versionOf(next)};
+  });
+}

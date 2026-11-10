@@ -106,7 +106,7 @@ export interface DecisionTarget {
 /** `delegated`: the person asked left it to the PM, who took the recommended option. */
 /** `choice` null with a `note`: the person typed their own answer instead of choosing an option (task #2996). */
 export interface DecisionAnswer { id: string; choice: number | null; note: string | null; delegated?: true
-  /** Left to the PM by the hourly sweep after 24 hours unanswered, not by the person (overdueDecisions.ts). */
+  /** Left to the PM after 24 hours unanswered, not by the person: on the rows the hourly sweep wrote before Swarm v4 removed it. */
   overdue?: true; defaulted?: true }
 
 /** Questions for one person in one conversation they read, from `asker`. One batch: one id ties them, no ping per question. */
@@ -215,20 +215,19 @@ export function answerableBy(state: SuperTabState, actor: Actor, decision: Decis
 }
 
 /** What tells the asking agent and the Lead, whichever of them is still in the conversation. A notice only they read, with
- *  none of the answer in it: the decisions read, which checks who reads it, has the answer (review of #1753). */
-export const ANSWERED_NOTICE = 'A decision asked in this conversation was answered. Read the answer with: harness super-tab decisions --answered'
+ *  none of the answer in it (review of #1753): the decisions read (GET /decisions), which checks who reads it, has the answer. Since
+ *  Swarm v4 the CLI has no verb for that read, so these notices name no command; a notice names only verbs the CLI has
+ *  (noticeCommands.test.ts). */
+export const ANSWERED_NOTICE = 'A decision asked in this conversation was answered.'
 /** The same notice for a decision the person left to the PM, with none of the answer either; [name] is what its project calls
  *  its coordinator (instructions.ts coordinatorNameOf). */
-export const delegatedNotice = (name: string) => `A decision asked in this conversation was left to the ${name}, who took its recommended option. `
-  + 'Read it with: harness super-tab decisions --answered'
+export const delegatedNotice = (name: string) => `A decision asked in this conversation was left to the ${name}, who took its recommended option.`
 /** The notice for a decision left to the PM by the sweep, not the person: it says why, so nobody reads it as their choice. */
-export const defaultedNotice = 'A decision you asked reached its default time. The server applied its recommended option. Read it with: harness super-tab decisions --answered'
-export const overdueNotice = (name: string) => `A decision asked in this conversation waited 24 hours, so it was left to the ${name}, who took its recommended option. `
-  + 'Read it with: harness super-tab decisions --answered'
+export const defaultedNotice = 'A decision you asked reached its default time. The server applied its recommended option.'
+export const overdueNotice = (name: string) => `A decision asked in this conversation waited 24 hours, so it was left to the ${name}, who took its recommended option.`
 /** The notices for a decision asked in a closed Chat with PM, told in the project chat instead: never "in this conversation". */
-export const CLOSED_CHAT_ANSWERED_NOTICE = 'A decision you asked in a closed Chat with PM was answered. Read the answer with: harness super-tab decisions --answered'
-export const closedChatDelegatedNotice = (name: string) => `A decision you asked in a closed Chat with PM was left to the ${name}, who took its recommended option. `
-  + 'Read it with: harness super-tab decisions --answered'
+export const CLOSED_CHAT_ANSWERED_NOTICE = 'A decision you asked in a closed Chat with PM was answered.'
+export const closedChatDelegatedNotice = (name: string) => `A decision you asked in a closed Chat with PM was left to the ${name}, who took its recommended option.`
 
 /** How an answer reads in the decisions list: a delegated one never as the person's own choice. */
 const answerText = (option: string, delegated: boolean) => delegated ? `PM decided: ${option}` : option
@@ -323,8 +322,7 @@ export function mustAgreePassed(state: SuperTabState, actor: Actor, decision: De
   const project = groupProject(state, group)
   const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
   const noticeIn = isClosedPmChat(group) ? state.conversations.find(c => c.id === project.leadConversationId)! : group
-  const text = `A decision ${usernameOf(state, asked.personId)} must agree to reached its default time unanswered, so no default applied: `
-    + 'it waits for them. Read it with: harness super-tab decisions'
+  const text = `A decision ${usernameOf(state, asked.personId)} must agree to reached its default time unanswered, so no default applied: it waits for them.`
   return { noticeIn: noticeIn.id, text, recipients: lead && noticeIn.agentIds.includes(lead) ? [lead] : [], source: { kind: MUST_AGREE_KIND, decisionId: asked.id } }
 }
 
@@ -353,27 +351,15 @@ export async function waitingFor(tx: Tx, tabId: string, conversationId: string, 
 /** Closes the decisions still waiting in these conversations, whose work is over (workOver), as withdrawn: answered at
  *  [now] with no choice, so none waits, none is listed, none can be answered and a new ask of the same question is a new
  *  decision. Never a routing reflection's, which expires on its own (expireReflections). Run in the transaction that ends
- *  the work (store.ts), so a concurrent answer conflicts with it and only one of them counts. With [askedBy], only those
- *  asked by then: the work was read as over at that time (store.ts withdrawEndedDecisions). The number closed. */
-export async function withdrawIn(tx: Tx, tabId: string, conversationIds: readonly string[], now: number, askedBy?: number): Promise<number> {
+ *  the work (store.ts), so a concurrent answer conflicts with it and only one of them counts. The number closed. */
+export async function withdrawIn(tx: Tx, tabId: string, conversationIds: readonly string[], now: number): Promise<number> {
   let closed = 0
   // One by one through the conversation index: a command ends one conversation's work, rarely a few (hotFilters.test.ts).
   for (const conversationId of new Set(conversationIds)) {
-    closed += (await tx.superTabDecision.updateMany({ where: { tabId, conversationId, AND: [waiting, notReflection],
-      ...askedBy === undefined ? {} : { createdAt: { lte: new Date(askedBy) } } },
+    closed += (await tx.superTabDecision.updateMany({ where: { tabId, conversationId, AND: [waiting, notReflection] },
       data: { answeredAt: new Date(now), withdrawn: true } })).count
   }
   return closed
-}
-
-/** The conversations, by Swarm, where a decision still waits, a routing reflection's aside (store.ts withdrawEndedDecisions,
- *  once at worker startup). Open decisions are few: at most MAX_OPEN_DECISIONS per asker and person. */
-export async function waitingConversations(tx: Tx): Promise<Map<string, string[]>> {
-  const rows = await tx.superTabDecision.findMany({ where: { AND: [waiting, notReflection] }, select: { tabId: true, conversationId: true },
-    distinct: ['tabId', 'conversationId'] })
-  const byTab = new Map<string, string[]>()
-  for (const row of rows) byTab.set(row.tabId, [...byTab.get(row.tabId) ?? [], row.conversationId])
-  return byTab
 }
 
 /** The conversations whose work this write ended (workOver in [after], not in [before]): their waiting decisions close. */

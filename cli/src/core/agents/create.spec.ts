@@ -190,7 +190,9 @@ describe('creating an agent', () => {
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
       const place = vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2]
-      expect(place.swarmInstructions).toBeUndefined()
+      // The team's basics (Swarm v4, 2026-11-09), and the PM's part for the coordinator alone.
+      expect(place.swarmInstructions).toContain('Never watch GitHub yourself')
+      expect(place.swarmInstructions?.includes('You are your project\'s PM')).toBe(role === 'coordinator')
     }
   })
 
@@ -201,7 +203,7 @@ describe('creating an agent', () => {
       await setup().create(request({ cwd: folder(), ...over }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role: 'agent', fallback: 'review', key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toBeUndefined()
+      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never review your own work')
     }
     // A fallback is an agent's alone.
     for (const [over, role] of [[{ swarmRole: 'lead' }, 'coordinator'], [{ swarmRole: 'coordinator', swarmFallback: 'review' }, 'coordinator'],
@@ -209,7 +211,7 @@ describe('creating an agent', () => {
       await setup().create(request({ cwd: folder(), ...over }))
       const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
       expect(pane.swarmSkill).toEqual({ role, key: pane.sessionLabel })
-      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toBeUndefined()
+      expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
     }
     expect(await setup().create(request({ cwd: folder(), swarmRole: 'pm' }))).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED' })
   })
@@ -225,12 +227,12 @@ describe('creating an agent', () => {
     expect(await extraArgsOf({ engine: 'claude', swarmRole: 'agent' })).not.toContain('check_for_update_on_startup=false')
   })
 
-  it.each(['default', 'orchestration'] as const)('keeps the project\'s %s mode on the saved row, with no launch line', async mode => {
+  it.each(['default', 'orchestration'] as const)('keeps the project\'s %s mode on the saved row, with only the team\'s basics at launch', async mode => {
     const cwd = folder()
     await setup().create(request({ cwd, swarmRole: 'agent', swarmSkillMode: mode }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
     expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, mode })
-    expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toBeUndefined()
+    expect(vi.mocked(agentLaunchArgs).mock.calls.at(-1)![2].swarmInstructions).toContain('Never watch GitHub yourself')
   })
 
   // Swarm v3 (task #4215): a Swarm agent starts with its owner's own settings. Harness wrote full mode's warning acceptance

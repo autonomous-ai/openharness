@@ -12,6 +12,9 @@ abstract final class SwarmLayout {
     vertical: 6,
   );
 
+  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane.
+  static const double chatColumn = 720;
+
   /// The corners of a task card and of the agents-only line.
   static const double cardRadius = 12;
 
@@ -26,8 +29,23 @@ abstract final class SwarmLayout {
   static const double capsuleRadius = 8;
   static const double capsuleGap = 6;
 
+  /// A board column's heading, which sits level with its cards' left edge.
+  static const EdgeInsets columnHeadPadding = EdgeInsets.fromLTRB(4, 16, 4, 8);
+
+  /// A label chip as github.com draws it: a pill in the label's own colour.
+  static const EdgeInsets chipPadding = EdgeInsets.symmetric(
+    horizontal: 8,
+    vertical: 1,
+  );
+  static const double chipRadius = 999;
+
   /// A task's title, above its text and comments.
   static const double titleSize = 16;
+
+  /// A card in a chat that is nobody's bubble, as GitHub's words to an agent (super_tabs/github_row.dart): the gap above it,
+  /// and the gap under its file line.
+  static const double chatCardTop = 12;
+  static const double chatCardLineGap = 6;
 
   /// The agents-only line under a project's channel, where a composer would be.
   static const EdgeInsets agentsOnlyMargin = EdgeInsets.fromLTRB(28, 6, 28, 18);

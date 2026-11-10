@@ -28,6 +28,9 @@ class WsPool {
 
   final Map<String, WsConn> _conns = {};
 
+  /// Set by [closeAll]: a closed pool dials no more, so a late caller cannot start a socket nobody will close.
+  bool _closed = false;
+
   /// How local connections reach the daemon — its socket or the loopback
   /// port. Null keeps the port.
   final LocalDaemonTransport? localTransport;
@@ -54,6 +57,7 @@ class WsPool {
     Duration? fixedReconnectDelay,
     bool trustedLocal = false,
   }) {
+    if (_closed) throw StateError('This pool is closed.');
     // The reconnect policy is part of the key: a row that turns out to be this computer's after its
     // socket was made gets a new socket with the flat delay, not the old backoff. So is whether it
     // is the trusted window connection (WsConn.trustedLocal), which on Windows dials the pipe.
@@ -129,6 +133,7 @@ class WsPool {
   }
 
   Future<void> closeAll() async {
+    _closed = true;
     final all = _conns.values.toList();
     _conns.clear();
     // A failed close must not leave the other transports connected.
