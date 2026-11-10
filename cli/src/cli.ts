@@ -52,7 +52,7 @@ import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
-import { revokeHarnessRefresh } from './team/handoff.js'
+import { revokeHarnessRefresh } from './lib/harnessRefresh.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -219,12 +219,6 @@ Machine:
                                neither touches a local install-cli.sh build without --force)
   harness flash [flags]        re-flash a plugged-in circle device over USB. Flags go straight to the
                                flasher: --detect-only, --port, --version, --yes, --erase-nvs
-
-Team account (the separate "harnessteam" user made for Swarm work before Swarm v3, which has none):
-  harness team status          whether it is still there, its daemon (which stops once no agent runs), and how to delete it
-  harness team on | off        a computer used only for agents runs Swarm work only (on), or signs back in as
-                               your own computer (off)
-  harness team remove          delete the account, its home folder and its daemon
 
 Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH):
   harness grid login           sign in to your grid reusing THIS computer's Autonomous account —
@@ -420,7 +414,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   else if (signInAgain) {
     console.log('\n  ✗ Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account for 7 days. Run: harness login\n')
   } else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness team off undoes it)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness login signs it in as you)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -3114,32 +3108,6 @@ switch (cmd) {
         auth: controlPlaneAuth,
         get: (path, headers) => requestJson('GET', path, undefined, headers),
       }, flags.includes('--json')))
-      .then((code) => { process.exitCode = code }).catch(onError)
-    break
-  case 'team':
-    // `team ps`: the harnesses of the account's Harness Team machine, which plain `ps` hides (they belong to another
-    // account on this computer): the same read, with --machine already named (headless run, 2026-11-03).
-    if (rest[0] === 'ps') {
-      usableMachines().then(async (machines) => {
-        const team = machines.find((machine) => machine.label.endsWith('· Team'))
-        if (!team) { console.error('No Harness Team account on this account.'); return 1 }
-        return psCommand(['--machine', team.label, '--all', ...rest.slice(1)], { machines: async () => machines })
-      }).then((code) => { process.exitCode = code }).catch(onError)
-      break
-    }
-  case 'team':
-    // Loaded only here (team/deps.ts). The daemon is stopped before a sign-in changes under it and started again on the
-    // new one; `launch` prints its status block and exits, so it is always the last step.
-    Promise.all([import('./team/command.js'), import('./team/deps.js')])
-      .then(([{ teamCommand }, { teamCommandDeps }]) => teamCommand(rest, teamCommandDeps({
-        stopDaemon: async () => (await stopDaemonOrExit()).pid !== null,
-        startDaemon: () => launch(false),
-        signIn: async (restart) => {
-          const outcome = await loginCommand(false, false, false, { method: 'ask' })
-          if (outcome.signedIn) await restartDaemonForIdentity(restart)
-          else if (restart) await launch(false)
-        },
-      })))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'reset':

@@ -1,20 +1,17 @@
 /**
  * The Windows pieces of the team daemon and of `harness team status` (docs/superpowers/plans/2026-10-28-harness-team-
  * account-windows.md, Tasks 4 and 5), as pure functions and PowerShell queries the platform code runs: the privacy
- * probes, the pinned gh zips, and what status asks Windows about the account and its task.
+ * probes, the pinned gh zips, and the account's SID from `whoami` (guest sharing reads it too).
  *
  * A query is a short script and its inputs, for lib/windows/powershell.ts `runPowershell`: the inputs travel in
  * environment variables, never in the script's text.
  */
-import { closeSync, lstatSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
-import type { JobState } from './command.js'
+import { closeSync, openSync, readdirSync } from 'node:fs'
 import type { TeamConfig } from './config.js'
 import type { GhBuild } from './gh.js'
-import { TeamSignInError } from './signInError.js'
-import { HANDOFF_CODE } from './layout.js'
 import type { PrivacyItem } from './privacy.js'
 import {
-  SID, WINDOWS_TEAM_HANDOFF_FILE, WINDOWS_TEAM_TASK_NAME, WINDOWS_TEAM_TASK_PATH, checkSid, checkWindowsPath, checkWindowsUser,
+  SID, checkSid, checkWindowsPath,
 } from './windowsLayout.js'
 
 export interface PowershellQuery { script: string; inputs: Record<string, string> }
@@ -164,112 +161,4 @@ export function windowsUnzipScript(archive: string, into: string): PowershellQue
     script: 'Expand-Archive -LiteralPath $env:HARNESS_ARCHIVE -DestinationPath $env:HARNESS_INTO -Force',
     inputs: { HARNESS_ARCHIVE: checkWindowsPath(archive, 'gh archive'), HARNESS_INTO: checkWindowsPath(into, 'gh folder') },
   }
-}
-
-// ── The sign-in hand-over ─────────────────────────────────────────────────────────────────────
-
-export interface WindowsHandoffFs {
-  lstat(path: string): { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number }
-  write(path: string, text: string): void
-  read(path: string): string
-  unlink(path: string): void
-}
-
-const realHandoffFs: WindowsHandoffFs = {
-  lstat: (path) => lstatSync(path),
-  // A new file, or the one the owner left before: the folder lets nobody else add one (./windowsScript.ts step 8).
-  write: (path, text) => writeFileSync(path, text),
-  read: (path) => readFileSync(path, 'utf8'),
-  unlink: (path) => unlinkSync(path),
-}
-
-/**
- * The owner's side: the single-use code, into the handover folder setup made. Never through a link: the folder must be
- * a plain one (Node reads a junction as a symbolic link), and the code a plain file in it.
- */
-export function writeWindowsHandoff(code: string, file: string = WINDOWS_TEAM_HANDOFF_FILE, fs: WindowsHandoffFs = realHandoffFs): void {
-  if (!HANDOFF_CODE.test(code)) throw new Error('not a sign-in code')
-  const folder = fs.lstat(file.slice(0, file.lastIndexOf('\\')))
-  if (!folder.isDirectory() || folder.isSymbolicLink()) throw new Error('the sign-in handover folder is not a plain folder: run harness team setup again')
-  try {
-    const old = fs.lstat(file)
-    if (!old.isFile() || old.isSymbolicLink()) throw new Error('the sign-in handover file is not a plain file: run harness team setup again')
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-  fs.write(file, `${code}\n`)
-}
-
-/**
- * The team account's side (`team __start`): the code the owner left, read once and deleted, or null when there is none.
- * Only the owner and administrators may add a file to the folder; one that is not a plain small file holding a code is
- * deleted unread and refused, as ./handoff.ts `takeHandoffFile` refuses one on a Mac.
- */
-export function takeWindowsHandoffFile(file: string, fs: WindowsHandoffFs = realHandoffFs): string | null {
-  let info: ReturnType<WindowsHandoffFs['lstat']>
-  try { info = fs.lstat(file) } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw new TeamSignInError(`The team sign-in file could not be opened safely (${(error as NodeJS.ErrnoException).code ?? 'error'}).`, 'UNSAFE_FILE')
-  }
-  let text = ''
-  const safe = info.isFile() && !info.isSymbolicLink() && info.size <= 4096
-  try {
-    if (safe) text = fs.read(file).trim()
-  } finally {
-    try { fs.unlink(file) } catch { /* already gone */ }
-  }
-  if (!safe) throw new TeamSignInError('The team sign-in file was not a plain file; it was deleted unread.', 'UNSAFE_FILE')
-  if (!HANDOFF_CODE.test(text)) throw new TeamSignInError('The team sign-in file did not hold a sign-in code; it was deleted.', 'UNSAFE_FILE')
-  return text
-}
-
-/** Asks Task Scheduler to start the team daemon's task; prints nothing. Setup's task lets its owner start it. */
-export function windowsStartTaskScript(): PowershellQuery {
-  return {
-    script: 'Start-ScheduledTask -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME',
-    inputs: { HARNESS_TASK_PATH: WINDOWS_TEAM_TASK_PATH, HARNESS_TASK_NAME: WINDOWS_TEAM_TASK_NAME },
-  }
-}
-
-// ── harness team status ───────────────────────────────────────────────────────────────────────
-
-/** Whether a local account by that name exists; any account may ask. Prints `yes` or `no`. */
-export function windowsAccountExistsScript(user: string): PowershellQuery {
-  return {
-    script: "if (Get-LocalUser -Name $env:HARNESS_TEAM_USER -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }",
-    inputs: { HARNESS_TEAM_USER: checkWindowsUser(user, 'team account') },
-  }
-}
-
-export const parseWindowsAccountExists = (result: QueryResult): boolean => result.status === 0 && result.stdout.trim() === 'yes'
-
-/**
- * The team task as Task Scheduler has it, one JSON line: its state (`Ready`, `Running`, `Disabled`), its last result,
- * and the process of a running instance, which only Task Scheduler's COM interface gives. Setup's task lets every
- * signed-in account read it (./windowsScript.ts `teamTaskXml`), so a standard owner sees it too.
- */
-export function windowsJobStateScript(): PowershellQuery {
-  return {
-    script: [
-      '$task = Get-ScheduledTask -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME -ErrorAction SilentlyContinue',
-      "if (-not $task) { '{\"loaded\":false}'; exit 0 }",
-      '$info = Get-ScheduledTaskInfo -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME',
-      '$enginePid = $null',
-      'try {',
-      '  $scheduler = New-Object -ComObject Schedule.Service',
-      '  $scheduler.Connect()',
-      "  foreach ($instance in @($scheduler.GetFolder($env:HARNESS_TASK_PATH.TrimEnd('\\')).GetTask($env:HARNESS_TASK_NAME).GetInstances(0))) { $enginePid = [int]$instance.EnginePID }",
-      '} catch { }',
-      '[pscustomobject]@{ loaded = $true; state = [string]$task.State; pid = $enginePid; lastResult = $info.LastTaskResult } | ConvertTo-Json -Compress',
-    ].join('\n'),
-    inputs: { HARNESS_TASK_PATH: WINDOWS_TEAM_TASK_PATH, HARNESS_TASK_NAME: WINDOWS_TEAM_TASK_NAME },
-  }
-}
-
-export function parseWindowsJobState(result: QueryResult): JobState {
-  const none: JobState = { loaded: false, pid: null, state: null }
-  if (result.status !== 0) return none
-  let value: unknown
-  try { value = JSON.parse(result.stdout.trim()) } catch { return none }
-  if (!value || typeof value !== 'object' || (value as { loaded?: unknown }).loaded !== true) return none
-  const { state, pid } = value as { state?: unknown; pid?: unknown }
-  return { loaded: true, pid: typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : null, state: typeof state === 'string' ? state : null }
 }
