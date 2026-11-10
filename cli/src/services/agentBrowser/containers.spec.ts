@@ -1,27 +1,51 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { browserLimit, Containers } from './containers.js'
-import { fakePodman, type FakeCall, type FakePodman } from './fakePodman.js'
-import { createPodman } from './podman.js'
+import { PodmanError, type Podman } from './podman.js'
 import { defaultSettings, settingsHash, type BrowserSettings } from './settings.js'
-
-// The login shell is never started in a spec.
-vi.mock('../../lib/loginShellEnv.js', () => ({ oneShotParentEnv: () => process.env }))
 
 const GiB = 1024 ** 3
 const IMAGE = 'harness-browser:abc123-2026w46'
 const base: BrowserSettings = defaultSettings({ timeZone: 'Asia/Ho_Chi_Minh', languages: 'vi-VN, en-US' })
 const proxy = { scheme: 'socks5' as const, host: 'proxy.example', port: 1080, username: 'u', password: 's3cret-pass' }
 
-let fake: FakePodman
+interface FakeCall { args: string[]; stdin: string }
+interface FakeReply { stdout?: string; stderr?: string; code?: number }
+
+/**
+ * Podman as Containers sees it, answered in this process. The script fake (fakePodman.ts) is a Node process start per
+ * call; a start here makes 7 calls, and under load a test passed its 5 s. How a call reaches a process, its stdin and
+ * its error text are podman.spec's to test; the error below is podman.ts's `podman <verb> failed: <stderr>`.
+ */
+function inProcessPodman() {
+  const replies: Record<string, FakeReply> = {}
+  const made: FakeCall[] = []
+  const podman = {
+    async run(args: string[], opts: { stdin?: string } = {}) {
+      made.push({ args, stdin: opts.stdin ?? '' })
+      const line = args.join(' ')
+      // The longest prefix wins, as in fakePodman.ts.
+      const key = Object.keys(replies).filter(k => line === k || line.startsWith(`${k} `)).sort((a, b) => b.length - a.length)[0]
+      const { stdout = '', stderr = '', code = 0 } = key === undefined ? {} : replies[key]!
+      if (code !== 0) throw new PodmanError('podman_failed', `podman ${args[0]} failed: ${stderr.trim()}`)
+      return { stdout, stderr }
+    },
+  }
+  return {
+    podman: podman as Podman,
+    reply: (prefix: string, answer: FakeReply) => { replies[prefix] = answer },
+    calls: () => made,
+  }
+}
+
+let fake: ReturnType<typeof inProcessPodman>
 let logged: string[]
 let containers: Containers
 beforeEach(() => {
-  fake = fakePodman()
+  fake = inProcessPodman()
   fake.reply('ps', { stdout: '[]' })
   logged = []
-  containers = new Containers(createPodman({ resolve: async () => fake.path }), 'd1', line => logged.push(line))
+  containers = new Containers(fake.podman, 'd1', line => logged.push(line))
 })
-afterEach(() => fake.remove())
 
 const argvs = () => fake.calls().map(call => call.args)
 const named = (verb: string): FakeCall[] => fake.calls().filter(call => call.args[0] === verb)
@@ -100,18 +124,16 @@ describe('Containers', () => {
     expect(named('create')).toEqual([])
   })
 
-  it('a container on an older image, or with a different settings label, is created again and keeps its volume', async () => {
-    const labels = { 'harness.agent': 'a1', 'harness.daemon': 'd1', 'harness.settings': applied(base, 'UTC') }
-    for (const old of [{ Image: 'localhost/harness-browser:old-2026w45', Labels: labels }, { Labels: { ...labels, 'harness.settings': 'other' } }]) {
-      fake.remove()
-      fake = fakePodman()
-      containers = new Containers(createPodman({ resolve: async () => fake.path }), 'd1', () => {})
-      listed(entry('a1', 'd1', old))
-      await containers.start('a1', IMAGE, base, 'UTC')
-      expect(argvs()).toContainEqual(['rm', '--force', '--time', '10', 'harness-browser-a1'])
-      expect(named('create')).toHaveLength(1)
-      expect(named('volume').map(call => call.args[1])).toEqual(['create'])
-    }
+  const labels = { 'harness.agent': 'a1', 'harness.daemon': 'd1', 'harness.settings': applied(base, 'UTC') }
+  it.each([
+    ['an older image', { Image: 'localhost/harness-browser:old-2026w45', Labels: labels }],
+    ['a different settings label', { Labels: { ...labels, 'harness.settings': 'other' } }],
+  ])('a container on %s is created again and keeps its volume', async (_, old) => {
+    listed(entry('a1', 'd1', old))
+    await containers.start('a1', IMAGE, base, 'UTC')
+    expect(argvs()).toContainEqual(['rm', '--force', '--time', '10', 'harness-browser-a1'])
+    expect(named('create')).toHaveLength(1)
+    expect(named('volume').map(call => call.args[1])).toEqual(['create'])
   })
 
   it('refused limit is dropped and logged', async () => {
