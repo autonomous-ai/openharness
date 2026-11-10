@@ -14,6 +14,10 @@ declare const __BROWSER_TOOLS_JSON__: string
 declare const __BROWSER_TOOLS__: string
 declare const __BROWSER_TOOLS_LIB__: string
 declare const __BROWSER_SOCKS5__: string
+declare const __BROWSER_HUMAN_INPUT__: string
+declare const __BROWSER_CHALLENGE__: string
+declare const __BROWSER_PROXY_RELAY__: string
+declare const __BROWSER_DEVICE_INJECT__: string
 
 /** The Containerfile installs exactly this version; the tool server uses only its public API. */
 export const PLAYWRIGHT_CORE_VERSION = '1.58.2'
@@ -33,6 +37,10 @@ export function browserContextFiles(): Record<string, string> {
     'browser-tools-lib.mjs': asset(typeof __BROWSER_TOOLS_LIB__ === 'string' ? __BROWSER_TOOLS_LIB__ : undefined, 'browser-tools-lib.mjs'),
     // Its socks5.d.mts types it for the CLI's own import (exitLookup.ts) and is not part of the image.
     'socks5.mjs': asset(typeof __BROWSER_SOCKS5__ === 'string' ? __BROWSER_SOCKS5__ : undefined, 'socks5.mjs'),
+    'human-input.mjs': asset(typeof __BROWSER_HUMAN_INPUT__ === 'string' ? __BROWSER_HUMAN_INPUT__ : undefined, 'human-input.mjs'),
+    'challenge.mjs': asset(typeof __BROWSER_CHALLENGE__ === 'string' ? __BROWSER_CHALLENGE__ : undefined, 'challenge.mjs'),
+    'proxy-relay.mjs': asset(typeof __BROWSER_PROXY_RELAY__ === 'string' ? __BROWSER_PROXY_RELAY__ : undefined, 'proxy-relay.mjs'),
+    'device-inject.mjs': asset(typeof __BROWSER_DEVICE_INJECT__ === 'string' ? __BROWSER_DEVICE_INJECT__ : undefined, 'device-inject.mjs'),
   }
 }
 

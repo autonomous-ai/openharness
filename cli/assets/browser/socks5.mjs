@@ -76,7 +76,8 @@ export async function socks5Connect(socket, { host, port, username, password }) 
     }
     socket.write(Buffer.concat([Buffer.from([VERSION, CONNECT, 0, DOMAIN, name.length]), name, Buffer.from([port >> 8, port & 0xff])]))
     const [, reply, , type] = await bytes.read(4)
-    if (reply !== 0) throw new Error(`the SOCKS5 proxy refused the connection (${reply})`)
+    // The reply code tells a proxy that could not reach the target (the target's failure) from one that refused us.
+    if (reply !== 0) throw Object.assign(new Error(`the SOCKS5 proxy refused the connection (${reply})`), { reply })
     // The address the proxy bound, then its port: read and dropped.
     const length = type === IPV4 ? 4 : type === IPV6 ? 16 : type === DOMAIN ? (await bytes.read(1))[0] : -1
     if (length < 0) throw new Error('the SOCKS5 proxy answered an unknown address type')

@@ -60,6 +60,10 @@ try {
       __BROWSER_TOOLS__: JSON.stringify(readFileSync('assets/browser/browser-tools.mjs', 'utf8')),
       __BROWSER_TOOLS_LIB__: JSON.stringify(readFileSync('assets/browser/browser-tools-lib.mjs', 'utf8')),
       __BROWSER_SOCKS5__: JSON.stringify(readFileSync('assets/browser/socks5.mjs', 'utf8')),
+      __BROWSER_HUMAN_INPUT__: JSON.stringify(readFileSync('assets/browser/human-input.mjs', 'utf8')),
+      __BROWSER_CHALLENGE__: JSON.stringify(readFileSync('assets/browser/challenge.mjs', 'utf8')),
+      __BROWSER_PROXY_RELAY__: JSON.stringify(readFileSync('assets/browser/proxy-relay.mjs', 'utf8')),
+      __BROWSER_DEVICE_INJECT__: JSON.stringify(readFileSync('assets/browser/device-inject.mjs', 'utf8')),
       // Claude Code's status line script (src/engines/kit/statusLine.ts), which a launch writes into the data folder.
       __STATUS_LINE_SCRIPT__: JSON.stringify(readFileSync('hook/statusline.mjs', 'utf8')),
     },

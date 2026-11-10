@@ -24,10 +24,9 @@ describe('browser assets', () => {
   })
 
   it('the bundle\'s copies win over the files', () => {
-    for (const name of ['CONTAINERFILE', 'ENTRYPOINT', 'POLICY', 'TOOLS_JSON', 'TOOLS', 'TOOLS_LIB', 'SOCKS5']) vi.stubGlobal(`__BROWSER_${name}__`, `bundled ${name}`)
-    expect(Object.values(browserContextFiles()).sort()).toEqual([
-      'bundled CONTAINERFILE', 'bundled ENTRYPOINT', 'bundled POLICY', 'bundled SOCKS5', 'bundled TOOLS', 'bundled TOOLS_JSON', 'bundled TOOLS_LIB',
-    ])
+    const names = ['CONTAINERFILE', 'ENTRYPOINT', 'POLICY', 'TOOLS_JSON', 'TOOLS', 'TOOLS_LIB', 'SOCKS5', 'HUMAN_INPUT', 'CHALLENGE', 'PROXY_RELAY', 'DEVICE_INJECT']
+    for (const name of names) vi.stubGlobal(`__BROWSER_${name}__`, `bundled ${name}`)
+    expect(Object.values(browserContextFiles()).sort()).toEqual(names.map(name => `bundled ${name}`).sort())
   })
 
   it('hash covers every file, names included', () => {
@@ -69,12 +68,45 @@ describe('browser assets', () => {
     // Detached: a subshell's background job is not the script's child, so `wait -n` never sees it end.
     expect(file).toMatch(/^\( openbox [^\n]*& \)$/m)
     expect(file).toMatch(/^\( pulseaudio [^\n]*& \)$/m)
-    expect(file.trimEnd()).toMatch(/\nwait -n "\$XVNC" "\$BROWSER"\nexit \$\?$/)
+    // Plain: with process ids it missed a browser that had already exited, and the container stayed up without one.
+    expect(file.trimEnd()).toMatch(/\nwait -n\nexit \$\?$/)
     expect(file).toMatch(/\/var\/lib\/harness-browser-profile/)
     expect(file).toMatch(/if ! touch "\$PROFILE\/[^"]+"[^\n]*; then[^\n]*exit 3; fi/)
     const ready = file.indexOf('touch /tmp/harness-ready')
     expect(ready).toBeGreaterThan(file.indexOf('http://127.0.0.1:9222/json/version'))
     expect(ready).toBeGreaterThan(file.indexOf('/dev/tcp/127.0.0.1/5900'))
+  })
+
+  it('entrypoint starts openbox, and waits until it runs, before the browser', () => {
+    const file = onDisk('entrypoint.sh')
+    // The spike's keys reached no window until the browser's window had X focus, which openbox gives a window it maps.
+    expect(file).toMatch(/^\( openbox --startup "touch \/tmp\/openbox-ready" [^\n]*& \)$/m)
+    const openbox = file.indexOf('( openbox ')
+    const waited = file.search(/\[ -e \/tmp\/openbox-ready \] && break/)
+    expect(openbox).toBeGreaterThan(0)
+    expect(waited).toBeGreaterThan(openbox)
+    expect(file.indexOf('google-chrome-stable ')).toBeGreaterThan(waited)
+  })
+
+  it('entrypoint starts the proxy relay first, and only under PROXY=1', () => {
+    const file = onDisk('entrypoint.sh')
+    const block = /^if \[ "\$\{PROXY:-\}" = 1 \]; then\n[\s\S]*?^fi$/m.exec(file)?.[0] ?? ''
+    expect(block).toContain('node /opt/harness-browser/proxy-relay.mjs')
+    expect(file.indexOf(block)).toBeLessThan(file.indexOf('Xvnc :1'))
+    // The relay listens only once its start probe passed: no port, or a relay that died, is exit 4.
+    expect(block).toMatch(/\/dev\/tcp\/127\.0\.0\.1\/3128/)
+    expect(block).toMatch(/if ! \(exec 3<> \/dev\/tcp\/127\.0\.0\.1\/3128\)[^\n]*; then[^\n]*exit 4; fi/)
+    for (const flag of ['--proxy-server=http://127.0.0.1:3128', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']) {
+      expect(block, flag).toContain(flag)
+      expect(file.split(flag).length, flag).toBe(2)
+    }
+    expect(file).toMatch(/google-chrome-stable [\s\S]*"\$\{PROXY_FLAGS\[@\]\}"[\s\S]*about:blank/)
+  })
+
+  it('entrypoint starts the device script, detached, only when DEVICE is set', () => {
+    const file = onDisk('entrypoint.sh')
+    expect(file).toMatch(/^if \[ -n "\$\{DEVICE:-\}" \]; then \( node \/opt\/harness-browser\/device-inject\.mjs [^\n]*& \); fi$/m)
+    expect(file.split('device-inject.mjs').length).toBe(2)
   })
 
   it('browser-tools.json names exactly the eleven tools', () => {
