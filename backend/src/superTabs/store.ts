@@ -10,7 +10,8 @@ import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { isRetiredCommand, retiredAnswer } from './retired.js'
 import { metrics } from '../lib/metrics.js'
-import { writeReactionActivity, writeReplyActivity } from './activity.js'
+import { writeReplyActivity } from './activity.js'
+import type { ReactionTarget } from './reactions.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
@@ -37,8 +38,7 @@ import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
-import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageReactions, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery, type ThreadFacet } from './pageReads.js'
+import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery, type ThreadFacet } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
@@ -146,7 +146,6 @@ async function countersBefore(tx: Transaction, tabId: string, conversationId: st
   const newest = (list: SuperTabMessage[]) => list.length ? Math.max(...list.map(m => m.sequence)) : undefined
   return { message: newest(shown), main: newest(main), person: newest(person) }
 }
-const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
 /** How many of a project chat's newest rows are read to find the top-level line above a person's (thread replies come between). */
@@ -1898,7 +1897,8 @@ export class SuperTabStore {
         claimed = context.attachments.map(a => a.id)
       }
       if (command.type === 'buddy.propose' && command.attachmentIds?.length) ({ attachments: context.attachments, claimed, proposed } = await this.proposable(tx, original, actor, command))
-      if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command, original)
+      // Only an agent's reaction does anything, and nothing of it is kept (reactions.ts): the message must be one it may see.
+      if (command.type === 'message.react' && actor.kind === 'agent') context.reaction = await this.reactionTarget(tx, tabId, actor, command, original)
       if (command.type === 'message.edit' || command.type === 'message.delete') context.messageChange = await this.messageChangeTarget(tx, tabId, actor, command, original)
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
         context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
@@ -2187,12 +2187,6 @@ export class SuperTabStore {
         if (next) await moveChatMark(tx as unknown as PrismaClient, { tabId, state: effects.state, personId: actor.userId, conversationId: command.conversationId, next, now: context.now })
       }
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
-      if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command, context.now)
-      // A task's agent's 👀 and ✅ on the message that asked for it (taskLine.ts), as that agent's own reaction.
-      for (const r of effects.reactions ?? []) {
-        await this.writeReaction(tx, tabId, { kind: 'agent', agentId: r.agentId, machineOwnerId: '' },
-          { type: 'message.react', conversationId: r.conversationId, messageId: r.messageId, emoji: r.emoji, on: true }, context.now)
-      }
       // The cleaned text (commands.ts WORDS), never the command as it was sent (security review 2 of #2967).
       if (effects.messageEdit) {
         await tx.superTabMessage.update({ where: { id: effects.messageEdit.messageId }, data: { text: effects.messageEdit.text, editedAt: new Date(context.now) } })
@@ -3001,8 +2995,8 @@ export class SuperTabStore {
       data: { status: 'answered', answeredAt: new Date(now), holdReason: null, holdSince: null } }))
   }
 
-  /** The message a reaction names, when it is in that conversation and this actor may see it, and whether the actor already
-   *  reacted to it with that emoji. An agent-only notice is its recipient's alone. */
+  /** The message a reaction names, when it is in that conversation and this actor may see it. An agent-only notice is its
+   *  recipient's alone. */
   private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand, state: SuperTabState): Promise<ReactionTarget | undefined> {
     const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
       select: { id: true, source: true, recipientIds: true, thread: true, buddySession: true, author: true, buddyProject: true } })
@@ -3013,19 +3007,7 @@ export class SuperTabStore {
     const reader = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
     if (group && !sessionReadsRow(reader, group, state)(message)) return undefined
     if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
-    return { messageId: message.id, reacted: !!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } }) }
-  }
-
-  /** Writes or removes the actor's reaction row. The same reaction twice keeps one row: its id is derived. */
-  private async writeReaction(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand, now: number) {
-    const id = reactionId(tabId, actor, command)
-    const actorId = actor.kind === 'person' ? actor.userId : actor.agentId
-    // The message author's Activity row goes and comes with the reaction (activity.ts).
-    await writeReactionActivity(tx, { tabId, reactionId: id, conversationId: command.conversationId, messageId: command.messageId,
-      actor: { kind: actor.kind, id: actorId }, emoji: command.emoji, on: command.on, now })
-    if (!command.on) return void await tx.superTabReaction.deleteMany({ where: { id } })
-    await tx.superTabReaction.upsert({ where: { id }, update: {}, create: { id, tabId, conversationId: command.conversationId,
-      messageId: command.messageId, actorKind: actor.kind, actorId, emoji: command.emoji } })
+    return { messageId: message.id }
   }
 
   /** The message `message.edit` or `message.delete` names (messageEdits.ts), found as a reaction's is (reactionTarget): in that
@@ -3617,7 +3599,6 @@ export class SuperTabStore {
     const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
     if (!forward) page.reverse()
     const rowsOf = replica ? this.replica : tx
-    const reactions = page.length ? reactionCounts(state, await pageReactions(rowsOf, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(rowsOf, tabId, page.map(m => m.id)) : []
     // What the page's rows point at that this reader may not see (an agent-only note to someone else; for a Buddy, a routing
     // row): such a reply reads as a message of its own, with no thread or reply-to naming it and no reply line for it
@@ -3661,9 +3642,10 @@ export class SuperTabStore {
       }
     }
     const byMessage = deliveriesByMessage(deliveries)
-    return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    // `reactions` is always empty (2026-11-09): nothing shows one, and an app from before reads the field (reactions.ts).
+    return { messages: linked.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: [],
       deliveries: (byMessage.get(m.id) ?? []).filter(d => shownTo(m, d)).sort(receiptOrder(m)) })), next, threads, ...(context ? { context } : {}),
-      // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
+      // A poll for new messages learns here that an edit or a delete changed a message it already shows (messageEdits.ts).
       reactionSeq: group.reactionSeq ?? 0 }
   }
 
@@ -4768,21 +4750,6 @@ export class SuperTabStore {
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
       // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
-      // #3609: only a confirmed native receipt means the PM has received a person's words. Keep the eyes
-      // and receipt in one transaction, using the same identity as a manual reaction; eyes never answers the ask.
-      if (action.type === 'ack' && !action.uncertain && !delivery.deliveredAt && row && !row.deletedAt
-        && delivery.authorKind === 'person' && ledProject(state, agentId)) {
-        const actor: Actor = { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }
-        const command: ReactCommand = { type: 'message.react', conversationId: group.id, messageId: row.id, emoji: 'eyes', on: true }
-        if (!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } })) {
-          // Delivery authority uses light groups. Read the complete one before updating, so no task fields are lost.
-          const stored = await tx.swarmGroup.findUniqueOrThrow({ where: { id: partId(tabId, group.id) } })
-          const data = stored.data as unknown as Conversation
-          await this.writeReaction(tx, tabId, actor, command, this.now())
-          await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: group.id, seen: stored.version,
-            data: { ...data, reactionSeq: (data.reactionSeq ?? 0) + 1 } }, stamp)
-        }
-      }
       // An agent reads people by name, never email (task #2954).
       const named = row && namesPerson(row) ? rowForAgent(state, lazyUsernames(state), row) : row
       const shown = named && isBuddy(target) ? rowForBuddy(named) : named

@@ -826,12 +826,12 @@ server:
 A server with no attachments bucket refuses uploads; the eight pictures still
 work.
 
-People and agents react to a message with a small set: 👍 🎉 ❤️ 😄 👀 🚀.
-Counts show under the message, with the reader's own highlighted and the names
-on hover. Reacting twice keeps one reaction, and reacting again takes it back.
-Someone who leaves the Swarm drops out of the counts. A reaction changes its
-conversation, so other readers see it within one poll, also when new messages
-arrive in the same poll.
+Swarm v4 has no reactions (2026-11-09): nothing stores, counts or shows one,
+and the server adds no 👀 or ✅ of its own. A person's reaction from an older
+app is answered as ignored, and every message reads `reactions: []`. An
+agent's reaction still acknowledges a message without a post: it settles that
+agent's delivery of it and, from the project's PM, the ask it owes. An
+acknowledgement-only post ("on it") is still refused.
 
 When linked work is marked Done (a group with a pull request, marked Done after
 its merge), the project chat shows one celebration line. It names the person

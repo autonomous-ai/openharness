@@ -59,7 +59,7 @@ import { cloneData } from './cloneData.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
-import { react, reactionSchema, type ReactionTarget } from './reactions.js'
+import { reactionSchema, type ReactionTarget } from './reactions.js'
 import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
 import { githubRepository } from '../github/repository.js'
 import { shippedAt } from './ship.js'
@@ -103,6 +103,8 @@ const ONLY_CANDIDATE = 'Only candidate that can run this task.'
 /** How long a Swarm invitation stays open; its sent time is its expiry minus this (store.ts invite.accept). */
 export const SWARM_INVITATION_MS = 7 * 86_400_000
 
+/** What a person's reaction is answered with: an older app still offers one. */
+export const REACTIONS_GONE = 'Swarm no longer has reactions. Nothing was done.'
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
@@ -731,7 +733,7 @@ export interface CommandContext {
   voiceWords?: Record<string, string>
   /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
   avatarUpload?: AvatarUpload
-  /** The message `message.react` names, read by the store (reactions.ts). */
+  /** The message an agent's `message.react` names, read by the store (reactions.ts). */
   reaction?: ReactionTarget
   /** The message `message.edit` or `message.delete` names, read by the store (messageEdits.ts). */
   messageChange?: MessageChangeTarget
@@ -4430,17 +4432,23 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
       break
     case 'message.react': {
-      // A reaction joins nobody to a task: only where the agent already is (project instructions, phase 4), or in its project's
-      // chat while it works in the project, joining nothing there either (River, 2026-11-04, #2924).
+      // Nothing of a reaction is kept or shown (reactions.ts). A person's does nothing.
+      if (actor.kind !== 'agent') {
+        Object.assign(result, { changed: false, ignored: true, note: REACTIONS_GONE })
+        break
+      }
+      // An agent's joins it to nothing: only where it already is (project instructions, phase 4), or in its project's chat while it
+      // works in the project (River, 2026-11-04, #2924).
       const group = open(state, command.conversationId)
-      if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)
+      if (!group.agentIds.includes(actor.agentId)
         && !(projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId))) {
         fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
       }
-      result.changed = react(group, command.messageId, command.on, context.reaction)
-      if (actor.kind === 'agent') settleReaction(state, group, actor.agentId, command.messageId, command.on)
-      // A reaction is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
-      if (actor.kind === 'agent' && command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
+      if (context.reaction?.messageId !== command.messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
+      result.changed = false
+      settleReaction(state, group, actor.agentId, command.messageId, command.on)
+      // It is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
+      if (command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
       break
     }
     case 'message.edit':

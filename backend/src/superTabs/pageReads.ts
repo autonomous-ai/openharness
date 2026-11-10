@@ -1,7 +1,6 @@
 import type { Prisma, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import { routingRow } from './buddies.js'
 import { ms } from './parts/light.js'
-import type { ReactionRow } from './reactions.js'
 import { agentOnly, stableId, type Author } from './model.js'
 import { readBy } from './parts/indexed.js'
 import { prismaRow } from './rawRows.js'
@@ -11,12 +10,6 @@ type Transaction = Prisma.TransactionClient
 // A page's rows are read by a plain {tabId, messageId: {$in}} match. Prisma sends `messageId: { in }` as an $expr $or: Mongo
 // cannot bound an index by it, and on 2026-10-28 each page read scanned every delivery of its Swarm (prod at 100% CPU).
 // Each read here uses its tabId+messageId index and examines only the rows it returns (integration/superTabIndexes.test.ts).
-
-/** The reactions on one page of messages. */
-export async function pageReactions(tx: Transaction, tabId: string, messageIds: string[]): Promise<ReactionRow[]> {
-  return await tx.superTabReaction.aggregateRaw({ pipeline: [{ $match: { tabId, messageId: { $in: messageIds } } },
-    { $project: { _id: 0, messageId: 1, emoji: 1, actorKind: 1, actorId: 1 } }] }) as unknown as ReactionRow[]
-}
 
 export type PageDelivery = Pick<SuperTabDelivery, 'id' | 'messageId' | 'agentId' | 'status' | 'receipt' | 'holdReason' | 'holdSince'
   | 'claimFailingSince' | 'claimFailures' | 'deliveredAt' | 'answeredAt' | 'createdAt' | 'updatedAt'>

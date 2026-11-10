@@ -272,112 +272,59 @@ describe('avatars in the attachments bucket', () => {
   })
 })
 
+// Reactions are gone (anh Dee, 2026-11-09): nothing stores, counts or shows one (reactions.ts). An agent's still acknowledges a
+// message, so it settles that agent's delivery (integration/superTabs.test.ts), and is refused where the agent cannot see.
 describe('reactions', () => {
   const post = async (tab: string, text = 'Shipped the fix') =>
     (await run(tab, { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId as string
-  const react = (tab: string, messageId: string, on: boolean, user = owner, emoji: 'tada' | 'heart' = 'tada', operationId = randomUUID()) =>
-    run(tab, { type: 'message.react', conversationId: 'lead', messageId, emoji, on }, user, undefined, operationId)
-  const page = async (tab: string, user = owner) =>
-    (await read(tab, user, 'conversations/lead/messages')).body.data.messages as Array<{ id: string; reactions: Array<{ emoji: string; count: number }> }>
-  const countsOf = async (tab: string, messageId: string, user = owner) => (await page(tab, user)).find(m => m.id === messageId)!.reactions
+  const react = (tab: string, messageId: string, on: boolean, user = owner, emoji: 'tada' | 'heart' = 'tada') =>
+    run(tab, { type: 'message.react', conversationId: 'lead', messageId, emoji, on }, user)
+  const page = async (tab: string, user = owner, conversationId = 'lead') =>
+    (await read(tab, user, `conversations/${conversationId}/messages`)).body.data as { messages: Array<{ id: string; reactions: unknown[] }>; reactionSeq: number }
 
-  it('adds and removes idempotently, and bumps the group only on a change', async () => {
+  it('answers a person\'s reaction as ignored, stores and moves nothing, and still refuses a reader outside the Swarm', async () => {
     const tab = await swarm()
     const messageId = await post(tab)
-    const seq = async () => ((await read(tab, owner)).body.data.groups as Array<{ key: string; data: { reactionSeq?: number } }>)
-      .find(g => g.key === 'lead')!.data.reactionSeq ?? 0
-    expect((await react(tab, messageId, true)).result).toMatchObject({ changed: true })
-    expect((await react(tab, messageId, true)).result).toMatchObject({ changed: false })
-    expect(await countsOf(tab, messageId)).toEqual([{ emoji: 'tada', count: 1, by: [{ kind: 'person', id: owner.sub }] }])
-    expect(await seq()).toBe(1)
-    await react(tab, messageId, false)
-    expect((await react(tab, messageId, false)).result).toMatchObject({ changed: false })
-    expect(await countsOf(tab, messageId)).toEqual([])
-    expect(await seq()).toBe(2)
-  })
-
-  it('keeps one row when the same reaction arrives twice at once, and counts two reactors racing', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    await Promise.all([react(tab, messageId, true), react(tab, messageId, true), react(tab, messageId, true, peer)])
-    expect(await countsOf(tab, messageId)).toMatchObject([{ emoji: 'tada', count: 2 }])
-    expect(await db.superTabReaction.count({ where: { tabId: tab, messageId } })).toBe(2)
-  })
-
-  it('answers a retried operation with its first result', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    const operationId = randomUUID()
-    const first = await react(tab, messageId, true, owner, 'tada', operationId)
-    expect((await react(tab, messageId, true, owner, 'tada', operationId)).result).toEqual(first.result)
-  })
-
-  it('drops a member who left from the counts, and refuses a reader outside the Swarm', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    await react(tab, messageId, true, peer, 'heart')
-    await react(tab, messageId, true, owner, 'heart')
-    await run(tab, { type: 'member.remove', userId: peer.sub })
-    expect(await countsOf(tab, messageId)).toEqual([{ emoji: 'heart', count: 1, by: [{ kind: 'person', id: owner.sub }] }])
+    const before = await page(tab, peer)
+    for (const [on, user] of [[true, owner], [true, peer], [false, peer]] as const) {
+      expect((await react(tab, messageId, on, user)).result).toMatchObject({ changed: false, ignored: true })
+    }
+    expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
+    expect(await page(tab, peer)).toEqual(before)
     await expect(react(tab, messageId, true, outsider)).rejects.toMatchObject({ status: 403 })
-    await expect(react(tab, messageId, true, peer)).rejects.toMatchObject({ status: 403 })
   })
 
-  it('tells a poll for new messages that reactions changed, so it reads the page again', async () => {
+  it('shows no reaction stored before, on any page', async () => {
     const tab = await swarm()
     const messageId = await post(tab)
-    const poll = async () => (await read(tab, peer, 'conversations/lead/messages?after=1000000')).body.data as { messages: unknown[]; reactionSeq: number }
-    expect(await poll()).toEqual({ messages: [], next: null, reactionSeq: 0, threads: [] })
-    await react(tab, messageId, true)
-    expect((await poll()).reactionSeq).toBe(1)
+    await db.superTabReaction.create({ data: { id: `${messageId}-r`, tabId: tab, conversationId: 'lead', messageId, actorKind: 'person', actorId: peer.sub, emoji: 'heart' } })
+    expect((await page(tab, owner)).messages.find(m => m.id === messageId)!.reactions).toEqual([])
   })
 
-  it('refuses a message from another conversation or another Swarm', async () => {
-    const tab = await swarm()
-    const other = await swarm()
-    const elsewhere = await post(other)
-    await expect(react(tab, elsewhere, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    const group = (await run(tab, { type: 'conversation.create', title: 'Side', brief: 'Side work.', checks: [] })).result.conversationId as string
-    const side = (await run(tab, { type: 'message.send', conversationId: group, text: 'here', replyTo: null, recipientIds: [] })).result.messageId as string
-    await expect(react(tab, side, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-  })
-
-  // Agents acknowledge with reactions, as Slack bots do (the swarm skills): 👀 started, ✅ done, 🚀 merged.
   const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
   const agentIn = async (tab: string, conversationId: string, name: string, lead = false) =>
     (await run(tab, { type: 'agent.add', conversationId, machineId: 'host', harnessId: randomUUID(), name, configuration: config, lead })).result.agentId as string
   const agentReact = (tab: string, conversationId: string, messageId: string, agentId: string, emoji: 'eyes' | 'check' | 'rocket', on = true) =>
     run(tab, { type: 'message.react', conversationId, messageId, emoji, on }, owner, agentId)
 
-  it('shows an agent\'s 👀 and then ✅ on the message it took, to every reader of the conversation', async () => {
+  it('keeps an agent\'s reaction nowhere and shows it to nobody', async () => {
     const tab = await swarm()
     // Kai coordinates: the project chat holds only its coordinator among agents (#2207).
     const builder = await agentIn(tab, 'lead', 'Kai', true)
     const messageId = await post(tab, 'Kai, please add avatars.')
-    await agentReact(tab, 'lead', messageId, builder, 'eyes')
-    expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: builder }] }])
-    await agentReact(tab, 'lead', messageId, builder, 'eyes', false)
-    await agentReact(tab, 'lead', messageId, builder, 'check')
-    expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'check', count: 1, by: [{ kind: 'agent', id: builder }] }])
+    const before = await page(tab, peer)
+    for (const emoji of ['eyes', 'check'] as const) expect((await agentReact(tab, 'lead', messageId, builder, emoji)).result).toMatchObject({ changed: false })
+    expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
+    expect(await page(tab, peer)).toEqual(before)
   })
 
-  it('privacy: an agent reacts only where it takes part, never on another agent\'s private notice, and a reader outside a private project sees none of it', async () => {
+  it('privacy: refuses an agent\'s reaction where it takes no part, and on another agent\'s private notice', async () => {
     const tab = await swarm()
     const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result as
       { projectId: string; conversationId: string }
     await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [owner.sub] })
-    const pm = await agentIn(tab, conversationId, 'Secret PM', true)
+    await agentIn(tab, conversationId, 'Secret PM', true)
     const secret = (await run(tab, { type: 'message.send', conversationId, text: 'Ship the secret.', replyTo: null, recipientIds: [] })).result.messageId as string
-    await agentReact(tab, conversationId, secret, pm, 'rocket')
-    // The project's own reader sees it; a member outside the project reads neither the conversation nor its counter.
-    expect((await read(tab, owner, `conversations/${conversationId}/messages`)).body.data.messages
-      .find((m: { id: string }) => m.id === secret).reactions).toEqual([{ emoji: 'rocket', count: 1, by: [{ kind: 'agent', id: pm }] }])
-    const outside = await read(tab, peer, `conversations/${conversationId}/messages`)
-    expect(outside.status).toBe(404)
-    expect(outside.text).not.toContain(secret)
-    const parts = await read(tab, peer)
-    expect(parts.text).not.toContain(conversationId)
-    // An agent outside the private project is not even told it exists, and another agent's private notice is not there for it to mark.
     // Both agents share a task, as the project chat holds only its coordinator among agents (#2207).
     const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.', checks: [] })).result.conversationId as string
     const builder = await agentIn(tab, group, 'Kai')
@@ -387,7 +334,7 @@ describe('reactions', () => {
       agentOnly: true }, owner, lead)).result.messageId as string
     await expect(agentReact(tab, group, notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await agentReact(tab, group, notice, lead, 'eyes')
-    expect(((await read(tab, peer, `conversations/${group}/messages`)).body.data.messages as Array<{ id: string }>).map(m => m.id)).not.toContain(notice)
+    expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
   })
 })
 
