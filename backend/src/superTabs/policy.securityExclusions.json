@@ -105,12 +105,13 @@
    ]
   },
   {
-   "reason": "Guards that are not the Buddy, rule, devices, PM or TLS guard, or one under backend/src/superTabs (Redis, turn, launch, menu, surface cache, JSON, companion guards).",
+   "reason": "Guards that are not the Buddy, rule, devices, PM or TLS guard, or one under backend/src/superTabs (Redis, turn, launch, menu, surface cache, JSON, companion guards), and the test that the removed shell guard stays gone (#3720).",
    "files": [
     "backend/src/lib/redisGuard.test.ts",
     "backend/src/lib/redisGuard.ts",
     "backend/src/lib/shortTurnGuard.test.ts",
     "backend/src/lib/shortTurnGuard.ts",
+    "cli/e2e/swarmNoShellGuard.e2e.ts",
     "cli/src/core/turns/shortTurnGuard.spec.ts",
     "cli/src/core/turns/shortTurnGuard.ts",
     "cli/src/engines/kit/nativeLaunchGuard.spec.ts",
