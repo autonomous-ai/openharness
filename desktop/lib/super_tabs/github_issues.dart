@@ -208,6 +208,9 @@ class SwarmGitHub {
   /// At most this many open pull requests are read for a board: newest activity first, a team's open ones at once.
   static const pullsMax = 50;
 
+  /// At most this many taken tasks are read ([taken]): a crew is a handful, and each holds one or two.
+  static const takenMax = 100;
+
   final _lists = <String, List<SwarmIssue>>{};
   final _pulls = <String, Map<int, SwarmPull>>{};
   final _threads = <String, SwarmIssueThread>{};
@@ -266,6 +269,44 @@ class SwarmGitHub {
       _lists.remove(_lists.keys.first);
     }
     return list;
+  }
+
+  /// The tasks someone is on in [repository]: its open issues labelled `status:taken`, by the agent each is for (its
+  /// `builder:<name>` label, lower case), the one with the newest activity when an agent has two. One small GraphQL read of at
+  /// most [takenMax] issues, which Your Team's rows ask once a minute.
+  Future<Map<String, int>> taken(String repository) async {
+    final (owner, name) = _split(repository);
+    final answer = await _call([
+      'api',
+      'graphql',
+      '-f',
+      'query=$_takenQuery',
+      '-f',
+      'owner=$owner',
+      '-f',
+      'name=$name',
+      '-F',
+      'first=$takenMax',
+    ], repository);
+    final byAgent = <String, int>{};
+    for (final row in _nodes(_data(answer, ['repository', 'issues']))) {
+      if (row is! Map || row['number'] is! int) continue;
+      final labels = [
+        for (final label in _nodes(row['labels']))
+          if (label is Map && label['name'] is String) label['name'] as String,
+      ];
+      // The read asks for taken issues only; an answer that holds another is not trusted to be taken.
+      if (!labels.contains('status:taken')) continue;
+      for (final label in labels) {
+        if (label.startsWith('builder:')) {
+          byAgent.putIfAbsent(
+            label.substring(8).trim().toLowerCase(),
+            () => row['number'] as int,
+          );
+        }
+      }
+    }
+    return byAgent;
   }
 
   /// [repository]'s open pull requests, by the task each is for ([SwarmPull.tasks]); a task with two has the one with the
@@ -475,6 +516,13 @@ class SwarmGitHub {
       r'repository(owner:$owner,name:$name){issues(first:$first,after:$after,'
       r'states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){'
       'pageInfo{hasNextPage endCursor} nodes{$_issueFields comments{totalCount}}}}}';
+
+  /// The open issues someone has taken ([taken]): each one's number and the names of its labels.
+  static const _takenQuery =
+      r'query($owner:String!,$name:String!,$first:Int!){'
+      r'repository(owner:$owner,name:$name){issues(first:$first,'
+      r'states:OPEN,labels:["status:taken"],orderBy:{field:UPDATED_AT,direction:DESC}){'
+      'nodes{number labels(first:100){nodes{name}}}}}}';
 
   /// A repository's open pull requests for its board ([pulls]): each one's head, checks, conflict and labels, the issues it
   /// closes, and its newest comments, where lampOS's readers write `READ-OK <sha>` as a first line.

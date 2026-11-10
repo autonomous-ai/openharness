@@ -519,14 +519,16 @@ void main() {
           words,
           startsWith('GitHub is limiting requests. Reading again at '),
         );
-        final reads = github.calls.length;
+        // The feed's reads: the left pane reads the project's tasks with the same gh, on its own clock.
+        int feedReads() => github.reads('issues/comments');
+        final reads = feedReads();
         // Nothing is asked for the 9 minutes GitHub asked it to wait.
         await tester.pump(const Duration(minutes: 9));
-        expect(github.calls.length, reads);
+        expect(feedReads(), reads);
         github.failure = null;
         await tester.pump(const Duration(minutes: 2));
         await tester.pumpAndSettle();
-        expect(github.calls.length, greaterThan(reads));
+        expect(feedReads(), greaterThan(reads));
         expect(key('swarm-feed-state'), findsNothing);
         expect(key('swarm-github-row'), findsWidgets);
       },
