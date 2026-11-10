@@ -546,15 +546,20 @@ class _BoardSkeleton extends StatelessWidget {
 }
 
 /// The face of the agent named [name] in this Swarm (a `builder:<name>` label, or the name a comment is signed with),
-/// matched without case; a face drawn from the name when the Swarm has no such agent.
+/// matched without case and with a hyphen for a space; a face drawn from the name when the Swarm has no such agent.
 Widget swarmAgentFace(
   SuperTabController controller,
   String name, {
   double size = 22,
 }) {
   final key = name.toLowerCase();
+  // Read as Harness writes a builder label (cli superTabs/githubMentions.ts builderLabel): in lower case, with a hyphen for each
+  // run of spaces, so the label `builder:first-builder` and a comment signed "First builder" are both the agent "First builder".
+  String asLabel(String text) =>
+      text.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '-');
+  final wanted = asLabel(name);
   final agent = controller.snapshot?.agents
-      .where((a) => (a.displayName ?? a.name).toLowerCase() == key)
+      .where((a) => asLabel(a.displayName ?? a.name) == wanted)
       .firstOrNull;
   if (agent != null) {
     return SuperTabAvatar.agent(agent, size: size, engineBadge: false);
