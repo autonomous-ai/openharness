@@ -509,13 +509,13 @@ void main() {
     },
   );
 
-  testWidgets('Machines + opens Add your computers', (tester) async {
+  testWidgets('Add machine opens Add your computers', (tester) async {
     final (:f, :c) = await swarm((_) {});
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: SizedBox(
-            width: 300,
+            width: 800,
             height: 400,
             child: SuperTabMachines(
               controller: c,
@@ -528,7 +528,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Add machine'));
+    await tester.tap(find.byKey(const ValueKey('super-manage-add-machine')));
     await tester.pumpAndSettle();
     expect(find.text('Add your computers'), findsOneWidget);
     expect(find.byKey(const ValueKey('add-computer-m')), findsOneWidget);

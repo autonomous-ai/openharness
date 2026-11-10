@@ -17,7 +17,6 @@ import '../state/swarm.dart';
 import 'attachment_upload.dart';
 import 'actions.dart';
 import 'controller.dart';
-import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'new_repository.dart';
@@ -537,9 +536,10 @@ class SuperTabLaunch {
                   folder,
                 ),
         },
+        // A MacBook may sleep with its lid closed.
         maySleep:
-            superTabMachineSymbol(device is String ? device : null) ==
-            'laptopcomputer',
+            device is String &&
+            device.trim().toLowerCase().startsWith('macbook'),
         own: own,
         owner: own
             ? null
