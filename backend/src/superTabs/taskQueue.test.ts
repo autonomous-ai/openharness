@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createSuperTab, type Conversation } from './model.js'
-import { projectsOf } from './projects.js'
-import { placeAfter, queueKey, queueOrder, queueSiblings } from './taskQueue.js'
+import { placeAfter, queueKey, queueOrder } from './taskQueue.js'
 
 // A project's Next up (Tasks view, #2569): one sparse rank per task, so a move rewrites only the task moved.
 const task = (id: string, number: number, queueRank?: number) => ({ id, number, ...queueRank === undefined ? {} : { queueRank } })
@@ -44,18 +42,5 @@ describe('the Next-up queue order', () => {
     const once = placeAfter(tasks, 'c', 'a')
     const after = tasks.map(t => ({ ...t, ...once.has(t.id) ? { queueRank: once.get(t.id)! } : {} }))
     expect(placeAfter(after, 'c', 'a')).toEqual(once)
-  })
-})
-
-// Proposal cards are gone (2026-11-10), but the cards made before are stored: one its PM never accepted or reshaped (Later too) is
-// still no task, so nothing queues it or hands it out.
-describe('a stored proposal card in Next up', () => {
-  it('stays out until its PM accepted or reshaped it, as a task with no card is in', () => {
-    const state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
-    const group = (id: string, number: number, proposal?: Conversation['proposal']): Conversation => ({ id, number, title: id, leadId: null, agentIds: [],
-      archived: false, brief: 'Keep drafts.', checks: [], assignment: null, lastMessageSequence: 0, ...proposal ? { proposal } : {} })
-    state.conversations.push(group('undecided', 2, { senders: [] }), group('later', 3, { senders: [], decision: { kind: 'later', reason: 'PM' } }), group('accepted', 4, { senders: [], decision: { kind: 'accept', reason: 'PM' } }),
-      group('reshaped', 5, { senders: [], decision: { kind: 'reshape', reason: 'PM' } }), group('task', 6))
-    expect(queueSiblings(state, projectsOf(state)[0]!).map(c => c.id)).toEqual(['accepted', 'reshaped', 'task'])
   })
 })

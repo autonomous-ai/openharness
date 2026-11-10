@@ -34,7 +34,7 @@ export function bindTaskCard(group: Conversation, brief: MessageDraft): void {
 export function bindPullRequestCards(group: Conversation, message: MessageDraft, repositoryUrl?: string | null): void {
   if (message.thread || agentOnly(message.source, message.recipients) || !cardable(message)) return
   const known = new Set(group.cards?.pullRequests?.map(card => card.url))
-  const fresh = pullRequestLinks(message.text, repositoryUrl).filter(url => !known.has(url) && !group.unlinkedPullRequests?.some(entry => entry.url === url))
+  const fresh = pullRequestLinks(message.text, repositoryUrl).filter(url => !known.has(url))
   if (fresh.length) group.cards = { ...group.cards, pullRequests: [...group.cards?.pullRequests ?? [], ...fresh.map(url => ({ url, messageId: message.id }))] }
 }
 

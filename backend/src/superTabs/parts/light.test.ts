@@ -59,13 +59,10 @@ const conversation: Required<Conversation> = {
   messageSeq: 0,
   notBefore: '2026-12-04',
   number: 1,
-  paused: { by: 'person:owner', at: 1, reason: 'Wait' },
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
   process: 'full',
   projectId: 'p',
-  proposal: { senders: [], decision: { kind: 'accept', reason: 'r' }, mergedInto: 'g' },
-  proposals: [],
   pullRequestUrls: [],
   queueRank: 1.5,
   reactionSeq: 0,
@@ -79,9 +76,7 @@ const conversation: Required<Conversation> = {
   stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
-  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
   title: 't',
-  unlinkedPullRequests: [],
   writers: [],
 }
 

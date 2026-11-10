@@ -44,7 +44,7 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'taskApproval' | 'talkedAt' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'> & {
   /** A task's lane, as the crew dispatch hands it out (dispatch.ts laneOf: its PM's, else its owned paths'), null when no
    *  lane owns its paths; absent on a chat or a step. From the group alone, so a change read's changed tasks keep every lane's
    *  count whole on the reader's side (task #3400). Absent from an older backend. */
@@ -293,8 +293,6 @@ export interface HostAgentRow {
   /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
    *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
   buddyChatId?: string | null
-  /** Main Buddy whose session may rest and resume in place (#3824). */
-  buddySleepManaged?: true
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
@@ -338,8 +336,6 @@ export interface HostPool {
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
-  /** Asks for positive idle Buddy activity in fresh machine readings (#3824). */
-  buddySleepWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

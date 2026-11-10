@@ -39,7 +39,6 @@ export const GROUP_FIELDS = {
     'kind',
     'leadId',
     'projectId',
-    'proposal',
     'reviewOf',
   ],
   whenRunning: [
@@ -84,11 +83,9 @@ export const GROUP_FIELDS = {
     'messageSeq',
     'notBefore',
     'number',
-    'paused',
     'pin',
     'priority',
     'process',
-    'proposals',
     'pullRequestUrls',
     'queueRank',
     'reactionSeq',
@@ -101,7 +98,6 @@ export const GROUP_FIELDS = {
     'stepUp',
     'stuck',
     'talkedAt',
-    'unlinkedPullRequests',
     'writers',
   ],
 } as const

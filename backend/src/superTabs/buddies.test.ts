@@ -805,11 +805,9 @@ describe('a person\'s private chat with their own agent (anh Dee, 11-07, task #4
 describe('a Buddy chat as readers get it', () => {
   it('names its kind and owner and carries no audience, so an app from before Buddies never takes it for Chat with PM', () => {
     const f = setup()
-    group(f, f.chat).proposals = ['ask']
     const view = groupView(group(f, f.chat), new Set()) as unknown as Record<string, unknown>
     expect(view).toMatchObject({ id: f.chat, kind: 'buddy', buddyOwnerId: 'peer', agentIds: ['buddy'] })
     expect(view).not.toHaveProperty('audience')
-    expect(view).not.toHaveProperty('proposals')
     expect(groupView(group(f, f.pmChat), new Set())).toHaveProperty('audience')
   })
 })

@@ -26,7 +26,7 @@ export const RETIRED_COMMANDS = [
   // A task's pull request taken off it (2026-11-10): a task is the project's GitHub issue, which links its own.
   'conversation.unlink',
   // The Board way of working and task approval (2026-11-10): an older Desktop's Board settings, Accept and Decline, and its PM's
-  // suggestion. A project switched before keeps its stored settings, read where they apply (boardRights.ts).
+  // suggestion.
   'project.process', 'project.boardMode', 'project.canChat', 'project.decider', 'member.approvalMode', 'task.suggest', 'task.approve', 'task.reject',
   // Proposals (2026-11-10): a person asks an agent in their 1:1 chat, and a task is the project's GitHub issue.
   'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close', 'buddy.propose',

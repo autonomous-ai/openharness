@@ -121,8 +121,6 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   quotaReasons: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), z.string().min(1).max(300)).refine(v => Object.keys(v).length <= 8).optional(),
   runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
-  /** Running Buddy sessions positively idle in this reading; absent is unknown, never idle (#3824). */
-  idleBuddyHarnessIds: z.array(z.string().max(160)).max(1000).optional(),
   /** Of the stopped ones, those this machine's idle cleanup closed (cli superTabs/cleanupCloses.ts): only such a session is
    *  refused new work (closedAgents.ts sessionClosed), never one stopped by Change agent or a restart (review of #2953).
    *  Absent from hosts before it. */
@@ -193,7 +191,7 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
-  const { harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
+  const { harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
@@ -202,7 +200,6 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
   const refused = refusedStarts?.filter(r => opts.refusable?.(r.startId) ?? false)
   const engines = contributedEngines(pool, observation)
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
-    ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
     // Each engine's default account alone: a PM runs on no other (pmAccount.ts), whatever a CLI of the last 30 days reports.
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine) && p.id === defaultProfileId(pool.machineId, p.engine)) } : {}),
     ...(progress ? { harnessProgress: progress } : {}),
@@ -226,8 +223,7 @@ export function readingOnly(previous: StoredReading | undefined, next: StoredRea
   if (!previous || next.stoppedReservations?.length || next.refusedStarts?.length) return false
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.closedHarnessIds ?? [], next.closedHarnessIds ?? [])
-    || !sameSet(previous.preparingStartIds, next.preparingStartIds)
-    || !sameSet(previous.idleBuddyHarnessIds, next.idleBuddyHarnessIds)) return false
+    || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
   const before = previous.harnessProgress, after = next.harnessProgress
   return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)

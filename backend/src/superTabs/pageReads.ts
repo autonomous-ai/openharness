@@ -96,19 +96,11 @@ export async function agentGatheredCount(tx: Transaction, tabId: string, agentId
 
 /** An agent's open deliveries, oldest first and each conversation's tied rows in its order: one indexed read, and the tied
  *  messages' sequences only when there are ties. */
-export async function agentOpenDeliveries(tx: Transaction, tabId: string, agentId: string, prioritized = false): Promise<SuperTabDelivery[]> {
+export async function agentOpenDeliveries(tx: Transaction, tabId: string, agentId: string): Promise<SuperTabDelivery[]> {
   // By the agent index (parts/indexed.ts): Prisma sent `status: { in }` as an $expr $or, planned as one scan per status.
   const rows = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [{ $match: { tabId, agentId, status: { $in: [...OPEN_DELIVERY] } } },
     { $sort: { createdAt: 1 } }, { $limit: 100 }])
-  const priority = prioritized ? await readBy(tx, 'SuperTabDelivery', 'agentProposal', [
-    { $match: { tabId, agentId, status: { $in: [...OPEN_DELIVERY] }, inputPriority: { $gte: 0 } } },
-    { $sort: { inputPriority: 1, createdAt: 1 } }, { $limit: 100 },
-  ]) : []
-  const joined = [...new Map([...priority, ...rows].map(r => [String(r._id), r])).values()]
-  const ordered = await inConversationOrder(tx, tabId, joined.map(row => prismaRow<SuperTabDelivery>('SuperTabDelivery', row)))
-  // Old notices remain readable; missing priority means a normal server notice, below P0.
-  if (prioritized) ordered.sort((a, b) => (a.inputPriority ?? 1) - (b.inputPriority ?? 1) || a.createdAt.getTime() - b.createdAt.getTime())
-  return ordered
+  return inConversationOrder(tx, tabId, rows.map(row => prismaRow<SuperTabDelivery>('SuperTabDelivery', row)))
 }
 
 /** An agent's open deliveries, read by creation time, with each conversation's tied rows put in its message order. One

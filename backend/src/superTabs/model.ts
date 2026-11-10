@@ -14,14 +14,8 @@ import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
-/** A requester's approval of a task, until Swarm v4 retired task approval (2026-11-10): still stored, and read where a Member
- *  took only what its person accepted (members.ts). Goes with the old Swarm data's one-time drop. */
-interface TaskApproval { personId: string; generation: string; state: 'proposal' | 'approved' | 'rejected'; createdAt: number
-  decidedAt?: number; suggestedAgentId?: string; reason?: string }
 
 export interface Person {
-  /** Own task decisions until Swarm v4 retired task approval (2026-11-10); absent kept Auto approve. Still stored and read (TaskApproval). */
-  approvalMode?: 'autoApprove' | 'review'
   id: string
   email: string
   role: Role
@@ -397,8 +391,6 @@ export function renderWorkTask(task: WorkTask): string {
 }
 
 export interface Conversation {
-  /** Person decision, separate from execution status for old clients; never sent since Swarm v4 (read/views.ts). */
-  taskApproval?: TaskApproval
   id: string
   /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), a person's Buddy chat in a
    *  project (buddies.ts), or their one Buddy chat for the whole Swarm, with no project (`swarm-buddy`, buddies.ts
@@ -438,9 +430,6 @@ export interface Conversation {
   talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
-  /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
-   *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
-  unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
   /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
@@ -471,13 +460,6 @@ export interface Conversation {
   /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
    *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
   foldedInto?: string[]
-  /** A proposal card, written until proposals went (2026-11-10), as its readers still take it: a card its PM did not accept or
-   *  reshape is no task to queue, start or approve (taskApproval.ts undecidedProposal), and a person's Tasks show it with its
-   *  senders, its decision and its merge (read/personalTasks.ts, read/feedIds.ts). Goes with the task records (slice S13). */
-  proposal?: { senders: Array<{ personId: string; generation: string }>; decision?: { kind: 'accept' | 'reshape' | 'later' | 'no'; reason: string }
-    mergedInto?: string }
-  /** A Buddy chat's owner messages its Buddy proposed for, written until proposals went (2026-11-10): never served (read/views.ts). */
-  proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
   buddyName?: string
@@ -513,9 +495,6 @@ export interface Conversation {
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
-  /** A pause by someone who steers its project (boardRights.ts, task #3819): who (actorKey), when and why. While set, the task
-   *  is not handed out (dispatch.ts). */
-  paused?: { by: string; at: number; reason?: string }
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
@@ -563,13 +542,10 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
 
-/** Whether [url] was unlinked from [group]: no later text links it again. */
-const unlinked = (group: Pick<Conversation, 'unlinkedPullRequests'>, url: string): boolean => !!group.unlinkedPullRequests?.some(entry => entry.url === url)
-
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -1122,8 +1098,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   visible.buddies = true
   for (const pool of visible.machines ?? []) {
-    // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
-    if (pool.observation) delete pool.observation.idleBuddyHarnessIds
     // A Team daemon's privacy check, stored by an older release, can name paths on its Mac: shown to nobody until the Team
     // machines carrying it are taken out (migration/teamMachinesJob.ts); goes with that job, 2026-12-10.
     if (pool.observation) delete (pool.observation as { privacy?: unknown }).privacy
