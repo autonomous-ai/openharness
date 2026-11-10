@@ -59,6 +59,12 @@ By source:
 | Role skills | 46 | 23 | 28 | 47 | 25 |
 | Tools, frame, launch | 52 | 15 | 20 | 35 | 31 |
 
+**The shell guard is removed (anh Dee, 2026-11-09).** A Swarm v4 agent runs with its person's own settings, and no hook of
+Harness's runs before its tools. Every row below that names `shellGuard.ts`, `shellGuardHook.ts` or `guard` as its code
+(stop only your own processes, no system-wide installs, temporary files in your own folder, never remove a live worktree,
+and the merge and secret checks it was to grow) is enforced by neither code nor prompt now; the CLI keeps a no-op
+`__swarm-shell-guard` entry until 2026-12-10 so agents started before still run.
+
 ## New code: one task per family of rules
 
 Each task names its rows here, and removes their prompt lines once its code fully enforces them; a safety rule's line
