@@ -3331,7 +3331,7 @@ describe('the beat a host keeps', () => {
     const start = vi.fn(() => new Promise(() => {}))
     let clock = 0
     const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never,
-      prepare: async () => null, start: start as never, now: () => clock } })
+      prepare: async () => {}, start: start as never, now: () => clock } })
     const readings = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'POST' && path === '/api/super-tabs/tab/machines/machine-1')
     host.start()
     await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())

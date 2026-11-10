@@ -13,8 +13,9 @@ export type WireRole = 'lead' | 'dev' | 'review' | 'buddy'
 /** A Swarm project's skill set, which its owner chooses (2026-10-23): Default is the team process alone, Harness orchestration
  * adds Harness practices. A session saved without one launched before modes, on the orchestration text. */
 export type SwarmSkillMode = 'default' | 'orchestration'
-/** `github`: git and gh in this session use the Harness GitHub App's token for its task (lib/swarmGitHub.ts), set when a
- *  start does another person's project work (superTabs/start.ts) and kept for every relaunch. `fallback`: an agent
+/** `github`: git and gh in this session use the Harness GitHub App's token for its task (lib/swarmGitHub.ts), set on a
+ *  session started for another person's project before the App's removal and kept for every relaunch, so it never loses
+ *  push mid-work; no new session gets it (delete on or after 2026-12-10). `fallback`: an agent
  *  started as a Reviewer, which keeps its swarm-review file and text for a Swarm with no project instructions. */
 export interface SwarmSkill { role: SwarmRole; key: string; mode?: SwarmSkillMode; github?: true; fallback?: 'review' }
 /** A row as any release saved it: one from before role kinds names its role in the wire's values. parseSwarmSkill reads

@@ -300,7 +300,8 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
-    // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
+    // A session started for another person's project before the App's removal keeps git and gh on it at every relaunch, until
+    // its task token stops (backend #3723, 2026-12-10; lib/swarmGitHub.ts).
     if (source.swarmSkill?.github) {
       let github: ReturnType<NonNullable<LaunchOverridesDeps['swarm']>['github']>
       try { github = swarm!.github(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }

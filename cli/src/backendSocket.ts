@@ -179,7 +179,8 @@ export class BackendSocket {
     swarmFallback?: 'review'
     /** The skills of the Swarm project it joins; absent from a start before modes, which launches on orchestration. */
     swarmSkillMode?: import('./lib/swarmSkills.js').SwarmSkillMode
-    /** With swarmRole: git and gh use the Harness GitHub App's token for the agent's task (lib/swarmGitHub.ts). */
+    /** Sent by a host from before the Harness GitHub App's removal, and ignored: no new agent uses the App. Delete on or after
+     *  2026-12-10. */
     swarmGitHub?: true
     /** The name the pane opens under, instead of the next `agent-N`; null to number it. */
     name: string | null
