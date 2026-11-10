@@ -2,7 +2,7 @@
  * Turns ending the ways people end them, for Claude Code and Codex, on the real daemon: cancelled from
  * the app, interrupted with Ctrl-C in the terminal itself, and watched by more than one window at once.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { WORK_EVIDENCE_MS } from '../src/lib/turnActivity.js'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -129,6 +129,28 @@ describe('how turns end', () => {
     await client.waitFor(isTurn('turn_ended', agent.id), 20_000, 'the paused pass to end', client.frames.indexOf(pass))
     await until('the agent to read idle', async () => (await row(client, agent.id))?.activity?.state === 'idle' || null, 15_000, 250)
     await turn(client, agent.id, 'after the pause')
+    client.close()
+  })
+
+  // The same-words end to end run under load (2026-11-10): a turn's Stop reached the daemon after the queued next
+  // turn had been read opening, before that turn's prompt hook, and force-closed it 2.5 s in, losing its reply.
+  it('claude: a Stop that reaches the daemon after the next turn opened leaves that turn to end with its answer', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'late-stop')
+    await turn(client, agent.id, '!latestop')
+    const since = client.frames.length
+    const started = client.next(isTurn('turn_started', agent.id), 45_000, 'the next turn to start')
+    client.send('message', { agentId: agent.id, content: '!slow 3000' })
+    await started
+    writeFileSync(join(d.engineConfig.root, 'late-stop.release'), 'go')
+    const ended = await client.waitFor(isTurn('turn_ended', agent.id), 45_000, 'the next turn to end', since)
+    const answer = client.frames.slice(since).find((frame) => frame.type === 'text_delta' && frame.agentId === agent.id
+      && String(frame.payload?.content ?? '').includes('!slow 3000'))
+    expect(answer && client.frames.indexOf(answer) < client.frames.indexOf(ended), 'the answer before the turn ends').toBe(true)
+    // It was heard while the turn ran, and closed nothing.
+    expect(d.log()).toMatch(/Stop ran before the open turn opened: left open/)
+    expect(d.log()).not.toMatch(/force-closed by Stop hook/)
     client.close()
   })
 
