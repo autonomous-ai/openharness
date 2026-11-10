@@ -22,8 +22,7 @@ export const UNCERTAIN_LIMIT_MS = 60 * 60_000
  *  answering busy (prod 10-30, v1.3.71: every person's messages to their own Buddy sat queued for 2 hours, and nothing said so). */
 export const CLAIM_FAILING_ALARM_MS = 5 * 60_000
 const SETTLE_EVERY_MS = 5 * 60_000
-// Gathered ones too: nothing else settles a row its coordinator stopped polling for (store.ts settleDeliveries).
-const OPEN = ['queued', 'claimed', 'uncertain', 'gathered']
+const OPEN = ['queued', 'claimed', 'uncertain']
 const BATCH = 500
 
 /** Whether an open delivery can no longer move. [reachable]: its recipient may still read it there (store.ts deliveryAllowed). */

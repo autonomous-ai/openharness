@@ -624,10 +624,6 @@ export const NOTICE_READERS = {
   // A crew member's finished wake or move, timed for the daily scorecard Swarm v4 removed (task #3462), written until 2026-11-10:
   // read by nobody.
   'crew-timing': 'agent',
-  // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
-  'notice-digest': 'recipients',
-  // An agent's tag, ask or line to a person, routed to the PM instead (crewNeeds.ts): the PM's alone. Never gathered.
-  'crew-need': 'recipients',
   // A person's decision wakes the task's PM; people read the decision in Tasks.
   'task-approval': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
