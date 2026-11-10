@@ -4,7 +4,6 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
-import { DISPATCH_RULES, laneOf } from '../dispatch.js'
 import { heldView } from '../heldReason.js'
 import { buddyCapOf, isBuddyChat, isBuddyReader } from '../buddies.js'
 import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
@@ -68,8 +67,6 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   const checks = rest.checks.map(({ verdicts: _verdicts, ...check }: Conversation['checks'][number] & { verdicts?: unknown }) => check)
   const view: GroupView = { ...rest, checks, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
     ...(held ? { held } : {}), ...readers }
-  // A task's hand-out lane (dispatch.ts stampLane) is stored with it; only a task stored before that is worked out here.
-  if (group.handOutLane === undefined && group.task && !group.reviewOf && !group.kind && !audience) view.handOutLane = laneOf(group, DISPATCH_RULES.lanes)
   return view
 }
 
@@ -84,9 +81,9 @@ export const seenIn = (parts: ReaderView['parts']): Set<string> =>
 
 export function agentView(agent: Agent): AgentView {
   // A main project goes in the derived row, to its project's readers only: a private one's id says the project exists. A
-  // Member's mark and its set-up record name it too (members.ts; security review 2 of #3575), and are its host's alone
-  // (read/hostRows.ts sends the agent as stored).
-  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, mainProjectId: _main, member: _member, setUp: _setUp, ...rest } = agent
+  // Member's mark names it too (members.ts; security review 2 of #3575), and is its host's alone (read/hostRows.ts sends the
+  // agent as stored).
+  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, mainProjectId: _main, member: _member, ...rest } = agent
   return withAvatarView(rest) as AgentView
 }
 
