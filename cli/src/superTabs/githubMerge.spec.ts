@@ -145,7 +145,6 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
     f.github.repo.comments.set(4, [comment('READ-OK f6edb44')])
     await f.merger.tick()
-    f.clock.now += 30_000
     await f.merger.tick()
     expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, \d\d:\d\d: READ-OK f6edb44"\.$/)])
   })
@@ -270,9 +269,9 @@ describe('the rule\'s parts', () => {
   it('reads each reader\'s last verdict by the name it signs with, or its login unsigned, and TWO READS', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
-      comment('Kai, 14:00: TWO READS for this one')], '', [])
-    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno' },
-      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye' }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore' } })
+      comment('Kai, 14:00: TWO READS for this one')], '', { writers: [], opener: '', team: new Set() })
+    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno', ownLogin: false },
+      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false } })
     expect(twoReads).toBe(true)
   })
 

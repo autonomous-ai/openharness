@@ -10,7 +10,7 @@
  * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` in a comment's first line, the reader the name
  *   the comment is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned; two from two
  *   readers when its text or a comment's first line says TWO READS. A comment signed by one of its writers (writersOf), in any
- *   spelling, is that writer's, and an unsigned one from the login that opened it counts for nothing (notReaders);
+ *   spelling, is that writer's, and an unsigned READ-OK from the login that opened it counts for nothing (verdicts);
  * - no reader's last word on it is a HOLD: a HOLD stands until that reader's later READ-OK;
  * - every check on its head passed;
  * - and GitHub says it can merge.
@@ -62,13 +62,22 @@ export async function ledProjects(deps: { me: string | null; live: (harnessId: s
   return [...found.values()]
 }
 
+/** Who a pull request's verdicts can be from: its [writers] (writersOf), the GitHub [opener] that opened it, and its [team]'s
+ *  builder labels (teamOf). */
+export interface PullPeople { writers: readonly string[]; opener: string; team: ReadonlySet<string> }
+
+/** A verdict's own words where a signature would be ("READ-OK f6edb44: looks good"): no one's name. */
+const VERDICT_FIRST = /^(?:READ-OK|HOLD)\b/
+
 /** What one pull request's comments say: each reader's last verdict, by its name in lowercase, with the name as it signs,
- *  and whether it asks for two reads. A comment signed by one of its [writers] (`signedAs`) is that writer's, by the name the
+ *  and whether it asks for two reads. A comment signed by one of its writers (`signedAs`) is that writer's, by the name the
  *  pull request gives it: the signature pattern reads one or two plain words, and a name it cannot read (three words, another
- *  script, an apostrophe, an emoji) fell back to the GitHub login every agent of a person shares, so the author read as a reader. */
-export function verdicts(comments: Json[], body: string, writers: readonly string[]):
-  { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string }>; twoReads: boolean } {
-  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; at: string }>()
+ *  script, an apostrophe, an emoji) fell back to the GitHub login every agent of a person shares, so the author read as a reader.
+ *  From the login that opened it, which every agent of the author's person posts as, a signature is one only when it names one
+ *  of the team; any other is unsigned, its reader that login, and its READ-OK is `ownLogin`: it counts for no read. */
+export function verdicts(comments: Json[], body: string, people: PullPeople):
+  { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean }>; twoReads: boolean } {
+  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
@@ -76,14 +85,19 @@ export function verdicts(comments: Json[], body: string, writers: readonly strin
     if (/\bTWO READS\b/.test(first)) twoReads = true
     const found = VERDICT.exec(first)
     if (!found) continue
-    const reader = writers.find(writer => signedAs(first, writer)) ?? SIGNATURE.exec(first)?.[1] ?? String(object(comment.user).login ?? '')
+    const login = String(object(comment.user).login ?? '')
+    const fromOpener = people.opener !== '' && login.toLowerCase() === people.opener.toLowerCase()
+    const pattern = SIGNATURE.exec(first)?.[1]
+    const signature = people.writers.find(writer => signedAs(first, writer))
+      ?? (pattern && !VERDICT_FIRST.test(pattern) && (!fromOpener || people.team.has(labelOf(pattern))) ? pattern : undefined)
+    const reader = signature ?? login
     if (!reader || reader === SELF) continue
     const at = String(comment.created_at ?? '')
     const key = reader.toLowerCase()
     const last = readers.get(key)
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, at })
+    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, ownLogin: !signature && fromOpener, at })
   }
-  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
+  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name, ownLogin: v.ownLogin }])), twoReads }
 }
 
 /** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
@@ -129,13 +143,8 @@ export function writersOf(pull: Json): string[] {
   return [...labels.map(name => name.slice('builder:'.length)), ...branch.includes('/') ? [branch.split('/')[0]!.toLowerCase()] : []]
 }
 
-/** Whose verdicts on a pull request count for nothing: its writers (writersOf), and the GitHub login that opened it, unsigned.
- *  Every agent of a person posts as that person's login, so an unsigned READ-OK from it may be the author's own: a reader on
- *  that login signs ("Juno, 14:20: READ-OK f6edb44"). Another login's unsigned READ-OK is that person's. */
-export function notReaders(pull: Json): string[] {
-  const login = String(object(pull.user).login ?? '')
-  return [...writersOf(pull), ...login ? [login] : []]
-}
+/** A pull request's people for `verdicts`, with its [team]. */
+export const pullPeople = (pull: Json, team: ReadonlySet<string>): PullPeople => ({ writers: writersOf(pull), opener: String(object(pull.user).login ?? ''), team })
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
@@ -229,14 +238,19 @@ export class GitHubMerge {
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
-      const writers = writersOf(pull)
-      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), writers)
+      const people = pullPeople(pull, team)
+      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
       // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.
-      const own = notReaders(pull)
-      const reads = new Map([...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(own, reader))
-        .map(([reader, r]) => [sameKey(reader), r]))
-      if (reads.size < (twoReads ? 2 : 1)) continue
+      const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(people.writers, reader))
+      const reads = new Map(onHead.filter(([, r]) => !r.ownLogin).map(([reader, r]) => [sameKey(reader), r]))
+      if (reads.size < (twoReads ? 2 : 1)) {
+        // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
+        const unsigned = onHead.find(([, r]) => r.ownLogin)?.[1]
+        if (unsigned) await this.tellOnce(repo, number, head, author, `the READ-OK from ${unsigned.name} is unsigned, and every agent of its person posts as that `
+          + `login: its reader signs it, as in "<name>, ${this.clock()}: READ-OK ${head.slice(0, 7)}".`, comments)
+        continue
+      }
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
