@@ -30,12 +30,10 @@ let db: PrismaClient
 const owner: AuthUser = { sub: '300000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '300000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
 const watcher: AuthUser = { sub: '300000000000000000000003', email: 'watcher@example.com', autonomousEnv: 'prod', role: 'user' }
-// peer's sign-ins (lib/teamSession.ts): their own Mac's daemon, which relays their web app's Swarm requests, and the daemon
-// of the Harness Team account on that Mac, a second macOS user signed in to peer's account with a team session.
+// peer's own Mac's daemon, which relays their web app's Swarm requests; and the Harness Team account's machine on that Mac,
+// from before Team accounts went (anh Dee, 2026-11-10).
 const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', PEER_TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-const peerMac: AuthUser = { ...peer, harnessSessionId: 'peer-mac-session', harnessSessionKind: 'computer', harnessComputerId: PEER_COMPUTER }
-const peerTeam: AuthUser = { ...peer, harnessSessionId: 'peer-team-session', harnessSessionKind: 'team', harnessComputerId: PEER_TEAM_COMPUTER }
-const LIMITED = { code: 'TEAM_SESSION_LIMITED', status: 403 }
+const peerMac: AuthUser = { ...peer, harnessSessionId: 'peer-mac-session', harnessSessionKind: 'computer' }
 const config = { engine: 'claude', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
 beforeAll(async () => {
@@ -1054,9 +1052,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 })
 
 describe('a person\'s post in their Buddy chat from the web (phone bug, 10-29)', () => {
-  // The web app relays a person's Swarm requests through one of their online machines. Through their own Mac it is theirs;
-  // through their Team account it was refused ("A team sign-in can only run Swarm agents on its own machine"), so the app
-  // never relays through one now (desktop sharedTabsTarget), and the gate stays as it is.
+  // The web app relays a person's Swarm requests through one of their online machines: through their own Mac it is theirs.
   const post = (chat: string, text: string) => ({ type: 'message.send' as const, conversationId: chat, text, replyTo: null, recipientIds: [] })
   const stored = (f: Awaited<ReturnType<typeof swarm>>, chat: string) => db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: chat } })
   const delivered = async (f: Awaited<ReturnType<typeof swarm>>, chat: string) =>
@@ -1069,17 +1065,6 @@ describe('a person\'s post in their Buddy chat from the web (phone bug, 10-29)',
     expect([...new Set(await delivered(f, chat))]).toEqual([agentId])
     expect((await f.store.messages(peer, f.tab, chat, {}, agentId)).messages.at(-1)).toMatchObject({ text: 'From my phone',
       author: expect.objectContaining({ kind: 'person', id: peer.sub }) })
-  })
-
-  it('is refused to their Team account\'s sign-in, as them or as their Buddy on their Mac, and nothing is stored or delivered', async () => {
-    const f = await swarm()
-    const { chat, agentId } = await buddy(f)
-    const before = (await stored(f, chat)).length, deliveredBefore = await delivered(f, chat)
-    await expect(f.execute(post(chat, 'As the person'), peerTeam)).rejects.toMatchObject(LIMITED)
-    await expect(f.execute(post(chat, 'As the Buddy'), peerTeam, agentId)).rejects.toMatchObject(LIMITED)
-    await expect(f.store.messages(peerTeam, f.tab, chat, {})).rejects.toMatchObject(LIMITED)
-    expect((await stored(f, chat)).length).toBe(before)
-    expect(await delivered(f, chat)).toEqual(deliveredBefore)
   })
 
   it('is nobody else\'s: the Swarm owner, the PM and a viewer are refused alike, told nothing about the chat', async () => {
@@ -1264,7 +1249,7 @@ describe('the person\'s own browser, reading and writing the Swarm straight from
     expect(JSON.stringify(outside)).not.toContain('Private Swarm')
   })
 
-  it('speaks as an agent only where the person\'s own Mac may, and a team sign-in is still refused', async () => {
+  it('speaks as an agent only where the person\'s own Mac may', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     for (const asAgent of [agentId, f.lead]) {
@@ -1272,7 +1257,6 @@ describe('the person\'s own browser, reading and writing the Swarm straight from
         .toEqual(await refusal(f.store.messages(peerMac, f.tab, 'lead', {}, asAgent)))
     }
     expect(await refusal(f.store.messages(peerWeb, f.tab, 'lead', {}, f.lead))).toMatchObject({ code: 'FORBIDDEN', status: 403 })
-    expect(await refusal(new SwarmReads(f.store).firstLoad(peerTeam, f.tab))).toMatchObject(LIMITED)
   })
 })
 

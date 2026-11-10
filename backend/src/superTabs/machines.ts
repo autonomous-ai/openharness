@@ -26,8 +26,9 @@ export interface ContributedMachine {
    *  `atMost`, its owner's own [maxAgents]. Absent on a row saved by an older client: agentLimit reads it. */
   agents?: 'memory' | 'atMost'
   paused: boolean
-  /** `sessionKind` is how the reporting machine is signed in, stamped from its session by the store, never taken from
-   *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings. */
+  /** `sessionKind` is how the reporting machine is signed in, stamped by the store, never taken from the report: `computer`;
+   *  `team` on a reading a Harness Team account's session stored before they went (anh Dee, 2026-11-10). Absent on older
+   *  readings. */
   observation?: Omit<MachineObservation, 'privacy'> & { receivedAt: number; sessionKind?: 'team' | 'computer' }
   /** A Mac's Harness Team account: the machine of the Mac it lives on, stamped by the store from its account row
    *  (`Machine.hostMachineId`), never taken from the command. Such a pool is that Mac under the scenes ("One machine",
@@ -213,12 +214,12 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
 
 /**
  * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
- * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, the contributed engines' quotas, and how the
- * machine is signed in, from the session and never from the report (lib/teamSession.ts).
+ * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, the contributed engines' quotas, and that
+ * the machine is signed in as a computer (Harness Team accounts' sessions are gone, anh Dee 2026-11-10).
  * A full report and a reading-only one (DB 2.5) store the same.
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
-  opts: { team: boolean; now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
+  opts: { now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
   const { privacy: _reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
@@ -230,7 +231,7 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
     ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
-    sessionKind: opts.team ? 'team' : 'computer', ...(progress ? { harnessProgress: progress } : {}),
+    sessionKind: 'computer', ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
     ...(refused?.length ? { refusedStarts: refused } : {}) }
 }

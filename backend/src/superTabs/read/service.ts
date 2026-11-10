@@ -6,7 +6,6 @@ import { personalTasksFor, personalTasksPage, type PersonalTasks } from './perso
 import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
 import { logger } from '../../utils/logger.js'
 import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagRows, type WaitingTagRow } from '../mentions.js'
@@ -374,11 +373,10 @@ export class SwarmReads {
   }
 
   /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
-   *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. Reading the
+   *  person reading as themselves has marks: an agent is refused before anything is written. Reading the
    *  chat never reads a reply only in a thread: first, each such thread of theirs between the old mark and the new one with no
    *  mark of its own gets one at the old mark (threadMarkSeeds.ts), so the inbox and Threads still count it. */
   async markRead(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group, state } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence), now = this.now()
     const stored = await moveChatMark(this.db, { tabId, state, personId: user.sub, conversationId, next, now })
@@ -391,7 +389,6 @@ export class SwarmReads {
    *  person reading as themselves, and every chat they cannot read is the same refusal. Tags it resolved and Activity it read
    *  stay so; a reply only in a thread keeps its thread's mark. */
   async markUnread(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group } = await this.readGroup(user, tabId, conversationId)
     const target = Math.min(sequence - 1, group.data!.lastMessageSequence)
     return { sequence: await lowerReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: target, now: this.now() }) }
@@ -422,7 +419,6 @@ export class SwarmReads {
 
   /** The newest message sequence of a conversation whose thread `threadId` the person reads (markThreadRead's checks). */
   private async readableThread(user: AuthUser, tabId: string, conversationId: string, threadId: string): Promise<number> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const unavailable = () => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     const newest = (await this.readableChat(user, tabId, conversationId)).conversation.lastMessageSequence
     const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: threadId, tabId, conversationId } },
@@ -440,7 +436,6 @@ export class SwarmReads {
   /** Stores the person's notification setting for a conversation they can read (chatSettings.ts), checked as a read mark is:
    *  every miss is the same refusal, and only a person reading as themselves has settings. */
   async setChatNotify(user: AuthUser, tabId: string, conversationId: string, notify: NotifyLevel): Promise<{ notify: NotifyLevel }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.group(user, tabId, conversationId)
     return { notify: await writeChatSetting(this.db, { tabId, personId: user.sub, conversationId, notify, now: this.now() }) }
   }
@@ -448,7 +443,6 @@ export class SwarmReads {
   /** The person's Activity in this Swarm (activity.ts): replies to their messages, those they can read
    *  now. A person reading as themselves only. */
   async activity(user: AuthUser, tabId: string): Promise<{ items: ActivityItem[]; more: boolean }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { state } = await this.store.readLoad(user, tabId)
     const actor = await this.store.actor(this.db, user, state)
     author(state, actor)
@@ -459,7 +453,6 @@ export class SwarmReads {
   /** The person's due reminders in this Swarm and when the next one is due (reminders.ts), those they can read now. A person
    *  reading as themselves only. */
   async reminders(user: AuthUser, tabId: string): Promise<{ due: ReminderItem[]; next: string | null }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { state } = await this.store.readLoad(user, tabId)
     const actor = await this.store.actor(this.db, user, state)
     author(state, actor)
@@ -472,7 +465,6 @@ export class SwarmReads {
    *  another chat's message, one that does not exist or that a page would not show them) is the same refusal. Only a person
    *  reading as themselves. */
   async setReminder(user: AuthUser, tabId: string, conversationId: string, messageId: string, at: string): Promise<{ id: string; dueAt: string }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), dueAt = Date.parse(at)
     if (!(dueAt > now) || dueAt > now + REMINDER_AHEAD_MS) fail('INVALID_REMINDER', 'Choose a time in the next 30 days.', 400)
     const { state } = await this.readableChat(user, tabId, conversationId)
@@ -484,7 +476,6 @@ export class SwarmReads {
   /** Clears the person's reminder of one message of a chat they can read (reminders.ts), as Activity's Reminders does when they
    *  open it, and answers whether there was one. Only their own, as themselves. */
   async clearReminder(user: AuthUser, tabId: string, conversationId: string, messageId: string): Promise<{ cleared: boolean }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.readableChat(user, tabId, conversationId)
     return { cleared: await clearReminder(this.db, { tabId, personId: user.sub, conversationId, messageId }) }
   }
@@ -504,7 +495,6 @@ export class SwarmReads {
 
   /** Marks the person's Activity made at or before `through` read on every device, never past now. */
   async markActivityRead(user: AuthUser, tabId: string, through: string): Promise<{ marked: number }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { state } = await this.store.readLoad(user, tabId)
     const actor = await this.store.actor(this.db, user, state)
     author(state, actor)
@@ -526,7 +516,6 @@ export class SwarmReads {
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
    *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
   async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName, allProjects = false): Promise<Leaderboard> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), start = readableWeek(week, now)
     const began = performance.now()
     const result = await this.read(user, tabId, async (tx, cached) => {
@@ -580,7 +569,6 @@ export class SwarmReads {
   }
 
   async list(user: AuthUser, after?: string, withMentions = false): Promise<SwarmList> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     // People at the owner's domain join Swarms with auto-join on by themselves, before the first page is read (autoJoin.ts).
     if (!after) await this.store.autoJoin(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })

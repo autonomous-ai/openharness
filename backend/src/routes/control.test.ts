@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 
-// Deny by default, against the route table production serves: every control-API route a team session is not
-// explicitly allowed (lib/teamSession.ts TEAM_ROUTES) answers it 403, whatever the route. The session is a real one,
-// minted and redeemed through lib/harnessSession.ts against in-memory stores, so the real authentication runs.
+// Harness Team accounts are gone (anh Dee, 2026-11-10), against the route table production serves: every control-API route
+// that takes a sign-in answers a Team account's old token 401, on which an old Team daemon stops. The session is one made
+// before, its row and live access token in in-memory stores, so the real authentication runs.
 const fakes = vi.hoisted(() => {
   const redis = new Map<string, string>()
   const sessions: Array<Record<string, unknown> & { id: string }> = []
@@ -31,12 +31,6 @@ const fakes = vi.hoisted(() => {
         }),
         findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => pick(where)),
       },
-      machine: {
-        findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-          ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
-        // Other accounts' Team machines on the redeeming computer (superTabs/computerMoves.ts teamCleanupPending): none here.
-        aggregateRaw: vi.fn(async () => []),
-      },
     },
     user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },
   }
@@ -58,8 +52,7 @@ vi.mock('../services/UserService.js', () => ({
 
 import { registerAuthMiddleware, shouldSkipAuth } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
-import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
-import { TEAM_ROUTES } from '../lib/teamSession.js'
+import { harnessTokenHash, newHarnessToken } from '../lib/harnessTokenFormat.js'
 import { registerControlRoutes } from './control.js'
 import { createReadiness } from '../lib/readiness.js'
 
@@ -68,8 +61,10 @@ let token: string
 const routes: Array<{ method: string; url: string }> = []
 
 beforeAll(async () => {
-  const { code } = await startHandoff(fakes.user.id, 'team')
-  token = (await redeemHandoff(code, 'MacBook Pro · Team', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))!.token
+  token = newHarnessToken('hta_')
+  const row = await fakes.prisma.harnessSession.create({ data: { userId: fakes.user.id, refreshHash: 'h', label: 'MacBook Pro · Team',
+    kind: 'team', computerId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', expiresAt: new Date(Date.now() + 86_400_000) } })
+  fakes.redis.set(`hnauth:access:${harnessTokenHash(token)}`, JSON.stringify({ sessionId: row.id, userId: fakes.user.id }))
   app = Fastify()
   app.setErrorHandler(errorHandler)
   app.addHook('onRoute', route => {
@@ -81,24 +76,23 @@ beforeAll(async () => {
 })
 afterAll(async () => { await app?.close() })
 
-describe('a team session against every control route', () => {
-  it('is refused everywhere the allowlist does not name, the phone\'s own routes included', async () => {
-    const allowed = new Set(TEAM_ROUTES.map(r => `${r.method} ${r.url}`))
+describe("a Harness Team account's old sign-in against every control route", () => {
+  it('is a bad token everywhere, the routes its daemon called and the phone\'s own included', async () => {
     const swept: string[] = []
     for (const { method, url } of routes) {
-      if (allowed.has(`${method} ${url}`)) continue
       const path = url.replace(/:[A-Za-z]+/g, 'x0').replace(/\*/g, 'x0')
       // A public route takes no sign-in at all (health, sign-in itself, shared-secret callers): nothing to refuse.
       if (shouldSkipAuth(path) && !path.startsWith('/api/mobile/')) continue
       const res = await app.inject({ method: method as never, url: path, headers: { authorization: `Bearer ${token}` } })
-      expect(res.statusCode, `${method} ${url}: ${res.body}`).toBe(403)
-      expect(res.json().error?.code, `${method} ${url}`).toBe('TEAM_SESSION_LIMITED')
+      expect(res.statusCode, `${method} ${url}: ${res.body}`).toBe(401)
       swept.push(`${method} ${url}`)
     }
     // The table is the real one: the sweep covered the account's sensitive routes, not an empty list.
     for (const route of ['GET /api/machines', 'POST /api/auth/handoff', 'GET /api/auth/me', 'GET /api/connector-vault', 'GET /api/desk',
       'POST /api/auth/qr/approve', 'POST /api/device-auth/approve', 'GET /api/grid/profile', 'PUT /api/machines/:machineId/share',
       'GET /api/agent-messages', 'GET /api/harness-shares', 'GET /api/super-tabs', 'POST /api/super-tabs/:tabId/join',
-      'GET /api/mobile/v1/overview', 'POST /api/device-keys']) expect(swept).toContain(route)
+      'GET /api/mobile/v1/overview', 'POST /api/device-keys', 'POST /api/machines/resolve-computer', 'GET /api/device-keys',
+      'GET /api/super-tabs/hosts/:machineId/changes', 'POST /api/super-tabs/:tabId/commands', 'PUT /api/harness-shares/:id',
+      'POST /api/super-tabs/:tabId/github-token']) expect(swept).toContain(route)
   })
 })

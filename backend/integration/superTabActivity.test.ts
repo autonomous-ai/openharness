@@ -46,9 +46,8 @@ let tally: Record<string, number> | null = null
 const phones: PhoneNotice[] = []
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
-const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
 const signedIn = (authorization: string | undefined) =>
-  authorization === 'Bearer team' ? ownerTeam : [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
+  [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
 const MIGRATED = NOW - 60_000
 
 beforeAll(async () => {
@@ -127,18 +126,18 @@ const send = async (tabId: string, conversationId: string, text: string, as: Aut
   (await run(tabId, { type: 'message.send', conversationId, text, replyTo, recipientIds: [] }, as, asAgentId)).result.messageId as string
 const react = (tabId: string, conversationId: string, messageId: string, on: boolean, as: AuthUser = owner, emoji: 'thumbs_up' | 'check' = 'thumbs_up', asAgentId?: string) =>
   run(tabId, { type: 'message.react', conversationId, messageId, emoji, on }, as, asAgentId)
-const call = async (method: 'GET' | 'POST', url: string, as: AuthUser | 'team' = owner, payload?: unknown) => {
-  const response = await app.inject({ method, url, headers: { authorization: `Bearer ${as === 'team' ? 'team' : as.sub}` }, ...(payload === undefined ? {} : { payload: payload as never }) })
+const call = async (method: 'GET' | 'POST', url: string, as: AuthUser = owner, payload?: unknown) => {
+  const response = await app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` }, ...(payload === undefined ? {} : { payload: payload as never }) })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string; message: string } }, headers: response.headers }
 }
-const activity = (tabId: string, as: AuthUser | 'team' = owner) => call('GET', `/api/super-tabs/${tabId}/activity`, as)
+const activity = (tabId: string, as: AuthUser = owner) => call('GET', `/api/super-tabs/${tabId}/activity`, as)
 const items = async (tabId: string, as: AuthUser = owner) => {
   const answer = await activity(tabId, as)
   expect(answer.status).toBe(200)
   return answer.body.data.items as any[]
 }
 const derived = async (tabId: string, as: AuthUser) => (await call('GET', `/api/super-tabs/${tabId}/parts`, as)).body.data.derived
-const notify = (tabId: string, conversationId: string, value: unknown, as: AuthUser | 'team' = owner) =>
+const notify = (tabId: string, conversationId: string, value: unknown, as: AuthUser = owner) =>
   call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/notifications`, as, { notify: value })
 
 describe('Activity: replies to a person\'s messages', () => {
@@ -727,12 +726,11 @@ describe('Activity: only what the person can read now', () => {
     expect((await items(s.tabId, peer)).length).toBe(1)
   })
 
-  it('is the reader\'s alone: another member, an outsider of the Swarm and a Team session read none of it', async () => {
+  it('is the reader\'s alone: another member and an outsider of the Swarm read none of it', async () => {
     const s = await scene()
     const root = await send(s.tabId, s.web, 'Owner root')
     await send(s.tabId, s.web, 'Peer answers', peer, root)
     expect(await items(s.tabId, outsider)).toEqual([])
-    expect((await activity(s.tabId, 'team')).status).toBe(403)
     await run(s.tabId, { type: 'member.remove', userId: outsider.sub })
     expect((await activity(s.tabId, outsider)).status).toBeGreaterThanOrEqual(403)
     // A Swarm id that is not one, and another Swarm's, are refused alike.
@@ -790,7 +788,6 @@ describe('Activity: read state and its digest', () => {
     expect((await items(s.tabId))[0].read).toBe(true)
     expect((await derived(s.tabId, owner)).activityDigest).toBe(before)
     expect((await call('POST', `/api/super-tabs/${s.tabId}/activity/read`, owner, { through: 'yesterday' })).status).toBe(400)
-    expect((await call('POST', `/api/super-tabs/${s.tabId}/activity/read`, 'team', { through: item.createdAt })).status).toBe(403)
   })
 
   const markThread = (tabId: string, conversationId: string, threadId: string, sequence: number, as: AuthUser = owner) =>
@@ -909,7 +906,7 @@ describe('Chat notification settings', () => {
     expect((await derived(s.tabId, owner)).chatSettings).toEqual({ [s.web]: 'mentions' })
   })
 
-  it('refuses a chat the person cannot read like one that does not exist, a Team session, and a value it does not know', async () => {
+  it('refuses a chat the person cannot read like one that does not exist, and a value it does not know', async () => {
     const s = await scene()
     const hidden = await notify(s.tabId, s.secretGroup, 'muted', peer)
     const missing = await notify(s.tabId, 'no-such-chat', 'muted', peer)
@@ -917,7 +914,6 @@ describe('Chat notification settings', () => {
     expect([hidden.status, missing.status, buddy.status]).toEqual([404, 404, 404])
     expect(hidden.body.error).toEqual(missing.body.error)
     expect(buddy.body.error).toEqual(missing.body.error)
-    expect((await notify(s.tabId, s.web, 'muted', 'team')).status).toBe(403)
     expect((await notify(s.tabId, s.web, 'loud')).status).toBe(400)
     expect(await db.superTabChatSetting.count({ where: { tabId: s.tabId } })).toBe(0)
   })

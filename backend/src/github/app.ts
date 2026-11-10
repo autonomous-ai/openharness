@@ -170,13 +170,6 @@ export class GitHubApp {
     return this.config.slug ? `https://github.com/apps/${this.config.slug}/installations/new` : null
   }
 
-  /**
-   * Who the app's commits are by, as Claude's are by its own line (Dee, task #2136). A Harness Team account has no git identity
-   * of its own, so its commits would read "Harness Team <harnessteam@<host>.local>" (PR #1934). No GitHub account owns this
-   * address, so GitHub links these commits to nobody: telling a Team agent's commits apart rests on who pushed (pushOrigin.ts).
-   */
-  commitIdentity(): CommitIdentity { return COMMIT_IDENTITY }
-
   /** The app's bot account's login, which GitHub's activity log names as the actor of every push with the app's token: GitHub's
    *  own answer, remembered. Never a configured name, as a wrong one asks the log for a bot that never pushed, and its empty
    *  answer reads as clean. Null while GitHub cannot say, which reads as unknown. Never read from a commit. */

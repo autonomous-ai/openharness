@@ -32,7 +32,6 @@ import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
 import type { RepositoryReach } from './repositoryReach.js'
 import { githubRepository } from '../github/repository.js'
-import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } from './deletion.js'
@@ -363,10 +362,8 @@ function grantsOf(state: SuperTabState, agentId: string, allowed: SuperTabDelive
 
 const sameIds = (rows: SuperTabDelivery[], ids: string[]) => rows.length === ids.length && rows.every(r => ids.includes(r.id))
 
-/** Whose full poll `deliveries` remembers: the caller, and a team session apart, as it may act only for its own machine's
- *  agents (teamHost) while its person may act for any of theirs. */
-const pollKey = (user: AuthUser, tabId: string, agentId: string) =>
-  `${tabId}:${agentId}:${user.sub}${user.harnessSessionKind === 'team' ? `:team:${user.harnessComputerId ?? ''}` : ''}`
+/** Whose full poll `deliveries` remembers: the caller. */
+const pollKey = (user: AuthUser, tabId: string, agentId: string) => `${tabId}:${agentId}:${user.sub}`
 
 /** Logged, never thrown: without the memory the delivery poll just runs in full. */
 const pollMemoryFailed = (error: unknown): void => {
@@ -712,36 +709,22 @@ export class SuperTabStore {
     this.machineKeys = hooks.machineKeys ?? activeMachineKeysOf
   }
 
-  // ── A Mac's team account (lib/teamSession.ts) ────────────────────────────────────────────────────
-  // Its daemon is signed in as the person, so `user.sub` alone would let it speak for the person and for every machine
-  // of theirs. It may host only its own machine and speak only as the agents running there.
-
-  /** The one machine a team session hosts for; null for any other sign-in. One with no machine to act for does nothing. */
-  /** Shared with the read API (superTabs/read, design section 7.2). */
-  async teamHost(tx: Transaction, user: AuthUser): Promise<string | null> {
-    if (!isTeamSession(user)) return null
-    return (await teamMachine(user, tx))?.machineId ?? fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-  }
-
-  /** A host route of a team session must name its own machine. */
-  /** Shared with the read API (superTabs/read, design section 7.2). */
-  /** [owned]: the machine's account row for this sign-in, when the caller already read it (machineAlive), so it is read once.
-   *  [state]: a Swarm the request reads, whose own record of the machine counts too (teamByRecord). */
+  /** A host route never hosts a Harness Team account's machine (notTeamMachine). Shared with the read API (superTabs/read,
+   *  design section 7.2). [owned]: the machine's account row for this sign-in, when the caller already read it (machineAlive),
+   *  so it is read once. [state]: a Swarm the request reads, whose own record of the machine counts too (teamByRecord). */
   async hostFor(tx: Transaction, user: AuthUser, machineId: string, owned?: Machine | null, state?: SuperTabState): Promise<void> {
-    const team = await this.teamHost(tx, user)
-    if (team !== null && team !== machineId) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    if (team === null) await this.notTeamMachine(user, async () => owned !== undefined ? owned
+    await this.notTeamMachine(async () => owned !== undefined ? owned
       : tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } }), !!state && teamByRecord(state, machineId))
   }
 
   /**
-   * A Harness Team account's machine is hosted, and its agents spoken for, by its team session alone (security review 2 of
-   * #2089). It is a machine of its Mac owner's account, so the owner's ordinary sign-in passed every host check, and could
-   * read every chat its Product Manager can, claim its deliveries and post as it, past every rule the Swarm keeps for it.
+   * A Harness Team account's machine was hosted, and its agents spoken for, by its team session alone (security review 2 of
+   * #2089), and Team sessions are gone (anh Dee, 2026-11-10): nobody hosts it. It is a machine of its Mac owner's account, so
+   * the owner's ordinary sign-in passed every host check, and could read every chat its Product Manager can, claim its
+   * deliveries and post as it, past every rule the Swarm keeps for it.
    * [row]: the machine's account row, read once with the request's others; [flagged]: an agent that joined on one.
    */
-  private async notTeamMachine(user: AuthUser, row: () => Promise<Pick<Machine, 'sessionKind' | 'hostMachineId'> | null>, flagged = false): Promise<void> {
-    if (isTeamSession(user)) return
+  private async notTeamMachine(row: () => Promise<Pick<Machine, 'sessionKind' | 'hostMachineId'> | null>, flagged = false): Promise<void> {
     // The row's own mark, which an ordinary sign-in connecting as that computer resets (lib/adapterWs.ts), and the Mac it
     // names, which it keeps; and what the Swarm itself recorded ([flagged], security re-check 2 of #2089).
     const machine = flagged ? null : await row()
@@ -750,13 +733,9 @@ export class SuperTabStore {
     }
   }
 
-  /** What only the person does: a team session has no person to be. */
-  private personOnly(user: AuthUser): void {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-  }
-
   /**
-   * What a team session's agent may command beyond the Swarm's own rules for that agent: a machine is the person's to
+   * What a PM in a Harness Team account may have the server's dispatch command for it (projectPmActor), beyond the Swarm's own
+   * rules for that agent, as its team session once could (Team sessions are gone, anh Dee 2026-11-10; Team machines go with S15): a machine is the person's to
    * contribute, pause or remove, and nothing may start, add, move or drive an agent on another machine. It may assign or
    * add an agent that runs in a Team account too, on any machine: a Team Engineer handing its review step to a Reviewer on
    * another Team machine had to ask the PM instead (tasks #2178 and #2215, 11-02). That other Team account is another account
@@ -781,7 +760,7 @@ export class SuperTabStore {
       // whether its target was in a Team account, so a workflow the check blocks shows up before people work around it.
       logger.warn('[super-tab] team command refused', { tabId: state.id, command: command.type, teamMachineId: team,
         ...target ? { targetMachineId: target.machineId, targetTeamAccount: onTeamAccount(state, target) } : {} })
-      fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+      fail('TEAM_SESSION_LIMITED', 'A team sign-in can only run Swarm agents on its own machine.', 403)
     }
     const onTeam = (agentId: string) => {
       const target = state.agents.find(a => a.id === agentId)
@@ -847,15 +826,13 @@ export class SuperTabStore {
 
   /** An older Desktop's account policy read: the built-in policy, whatever the person saved before (project instructions,
    *  phase 4: routing lives in each project's instructions). */
-  async accountPolicy(user: AuthUser) {
-    this.personOnly(user)
+  async accountPolicy(_user: AuthUser) {
     return { policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true }
   }
 
   /** An older Desktop's account policy save: accepted and kept nowhere, answered with the default (project instructions,
    *  phase 4: routing lives in each project's instructions). A policy saved before stays, unread. */
-  async saveAccountPolicy(user: AuthUser, _revision: number, _input: RoutingPolicy) {
-    this.personOnly(user)
+  async saveAccountPolicy(_user: AuthUser, _revision: number, _input: RoutingPolicy) {
     return { policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true as const, ignored: true as const, note: IGNORED_NOTE }
   }
 
@@ -1106,10 +1083,7 @@ export class SuperTabStore {
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
   async actor(tx: Transaction, user: AuthUser, state: SuperTabState, agentId?: string): Promise<Actor> {
-    const team = await this.teamHost(tx, user)
     if (!agentId) {
-      // A team session never speaks or reads as the person.
-      if (team !== null) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
       return { kind: 'person', userId: user.sub, email: user.email }
     }
     // A stranger learns nothing of the Swarm from an agent id, real, made up or another Swarm's.
@@ -1118,12 +1092,10 @@ export class SuperTabStore {
       if (found.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
       return found
     })
-    // ...and as an agent only one running on its own machine, never the person's agents elsewhere.
-    if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const reads = new GrantReads()
     await this.agentGrant(tx, state, target, reads)
     // An agent of a Team account's machine is spoken for by that account alone, never its owner's own sign-in.
-    await this.notTeamMachine(user, () => reads.once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
+    await this.notTeamMachine(() => reads.once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
       where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } })), onTeamAccount(state, target))
     return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
@@ -1189,7 +1161,6 @@ export class SuperTabStore {
   }
 
   async create(user: AuthUser, operationId: string, name: string, projectVisibility?: ProjectVisibility) {
-    this.personOnly(user)
     const id = stableId('super-tab', user.autonomousEnv, user.sub, operationId)
     const requestHash = hash({ name, ...(projectVisibility ? { projectVisibility } : {}) })
     return transaction(this.db, async tx => {
@@ -1212,7 +1183,6 @@ export class SuperTabStore {
   }
 
   async list(user: AuthUser, after?: string) {
-    this.personOnly(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
     const heads = await this.heads(rows.slice(0, 100))
     return { tabs: rows.slice(0, 100).flatMap(row => {
@@ -1232,7 +1202,6 @@ export class SuperTabStore {
   /** The owner's deleted Swarms they can still restore, newest first (deletion.ts): names only, from their heads. By the owner
    *  index, at most 100. */
   async deletedList(user: AuthUser) {
-    this.personOnly(user)
     const now = this.now()
     const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: { $ne: null } } },
       { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { deletedAt: 1, purgeAt: 1 } }]))
@@ -1256,7 +1225,6 @@ export class SuperTabStore {
    *  is checked again in this transaction: auto-join still on at the person's domain, not a member, never declined, under 200
    *  people. The join relies on the sharing the head holds, so turning auto-join off at once conflicts with it. */
   async autoJoinSwarm(user: AuthUser, tabId: string): Promise<AutoJoinOutcome> {
-    this.personOnly(user)
     return transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       const domain = autoJoinOn(state), email = authenticatedEmail(user.email)
@@ -1326,7 +1294,6 @@ export class SuperTabStore {
   }
 
   async invitations(user: AuthUser) {
-    this.personOnly(user)
     const email = user.email.trim().toLowerCase()
     const rows = await invitedSwarms(this.db, user.autonomousEnv, email, 100)
     const heads = await this.heads(rows)
@@ -1348,7 +1315,6 @@ export class SuperTabStore {
   }
 
   async sharing(user: AuthUser, tabId: string) {
-    this.personOnly(user)
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       requireSharingOwner(state, user.sub)
@@ -1357,7 +1323,6 @@ export class SuperTabStore {
   }
 
   async saveSharing(user: AuthUser, tabId: string, input: SaveSharing) {
-    this.personOnly(user)
     const request = saveSharingSchema.parse(input)
     return transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
@@ -1381,7 +1346,6 @@ export class SuperTabStore {
 
   /** A signed-in preview contains no projects, people, machines, or conversation data. It never joins. */
   async previewJoin(user: AuthUser, tabId: string, token?: string) {
-    this.personOnly(user)
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const sharing = authorizeSwarmJoin(state, user.email, token, user.sub)
@@ -1391,7 +1355,6 @@ export class SuperTabStore {
   }
 
   async join(user: AuthUser, tabId: string, input: JoinSwarm) {
-    this.personOnly(user)
     const request = joinSwarmSchema.parse(input)
     return transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
@@ -1685,25 +1648,22 @@ export class SuperTabStore {
       // Buddies, their default's chat included, reads all of them. Nothing more is read when none is listed.
       const loaded = await this.ensure(tx, named, { groupIds: listedBuddyChats(named.state) })
       const original = loaded.state
-      const team = await this.teamHost(tx, user)
       // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.
       if (command.type === 'agent.remove' && asAgentId === command.agentId && !original.agents.some(a => a.id === asAgentId)) {
         const prior = await tx.superTabOperation.findUnique({ where: { id: stableId(tabId, `agent:${asAgentId}`, operationId) } })
         const result = prior?.result as Record<string, unknown> | undefined
-        // A team session's only if the removed agent ran on its machine; a receipt from before that was recorded is not.
-        if (prior && prior.requestHash === hash(command) && result?.releasedBy === user.sub && (team === null || result.releasedMachineId === team)) {
+        if (prior && prior.requestHash === hash(command) && result?.releasedBy === user.sub) {
           return replyOf(prior)
         }
         fail('FORBIDDEN', 'Only the execution host can confirm this removal.', 403)
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
-      if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command, asAgentId)
       // A Team account's session is closed by its own team session: the Mac's owner is its machine owner too, and from an
       // ordinary sign-in confirmed it, ending its hold with its data still there. A held one is on a Team account by
       // definition, whatever the account row says now (review of #2142).
-      if (command.type === 'agent.sessionClosed' && team === null) {
+      if (command.type === 'agent.sessionClosed') {
         const closing = original.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId && c.machineOwnerId === user.sub)
-        if (closing) await this.notTeamMachine(user, () => tx.machine.findFirst({ where: { machineId: closing.machineId, userId: user.sub,
+        if (closing) await this.notTeamMachine(() => tx.machine.findFirst({ where: { machineId: closing.machineId, userId: user.sub,
           autonomousEnv: user.autonomousEnv, ...machineAlive } }), !!closing.heldFor || teamByRecord(original, closing.machineId))
       }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
@@ -2220,7 +2180,7 @@ export class SuperTabStore {
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       // Answering an agent settles its tags in other conversations too (mentions.ts answeredAgents).
-      if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
+      if (command.type === 'message.send' && actor.kind === 'person') {
         const sent = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person' && m.author.id === actor.userId && !m.source)
         await resolveByAnswer(tx, tabId, actor.userId, answeredAgents(effects.state, actor, effects.state.conversations.find(c => c.id === command.conversationId)!,
           sent.flatMap(m => m.recipients)), context.now)
@@ -2235,8 +2195,8 @@ export class SuperTabStore {
       const replies = await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now, { state: effects.state, threads })
       this.tellPhones(tx, tabId, effects.state, { replies, tags }, effects.messages)
       // Their own message leaves the chat read for them on every app, in the same commit its read answers from (task #2265). A reply
-      // only in a thread is not in the chat, and a Team session has no marks (read/service.ts markRead).
-      if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
+      // only in a thread is not in the chat.
+      if (command.type === 'message.send' && actor.kind === 'person') {
         const own = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person'
           && m.author.id === actor.userId && (!m.thread || m.thread === m.id || m.alsoInChat))
         const next = Math.max(0, ...own.map(m => sequences.get(m.id) ?? 0))
@@ -3086,13 +3046,9 @@ export class SuperTabStore {
       const unavailable = () => fail('NOT_FOUND', 'This role is unavailable.', 404)
       const project = projectsOf(state).find(p => p.id === projectId) ?? unavailable()
       const role = project.roles?.find(r => r.id === roleId) ?? unavailable()
-      const team = await this.teamHost(tx, user)
       if (asAgentId) {
         await this.actor(tx, user, state, asAgentId)
         if (ledProject(state, asAgentId)?.id !== project.id) unavailable()
-      } else if (team !== null) {
-        // A team session is never the project's owner: it reads a text only for an agent its own machine hosts.
-        if (!await this.hostsProject(tx, state, user, project.id, team)) unavailable()
       } else if (!ownsProject(state, user.sub, project) && !await this.hostsProject(tx, state, user, project.id)) {
         unavailable()
       }
@@ -3175,11 +3131,9 @@ export class SuperTabStore {
     })
   }
 
-  /** Whether this account could host one of the project's agents now, by the same live grant as its host reads; on
-   *  [machineId] alone when given. */
-  private async hostsProject(tx: Transaction, state: SuperTabState, user: AuthUser, projectId: string, machineId?: string): Promise<boolean> {
-    for (const target of state.agents.filter(a => a.machineOwnerId === user.sub && (!machineId || a.machineId === machineId)
-      && agentProjectId(state, a) === projectId)) {
+  /** Whether this account could host one of the project's agents now, by the same live grant as its host reads. */
+  private async hostsProject(tx: Transaction, state: SuperTabState, user: AuthUser, projectId: string): Promise<boolean> {
+    for (const target of state.agents.filter(a => a.machineOwnerId === user.sub && agentProjectId(state, a) === projectId)) {
       try { agent(state, target.id); await this.agentGrant(tx, state, target); return true }
       catch (error) { if (!(error instanceof SuperTabError)) throw error }
     }
@@ -3273,7 +3227,7 @@ export class SuperTabStore {
         }
         const refusal = now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
           ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
-          : await this.terminalRefusal(tx, states.get(row.tabId)!, row, isTeamSession(user))
+          : await this.terminalRefusal(tx, states.get(row.tabId)!, row, false)
         if (refusal) {
           const refused = await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'done', ok: false, error: refusal } })
           if (refused.count) this.terminalAnswered(tx, row.id)
@@ -3646,7 +3600,6 @@ export class SuperTabStore {
   /** One project's Buddy proposals its PM has not answered, oldest first (proposals.ts), for a person who reads its chat:
    *  anyone else is answered as for a project that is not there. */
   async proposals(user: AuthUser, tabId: string, projectId: string): Promise<{ proposals: OpenProposal[] }> {
-    this.personOnly(user)
     let { state } = await this.readLoad(user, tabId)
     const actor = await this.actor(this.db, user, state)
     // The project chat is never archived, but a quiet one is not in the first load.
@@ -3660,7 +3613,6 @@ export class SuperTabStore {
    *  read. A project's chat holds its pulse; a quiet one is not in the first load, so the readable ones missing are loaded by id
    *  (at most the Swarm's 100 projects). */
   async projectList(user: AuthUser, tabId: string, invitedTo?: string): Promise<ProjectList> {
-    this.personOnly(user)
     let { state } = await this.readLoad(user, tabId)
     const actor = await this.actor(this.db, user, state)
     // Only a member: someone who left reads no list, as for a Swarm that is not there.
@@ -3687,7 +3639,6 @@ export class SuperTabStore {
    *  shows them: the same read check and row filter as messages(). People only, reading as themselves: agents read every
    *  message as it comes. At most CATCH_UP_SCAN rows are read; `more` says there were more. */
   async catchUp(user: AuthUser, tabId: string, conversationId: string, after: number): Promise<CatchUp> {
-    this.personOnly(user)
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(this.db, user, state)
     const group = readConversation(state, actor, conversationId)
@@ -3710,7 +3661,6 @@ export class SuperTabStore {
 
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
   async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
-    this.personOnly(user)
     // Not every quiet conversation: listMentions reads the quiet ones its tags are in by id (mentions.ts readable).
     const { state: tab } = await this.readLoad(user, tabId)
     await this.actor(this.db, user, tab)
@@ -3915,7 +3865,6 @@ export class SuperTabStore {
 
   /** Refuses anyone but a person of [tabId] who may write there (a viewer reads only), for New Project's organization check. */
   async requireWriter(user: AuthUser, tabId: string): Promise<void> {
-    this.personOnly(user)
     const { state } = await this.readLoad(user, tabId)
     author(state, await this.actor(this.db, user, state), true)
   }
@@ -3923,7 +3872,6 @@ export class SuperTabStore {
   /** Refuses [user] unless they may ask for a new repository for [projectId] now: a person, its owner, while it has no
    *  repository address. Read only: the routes ask this before any GitHub call (security review 1 of #3201). */
   async mayCreateRepository(user: AuthUser, tabId: string, projectId: string): Promise<void> {
-    this.personOnly(user)
     const { state } = await this.readLoad(user, tabId)
     repositoryCreator(state, await this.actor(this.db, user, state), projectId)
   }
@@ -3931,7 +3879,6 @@ export class SuperTabStore {
   /** [user] asks for a new repository for their project (task #1788), checked as [mayCreateRepository] in its write.
    *  Written on the project as `waiting`, replacing any earlier ask, so the apps show it. */
   async startRepositoryCreation(user: AuthUser, tabId: string, projectId: string, ask: { owner: string; name: string; private: boolean }, at: number): Promise<void> {
-    this.personOnly(user)
     await transaction(this.db, async tx => {
       const loaded = await this.load(tx, user, tabId), state = cloneData(loaded.state)
       const actor = await this.actor(tx, user, state)
@@ -4038,7 +3985,6 @@ export class SuperTabStore {
    *  daemon of the owner's asks every minute, add-on on or off, so it reads only the Swarms' heads and the people of those
    *  with the add-on: a full load of each Swarm sent about 1 MB per Swarm per poll (Diego, 2026-10-28). */
   async hostGrids(user: AuthUser) {
-    this.personOnly(user)
     // By the owner index (parts/indexed.ts): Prisma's $expr filter is bounded by the environment alone, every Swarm of it.
     // Not a deleted one (deletion.ts): its grid goes with it. A raw `deletedAt: null` matches a row that never had the field.
     const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: null } },
@@ -4120,7 +4066,7 @@ export class SuperTabStore {
     // whatever changed there that this machine's host does not read (machineReports.ts recordHolds).
     if (!record || !stamps || !recordHolds(record, stamps) || now >= record.deadline || now - record.at >= RECORD_TTL_MS || record.removals) return null
     // The checks a full report makes with the Swarm, from what the last one saw of it; a refusal is the full report's to say.
-    if ((record.team && !isTeamSession(user)) || !host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
+    if (record.team || !host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
     const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true, deletedAt: true } })
     if (row?.format !== 2 || row.deletedAt) return null
     const part = loaded !== undefined ? loaded : (await loadMachineParts(this.db, [partId(tabId, machineId)])).get(partId(tabId, machineId))
@@ -4130,7 +4076,7 @@ export class SuperTabStore {
     if (renamedBy(pool, accountMachineName(host.owned))) return null
     const data = structuredClone(part.data), mine = data.contribution!
     // A reading naming a refused start is never only a reading (machines.ts readingOnly): the full report fails it.
-    const reading = storedObservation(mine, observation, { team: isTeamSession(user), now, preparable: id => record.preparable.includes(id),
+    const reading = storedObservation(mine, observation, { now, preparable: id => record.preparable.includes(id),
       refusable: () => true })
     if (!readingOnly(mine.observation, reading)) return null
     addLent(mine, now, record.lentCount, record.lentProjects)
@@ -4226,7 +4172,7 @@ export class SuperTabStore {
       }
       if (!state.machines?.includes(pool)) return saved()
       recordAgentPresence(state, machineId, observation.runningHarnessIds, now)
-      const reading = storedObservation(pool, observation, { team: isTeamSession(user), now,
+      const reading = storedObservation(pool, observation, { now,
         preparable: id => !!state.starts?.some(s => s.id === id && preparableStart(s, machineId)),
         refusable: id => !!state.starts?.some(s => s.id === id && refusableStart(s, machineId)) })
       accrueLent(state, pool, now)
@@ -4308,8 +4254,6 @@ export class SuperTabStore {
   }
 
   async mayObserve(user: AuthUser, tabId: string, machineId: string, harnessId: string, machineOwnerId: string): Promise<boolean> {
-    // Watching is a person's: a team session has no person to watch as.
-    if (isTeamSession(user)) return false
     try {
       const tx = this.db
       const { state } = await this.readLoad(user, tabId)
@@ -4359,7 +4303,6 @@ export class SuperTabStore {
 
   /** mayObserve for each of `shares`, all in Swarm `tabId`, from one load of it. */
   private async observable<T extends { machineId: string; agentId: string; ownerId: string }>(user: AuthUser, tabId: string, shares: T[], reads = new GrantReads()): Promise<T[]> {
-    if (isTeamSession(user)) return []
     let state: SuperTabState
     try {
       state = (await this.readLoad(user, tabId)).state
@@ -4462,7 +4405,7 @@ export class SuperTabStore {
       // revokes moves the stamp; what no Swarm write records (a machine, a share) is checked again each time.
       const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
       if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen)) {
-        return (await this.heldDeliveries(user, agentId, open, seen)).map(d => withTurnEnd(d, this.now()))
+        return (await this.heldDeliveries(agentId, open, seen)).map(d => withTurnEnd(d, this.now()))
       }
     }
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
@@ -4475,13 +4418,11 @@ export class SuperTabStore {
 
   /** The open deliveries the last full poll allowed, while the Swarm is as it read it: the grants it checked are checked
    *  again, as the full poll does: the agent's refuses the poll, a sender's withholds what it sent (senderAllowed). */
-  private async heldDeliveries(user: AuthUser, agentId: string, open: SuperTabDelivery[], seen: NonNullable<Polled['open']>) {
+  private async heldDeliveries(agentId: string, open: SuperTabDelivery[], seen: NonNullable<Polled['open']>) {
     // One request's reads, shared by the agent's check and its senders' (GrantReads), never kept past it.
     const target = seen.grants[agentId]!, inSwarm = () => {}, reads = new GrantReads()
-    const team = await this.teamHost(this.db, user)
-    if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.grantHolds(this.db, seen.swarm, target, inSwarm, reads)
-    if (team === null) await this.notTeamMachine(user, () => reads.once(machineKey(seen.swarm.environment, target.machineId, target.machineOwnerId),
+    await this.notTeamMachine(() => reads.once(machineKey(seen.swarm.environment, target.machineId, target.machineOwnerId),
       () => this.db.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: seen.swarm.environment, ...machineAlive } })), !!target.team)
     const senders = new Map<string, Promise<boolean>>()
     const sent = (id: string) => senders.get(id) ?? senders.set(id, this.grantHolds(this.db, seen.swarm, seen.grants[id]!, inSwarm, reads)

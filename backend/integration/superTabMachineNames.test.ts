@@ -22,7 +22,6 @@ let pushes: SwarmChanged[] = []
 const TEAM_COMPUTER = 'tttttttttttttttttttttttttttttttt'
 const dee: AuthUser = { sub: '400000000000000000000001', email: 'dee@example.com', autonomousEnv: 'prod', role: 'user' }
 const huy: AuthUser = { sub: '400000000000000000000002', email: 'huy@example.com', autonomousEnv: 'prod', role: 'user' }
-const deeTeam: AuthUser = { ...dee, harnessSessionId: 'dee-team-session', harnessSessionKind: 'team', harnessComputerId: TEAM_COMPUTER }
 const run = (tab: string, command: Command, user: AuthUser = dee) => store.execute(user, tab, { operationId: randomUUID(), command })
 const reading = (generation: string) => ({ generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
   diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
@@ -132,15 +131,13 @@ describe('a rename after joining', () => {
     expect([await nameIn(one, 'studio-2'), await nameIn(two, 'studio-2')]).toEqual(['Mac 3', 'Mac 3'])
   })
 
-  it('renames its Mac\'s Team account with it, which its own reading never renames to its account\'s name', async () => {
+  it('renames its Mac\'s Team account with it', async () => {
     const tab = await swarm()
     await contribute(tab, 'studio-2', 'Macs-Mac-Studio-2')
     await contribute(tab, 'studio-2-team', 'Macs-Mac-Studio-2 · Team', dee, { ifMissing: true, maxAgents: 1 })
     expect(await nameIn(tab, 'studio-2-team')).toBe('Macs-Mac-Studio-2.local · Team account')
     await rename('studio-2', 'Mac 3')
     await report(tab, 'studio-2')
-    expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3 · Team account')
-    await report(tab, 'studio-2-team', deeTeam)
     expect(await nameIn(tab, 'studio-2-team')).toBe('Mac 3 · Team account')
   })
 

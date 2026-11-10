@@ -44,7 +44,6 @@ import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { PICTURES_RETIRED } from '../superTabs/retired.js'
-import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { markNothingNew } from '../lib/routeLatency.js'
@@ -540,8 +539,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // records into it: each is answered ok and ignored, to everyone, naming no Swarm. An older Desktop's open then gets no context (it
   // says it could not prepare terminal sharing) and an older host's read finds no terminal (its prepare fails), so nothing new is
   // recorded. A host drops an observation once it is acknowledged by the id it makes of it (cli superTabs/native.ts eventId), so
-  // that one is answered with it: without it, a journal from before would send the same observation again, for ever. A Team session
-  // reaches these on its own list (lib/teamSession.ts).
+  // that one is answered with it: without it, a journal from before would send the same observation again, for ever.
   const recordingGone = (_req: unknown, reply: FastifyReply) => sendSuccess(reply, { ok: true, ignored: true })
   app.post('/api/super-tabs/:tabId/native', { bodyLimit: HOT_BODY_LIMIT, preHandler: validateParams(tabParams) }, recordingGone)
   app.get('/api/super-tabs/:tabId/native/:contextId', { preHandler: validateParams(nativeParams) }, recordingGone)
@@ -638,7 +636,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
     (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
   // The scorecard is gone with Swarm v4, but an older Desktop's Scorecard tab still reads it: it answers no days, to everyone, and
-  // names no Swarm, as `updateRequired` does for the retired full-state reads. A Team session never reaches it (lib/teamSession.ts).
+  // names no Swarm, as `updateRequired` does for the retired full-state reads.
   app.get('/api/super-tabs/:tabId/scorecard', { preHandler: validateParams(tabParams) }, (_req, reply) => sendSuccess(reply, { days: [] }))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
@@ -678,10 +676,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       }
       await requireApproval(req.user!, grant, repository)
       const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
-      // A Harness Team account has no git identity of its own: its commits are the app's, as its pull requests are
-      // (github/app.ts commitIdentity). A person's machine keeps its owner's, as before.
-      const commitAs = isTeamSession(req.user) ? github.app.commitIdentity() : null
-      return { ...issued, ...attribution(grant), ...(commitAs ? { commitAs } : {}) }
+      return { ...issued, ...attribution(grant) }
     }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },

@@ -6,7 +6,6 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { machineAlive } from '../../lib/prisma.js'
-import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type SuperTabState } from '../model.js'
 import { GrantReads, TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, teamByRecord, type SuperTabStore } from '../store.js'
@@ -72,8 +71,8 @@ export class HostReads {
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => hostInputs(tx, cached, tabId))
       if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
       const state = await this.tabState(tx, cached, tabId, machineId)
-      // Its Team account alone hosts a machine this Swarm records as one, whatever its account row says now (store.ts).
-      if (!isTeamSession(user) && teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
+      // Nobody hosts a machine this Swarm records as a Harness Team account's, whatever its account row says now (store.ts).
+      if (teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
       const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.

@@ -26,9 +26,8 @@ let clock = NOW
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
-const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
 const signedIn = (authorization: string | undefined) =>
-  authorization === 'Bearer team' ? ownerTeam : [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
+  [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
 const MIGRATED = NOW - MINUTE
 
 beforeAll(async () => {
@@ -82,7 +81,7 @@ const run = async (tabId: string, command: Command, as: AuthUser = owner, asAgen
 const send = async (tabId: string, conversationId: string, text: string, as: AuthUser = owner, replyTo: string | null = null, asAgentId?: string) =>
   (await run(tabId, { type: 'message.send', conversationId, text, replyTo, recipientIds: [] }, as, asAgentId)).result.messageId as string
 const call = async (method: 'GET' | 'POST', url: string, as: AuthUser = owner, payload?: unknown) => {
-  const response = await app.inject({ method, url, headers: { authorization: as === ownerTeam ? 'Bearer team' : `Bearer ${as.sub}` },
+  const response = await app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` },
     ...(payload === undefined ? {} : { payload: payload as never }) })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string; message: string } }, headers: response.headers }
 }
@@ -169,16 +168,13 @@ describe('Reminders: a message brought back to its person at a time', () => {
     expect((await set(s.tabId, s.web, message, NOW + 30 * DAY)).status).toBe(200)
   })
 
-  it('is the person\'s alone: another member, an agent and a Team session never read, set or clear it', async () => {
+  it('is the person\'s alone: another member and an agent never read, set or clear it', async () => {
     const s = await scene()
     const message = await send(s.tabId, s.web, 'Owner asks')
     await set(s.tabId, s.web, message, NOW + 20 * MINUTE)
     clock = NOW + 20 * MINUTE
     expect(await due(s.tabId, peer)).toEqual({ due: [], next: null })
     expect((await clear(s.tabId, s.web, message, peer)).body.data).toEqual({ cleared: false })
-    for (const answer of [await list(s.tabId, ownerTeam), await set(s.tabId, s.web, message, NOW + 40 * MINUTE, ownerTeam), await clear(s.tabId, s.web, message, ownerTeam)]) {
-      expect(answer.status).toBe(403)
-    }
     for (const answer of [await list(s.tabId, owner, `?asAgentId=${s.worker}`), await set(s.tabId, s.web, message, NOW + 40 * MINUTE, owner, `?asAgentId=${s.worker}`),
       await clear(s.tabId, s.web, message, owner, `?asAgentId=${s.worker}`)]) {
       expect(answer.status).toBe(400)

@@ -22,8 +22,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { createRateLimiter } from '../../lib/rateLimit.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { agentOnly, author, fail, SuperTabError, type Actor, type Author, type Conversation, type SuperTabState } from '../model.js'
+import { agentOnly, author, SuperTabError, type Actor, type Author, type Conversation, type SuperTabState } from '../model.js'
 import { readConversation } from '../projects.js'
 import { deliveredCopies, threadsBackfilled, threadsNaming, type ThreadReply } from '../pageReads.js'
 import { isSwarmBuddyChat } from '../buddies.js'
@@ -404,10 +403,9 @@ export interface InboxRead {
   threadRows: ThreadMarkRow[]
 }
 
-/** The inbox of the signed-in person: never an agent's (they have no read marks) or a Team session's (marks are the person's).
+/** The inbox of the signed-in person: never an agent's (they have no read marks).
  *  Without `latest`, the chats' latest messages are not read and `latest` is empty. */
 export async function inboxRead(store: SuperTabStore, user: AuthUser, tabId: string, options: { latest: boolean }): Promise<InboxRead> {
-  if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
   const db = store.db
   const { state } = await store.readLoad(user, tabId)
   const actor = await store.actor(db, user, state)

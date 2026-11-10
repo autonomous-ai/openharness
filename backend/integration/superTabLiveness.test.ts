@@ -648,13 +648,6 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(held.map(row => row.messageId)).toEqual(page.map(row => row.id))
   })
 
-  it('never answers a team session from its person\'s held answer: the team session meets its own checks', async () => {
-    const f = await swarm()
-    await held(f)
-    f.clock.now += 1_000
-    const team: AuthUser = { ...host, harnessSessionId: 'team-elsewhere', harnessSessionKind: 'team', harnessComputerId: 'elsewhere' }
-    await expect(f.timed.deliveries(team, f.tab, f.lead)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
-  })
 })
 
 // Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is

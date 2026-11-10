@@ -20,7 +20,7 @@ import { createRateLimiter } from '../lib/rateLimit.js'
 const start = z.object({
   label: z.string().trim().min(1).max(80),
   kind: z.enum(['computer', 'viewer']),
-  // A computer names the computer it is, so the session it gets is one; an app does not.
+  // A computer names the computer it is; an app does not.
   computerId: z.string().regex(/^[0-9a-fA-F-]{16,64}$/).optional(),
   // A device with no screen asks for a code it can say aloud (lib/harnessSession.ts).
   spokenCode: z.boolean().optional(),

@@ -245,12 +245,9 @@ describe('installation tokens', () => {
     expect(app.notInstalled(repo).message).toBe('The Harness GitHub App is not installed on acme/app. Ask an owner of acme to install it.')
   })
 
-  // Dee, task #2136: a commit reads as Claude's line does, and asks GitHub nothing.
-  it('names Harness by Autonomous as its commit identity, with no call to GitHub', () => {
-    const { app, github } = setup()
-    expect(app.commitIdentity()).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+  // Dee, task #2136: a commit reads as Claude's line does.
+  it('names Harness by Autonomous as its co-author', () => {
     expect(HARNESS_CO_AUTHOR).toBe('Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>')
-    expect(github.calls).toEqual([])
   })
 
   // A wrong name asks the log for a bot that never pushed: an empty answer that would read as clean (review 1 of #2600).

@@ -8,7 +8,6 @@ export default defineConfig({ test: {
     'integration/superTabSharing.test.ts',
     'integration/superTabAutoJoin.test.ts',
     'integration/superTabGithub.test.ts',
-    'integration/superTabTeam.test.ts',
     'integration/superTabRead.test.ts',
     'integration/superTabPersonalTasksFeed.test.ts',
     'integration/superTabOneGroup.test.ts',

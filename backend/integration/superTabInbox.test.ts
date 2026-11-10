@@ -37,9 +37,8 @@ let app: FastifyInstance
 let store: SuperTabStore
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
-const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
 const signedIn = (authorization: string | undefined) =>
-  authorization === 'Bearer team' ? ownerTeam : [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
+  [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
 const MIGRATED = NOW - 60_000
 
 beforeAll(async () => {
@@ -102,11 +101,11 @@ async function scene(extra: (s: ReturnType<typeof swarm>) => void = () => {}) {
   return { tabId, web, worker, secretGroup, closedId, buddyId, leads: state.leadsConversationId! }
 }
 
-const get = async (url: string, as: AuthUser | 'team' = owner) => {
-  const response = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${as === 'team' ? 'team' : as.sub}` } })
+const get = async (url: string, as: AuthUser = owner) => {
+  const response = await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${as.sub}` } })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string; message: string } } }
 }
-const inbox = (tabId: string, as: AuthUser | 'team' = owner) => get(`/api/super-tabs/${tabId}/inbox`, as)
+const inbox = (tabId: string, as: AuthUser = owner) => get(`/api/super-tabs/${tabId}/inbox`, as)
 
 /** Sends a message as a person (or as an agent the owner runs) through the real command, and answers its stored row. */
 async function send(tabId: string, conversationId: string, text: string, opts: { as?: AuthUser; agentId?: string; replyTo?: string } = {}) {
@@ -306,7 +305,7 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
     expect(JSON.stringify(thread)).not.toContain(outsider.sub)
   })
 
-  it('refuses a removed member, a Team session and an agent alike, with nothing about the Swarm\'s chats', async () => {
+  it('refuses a removed member and an agent alike, with nothing about the Swarm\'s chats', async () => {
     const s = await busyScene()
     await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'member.remove', userId: peer.sub } })
     const removed = await inbox(s.tabId, peer)
@@ -317,9 +316,6 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
     expect({ status: removed.status, code: removed.body.error?.code }).toEqual({ status: page.status, code: page.body.error?.code })
     expect(removed.body.data).toBeUndefined()
     expect(JSON.stringify(removed.body)).not.toMatch(/Web|Buddy|Leads/)
-    const team = await inbox(s.tabId, 'team')
-    expect(team.status).toBe(403)
-    expect(JSON.stringify(team.body)).not.toMatch(/Web|Secret|Leads/)
     // An agent has no read marks: the read takes no agent at all.
     expect((await get(`/api/super-tabs/${s.tabId}/inbox?asAgentId=${s.worker}`, owner)).status).toBe(400)
     // Another Swarm's id reads as one that does not exist.
@@ -438,9 +434,9 @@ describe('thread unread as Desktop marks it (controller.dart threadUnread)', () 
 })
 
 describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', () => {
-  const threadsRead = (tabId: string, as: AuthUser | 'team' = owner) => get(`/api/super-tabs/${tabId}/threads`, as)
-  const post = async (url: string, as: AuthUser | 'team', payload: unknown) => {
-    const response = await app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${as === 'team' ? 'team' : as.sub}` }, payload: payload as never })
+  const threadsRead = (tabId: string, as: AuthUser = owner) => get(`/api/super-tabs/${tabId}/threads`, as)
+  const post = async (url: string, as: AuthUser, payload: unknown) => {
+    const response = await app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${as.sub}` }, payload: payload as never })
     return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string } } }
   }
   const markThread = async (tabId: string, conversationId: string, root: string, sequence: number, as: AuthUser) =>
@@ -633,9 +629,8 @@ describe('reading a chat never reads a reply only in a thread (Diego, 11-01)', (
     const [buddyRoot] = await insert(s.tabId, s.buddyId, [{ text: 'Buddy root', author: personAuthor(peer), mentions: [owner.sub] }])
     await insert(s.tabId, s.buddyId, [{ text: 'Buddy reply', author: agentAuthor('buddy-agent'), thread: buddyRoot, mentions: [owner.sub] }])
     const refusals = [await post(`/api/super-tabs/${s.tabId}/conversations/${s.secretGroup}/read`, peer, { sequence: 10_000 }),
-      await post(`/api/super-tabs/${s.tabId}/conversations/${s.buddyId}/read`, owner, { sequence: 10_000 }),
-      await post(`/api/super-tabs/${s.tabId}/conversations/${s.web}/read`, 'team', { sequence: 10_000 })]
-    expect(refusals.map(r => r.status)).toEqual([404, 404, 403])
+      await post(`/api/super-tabs/${s.tabId}/conversations/${s.buddyId}/read`, owner, { sequence: 10_000 })]
+    expect(refusals.map(r => r.status)).toEqual([404, 404])
     expect(JSON.stringify(refusals)).not.toMatch(/Secret|Buddy/)
     expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId, threadId: { in: [secretRoot!, buddyRoot!, hiddenRoot!] } } })).toBe(0)
   })

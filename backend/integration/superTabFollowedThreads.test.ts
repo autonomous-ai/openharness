@@ -36,9 +36,8 @@ let app: FastifyInstance
 let store: SuperTabStore
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
-const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
 const signedIn = (authorization: string | undefined) =>
-  authorization === 'Bearer team' ? ownerTeam : [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
+  [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
 const MIGRATED = NOW - 60_000
 
 beforeAll(async () => {
@@ -98,13 +97,13 @@ async function scene(extra: (s: ReturnType<typeof swarm>) => void = () => {}) {
   return { tabId, web, worker, secret, secretGroup, buddyId, open, openChat }
 }
 
-const call = async (method: 'GET' | 'POST', url: string, as: AuthUser | 'team' = owner, payload?: unknown) => {
-  const response = await app.inject({ method, url, headers: { authorization: `Bearer ${as === 'team' ? 'team' : as.sub}` }, ...(payload === undefined ? {} : { payload: payload as never }) })
+const call = async (method: 'GET' | 'POST', url: string, as: AuthUser = owner, payload?: unknown) => {
+  const response = await app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` }, ...(payload === undefined ? {} : { payload: payload as never }) })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string; message: string } }, headers: response.headers }
 }
-const inbox = (tabId: string, as: AuthUser | 'team' = owner) => call('GET', `/api/super-tabs/${tabId}/inbox`, as)
-const threads = (tabId: string, as: AuthUser | 'team' = owner) => call('GET', `/api/super-tabs/${tabId}/threads`, as)
-const follow = (tabId: string, conversationId: string, root: string, value: boolean | null, as: AuthUser | 'team' = owner, query = '') =>
+const inbox = (tabId: string, as: AuthUser = owner) => call('GET', `/api/super-tabs/${tabId}/inbox`, as)
+const threads = (tabId: string, as: AuthUser = owner) => call('GET', `/api/super-tabs/${tabId}/threads`, as)
+const follow = (tabId: string, conversationId: string, root: string, value: boolean | null, as: AuthUser = owner, query = '') =>
   call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/follow${query}`, as, { follow: value })
 const markThread = (tabId: string, conversationId: string, root: string, sequence: number, as: AuthUser = owner) =>
   call('POST', `/api/super-tabs/${tabId}/conversations/${conversationId}/threads/${root}/read`, as, { sequence })
@@ -243,8 +242,7 @@ describe('Follow and Unfollow, kept on the person\'s thread mark', () => {
     expect(refused.map(r => r.status)).toEqual(refused.map(() => 404))
     expect(new Set(refused.map(r => JSON.stringify(r.body)))).toHaveLength(1)
     expect(JSON.stringify(refused)).not.toMatch(/Secret|Buddy|Hidden/)
-    // A Team session, an agent and someone who left are refused too.
-    expect((await follow(s.tabId, s.web, s.root, true, 'team')).status).toBe(403)
+    // An agent and someone who left are refused too.
     expect((await follow(s.tabId, s.web, s.root, true, owner, `?asAgentId=${s.worker}`)).status).toBe(400)
     await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'member.remove', userId: outsider.sub } })
     expect((await follow(s.tabId, s.web, s.root, true, outsider)).status).toBe(404)
@@ -530,11 +528,8 @@ describe('a person\'s followed threads (GET /threads)', () => {
     for (const bad of ['0', '251', '2.5', 'many']) expect((await page(`?read=${bad}`)).status, bad).toBe(400)
   })
 
-  it('refuses a Team session and an agent', async () => {
+  it('refuses an agent', async () => {
     const s = await followScene()
-    const team = await threads(s.tabId, 'team')
-    expect(team.status).toBe(403)
-    expect(JSON.stringify(team.body)).not.toMatch(/Web|Followed/)
     expect((await call('GET', `/api/super-tabs/${s.tabId}/threads?asAgentId=${s.worker}`)).status).toBe(400)
     expect((await threads(`tab-${randomUUID()}`)).status).toBe(404)
   })

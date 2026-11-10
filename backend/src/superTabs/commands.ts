@@ -664,7 +664,7 @@ export interface CommandContext {
     machineName?: string
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
     hostMachineId?: string
-    /** The machine's account row is signed in as a Harness Team account (lib/teamSession.ts), with or without a Mac. */
+    /** The machine's account row was last served by a Harness Team account's sign-in, with or without a Mac. */
     teamSession?: true }
   /** Loaded from this tab and conversation by the store. */
   /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies), and

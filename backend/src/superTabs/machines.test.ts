@@ -238,7 +238,7 @@ describe('reported engine profiles', () => {
     const pool: ContributedMachine = { machineId: 'host', name: 'Mac', contributorId: 'owner', membershipGeneration: 'tab', generation: 'g1',
       cwd: '/x', engines: ['claude'], maxAgents: 2, paused: false }
     const kept = storedObservation(pool, { ...sent, profiles: [profile, { ...profile, engine: 'codex' }] } as MachineObservation,
-      { team: false, now: NOW, preparable: () => true })
+      { now: NOW, preparable: () => true })
     expect(kept.profiles).toEqual([profile])
   })
 })
@@ -252,20 +252,20 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
   const reading = (extra: Partial<MachineObservation> = {}): MachineObservation => ({ ...sent, runningHarnessIds: ['a'], stoppedHarnessIds: ['z'],
     ...extra } as MachineObservation)
   const stored = (extra: Partial<MachineObservation> = {}, at = NOW, preparable = (_id: string) => true) =>
-    storedObservation(pool(), reading(extra), { team: false, now: at, preparable })
+    storedObservation(pool(), reading(extra), { now: at, preparable })
 
   it('keeps what a full report keeps: running sessions\' progress and tokens, its own preparing starts, contributed engines\' quotas', () => {
     const kept = storedObservation(pool(), reading({ harnessProgress: { a: 5, b: 6 }, harnessTokens: { a: tokens, b: tokens },
       preparingStartIds: ['s1', 's2'], quotas: [quota('claude'), quota('codex')], privacy: { mode: 'dedicated' } }),
-    { team: false, now: NOW, preparable: id => id === 's1' })
+    { now: NOW, preparable: id => id === 's1' })
     expect(kept).toMatchObject({ receivedAt: NOW, sessionKind: 'computer', harnessProgress: { a: 5 }, harnessTokens: { a: tokens },
       preparingStartIds: ['s1'], runningHarnessIds: ['a'], stoppedHarnessIds: ['z'] })
     expect(kept.quotas.map(q => q.engine)).toEqual(['claude'])
     // A Team daemon's privacy check is accepted in a reading and stored with none (Swarm v4).
     expect(kept).not.toHaveProperty('privacy')
-    const team = storedObservation(pool(), reading({ privacy: { mode: 'dedicated' } }), { team: true, now: NOW, preparable: () => true })
-    expect(team).toMatchObject({ sessionKind: 'team' })
-    expect(team).not.toHaveProperty('privacy')
+    const older = storedObservation(pool(), reading({ privacy: { mode: 'dedicated' } }), { now: NOW, preparable: () => true })
+    expect(older).toMatchObject({ sessionKind: 'computer' })
+    expect(older).not.toHaveProperty('privacy')
   })
 
   it('stores only running idle Buddies and makes changed proof run the full decision', () => {
@@ -311,9 +311,9 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     expect(readingOnly(undefined, before)).toBe(false)
     // Sessions are compared as sets: a session repeated is not one that stayed.
     expect(readingOnly(stored({ runningHarnessIds: ['a', 'b'] }), stored({ runningHarnessIds: ['a', 'a'] }))).toBe(false)
-    // A reading from the other kind of session decides who may host the machine (store.ts teamByRecord).
-    const team = storedObservation(pool(), reading({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] }), { team: true, now: NOW + 15_000, preparable: () => true })
-    expect(readingOnly(before, team)).toBe(false)
+    // A reading stored from a Harness Team account's session, before they went, decides who may host the machine (store.ts
+    // teamByRecord): the next one is never only a reading.
+    expect(readingOnly({ ...before, sessionKind: 'team' }, stored({ harnessProgress: { a: 5 }, preparingStartIds: ['s1'] }))).toBe(false)
   })
 })
 
