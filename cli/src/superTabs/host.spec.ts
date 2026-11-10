@@ -3433,7 +3433,7 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     const commands: unknown[] = [], refusals: string[] = []
     /** The Swarm as its person reads it: the machines they took out of it (backend removedMachines, their own only). */
     const swarm: Record<string, unknown> = { id: 'own', machines: [] }
-    let clock = 0
+    let clock = 0, reads = 0
     const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
       if (path.endsWith('/commands')) {
         commands.push({ path, ...(body as object) })
@@ -3442,18 +3442,19 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
         return { status: 200, body: { success: true, data: {} } }
       }
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] })
-        : path.startsWith('/api/super-tabs/own/') ? swarmReply(path, swarm) : [] } }
+        : path.startsWith('/api/super-tabs/own/') ? (reads++, swarmReply(path, swarm)) : [] } }
     })
     const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'Ken Mac') } })
     const prepare = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/data/swarm-projects/own', engines: ['claude', 'codex'], maxAgents: 3, scope: 'swarm' }))
     const log = vi.fn()
     const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare }); hosts.push(host)
-    /** One roster pass at `at` ms, waiting for the add it may start to finish. */
+    /** One roster pass at `at` ms, waiting for the add it may start to finish: each starts with a Swarm read, and ends in a
+     *  command sent, a skip or a refusal said, or a read that comes back no more. */
     const pass = async (at: number) => {
       clock = at
-      const tries = prepare.mock.calls.length, heard = commands.length + log.mock.calls.length
+      const before = reads, heard = commands.length + log.mock.calls.length
       await host.tick()
-      if (prepare.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
+      if (reads > before) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
     }
     return { core, rows, swarm, commands, refusals, prepare, log, pass }
   }
@@ -3472,20 +3473,21 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
   })
 
   // A machine its person took out of the Swarm stays out: only a person adds it back (backend removedMachines, #2181). The
-  // server refuses the add too (`unlessRemoved`); the host prepares nothing, and waits for the roster to stop asking.
-  it('never adds back a machine its person removed, and asks nothing more while the roster still marks it', async () => {
+  // server refuses the add too (`unlessRemoved`); the host prepares nothing, and looks again, saying so, each half hour.
+  it('never adds back a machine its person removed, and looks again only each half hour while the roster marks it', async () => {
     const t = joining()
     t.swarm.removedMachines = ['machine-1']
-    for (const at of [0, 60_000, 30 * 60_000, 24 * 60 * 60_000]) await t.pass(at)
+    await t.pass(0)
+    await t.pass(30 * 60_000 - 1)
+    await t.pass(30 * 60_000)
     expect(t.prepare).not.toHaveBeenCalled()
     expect(t.commands).toEqual([])
-    // Added back by its person: no longer removed, and once the roster marks it again, it joins.
+    expect(t.log.mock.calls).toEqual(Array(2).fill(['Not adding this machine back to a Swarm its person removed it from']))
+    // No longer removed (added back, or dropped from the server's list): the next look adds it.
     delete t.swarm.removedMachines
-    t.rows[0]!.joinSwarm = false
-    await t.pass(24 * 60 * 60_000 + 1)
-    t.rows[0]!.joinSwarm = true
-    await t.pass(24 * 60 * 60_000 + 2)
+    await t.pass(60 * 60_000)
     expect(t.prepare).toHaveBeenCalledOnce()
+    expect(t.commands).toHaveLength(1)
   })
 
   it('backs off a refusal, doubling up to half an hour, and starts over after an add', async () => {
