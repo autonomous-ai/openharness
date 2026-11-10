@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { Availability, Podman } from './podman.js'
 import { PodmanError } from './podman.js'
@@ -6,14 +6,12 @@ import { PODMAN_RELEASE } from './podmanRelease.js'
 import { canAskForPassword, Setup, type SetupStep } from './setup.js'
 
 const GiB = 1024 ** 3
-const BOOT = 1_800_000_000
 const TEN_MINUTES = 10 * 60_000
 
 interface Rig {
   platform?: NodeJS.Platform
   arch?: string
   installed?: boolean
-  wsl2?: boolean
   machines?: unknown[]
   /** The person's machine would not start (podman.ts remembers it). */
   ownMachine?: boolean
@@ -26,7 +24,6 @@ interface Rig {
   runStdout?: string
   which?: string[]
   interactive?: boolean
-  bootTime?: number
   hostMemoryBytes?: number
   hostCpus?: number
 }
@@ -35,8 +32,8 @@ interface Rig {
 function rig(options: Rig = {}) {
   const platform = options.platform ?? 'darwin'
   const downloads: Array<{ url: string; to: string; timeoutMs: number }> = []
-  const runs: Array<{ cmd: string; args: string[]; timeoutMs: number; script?: string }> = []
-  const steps: Array<[SetupStep | null, number | undefined]> = []
+  const runs: Array<{ cmd: string; args: string[]; timeoutMs: number }> = []
+  const steps: Array<SetupStep | null> = []
   const podmanRuns: string[][] = []
   // The connection each machine start ran on.
   const startedOn: Array<string | null> = []
@@ -49,7 +46,7 @@ function rig(options: Rig = {}) {
     }),
     spawn: () => { throw new Error('setup never spawns') },
     argv: () => { throw new Error('setup never spawns') },
-    available: async (): Promise<Availability> => ({ state: 'needs_setup', restart: platform === 'win32' && !options.wsl2, ...(options.ownMachine ? { ownMachine: true as const } : {}) }),
+    available: async (): Promise<Availability> => ({ state: 'needs_setup', ...(options.ownMachine ? { ownMachine: true as const } : {}) }),
     startMachine: vi.fn(async () => { podmanRuns.push(['machine', 'start']); startedOn.push(connection) }),
     memoryBytes: async () => 0,
     connection: () => connection,
@@ -66,17 +63,14 @@ function rig(options: Rig = {}) {
     },
     sha256: async () => options.checksum ?? Object.values(PODMAN_RELEASE.artifacts).find(a => a.url === downloads.at(-1)!.url)!.sha256,
     run: async (cmd, args, opts) => {
-      // The elevated script is read while it exists: setup deletes it with the installer.
-      const file = args[args.length - 1]!.match(/'-File','"([^"]+)"'/)?.[1]
-      runs.push({ cmd, args, timeoutMs: opts.timeoutMs, ...(file ? { script: readFileSync(file, 'utf8') } : {}) })
+      runs.push({ cmd, args, timeoutMs: opts.timeoutMs })
       return { code: options.runCode?.(cmd) ?? 0, stdout: options.runStdout ?? '', stderr: options.runStderr ?? '' }
     },
     which: async cmd => ((options.which ?? []).includes(cmd) ? `/usr/bin/${cmd}` : null),
     interactive: () => options.interactive ?? true,
-    bootTime: () => options.bootTime ?? BOOT,
     hostMemoryBytes: options.hostMemoryBytes ?? 16 * GiB,
     hostCpus: options.hostCpus ?? 8,
-    step: (s, bootTime) => { steps.push([s, bootTime]) },
+    step: (s) => { steps.push(s) },
   })
   return { setup, podman, downloads, runs, steps, podmanRuns, startedOn }
 }
@@ -100,7 +94,7 @@ describe('PODMAN_RELEASE', () => {
 describe('Setup', () => {
   it('macOS installs the pkg through osascript with administrator privileges', async () => {
     const r = rig({ platform: 'darwin', arch: 'arm64' })
-    expect(await r.setup.run({ step: null })).toBe('done')
+    await r.setup.run({ step: null })
     expect(r.downloads).toEqual([{ url: PODMAN_RELEASE.artifacts['darwin-arm64'].url, to: expect.stringMatching(/podman-installer-macos-arm64\.pkg$/), timeoutMs: TEN_MINUTES }])
     expect(r.runs).toHaveLength(1)
     expect(r.runs[0]!.cmd).toBe('osascript')
@@ -108,7 +102,7 @@ describe('Setup', () => {
     expect(r.runs[0]!.args).toEqual(['-e',
       `do shell script "installer -pkg '${r.downloads[0]!.to}' -target /" with prompt "Harness needs your password to install Podman for Browser." with administrator privileges`])
     expect(existsSync(r.downloads[0]!.to)).toBe(false)
-    expect(r.steps[0]).toEqual(['installing', undefined])
+    expect(r.steps[0]).toBe('installing')
   })
 
   it('an Intel Mac gets the amd64 pkg', async () => {
@@ -140,60 +134,6 @@ describe('Setup', () => {
     expect(r.podmanRuns).toEqual([])
   })
 
-  it('Windows runs one elevated script that enables WSL 2 when missing and installs the MSI', async () => {
-    const r = rig({ platform: 'win32', arch: 'x64', wsl2: false })
-    await r.setup.run({ step: null })
-    expect(r.downloads[0]!.url).toBe(PODMAN_RELEASE.artifacts['win32-x64'].url)
-    expect(r.runs).toHaveLength(1)
-    const [call] = r.runs
-    expect(call!.cmd).toBe('powershell.exe')
-    expect(call!.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command'])
-    expect(call!.args[3]!.match(/Start-Process/g)).toHaveLength(1)
-    expect(call!.args[3]).toContain('Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden')
-    expect(call!.timeoutMs).toBe(TEN_MINUTES)
-    expect(call!.script).toContain('wsl.exe --install --no-distribution')
-    expect(call!.script).toMatch(/msiexec\.exe -ArgumentList '\/i', '"[^"]+podman-installer-windows-amd64\.msi"', '\/qn', '\/norestart'/)
-
-    const withWsl = rig({ platform: 'win32', arch: 'arm64', wsl2: true })
-    expect(await withWsl.setup.run({ step: null })).toBe('done')
-    expect(withWsl.downloads[0]!.url).toBe(PODMAN_RELEASE.artifacts['win32-arm64'].url)
-    expect(withWsl.runs[0]!.script).not.toContain('wsl.exe')
-    expect(withWsl.runs[0]!.script).toContain('/qn')
-  })
-
-  it('a declined UAC prompt is podman_install_failed', async () => {
-    const r = rig({ platform: 'win32', arch: 'x64', runCode: () => 1, runStderr: 'The operation was canceled by the user.' })
-    const error = await failure(r.setup.run({ step: null }))
-    expect(error.state).toBe('podman_install_failed')
-    expect(error.message).toContain('canceled by the user')
-    expect(r.steps).toEqual([['installing', undefined]])
-  })
-
-  it('Windows returns restart_needed after the script when WSL 2 was just enabled', async () => {
-    const r = rig({ platform: 'win32', arch: 'x64', wsl2: false })
-    expect(await r.setup.run({ step: null })).toBe('restart_needed')
-    expect(r.steps).toEqual([['installing', undefined], ['restart_needed', BOOT]])
-    expect(r.podmanRuns).toEqual([])
-  })
-
-  it('restart_needed resumes only after the boot time changed', async () => {
-    const same = rig({ platform: 'win32', arch: 'x64', installed: true, bootTime: BOOT + 30 })
-    expect(await same.setup.run({ step: 'restart_needed', bootTime: BOOT })).toBe('restart_needed')
-    expect(same.podmanRuns).toEqual([])
-    expect(same.steps).toEqual([])
-
-    const later = rig({ platform: 'win32', arch: 'x64', installed: true, bootTime: BOOT + 3_600 })
-    expect(await later.setup.run({ step: 'restart_needed', bootTime: BOOT })).toBe('done')
-    expect(later.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'init', '--rootful'], ['machine', 'start']])
-  })
-
-  it('after the restart no elevated call is made', async () => {
-    const r = rig({ platform: 'win32', arch: 'x64', installed: false, bootTime: BOOT + 3_600 })
-    await r.setup.run({ step: 'restart_needed', bootTime: BOOT })
-    expect(r.runs).toEqual([])
-    expect(r.downloads).toEqual([])
-  })
-
   it('Linux uses pkexec with the distro\'s package manager', async () => {
     const managers: Array<[string, string[]]> = [
       ['apt-get', ['install', '-y', 'podman', 'uidmap', 'slirp4netns']],
@@ -204,7 +144,7 @@ describe('Setup', () => {
     for (const [index, [manager, args]] of managers.entries()) {
       // Every manager after this one is present too: the first in the list wins.
       const r = rig({ platform: 'linux', which: ['pkexec', ...managers.slice(index).map(([name]) => name)] })
-      expect(await r.setup.run({ step: null })).toBe('done')
+      await r.setup.run({ step: null })
       expect(r.runs).toEqual([{ cmd: '/usr/bin/pkexec', args: [`/usr/bin/${manager}`, ...args], timeoutMs: TEN_MINUTES }])
       expect(r.downloads).toEqual([])
     }
@@ -221,9 +161,8 @@ describe('Setup', () => {
       { platform: 'linux', which: ['apt-get'] },
       { platform: 'linux', which: ['pkexec'] },
       { platform: 'darwin', interactive: false },
-      { platform: 'win32', arch: 'x64', interactive: false },
       { platform: 'linux', which: ['pkexec', 'apt-get'], interactive: false },
-      { platform: 'win32', arch: 'ia32' },
+      { platform: 'darwin', arch: 'ia32' },
     ] satisfies Rig[]) {
       const r = rig(options)
       expect((await failure(r.setup.run({ step: null }))).state).toBe('podman_manual')
@@ -238,15 +177,11 @@ describe('Setup', () => {
     await mac.setup.run({ step: null })
     expect(mac.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'init', '--memory', '8192', '--cpus', '5'], ['machine', 'start']])
     expect(mac.podman.run.mock.calls[1]![1]).toEqual({ timeoutMs: TEN_MINUTES })
-    expect(mac.steps).toEqual([['starting_podman', undefined], [null, undefined]])
+    expect(mac.steps).toEqual(['starting_podman', null])
 
     const big = rig({ platform: 'darwin', installed: true, hostMemoryBytes: 64 * GiB, hostCpus: 2 })
     await big.setup.run({ step: null })
     expect(big.podmanRuns[1]).toEqual(['machine', 'init', '--memory', '16384', '--cpus', '2'])
-
-    const windows = rig({ platform: 'win32', installed: true })
-    await windows.setup.run({ step: null })
-    expect(windows.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'init', '--rootful'], ['machine', 'start']])
   })
 
   it('a machine that will not be made is podman_down', async () => {
@@ -266,16 +201,10 @@ describe('Setup', () => {
   it('setup then inits and starts a machine named harness, and never runs start, set, rm or reset on the other one', async () => {
     const person = [{ Name: 'podman-machine-default', Running: false }]
     const mac = rig({ platform: 'darwin', installed: true, machines: person, ownMachine: true, hostMemoryBytes: 16 * GiB, hostCpus: 10 })
-    expect(await mac.setup.run({ step: null })).toBe('done')
+    await mac.setup.run({ step: null })
     expect(mac.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'init', '--memory', '8192', '--cpus', '5', 'harness'], ['machine', 'start']])
     expect(mac.podman.run.mock.calls[1]![1]).toEqual({ timeoutMs: TEN_MINUTES })
     expect(mac.startedOn).toEqual(['harness'])
-
-    // Windows reaches its rootful machine as root, through the connection init names `<machine>-root`.
-    const windows = rig({ platform: 'win32', installed: true, machines: person, ownMachine: true })
-    await windows.setup.run({ step: null })
-    expect(windows.podmanRuns).toEqual([['machine', 'list', '--format', 'json'], ['machine', 'init', '--rootful', 'harness'], ['machine', 'start']])
-    expect(windows.startedOn).toEqual(['harness-root'])
   })
 
   it('the default connection is not changed', async () => {
@@ -299,21 +228,21 @@ describe('Setup', () => {
 
   it('an installed Podman is never replaced', async () => {
     const r = rig({ platform: 'darwin', installed: true, interactive: false })
-    expect(await r.setup.run({ step: 'installing' })).toBe('done')
+    await r.setup.run({ step: 'installing' })
     expect(r.downloads).toEqual([])
     expect(r.runs).toEqual([])
   })
 
   it('Linux skips the machine steps', async () => {
     const r = rig({ platform: 'linux', installed: true })
-    expect(await r.setup.run({ step: null })).toBe('done')
+    await r.setup.run({ step: null })
     expect(r.podmanRuns).toEqual([])
-    expect(r.steps).toEqual([[null, undefined]])
+    expect(r.steps).toEqual([null])
   })
 
   it('resumes from the recorded step', async () => {
     const r = rig({ platform: 'darwin', installed: false })
-    expect(await r.setup.run({ step: 'starting_podman' })).toBe('done')
+    await r.setup.run({ step: 'starting_podman' })
     expect(r.downloads).toEqual([])
     expect(r.runs).toEqual([])
     expect(r.podmanRuns.at(-1)).toEqual(['machine', 'start'])
@@ -323,7 +252,6 @@ describe('Setup', () => {
 describe('canAskForPassword', () => {
   it('is false over SSH, and on Linux without a display', () => {
     expect(canAskForPassword({}, 'darwin')).toBe(true)
-    expect(canAskForPassword({}, 'win32')).toBe(true)
     expect(canAskForPassword({ SSH_CONNECTION: '10.0.0.2 51000 10.0.0.1 22' }, 'darwin')).toBe(false)
     expect(canAskForPassword({}, 'linux')).toBe(false)
     expect(canAskForPassword({ DISPLAY: ':0' }, 'linux')).toBe(true)

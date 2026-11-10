@@ -1,12 +1,11 @@
 /**
  * What setup does on this computer itself (setup.ts takes them as its dependencies): download the pinned Podman
- * installer, check its SHA-256, and run the installer and Windows' restart, each bounded in time and started without
- * a window (docs/windows-rules.md, rule 1).
+ * installer, check its SHA-256, and run the installer, each bounded in time and started without a window
+ * (docs/windows-rules.md, rule 1).
  */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { uptime } from 'node:os'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
@@ -36,9 +35,4 @@ export function run(cmd: string, args: string[], opts: { timeoutMs: number }): P
       resolve({ code, stdout, stderr: error.killed ? `${cmd} timed out after ${opts.timeoutMs} ms` : stderr || error.message })
     })
   })
-}
-
-/** When this boot began, in seconds, as lib/bootId.ts names a boot it has no id for. */
-export function bootTime(): number {
-  return Math.round(Date.now() / 1000 - uptime())
 }

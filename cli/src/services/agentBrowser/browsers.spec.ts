@@ -59,7 +59,7 @@ function rig() {
     ready: vi.fn(async (agentId: string) => running.has(agentId)),
     exitCode: vi.fn(async (agentId: string) => (running.has(agentId) ? null : exitCodes.get(agentId) ?? null)),
   }
-  const setup = { run: vi.fn(async (_from: unknown): Promise<'done' | 'restart_needed'> => 'done') }
+  const setup = { run: vi.fn(async (_from: unknown): Promise<void> => {}) }
   const image = vi.fn(async () => IMAGE)
   const exitZone = vi.fn(async (_proxy: unknown): Promise<string | null> => null)
   const seen = new Map<string, string[]>()
@@ -99,7 +99,7 @@ const settle = async () => { for (let i = 0; i < 10; i++) await vi.advanceTimers
 describe('Browsers', () => {
   it('start with no podman and no setup running is failed needs_setup', async () => {
     const r = rig()
-    r.availability.value = { state: 'needs_setup', restart: false }
+    r.availability.value = { state: 'needs_setup' }
     await r.browsers.start('a1')
     expect(shown(r, 'a1')).toBe('failed/needs_setup')
     expect(r.containers.start).not.toHaveBeenCalled()
@@ -108,7 +108,7 @@ describe('Browsers', () => {
 
   it('setUp reports steps and then starts the waiting browsers', async () => {
     const r = rig()
-    r.availability.value = { state: 'needs_setup', restart: false }
+    r.availability.value = { state: 'needs_setup' }
     await r.browsers.start('a1')
     let recorded: unknown
     r.setup.run.mockImplementation(async () => {
@@ -116,7 +116,6 @@ describe('Browsers', () => {
       recorded = r.state.read().setup
       r.browsers.setupStep('starting_podman')
       r.browsers.setupStep(null)
-      return 'done'
     })
     await r.browsers.setUp()
     expect(r.setup.run).toHaveBeenCalledWith({ step: null })
@@ -130,12 +129,11 @@ describe('Browsers', () => {
 
   it('the connection name survives a restart through the state file', async () => {
     const r = rig()
-    r.availability.value = { state: 'needs_setup', restart: false, ownMachine: true }
+    r.availability.value = { state: 'needs_setup', ownMachine: true }
     await r.browsers.start('a1')
     r.setup.run.mockImplementationOnce(async () => {
       r.connection.value = 'harness'
       r.browsers.setupStep(null)
-      return 'done'
     })
     await r.browsers.setUp()
     expect(shown(r, 'a1')).toBe('ready')
@@ -151,14 +149,14 @@ describe('Browsers', () => {
 
   it('a start while setup runs waits for it', async () => {
     const r = rig()
-    const run = deferred<'done'>()
+    const run = deferred<void>()
     r.setup.run.mockImplementation(async () => { r.browsers.setupStep('installing'); return await run.promise })
     const setUp = r.browsers.setUp()
     expect(r.browsers.setUp()).toBe(setUp)
     await r.browsers.start('a1')
     expect(shown(r, 'a1')).toBe('setup/installing')
     expect(r.podman.available).not.toHaveBeenCalled()
-    run.resolve('done')
+    run.resolve()
     await setUp
     expect(shown(r, 'a1')).toBe('ready')
     expect(r.setup.run).toHaveBeenCalledTimes(1)
@@ -166,14 +164,14 @@ describe('Browsers', () => {
 
   it('a start in the moment before setup reports its first step joins it', async () => {
     const r = rig()
-    const run = deferred<'done'>()
+    const run = deferred<void>()
     r.setup.run.mockReturnValueOnce(run.promise)
     const setUp = r.browsers.setUp()
     await r.browsers.start('a1')
     expect(shown(r, 'a1')).toBe('starting')
     r.browsers.setupStep('starting_podman')
     expect(shown(r, 'a1')).toBe('setup/starting_podman')
-    run.resolve('done')
+    run.resolve()
     await setUp
     expect(shown(r, 'a1')).toBe('ready')
   })
@@ -189,32 +187,9 @@ describe('Browsers', () => {
     expect(r.measured).toEqual([])
   })
 
-  it('setUp that needs a restart leaves browsers in setup/restart_needed, and a later setUp after the restart goes on', async () => {
-    const r = rig()
-    r.availability.value = { state: 'needs_setup', restart: true }
-    await r.browsers.start('a1')
-    r.setup.run.mockImplementationOnce(async () => {
-      r.browsers.setupStep('installing')
-      r.browsers.setupStep('restart_needed', 1_700_000_000)
-      return 'restart_needed'
-    })
-    await r.browsers.setUp()
-    expect(shown(r, 'a1')).toBe('setup/restart_needed')
-    expect(r.state.read().setup).toEqual({ step: 'restart_needed', bootTime: 1_700_000_000 })
-    expect(r.measured).not.toContain('agent_browser_setup_ok')
-    r.setup.run.mockImplementationOnce(async () => {
-      r.browsers.setupStep('starting_podman')
-      r.browsers.setupStep(null)
-      return 'done'
-    })
-    await r.browsers.setUp()
-    expect(r.setup.run).toHaveBeenLastCalledWith({ step: 'restart_needed', bootTime: 1_700_000_000 })
-    expect(shown(r, 'a1')).toBe('ready')
-  })
-
   it('setup that fails names it on every waiting browser, and Retry runs setup again', async () => {
     const r = rig()
-    r.availability.value = { state: 'needs_setup', restart: false }
+    r.availability.value = { state: 'needs_setup' }
     await r.browsers.start('a1')
     await r.browsers.start('a2')
     r.setup.run.mockRejectedValueOnce(new PodmanError('podman_install_failed', 'osascript exited 1: User canceled'))
@@ -253,26 +228,25 @@ describe('Browsers', () => {
     expect(r.seen.get('a1')).toEqual(['starting', 'setup/building', 'starting', 'ready'])
   })
 
-  it('resume with the step starting_podman runs setUp, and with restart_needed hands Setup the boot time', async () => {
-    for (const setup of [{ step: 'starting_podman' }, { step: 'restart_needed', bootTime: 1_700_000_000 }]) {
-      writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup }))
-      const r = rig()
-      r.availability.value = { state: 'needs_setup', restart: false }
-      const run = deferred<'restart_needed'>()
-      r.setup.run.mockReturnValueOnce(run.promise)
-      await r.browsers.resume(new Set())
-      expect(r.setup.run).toHaveBeenCalledWith(setup)
-      await r.browsers.start('a1')
-      expect(shown(r, 'a1')).toBe(`setup/${setup.step}`)
-      run.resolve('restart_needed')
-      await settle()
-    }
+  it('resume with the step starting_podman runs setUp', async () => {
+    const setup = { step: 'starting_podman' }
+    writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup }))
+    const r = rig()
+    r.availability.value = { state: 'needs_setup' }
+    const run = deferred<void>()
+    r.setup.run.mockReturnValueOnce(run.promise)
+    await r.browsers.resume(new Set())
+    expect(r.setup.run).toHaveBeenCalledWith(setup)
+    await r.browsers.start('a1')
+    expect(shown(r, 'a1')).toBe('setup/starting_podman')
+    run.resolve()
+    await settle()
   })
 
   it('resume with the step installing does not run the installer', async () => {
     writeFileSync(path, JSON.stringify({ browsers: {}, deleting: [], setup: { step: 'installing' } }))
     const r = rig()
-    r.availability.value = { state: 'needs_setup', restart: false }
+    r.availability.value = { state: 'needs_setup' }
     await r.browsers.resume(new Set())
     expect(r.setup.run).not.toHaveBeenCalled()
     await r.browsers.start('a1')

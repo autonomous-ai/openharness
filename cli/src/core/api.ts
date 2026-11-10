@@ -706,11 +706,11 @@ export const SUPER_TAB_REQUESTS = ['super_tabs'] as const
 export interface SuperTabsPort { connected(): void; disconnected(): void; stop(): void; swarmRole(harnessId: string): Promise<import('../lib/swarmSkills.js').SwarmSkillGrant | null | undefined> }
 export const SUPER_TAB_FALLBACKS: PortFallbacks<SuperTabsPort> = { connected: undefined, disconnected: undefined, stop: undefined, swarmRole: later(undefined) }
 /**
- * The agent browser (services/agentBrowser.ts): whether Browser can run here, setting it up and restarting Windows to
- * finish (this computer only), a browser's state for its agent's tools (this computer only), and Retry and the settings
- * (the machine's own person only, `mayOpenBrowser`).
+ * The agent browser (services/agentBrowser.ts): whether Browser can run here, setting it up (this computer only), a
+ * browser's state for its agent's tools (this computer only), and Retry and the settings (the machine's own person
+ * only, `mayOpenBrowser`).
  */
-export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser_setup', 'agent_browser_restart', 'agent_browser_retry',
+export const AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
   'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'] as const
 /** The project and folder readers (services/projects.ts). */
 export const PROJECTS_REQUESTS = ['git_pull_request', 'git_pull_requests_status', 'git_project_info', 'scm_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file',

@@ -197,29 +197,42 @@ describe('the agent browser service', () => {
     expect(sync).not.toHaveBeenCalled()
   })
 
-  it('setup and restart refuse a non-local asker', async () => {
-    const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
+  it('setup refuses a non-local asker', async () => {
     const count = vi.fn()
-    const { requests } = start(fakeCore({ dataDir, count }), { setup: { run } })
+    const { requests } = start(fakeCore({ dataDir, count }))
     for (const asker of [OTHER_DESKTOP, PLAIN_OWNER]) {
       expect(await requests.agent_browser_setup!({}, asker)).toEqual({ error: 'LOCAL_ONLY' })
-      expect(await requests.agent_browser_restart!({}, asker)).toEqual({ error: 'LOCAL_ONLY' })
       expect(await requests.agent_browser_state!({ pane: '%1' }, asker)).toEqual({ error: 'LOCAL_ONLY' })
     }
     // Podman is here already, and Linux runs it in no machine: setup has nothing to install, and says it is done.
     expect(await requests.agent_browser_setup!({}, LOCAL)).toEqual({ ok: true })
     await eventually(() => expect(count).toHaveBeenCalledWith('agent_browser_setup_ok'))
-    expect(await requests.agent_browser_restart!({}, LOCAL)).toEqual({ error: 'NOT_WINDOWS' })
+  })
+
+  it('on win32 availability is unsupported and no process starts', async () => {
+    // A state file starts the service's look at Podman at once anywhere else.
+    saveState({ a1: defaultSettings(HOST) })
+    const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
+    const { podman, spawn } = podmanHere()
+    const { port, requests } = start(undefined, { platform: 'win32', podman, setup: { run } })
+    expect(await requests.agent_browser_available!({}, PLAIN_OWNER)).toEqual({ state: 'unsupported' })
+    port.attached(session('a1'))
+    port.stopped('a1')
+    port.deleted('a1')
+    expect(port.frameContext('a1')).toBeUndefined()
+    expect(port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
+    expect(fake.calls()).toEqual([])
+    expect(spawn).not.toHaveBeenCalled()
     expect(run).not.toHaveBeenCalled()
   })
 
-  it('restart on Windows restarts it in 10 s, and a refusal is named', async () => {
-    const run = vi.fn(async () => ({ code: 0, stdout: '', stderr: '' }))
-    const { requests } = start(undefined, { platform: 'win32', setup: { run } })
-    expect(await requests.agent_browser_restart!({}, LOCAL)).toEqual({ ok: true })
-    expect(run).toHaveBeenCalledWith('shutdown.exe', ['/r', '/t', '10', '/c', 'Harness is restarting Windows to finish setting up Browser'], { timeoutMs: 30_000 })
-    run.mockResolvedValueOnce({ code: 1190, stdout: '', stderr: 'A system shutdown has already been scheduled.' })
-    expect(await requests.agent_browser_restart!({}, LOCAL)).toEqual({ error: 'RESTART_FAILED' })
+  it('on win32 every other request answers UNSUPPORTED', async () => {
+    const { requests } = start(undefined, { platform: 'win32' })
+    expect(Object.keys(requests).sort()).toEqual([...AGENT_BROWSER_REQUESTS].sort())
+    for (const type of AGENT_BROWSER_REQUESTS.filter(type => type !== 'agent_browser_available')) {
+      expect(await requests[type]!({ agentId: 'a1', pane: '%1' }, LOCAL), type).toEqual({ error: 'UNSUPPORTED' })
+    }
+    expect(fake.calls()).toEqual([])
   })
 
   it('available answers what Podman is, to any asker', async () => {

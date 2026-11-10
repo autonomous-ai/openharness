@@ -90,9 +90,9 @@ export class Browsers {
     return this.setupRun ??= this.runSetup().finally(() => { this.setupRun = null })
   }
 
-  /** Setup's `step`: recorded first, so a daemon or Windows restart resumes where it stopped. */
-  setupStep(step: SetupStep | null, bootTime?: number): void {
-    this.deps.state.update(s => { s.setup = step ? { step, bootTime } : null })
+  /** Setup's `step`: recorded first, so a daemon restart resumes where it stopped. */
+  setupStep(step: SetupStep | null): void {
+    this.deps.state.update(s => { s.setup = step ? { step } : null })
     if (step) this.showSetup({ state: 'setup', step })
   }
 
@@ -194,7 +194,7 @@ export class Browsers {
 
   private async runSetup(): Promise<void> {
     try {
-      if ((await this.deps.setup.run(this.deps.state.read().setup ?? { step: null })) === 'restart_needed') return
+      await this.deps.setup.run(this.deps.state.read().setup ?? { step: null })
     } catch (error) {
       const state = failedState(error)
       this.deps.measure('agent_browser_setup_failed')

@@ -284,7 +284,7 @@ describe('the core API services stand on', () => {
 
   // A verified machine share is `owner` too, and the browser holds its person's logins.
   it('opens an agent\'s browser for this computer and the owner\'s own apps only, never a plain owner or a guest', () => {
-    expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_restart', 'agent_browser_retry',
+    expect(AGENT_BROWSER_REQUESTS).toEqual(['agent_browser_available', 'agent_browser_setup', 'agent_browser_retry',
       'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'])
     expect(mayOpenBrowser({ local: true, owner: true })).toBe(true)
     expect(mayOpenBrowser({ local: false, owner: true, accountOwner: true })).toBe(true)

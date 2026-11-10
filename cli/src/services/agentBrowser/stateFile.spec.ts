@@ -23,8 +23,8 @@ describe('StateFile', () => {
   it('update is atomic and 0600', () => {
     const file = new StateFile(path)
     file.update(s => { s.browsers.a1 = settings })
-    file.update(s => { s.deleting.push('a2'); s.setup = { step: 'restart_needed', bootTime: 1_700_000_000 } })
-    expect(file.read()).toEqual({ browsers: { a1: settings }, deleting: ['a2'], setup: { step: 'restart_needed', bootTime: 1_700_000_000 } })
+    file.update(s => { s.deleting.push('a2'); s.setup = { step: 'starting_podman' } })
+    expect(file.read()).toEqual({ browsers: { a1: settings }, deleting: ['a2'], setup: { step: 'starting_podman' } })
     if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
     // Written beside and renamed over: no half-written file, and nothing left behind.
     expect(readdirSync(dir)).toEqual(['agent-browser.json'])

@@ -3,11 +3,11 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { tmpdir, uptime } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
-import { bootTime, download, run, sha256 } from './hostTools.js'
+import { download, run, sha256 } from './hostTools.js'
 
 vi.mock('node:child_process', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:child_process')>()
@@ -70,11 +70,5 @@ describe('run', () => {
     expect(await run(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { timeoutMs: 200 }))
       .toEqual({ code: 1, stdout: '', stderr: `${process.execPath} timed out after 200 ms` })
     expect(await run('/no/such/program', [], { timeoutMs: 1_000 })).toMatchObject({ code: 1, stderr: expect.stringContaining('ENOENT') })
-  })
-})
-
-describe('bootTime', () => {
-  it('is now less the uptime, in seconds', () => {
-    expect(Math.abs(bootTime() - (Date.now() / 1000 - uptime()))).toBeLessThan(2)
   })
 })

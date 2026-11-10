@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { chmodSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -42,9 +42,6 @@ describe('createPodman', () => {
     expect(await createPodman({ resolve: async () => '/shell/podman', exists, platform: 'darwin' }).path()).toBe('/shell/podman')
     expect(asked).toEqual([])
     expect(await createPodman({ resolve: async () => null, exists, platform: 'darwin' }).path()).toBe('/opt/podman/bin/podman')
-    vi.stubEnv('ProgramFiles', 'D:\\Programs')
-    expect(await createPodman({ resolve: async () => null, exists, platform: 'win32' }).path())
-      .toBe('D:\\Programs\\RedHat\\Podman\\podman.exe')
     expect(await createPodman({ resolve: async () => null, exists: () => false, platform: 'darwin' }).path()).toBeNull()
     expect(await createPodman({ resolve: async () => null, exists, platform: 'linux' }).path()).toBeNull()
     expect(fake.calls()).toEqual([])
@@ -59,24 +56,10 @@ describe('createPodman', () => {
     expect(await createPodman().path()).toBe(fake.path)
   })
 
-  it('no podman is needs_setup; restart is true only on win32 without WSL 2', async () => {
-    const none = (platform: NodeJS.Platform, wsl2: boolean) =>
-      createPodman({ resolve: async () => null, exists: () => false, platform, wsl2: async () => wsl2 }).available()
-    expect(await none('darwin', false)).toEqual({ state: 'needs_setup', restart: false })
-    expect(await none('linux', false)).toEqual({ state: 'needs_setup', restart: false })
-    expect(await none('win32', true)).toEqual({ state: 'needs_setup', restart: false })
-    expect(await none('win32', false)).toEqual({ state: 'needs_setup', restart: true })
-  })
-
-  it('wsl 2 is read from wsl --status, started hidden', async () => {
-    vi.mocked(execFile).mockImplementationOnce(((_file: string, _args: string[], _options: object, done: (error: Error | null) => void) => {
-      done(null)
-      return {} as ChildProcess
-    }) as unknown as typeof execFile)
-    const podman = createPodman({ resolve: async () => null, exists: () => false, platform: 'win32' })
-    expect(await podman.available()).toEqual({ state: 'needs_setup', restart: false })
-    expect(vi.mocked(execFile).mock.calls[0]!.slice(0, 3))
-      .toEqual(['wsl.exe', ['--status'], expect.objectContaining({ windowsHide: true, timeout: 10_000 })])
+  it('no podman is needs_setup', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(await createPodman({ resolve: async () => null, exists: () => false, platform }).available()).toEqual({ state: 'needs_setup' })
+    }
   })
 
   it('podman info ok is ready', async () => {
@@ -95,7 +78,7 @@ describe('createPodman', () => {
   it('info failing with no machine is needs_setup, and with a running machine or on Linux is podman_down', async () => {
     fake.reply('info', { code: 125 })
     fake.reply('machine list', { stdout: '[]' })
-    expect(await found('win32').available()).toEqual({ state: 'needs_setup', restart: false })
+    expect(await found('darwin').available()).toEqual({ state: 'needs_setup' })
     fake.reply('machine list', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Running: true }]) })
     expect((await failure(found('darwin').available())).state).toBe('podman_down')
     expect((await failure(found('linux').available())).state).toBe('podman_down')
@@ -120,7 +103,7 @@ describe('createPodman', () => {
 
   it('memoryBytes reads memTotal from podman info on every platform', async () => {
     fake.reply('info', { stdout: info('5.8.9', 7 * GiB) })
-    for (const platform of ['darwin', 'linux', 'win32'] as const) expect(await found(platform).memoryBytes()).toBe(7 * GiB)
+    for (const platform of ['darwin', 'linux'] as const) expect(await found(platform).memoryBytes()).toBe(7 * GiB)
   })
 
   it('info that is not JSON is podman_failed, and does not count as an answer', async () => {
@@ -180,7 +163,7 @@ describe('createPodman', () => {
     const error = await failure(podman.startMachine())
     expect(error.state).toBe('needs_setup')
     expect(error.message).toContain('gvproxy')
-    expect(await podman.available()).toEqual({ state: 'needs_setup', restart: false, ownMachine: true })
+    expect(await podman.available()).toEqual({ state: 'needs_setup', ownMachine: true })
     expect(fake.calls().map(call => call.args).filter(args => args[0] === 'machine' && args[1] !== 'list')).toEqual([['machine', 'start']])
   })
 
@@ -207,11 +190,11 @@ describe('createPodman', () => {
     ])
   })
 
-  it('a rootful connection names its machine without -root, and a stopped one is read from the list', async () => {
-    fake.reply('--connection harness-root info', { code: 125 })
+  it('Harness\'s own machine stopped is read from the list by its name', async () => {
+    fake.reply('--connection harness info', { code: 125 })
     fake.reply('machine list', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Running: true }, { Name: 'harness', Running: false }]) })
-    const podman = createPodman({ resolve: async () => fake.path, platform: 'win32', now: () => 0 })
-    podman.useConnection('harness-root')
+    const podman = found()
+    podman.useConnection('harness')
     expect(await podman.available()).toEqual({ state: 'stopped' })
     await podman.startMachine()
     expect(fake.calls().at(-1)!.args).toEqual(['machine', 'start', 'harness'])
@@ -222,16 +205,16 @@ describe('createPodman', () => {
     fake.reply('machine list', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Running: false }]) })
     const podman = found()
     podman.useConnection('harness')
-    expect(await podman.available()).toEqual({ state: 'needs_setup', restart: false })
+    expect(await podman.available()).toEqual({ state: 'needs_setup' })
   })
 
   it('memoryBytes reads machine inspect while the machine is stopped', async () => {
     fake.reply('info', { code: 125, stderr: 'Error: unable to connect to Podman socket' })
     fake.reply('machine inspect', { stdout: JSON.stringify([{ Name: 'podman-machine-default', Resources: { CPUs: 12, Memory: 8192 } }]) })
     expect(await found('darwin').memoryBytes()).toBe(8 * GiB)
-    const own = found('win32')
-    own.useConnection('harness-root')
-    fake.reply('--connection harness-root info', { code: 125 })
+    const own = found('darwin')
+    own.useConnection('harness')
+    fake.reply('--connection harness info', { code: 125 })
     fake.reply('machine inspect harness', { stdout: JSON.stringify([{ Name: 'harness', Resources: { Memory: 4096 } }]) })
     expect(await own.memoryBytes()).toBe(4 * GiB)
     expect(fake.calls().map(call => call.args).filter(args => args[0] === 'machine')).toEqual([['machine', 'inspect'], ['machine', 'inspect', 'harness']])

@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { availableParallelism, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
-import { mayOpenBrowser, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
+import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { resolveViaLoginShell } from '../lib/tmuxOnPath.js'
@@ -19,7 +19,7 @@ import { Browsers, type BrowserState } from './agentBrowser/browsers.js'
 import { Containers } from './agentBrowser/containers.js'
 import { watchEvents } from './agentBrowser/events.js'
 import { exitZone, testProxy, type ExitLookupDeps } from './agentBrowser/exitLookup.js'
-import { bootTime, download, run, sha256 } from './agentBrowser/hostTools.js'
+import { download, run, sha256 } from './agentBrowser/hostTools.js'
 import { ensureImage } from './agentBrowser/image.js'
 import { createPodman, PodmanError, type Podman } from './agentBrowser/podman.js'
 import { humanMode, parseSettings, publicSettings, type BrowserHost } from './agentBrowser/settings.js'
@@ -31,8 +31,6 @@ export { AGENT_BROWSER_REQUESTS } from '../core/api.js'
 type SetupDeps = ConstructorParameters<typeof Setup>[0]
 type Reply = Record<string, unknown>
 
-const RESTART_TIMEOUT_MS = 30_000
-const RESTART_ARGS = ['/r', '/t', '10', '/c', 'Harness is restarting Windows to finish setting up Browser']
 const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
 // Xvnc listens on 5900 inside the container only (no published port): a viewer's bytes reach it through an exec.
 const VNC_PIPE = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
@@ -69,16 +67,34 @@ function named(error: unknown): Reply {
   throw error
 }
 
+/**
+ * Windows is not in v1 (spec § Later: Windows): WSL 2 could not be tested on any runner or VM we have. Nothing here
+ * runs Podman, the port tells the core no agent has a browser, and every request says so.
+ */
+function unsupported(ports: Pick<CorePorts, 'agentBrowser'>): ServiceRequests {
+  ports.agentBrowser = {
+    attached: () => {},
+    stopped: () => {},
+    deleted: () => {},
+    frameContext: () => undefined,
+    streamCommand: () => ({ error: 'NO_BROWSER' }),
+    onCloseViewers: () => {},
+    stop: () => {},
+  }
+  return Object.fromEntries(AGENT_BROWSER_REQUESTS.map(type =>
+    [type, () => (type === 'agent_browser_available' ? { state: 'unsupported' } : { error: 'UNSUPPORTED' })]))
+}
+
 export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBrowser'>, options: AgentBrowserOptions = {}): ServiceRequests {
-  const podman = options.podman ?? createPodman()
   const platform = options.platform ?? process.platform
+  if (platform === 'win32') return unsupported(ports)
+  const podman = options.podman ?? createPodman()
   const now = options.now ?? (() => new Date())
   const log = (line: string) => console.log(line)
   const count = (name: string) => core.count?.(name as ProductUsageMetric)
   const daemonId = daemonIdOf(core.dataDir)
   const statePath = join(core.dataDir, 'agent-browser.json')
   const state = new StateFile(statePath)
-  const runHere = options.setup?.run ?? run
 
   const containers = new Containers(podman, daemonId, log)
   /** The core's streams to this machine's browsers (core/browserStreams.ts), told when one stops or goes. */
@@ -87,10 +103,10 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   let browsers: Browsers
   const setup = new Setup({
     podman, platform, arch: process.arch,
-    download, sha256, run, which: resolveViaLoginShell, interactive: canAskForPassword, bootTime,
+    download, sha256, run, which: resolveViaLoginShell, interactive: canAskForPassword,
     hostMemoryBytes: totalmem(), hostCpus: availableParallelism(),
     ...options.setup,
-    step: (step, at) => browsers.setupStep(step, at),
+    step: step => browsers.setupStep(step),
   })
   browsers = new Browsers({
     podman, setup, state, log,
@@ -194,14 +210,6 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       begin()
       void browsers.setUp()
       return { ok: true }
-    },
-    agent_browser_restart: async (_payload, asker) => {
-      if (!asker.local) return LOCAL_ONLY
-      if (platform !== 'win32') return { error: 'NOT_WINDOWS' }
-      const result = await runHere('shutdown.exe', RESTART_ARGS, { timeoutMs: RESTART_TIMEOUT_MS })
-      if (result.code === 0) return { ok: true }
-      log(`agent browser: Windows did not restart (${result.code}): ${result.stderr.trim()}`)
-      return { error: 'RESTART_FAILED' }
     },
     agent_browser_state: async (payload, asker) => {
       if (!asker.local) return LOCAL_ONLY

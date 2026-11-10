@@ -5,7 +5,6 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { win32 } from 'node:path'
 import { oneShotParentEnv } from '../../lib/loginShellEnv.js'
 import { resolveViaLoginShell } from '../../lib/tmuxOnPath.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
@@ -21,7 +20,7 @@ export type Availability =
   | { state: 'ready' }
   | { state: 'stopped' }
   // ownMachine: Podman is here and the person's machine would not start; setup makes Harness's own beside it.
-  | { state: 'needs_setup'; restart: boolean; ownMachine?: true }
+  | { state: 'needs_setup'; ownMachine?: true }
   | { state: 'podman_old' }
   | { state: 'podman_memory' }
 
@@ -45,7 +44,6 @@ const RUN_TIMEOUT_MS = 30_000
 const INFO_TIMEOUT_MS = 5_000
 const MACHINE_START_TIMEOUT_MS = 10 * 60_000
 const AVAILABLE_CACHE_MS = 60_000
-const WSL_STATUS_TIMEOUT_MS = 10_000
 // One browser is capped at 2 GiB, and Podman's VM needs room beside it.
 const MIN_MEMORY_BYTES = 3 * 1024 ** 3
 const MIN_VERSION: readonly [number, number] = [4, 6]
@@ -57,24 +55,12 @@ const OUTPUT_LIMIT = 64 * 1024 * 1024
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */
 function installedPaths(platform: NodeJS.Platform): string[] {
-  if (platform === 'darwin') return ['/opt/podman/bin/podman']
-  if (platform === 'win32') return [win32.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'RedHat', 'Podman', 'podman.exe')]
-  return []
-}
-
-/** WSL 2 answers `wsl --status` with 0; a Windows without it, or with only the inbox stub, does not. */
-function wslInstalled(): Promise<boolean> {
-  return new Promise(resolve => {
-    execFile('wsl.exe', ['--status'], { timeout: WSL_STATUS_TIMEOUT_MS, ...ownProcessGroup('win32') }, error => resolve(!error))
-  })
+  return platform === 'darwin' ? ['/opt/podman/bin/podman'] : []
 }
 
 function parsed<T>(stdout: string, command: string): T {
   try { return JSON.parse(stdout) as T } catch { throw new PodmanError('podman_failed', `podman ${command} did not answer in JSON`) }
 }
-
-/** `machine init <name>` makes two connections to it, `<name>` and `<name>-root` (podman-machine-init(1)). */
-const machineOf = (connection: string) => connection.replace(/-root$/, '')
 
 function versionAtLeast(version: string): boolean {
   const [major = 0, minor = 0] = version.split('.').map(part => Number.parseInt(part, 10))
@@ -85,13 +71,11 @@ export function createPodman(deps: {
   resolve?: (cmd: string) => Promise<string | null>
   exists?: (path: string) => boolean
   platform?: NodeJS.Platform
-  wsl2?: () => Promise<boolean>
   now?: () => number
 } = {}): Podman {
   const resolve = deps.resolve ?? resolveViaLoginShell
   const exists = deps.exists ?? existsSync
   const platform = deps.platform ?? process.platform
-  const wsl2 = deps.wsl2 ?? wslInstalled
   const now = deps.now ?? Date.now
   // Kept once found; looked for again while missing, since setup may have just installed it.
   let found: string | null = null
@@ -100,7 +84,7 @@ export function createPodman(deps: {
   // The person's machine failed to start. Kept in memory only: after a daemon restart one more start is tried.
   let wontStart = false
   /** A machine command's own argument: Harness's machine by name, or none for the person's default machine. */
-  const machine = () => (connection ? [machineOf(connection)] : [])
+  const machine = () => (connection ? [connection] : [])
   // Machine commands act on a machine by name and run on the host, never through a connection.
   const onConnection = (args: string[]) => (connection && args[0] !== 'machine' ? ['--connection', connection, ...args] : args)
 
@@ -139,21 +123,21 @@ export function createPodman(deps: {
   }
 
   async function measure(): Promise<Availability> {
-    if (!(await path())) return { state: 'needs_setup', restart: platform === 'win32' && !(await wsl2()) }
+    if (!(await path())) return { state: 'needs_setup' }
     const info = await readInfo().catch(() => null)
     if (info) {
       if (!versionAtLeast(info.version)) return { state: 'podman_old' }
       return info.memTotal < MIN_MEMORY_BYTES ? { state: 'podman_memory' } : { state: 'ready' }
     }
-    // Only macOS and Windows run Podman in a machine; on Linux an unanswered info is Podman itself down.
-    if (platform === 'darwin' || platform === 'win32') {
+    // Only macOS runs Podman in a machine; on Linux an unanswered info is Podman itself down.
+    if (platform === 'darwin') {
       const { stdout } = await run(['machine', 'list', '--format', 'json'])
       const listed = parsed<Array<{ Name?: string; Running?: boolean }>>(stdout, 'machine list')
       const own = machine()[0]
       const machines = own ? listed.filter(listing => listing.Name === own) : listed
       // Podman is here and has no machine (or Harness's own is gone): setup's machine steps make one.
-      if (machines.length === 0) return { state: 'needs_setup', restart: false }
-      if (!machines.some(listing => listing.Running)) return wontStart ? { state: 'needs_setup', restart: false, ownMachine: true } : { state: 'stopped' }
+      if (machines.length === 0) return { state: 'needs_setup' }
+      if (!machines.some(listing => listing.Running)) return wontStart ? { state: 'needs_setup', ownMachine: true } : { state: 'stopped' }
     }
     throw new PodmanError('podman_down', 'Podman is not running')
   }
@@ -188,7 +172,7 @@ export function createPodman(deps: {
       try {
         return (await readInfo()).memTotal
       } catch (error) {
-        if (platform !== 'darwin' && platform !== 'win32') throw error
+        if (platform !== 'darwin') throw error
         // A stopped machine answers no info: its size is in its own configuration, in MiB (measured in the spike).
         const { stdout } = await run(['machine', 'inspect', ...machine()])
         const [inspected] = parsed<Array<{ Resources?: { Memory?: number } }>>(stdout, 'machine inspect')

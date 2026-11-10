@@ -13,7 +13,7 @@ const READY_MARKER = '/tmp/harness-ready'
 const STOP_SECONDS = '10'
 
 /**
- * Podman refuses a limit on rootless cgroup v1, or on a rootless WSL machine the person already had. The patterns are
+ * Podman refuses a limit on rootless cgroup v1. The patterns are
  * the prior art's (ai-assitant-sanbox gateway-source/src/agents/sandbox/docker.ts:736-800, LIMIT_FALLBACKS), plus
  * crun's "requested cgroup controller `<name>` is not available", which names the controller in backticks. macOS
  * refused none in the spike, so no refusal text was measured. They come first in the argv so a spec's fake can

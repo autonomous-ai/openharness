@@ -38,7 +38,7 @@ describe('what a guest may ask', () => {
   // The policy is default-deny, so every browser frame and request is refused before any service hears it.
   it('the guest policy refuses every agent_browser type', () => {
     for (const type of ['agent_browser_open', 'agent_browser_ack', 'agent_browser_close',
-      'agent_browser_available', 'agent_browser_setup', 'agent_browser_restart', 'agent_browser_retry', 'agent_browser_state',
+      'agent_browser_available', 'agent_browser_setup', 'agent_browser_retry', 'agent_browser_state',
       'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test']) {
       expect(verdict(type, { agentId: 'mine' }), type).toEqual({ allow: false, error: 'GUEST_NOT_ALLOWED' })
     }
