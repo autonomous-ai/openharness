@@ -207,8 +207,13 @@ describe('service links', () => {
     void links.call('engine-claude', 'screen_read', {}, 30_000).then(refused)
     await vi.advanceTimersByTimeAsync(0)
     expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'engine-claude', retryable: true })
-    // One not on demand is never waited for.
+    // One not on demand is never waited for, nor any where none is on demand.
     expect(links.whenStarting('search')).toBeNull()
+    expect(make().whenStarting('search')).toBeNull()
+    // One that connected and went is refused at once, as its requests are: nothing to wait for.
+    const once = make({ owned: { 'engine-claude': ['screen_read'] }, onDemand: new Set(['engine-claude']), want: vi.fn() })
+    once.accept('engine-claude', TOKEN, sink(), vi.fn())!.closed()
+    expect(once.whenStarting('engine-claude')).toBeNull()
     // A reader may take longer to start than the others (its own start wait).
     const readers = make({ owned: { 'engine-codex': ['screen_read'] }, onDemand: new Set(['engine-codex']), want: vi.fn(), startWaits: { 'engine-codex': 45_000 } })
     const codex = vi.fn()

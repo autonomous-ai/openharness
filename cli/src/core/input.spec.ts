@@ -150,6 +150,17 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBeNull()
   })
 
+  it('asks whether an engine\'s reader is starting, and tells the app a message waits for it', async () => {
+    const starting = Promise.resolve(true)
+    const { deps: given } = deps({ engineStarting: (engine) => engine === 'claude' ? starting : null })
+    const wired = sessionInputDeps(given, () => lock([]))
+    expect(wired.engineStarting!({ ...agents.get('a1')!, engine: 'claude' })).toBe(starting)
+    expect(wired.engineStarting!({ ...agents.get('a1')!, engine: 'codex' })).toBeNull()
+    expect(sessionInputDeps(deps().deps, () => lock([])).engineStarting!(agents.get('a1')!)).toBeNull()
+    wired.onWaiting!('s1', 'engine_starting')
+    expect(given.clients.send).toHaveBeenCalledWith({ type: 'message_waiting', agentId: 'a1', dbSessionId: 's1', payload: { reason: 'engine_starting' } })
+  })
+
   it('hands the controller the move gate when it was given one, and none otherwise', () => {
     const { deps: given } = deps()
     expect('moveGate' in sessionInputDeps(given, () => lock([]))).toBe(false)

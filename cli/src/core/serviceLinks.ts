@@ -151,11 +151,11 @@ export function createServiceLinks(options: ServiceLinksOptions) {
    *  marked Claude Code's reader, which took 26 s to start on a Mac at load 40, as unable to start: every read after it was
    *  refused at once (2026-11-10). */
   const starts = new Map<string, unknown>()
-  /** Who waits for a service to connect (`whenUp`). */
+  /** Who waits for a service's first start (`whenStarting`). */
   const upWaiters = new Map<string, Set<(up: boolean) => void>>()
+  // Run only while it has not connected: `accept` clears its timer.
   const startOver = (service: string): void => {
     starts.delete(service)
-    if (links.has(service)) return
     unstarted.add(service)
     for (const [id, entry] of waiting) if (entry.service === service && entry.frame) settle(id, entry, unavailable(service))
     for (const up of upWaiters.get(service) ?? []) up(false)
