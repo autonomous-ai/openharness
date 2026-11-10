@@ -162,7 +162,7 @@ Future<List<SuperTabController>> _show(
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1950);
+  tester.view.physicalSize = const Size(760, 2030);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
