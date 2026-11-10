@@ -11,7 +11,9 @@ import 'support/super_tab_fixture.dart';
 void main() {
   ConversationServer server() {
     final server = ConversationServer.chat();
-    final now = DateTime.now().toUtc();
+    // A fixed noon, in this computer's own time zone: the three never straddle a midnight, whenever and wherever the test
+    // runs (CI on UTC failed it from 00:10 to 00:28, when the third fell on the next day and drew a day line, no time).
+    final now = DateTime(2026, 11, 7, 12);
     for (final (text, minutesAgo) in [
       ('First', 30),
       ('Two minutes on', 28),
@@ -20,6 +22,7 @@ void main() {
       server.append(text);
       server.messages.last['createdAt'] = now
           .subtract(Duration(minutes: minutesAgo))
+          .toUtc()
           .toIso8601String();
     }
     return server;
