@@ -39,8 +39,6 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const commits = new Map<string, string[]>()
   /** A pull request's changed files, by `owner/name#number`, lower case, as GET /pulls/{n}/files lists them (task #3401). */
   const files = new Map<string, Array<{ filename: string; status: string; previous_filename?: string }>>()
-  /** Workflow runs by `owner/name`, lower case: each run's status and its jobs' statuses and runner labels. */
-  const actions = new Map<string, Array<{ id: number; status: string; jobs: Array<{ status: string; labels: string[] }> }>>()
   /** Each installation's accepted permissions, by installation id, as GET /app/installations/{id} answers them. An
    *  installation listed here refuses a token that asks for more, as GitHub does; one not listed answers 404 and mints any. */
   const grants = new Map<number, Record<string, 'read' | 'write'>>()
@@ -48,7 +46,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
   const issued = new Set<string>()
   const revoked: string[] = []
   let minted = 0
-  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null, actionsStatus: 200, jobsStatus: 200, pullsStatus: 200 }
+  const control = { revokeStatus: 204, tokenStatus: 201 as number, tokenMessage: '', down: false, botId: 4242 as number | null, pullsStatus: 200 }
   /** Each token's permissions, as it was minted. */
   const permissions = new Map<string, unknown>()
   const json = (status: number, body?: unknown) => new Response(body === undefined ? null : JSON.stringify(body), { status })
@@ -122,18 +120,6 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const branch = known.branch ?? 'main'
       // A renamed repository: GitHub redirects its old name to its id, and fetch follows, so the body names it as it is now.
       if (!repoPath[3]) return json(200, { full_name: renamed.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? `${repoPath[1]}/${repoPath[2]}`, default_branch: branch })
-      const runs = actions.get(`${repoPath[1]}/${repoPath[2]}`.toLowerCase()) ?? []
-      if (repoPath[3] === '/actions/runs') {
-        if (control.actionsStatus !== 200) return json(control.actionsStatus, { message: 'Server Error' })
-        const matching = runs.filter(r => r.status === url.searchParams.get('status'))
-        return json(200, { total_count: matching.length, workflow_runs: matching.slice(0, Number(url.searchParams.get('per_page') ?? 30)).map(r => ({ id: r.id, status: r.status, name: `run ${r.id}`, head_branch: 'secret-branch' })) })
-      }
-      const jobs = /^\/actions\/runs\/(\d+)\/jobs$/.exec(repoPath[3] ?? '')
-      if (jobs) {
-        if (control.jobsStatus !== 200) return json(control.jobsStatus, { message: 'Server Error' })
-        const run = runs.find(r => r.id === Number(jobs[1]))
-        return run ? json(200, { total_count: run.jobs.length, jobs: run.jobs.map((j, i) => ({ id: i, name: `job ${i}`, ...j })) }) : json(404, { message: 'Not Found' })
-      }
       // As GitHub does: each answer carries an ETag, and a request naming the current one is answered 304 with no body.
       const tagged = (value: unknown) => {
         const etag = `"${createHash('sha1').update(JSON.stringify(value)).digest('hex')}"`
@@ -185,7 +171,7 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
     }
     return json(404, { message: 'Not Found' })
   }) as typeof globalThis.fetch
-  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, compares, compareStatus, commits, revoked, issued, control, actions, permissions }
+  return { fetch, calls, grants, installed, owners, renamed, protection, pulls, checkRuns, checkSuites, reviews, comments, files, compares, compareStatus, commits, revoked, issued, control, permissions }
 }
 
 /** A configured app talking to [github]. */
