@@ -167,7 +167,7 @@ Future<List<SuperTabController>> _show(
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 3216);
+  tester.view.physicalSize = const Size(760, 3096);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -561,7 +561,9 @@ class _Gallery extends StatelessWidget {
                 ),
               ),
               // Its pull requests, what ⑂ opens (anh Dee 2026-11-10): three columns by who acts next, as lampOS's train bot sorts them.
-              title('Pull requests: To read, To fix, Merging; a card opens its chat'),
+              title(
+                'Pull requests: To read, To fix, Merging; a card opens its chat',
+              ),
               SizedBox(
                 width: 760,
                 height: 250,
