@@ -33,6 +33,7 @@ class ProjectSidebar extends StatelessWidget {
     this.app,
     this.onNewProject,
     this.onNewSwarm,
+    this.onRenameSwarm,
     this.onManage,
     this.onManageMachines,
     this.manageSelected = false,
@@ -95,6 +96,10 @@ class ProjectSidebar extends StatelessWidget {
   /// The existing New Swarm. Given, the bar starts with the Swarm dropdown
   /// ([SwarmSwitcher]), which offers it last.
   final VoidCallback? onNewSwarm;
+
+  /// Rename in that dropdown, for this Swarm, to a person who may change it (anh Dee, 2026-11-10: "how do i rename a
+  /// swarm").
+  final VoidCallback? onRenameSwarm;
 
   /// Opens Manage (Machines, Models, Devices, Swarm), the row at the foot.
   final VoidCallback? onManage;
@@ -705,6 +710,7 @@ class ProjectSidebar extends StatelessWidget {
         app: app,
         controller: controller,
         onNewSwarm: onNewSwarm,
+        onRename: controller.canWrite ? onRenameSwarm : null,
         row:
             ({
               required label,

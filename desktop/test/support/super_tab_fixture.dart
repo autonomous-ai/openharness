@@ -1326,6 +1326,10 @@ class ConversationServer {
           if (newAgentChatsDormant) 'dormant': true,
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'tab.rename') {
+        // As backend commands.ts sets it: the Swarm's one name.
+        revision++;
+        state['name'] = command['name'];
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[
