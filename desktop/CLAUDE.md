@@ -599,7 +599,9 @@ add a kind there, not at the call site.
 - **Type** is `AppType` (`lib/shared/theme/app_type.dart`): system sans for app
   headings, labels, fields, navigation, and prose; explicit mono for code, paths,
   logs, and identifiers. Ordinary UI is independent of terminal zoom and respects
-  accessibility text scaling. The terminal grid, in-pane composer, and in-pane
+  accessibility text scaling, except the Swarm's panes: a chat, a task's or pull request's chat
+  and an agent's instructions read at the terminal's size beside them (`SwarmType.sizeOf`, anh Dee
+  2026-11-10: "one consistent font across all panes"). The terminal grid, in-pane composer, and in-pane
   find keep the selected terminal font and size. Compact pane/status bars retain
   their established `workspaceBarTextStyle()` and user-selected status themes.
   Native menus use the system menu font. Do not measure desktop UI in terminal cells.

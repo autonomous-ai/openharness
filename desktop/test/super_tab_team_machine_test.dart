@@ -1,11 +1,11 @@
 // One machine per Mac in the Swarm (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is a
 // second contribution, its pool naming the Mac as `hostMachineId`, and the Swarm shows the Mac alone. Its agents read as
-// on the Mac; teammates read the account's availability, which runs while the owner is away from the Mac; the only new
-// words are one line when teammates' agents cannot run there.
+// on the Mac; teammates read the account's availability, which runs while the owner is away from the Mac.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/shared/theme/machines_style.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
@@ -20,7 +20,6 @@ Map<String, dynamic> _pool(
   String contributor = 'peer',
   String? host,
   int age = 0,
-  Map<String, dynamic>? teamWork,
 }) => {
   'machineId': id,
   'name': name,
@@ -32,13 +31,6 @@ Map<String, dynamic> _pool(
   'paused': false,
   'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch - age},
   'hostMachineId': ?host,
-  'teamWork': teamWork ?? {'allowed': true},
-};
-
-Map<String, dynamic> _refused(String code) => {
-  'allowed': false,
-  'code': code,
-  'reason': 'Refused ($code).',
 };
 
 Map<String, dynamic> _agent(String id, String machineId) => {
@@ -88,11 +80,15 @@ Future<void> _unmount(WidgetTester tester, dynamic c) async {
 }
 
 Finder _row(String id) => find.byKey(ValueKey('super-machine-$id'));
-Finder _state(String id, String status) =>
-    find.byKey(ValueKey('super-machine-state-$id-$status'));
-Finder _problem(String id) => find.byKey(ValueKey('super-machine-problem-$id'));
-String? _problemText(WidgetTester tester, String id) =>
-    tester.widget<Text>(_problem(id)).data;
+
+/// The row's dot in [status]'s colour: `live` or `offline`.
+Finder _state(String id, String status) => find.byWidgetPredicate(
+  (w) =>
+      w is Container &&
+      w.key == ValueKey('machines-dot-$id') &&
+      (w.decoration as BoxDecoration?)?.color ==
+          (status == 'live' ? MachinesStyle.online : MachinesStyle.offline),
+);
 
 void main() {
   testWidgets('Manage names this computer by its local port, in mono', (
@@ -117,7 +113,6 @@ void main() {
           body: SuperTabMachines(
             controller: c,
             app: app,
-            manage: true,
             ticks: false,
             onAddAgent: (_) {},
           ),
@@ -258,50 +253,8 @@ void main() {
     },
   );
 
-  testWidgets(
-    'one line says when teammates\' agents cannot run on the Mac, and why',
-    (tester) async {
-      const reasons = {
-        'PRIVACY_CHECK_FAILED':
-            "Teammates' agents paused: privacy check failed",
-        'PRIVACY_CHECK_STALE':
-            "Teammates' agents paused: privacy check out of date",
-        'PRIVACY_UNCHECKED':
-            "Teammates' agents paused: privacy not checked yet",
-      };
-      for (final MapEntry(key: code, value: line) in reasons.entries) {
-        final server = _swarm();
-        server.state['machines'] = [
-          _pool('mac', teamWork: _refused('TEAM_ACCOUNT_REQUIRED')),
-          _pool('mac-team', host: 'mac', teamWork: _refused(code)),
-        ];
-        for (final account in ['peer', 'owner']) {
-          final c = await _mount(tester, server, account: account);
-          expect(_problemText(tester, 'mac'), line, reason: '$code, $account');
-          await _unmount(tester, c);
-        }
-      }
-    },
-  );
-
   // Swarm v3 makes no Team accounts (#4120): a Mac without one is short of nothing, so its row says nothing of it
   // (#4289), for teammates and its owner alike.
-  testWidgets('a Mac without a Harness Team account says nothing of one', (
-    tester,
-  ) async {
-    final server = _swarm();
-    server.state['machines'] = [
-      _pool('mac', teamWork: _refused('TEAM_ACCOUNT_REQUIRED')),
-    ];
-    for (final account in ['peer', 'owner']) {
-      final c = await _mount(tester, server, account: account);
-      expect(_row('mac'), findsOneWidget);
-      expect(_problem('mac'), findsNothing, reason: account);
-      expect(find.textContaining('not set up'), findsNothing, reason: account);
-      await _unmount(tester, c);
-    }
-  });
-
   // Local Team account run, 2026-10-28 (group #646, item 5): a teammate's Lead computer, never added to the Swarm, read
   // "Unavailable machine" with an empty dot. Named by its owner, as the Swarm knows no name for it.
   testWidgets(
@@ -324,68 +277,6 @@ void main() {
       c = await _mount(tester, server);
       expect(find.text("peer's computer"), findsOneWidget);
       expect(_state('peer-air', 'offline'), findsOneWidget);
-      await _unmount(tester, c);
-    },
-  );
-
-  testWidgets('the line stays away when it would say nothing new', (
-    tester,
-  ) async {
-    Future<void> quiet(
-      List<Map<String, dynamic>> machines, {
-      String account = 'owner',
-      bool viewer = false,
-    }) async {
-      final server = _swarm(viewer: viewer);
-      server.state['machines'] = machines;
-      final c = await _mount(tester, server, account: account);
-      expect(_problem('mac'), findsNothing, reason: '$machines $account');
-      await _unmount(tester, c);
-    }
-
-    // Teammates' agents can run there.
-    await quiet([
-      _pool('mac', teamWork: _refused('TEAM_ACCOUNT_REQUIRED')),
-      _pool('mac-team', host: 'mac'),
-    ]);
-    // Nobody else can start work in this Swarm: a viewer cannot.
-    await quiet([
-      _pool('mac', teamWork: _refused('TEAM_ACCOUNT_REQUIRED')),
-    ], viewer: true);
-    // The row already reads offline: the Mac's own silence, and for a teammate the team account's.
-    await quiet([
-      _pool('mac', age: _offlineAge, teamWork: _refused('MACHINE_OFFLINE')),
-    ]);
-    await quiet([
-      _pool('mac'),
-      _pool(
-        'mac-team',
-        host: 'mac',
-        age: _offlineAge,
-        teamWork: _refused('MACHINE_OFFLINE'),
-      ),
-    ]);
-  });
-
-  testWidgets(
-    'the Mac\'s owner hears that its Harness Team account is offline',
-    (tester) async {
-      final server = _swarm();
-      server.state['machines'] = [
-        _pool('mac'),
-        _pool(
-          'mac-team',
-          host: 'mac',
-          age: _offlineAge,
-          teamWork: _refused('MACHINE_OFFLINE'),
-        ),
-      ];
-      final c = await _mount(tester, server, account: 'peer');
-      expect(_state('mac', 'live'), findsOneWidget);
-      expect(
-        _problemText(tester, 'mac'),
-        "Teammates' agents paused: Harness Team account offline",
-      );
       await _unmount(tester, c);
     },
   );

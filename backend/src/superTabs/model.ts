@@ -44,8 +44,6 @@ export interface AgentConfiguration {
   contextWindow: number | null
   engineVersion: string | null
 }
-/** Why a crew member must leave its machine (crewKeep.ts). */
-export type CrewTrouble = 'offline' | 'signed-out' | 'quota' | 'disk' | 'quota-low' | 'unstable'
 
 export interface Agent {
   id: string
@@ -82,9 +80,6 @@ export interface Agent {
    *  close it (agent.stopRefused). */
   idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
-  /** Set while it is one of its project's crew (crew.ts): its host keeps it alive, and no idle path closes or removes it.
-   *  `by` is the person's or PM agent's id that marked it. */
-  crew?: { role: string; lane?: string; at: number; by: string }
   /** A person's request to move this Product Manager to another engine or account (lead.switch), carried out by its host.
    *  `id` is the operation that asked; `claimedUntil` is set once the host took it (agent.switchClaim). */
   /** The switch request the last rebind settled, until its result arrives: that result is the one line the chat gets, and
@@ -117,22 +112,6 @@ export interface Agent {
   /** Its last task was lost (liveness.ts): routing leaves it out, even once that task is cancelled or reassigned, until it
    *  finishes a new task, a person assigns it work by hand, or its terminal is replaced (commands.ts). */
   lostTask?: { conversationId: string; assignmentId: string; reason: string; at: number; resumeAt?: string }
-  /** A crew member the Swarm put to sleep after an idle hour (crewKeep.ts): its host closes the session and keeps its folder;
-   *  work.assign clears it and the host reopens it in place. `folderDropped` once a cleanup rule removed its folder, so a
-   *  wake starts it fresh. Set only by the server. */
-  asleep?: { since: number; folderDropped?: boolean }
-  /** When a reading first showed its session gone, in the last hour, at most five (machines.ts recordAgentPresence): a crew member
-   *  that stops three times in an hour is moved, not reopened in place (crewKeep.ts, task #3662). */
-  stops?: number[]
-  /** A crew member being moved off a failing machine (crewKeep.ts): its start on [machineId] takes over under the same name;
-   *  until then nothing is assigned to it and its old host closes the session. Set only by the server. */
-  movedTo?: { machineId: string; startId: string; reason: CrewTrouble; at: number }
-  /** The agent this crew member took over from on a move, so its history reads as one member. */
-  movedFrom?: { agentId: string; machineId: string; reason: CrewTrouble; at: number }
-  /** The machine whose start of this member's move failed, and when: not picked again for MOVE_REFUSED_WAIT_MS (crewKeep.ts). */
-  crewMoveRefused?: { machineId: string; at: number }
-  /** A move needed but no machine could take it: said once in the project chat until the trouble changes. */
-  crewStuck?: CrewTrouble
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
@@ -152,16 +131,9 @@ export interface Agent {
    *  its host reads them in the agent's row to reopen a woken one in its folder (#4698). */
   member?: { projectId: string }
   helperOf?: { agentId: string; harnessId: string }
-  /** Its project set up on its computer, as its own host reported (agent.setUp, #4698): the commands it ran, or why it failed.
-   *  A Member on a host that reports it takes no task until it is set up (members.ts setUpReady). */
-  setUp?: { projectId: string; at: number; steps?: string[]; failed?: string }
   /** The private project a Regular agent first worked in: its one conversation holds that project's content, so it takes tasks
    *  only there from then on (projects.ts regularMayWorkIn; security review 2 of #4116). Set at its assignment, never cleared. */
   privateProjectId?: string
-  /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
-   *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
-   *  only by the server. */
-  crewWaking?: { at: number; conversationId: string; runningAt?: number }
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -179,8 +151,6 @@ export interface AgentStartRequest {
   cwd: string
   worktree: boolean
   branchRef?: string
-  /** Stamped by the server for Team-written code (teamWritten.ts): the agent reads no project settings and its folder gets no trust. */
-  projectSettings?: 'off'
   permissionMode?: string
   codexHome?: string
   gridModel?: string
@@ -200,12 +170,8 @@ export interface AgentStartRequest {
   /** A helper's start (members.ts): made from its Member's ready setup on the Member's computer, for the task it starts
    *  in. Written by the server alone. */
   helperOf?: { agentId: string; harnessId: string }
-  /** The commands its Member recorded setting the project up (agent.setUp), for a helper's host to repeat. */
-  setUpSteps?: string[]
   /** The offered account selected for a destination PM switch. */
   profileId?: string
-  /** A crew member's move (crewKeep.ts): the agent its start takes over from once it runs. Written by the server alone. */
-  crewMoveOf?: string
   /** A bounded handoff note transferred from the source host, visible only in the destination host's start row. */
   handoffNote?: string
   handoffSourceAgentId?: string
@@ -273,8 +239,6 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
-  /** When its crew member was told it had been 2 hours without progress (dispatch.ts crewClock): once per quiet spell. */
-  nudgedAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
   /** While it is blocked or needs a human: why it waits (heldReason.ts). Absent on a hold from before reasons. */
@@ -366,13 +330,6 @@ export interface Conversation {
   process?: import('./process.js').ProjectProcess
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
-  /** A Harness Team agent was assigned to build this task, or GitHub shows the app's bot pushed to its branch: its code runs
-   *  only in a Team account (teamWritten.ts, audit H2). */
-  teamWritten?: true
-  /** What set [teamWritten] (#3304): `assigned` (a Team agent given the task) and `branch` (a bot's push on a branch a start
-   *  named) are never cleared; `pushed` names the pull requests GitHub showed a bot's push among, and only a clean read of all
-   *  of them clears it. Absent on a mark from before #3304, which a join may have set. */
-  teamWrittenBy?: { kind: 'assigned' | 'branch' } | { kind: 'pushed'; pulls: string[] }
   /** A step of the task `reviewOf` names (task steps design, 2026-11-02): its name as the instructions give it, in any
    *  language. Readers show it inside its task, never as a task of its own. Absent on a linked group opened before steps. */
   step?: string
@@ -393,10 +350,6 @@ export interface Conversation {
   talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
-  /** The pull requests its own code is in, which GitHub's push read covers for its Team-written mark (teamWritten.ts, task
-   *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
-   *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
-  codePullRequestUrls?: string[]
   /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
    *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
   unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
@@ -450,8 +403,6 @@ export interface Conversation {
   stepUp?: StepUp
   /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
-  /** Its place in its project's Next up (taskQueue.ts), set by work.queue. Absent: it sorts by its number. */
-  queueRank?: number
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
@@ -462,12 +413,6 @@ export interface Conversation {
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
-  /** The lane its PM or a person put it in (dispatch.ts laneOf), set by work.lane, as the lane table writes it. Absent: its
-   *  owned paths choose. */
-  lane?: string
-  /** Its lane as the dispatch hands it out (dispatch.ts laneOf), stored when its paths or lane change (stampLane), so reads
-   *  only copy it. Absent on a chat, a step, and a task from before; null when no lane owns its paths. */
-  handOutLane?: string | null
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
@@ -518,20 +463,6 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
  *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
-
-/** The pull requests [group]'s own code is in (codePullRequestUrls). A conversation from before the list reads every link it
- *  recorded, posts' included: an access rule loses no protection it had (task #3554). */
-export const codePullRequests = (group: Pick<Conversation, 'codePullRequestUrls' | 'pullRequestUrls'>): string[] =>
-  group.codePullRequestUrls ?? group.pullRequestUrls ?? []
-
-/** Adds the pull request links of [texts], its own code's sources, to [group]'s code list, and corrects the ones it holds. A
- *  conversation from before the list gets none: it keeps reading what it recorded (codePullRequests). */
-export function appendCodePullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
-  if (group.codePullRequestUrls === undefined) return
-  const urls = new Set(group.codePullRequestUrls.flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
-  group.codePullRequestUrls = [...urls]
-}
 
 /** The most unlinked pull requests a task remembers. */
 export const UNLINKS_KEPT = 50
@@ -723,7 +654,8 @@ export const NOTICE_READERS = {
   'schedule-request': 'recipients', 'tidy-request': 'recipients', 'digest-request': 'recipients',
   // Two agents that may be talking in a loop, told to the coordinator (commands.ts pairLoop, project instructions phase 1).
   'pair-loop': 'recipients',
-  // A crew member's finished wake or move, timed for the daily scorecard Swarm v4 removed (crewTimes.ts, task #3462): read by nobody.
+  // A crew member's finished wake or move, timed for the daily scorecard Swarm v4 removed (task #3462), written until 2026-11-10:
+  // read by nobody.
   'crew-timing': 'agent',
   // The server's routine notices to the coordinator, gathered into one message (noticeDigest.ts).
   'notice-digest': 'recipients',
@@ -739,7 +671,7 @@ export const NOTICE_READERS = {
   instructions: 'agent',
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
-  'project-report': 'people', route: 'people', 'route-override': 'people', 
+  'project-report': 'people', route: 'people', 'route-override': 'people',
   // Proposal history, written until proposals went (2026-11-10), and the private Buddy notices stored before task #4558, are visible
   // to the people who can read their card/chat. Delete them with the notice readers of v1-v3 (slice S18).
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',

@@ -88,12 +88,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'rule.set':
       leadCheck(command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : undefined))
       break
-    case 'person.tell':
-      // The line reads that its person still reads the agent's project: their own part guards it, as a revoke touches the
-      // people it removes (project.sharing below) and member.remove writes it (security review 2 of #2090).
-      member(command.personId)
-      leadCheck(actor.kind === 'agent' ? agentProject(actor.agentId) : undefined)
-      break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
       for (const person of before.people) {
@@ -155,7 +149,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       head()
       break
     }
-    case 'agent.release': case 'crew.add': case 'crew.remove':
+    case 'agent.release':
       leadCheck(agentProject(command.agentId))
       break
     case 'agent.rebind':

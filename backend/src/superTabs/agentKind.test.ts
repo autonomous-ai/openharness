@@ -70,10 +70,9 @@ describe('the reader\'s My agents', () => {
     expect(inMyAgents(state, { kind: 'agent', agentId: 'theirs', machineOwnerId: 'peer' }, agent('mine'))).toBe(false)
   })
 
-  it('leaves out a stopped, asleep, finished or stopping agent', () => {
+  it('leaves out a stopped, finished or stopping agent', () => {
     const { state, agent } = setup()
     expect(inMyAgents(state, peerReads, agent('down', { downSince: new Date(0).toISOString() }))).toBe(false)
-    expect(inMyAgents(state, peerReads, agent('asleep', { asleep: { since: 0 } }))).toBe(false)
     expect(inMyAgents(state, peerReads, agent('finished', { workDecision: 'awaiting' }))).toBe(false)
     expect(inMyAgents(state, peerReads, agent('stopping', { workDecision: 'stop' }))).toBe(false)
     expect(inMyAgents(state, peerReads, agent('kept', { workDecision: 'keep' }))).toBe(true)

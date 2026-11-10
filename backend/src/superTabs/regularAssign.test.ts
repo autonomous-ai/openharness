@@ -13,7 +13,7 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const own = (userId: string) => ({ contribution: { machineOwnerId: userId, contributorId: userId } })
-const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
+const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 const code = (body: () => unknown): string | null => {
   try { body(); return null } catch (error) { return error instanceof SuperTabError ? error.code : 'INVALID' }

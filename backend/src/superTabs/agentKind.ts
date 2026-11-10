@@ -42,5 +42,5 @@ export function agentChatId(state: SuperTabState, target: Agent, reads: (chat: C
 export function inMyAgents(state: SuperTabState, actor: Actor, target: Agent): boolean {
   if (actor.kind !== 'person' || target.contributorId !== actor.userId) return false
   if (target.workDecision === 'awaiting' || target.workDecision === 'stop') return false
-  return (!target.downSince && !target.asleep) || !!ledProject(state, target.id)
+  return !target.downSince || !!ledProject(state, target.id)
 }

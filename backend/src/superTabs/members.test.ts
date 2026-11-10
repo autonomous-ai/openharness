@@ -154,27 +154,14 @@ function withMember(f = swarm()) {
 }
 
 describe('the Member', () => {
-  // The host contract of #4698 (Threadland): a host that says memberSetUp reports the project set up before work comes.
   // Its mark names its project, which may be private: readers never get it, as its main project's id (read/views.ts).
-  // Security review 2 of #3575: its set-up record names that project too, with its commands or failure text.
-  it('keeps its mark and set-up out of what readers get, its host alone reads them', () => {
-    const { f, lamp, member } = withMember()
-    f.run({ type: 'agent.setUp', projectId: lamp, ok: true, steps: ['npm ci'] } as Command, { kind: 'agent', agentId: member, machineOwnerId: 'kai' })
+  it('keeps its mark out of what readers get', () => {
+    const { f, member } = withMember()
     const parts = readerView(store.split(f.state, { tabId: 'tab', version: 9_000, now: NOW }), owner, NOW, {}).parts
     const row = parts.agents.find(a => a.key === member)?.data
     expect(row).not.toHaveProperty('member')
-    expect(row).not.toHaveProperty('setUp')
   })
 
-  it('records its set-up on a host that reports one, and is refused another agent\'s report', () => {
-    const f = swarm()
-    f.state.machines!.find(m => m.machineId === 'kai-mac')!.observation!.capabilities!.push('memberSetUp')
-    const { lamp, member } = withMember(f)
-    const me: Actor = { kind: 'agent', agentId: member, machineOwnerId: 'kai' }
-    expect(code(() => f.run({ type: 'agent.setUp', projectId: lamp, ok: true, steps: ['npm ci'] } as Command, owner))).not.toBeNull()
-    f.run({ type: 'agent.setUp', projectId: lamp, ok: true, steps: ['npm ci'] } as Command, me)
-    expect(f.state.agents.find(a => a.id === member)!.setUp).toMatchObject({ projectId: lamp, steps: ['npm ci'] })
-  })
 })
 
 // Security review 2 of #3575 (Secrev8): a private project's Member is tied to it from its start, not from its first task, so

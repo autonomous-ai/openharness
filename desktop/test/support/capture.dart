@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/terminal/terminal_typography.dart';
 
 import 'real_fonts.dart';
 
@@ -15,9 +16,14 @@ import 'real_fonts.dart';
 /// shared metric-compatible faces every regression run uses.
 Future<void> loadCaptureFonts(String? captureDir) async {
   if (captureDir == null || !Platform.isMacOS) return loadRealFonts();
-  for (final family in ['.AppleSystemUIFont', 'Roboto']) {
+  for (final (family, file) in [
+    ('.AppleSystemUIFont', 'SFNS.ttf'),
+    ('Roboto', 'SFNS.ttf'),
+    // Code in a message and terminal rows, in the Mac's default terminal font: without it they draw as Ahem's boxes.
+    (macTerminalFontFamily, 'SFNSMono.ttf'),
+  ]) {
     final bytes = ByteData.sublistView(
-      await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
+      await File('/System/Library/Fonts/$file').readAsBytes(),
     );
     await (FontLoader(family)..addFont(Future.value(bytes))).load();
   }

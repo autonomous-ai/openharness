@@ -752,7 +752,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     // Started and assigned in a task: the project chat holds only its coordinator among agents (#2207).
     const task = String((await run(tab, { type: 'conversation.create', title: 'Pool work', brief: '', checks: [] })).result.conversationId)
     const request = { conversationId: task, machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+      // 15 GiB each, with 28 GB free: room for one (saved counts hold no start back since 2026-11-10).
+      requirements: { memoryBytes: 15 * 1024 ** 3, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await expect(asHost(tab, { type: 'agent.start', request: { ...request, cwd: '/private' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     await expect(asHost(tab, { type: 'agent.start', request: { ...request, permissionMode: 'full' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     const starts = await Promise.allSettled([asHost(tab, { type: 'agent.start', request }), asHost(tab, { type: 'agent.start', request })])
@@ -3009,7 +3010,7 @@ it('releases a finished worker through its execution host, cancels deliveries an
   expect(machineSlots(after, after.machines![0]!)).toBe(1)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
   const delayed = (await store.read(owner, tab)).state
-  expect(delayed.machines![0]!.availableSlots).toBe(3)
+  expect(machineSlots(delayed, delayed.machines![0]!)).toBe(1)
   expect(await db.superTabDelivery.count({ where: { tabId: tab, agentId: worker, status: { in: ['queued', 'claimed', 'uncertain'] } } })).toBe(0)
   expect((await rosterRows(store, host, 'test-host')).some(r => r.agent?.id === worker)).toBe(false)
   // Re-contribution reserves a new runtime; ordinary removal must not reuse its old stop proof.
@@ -3020,15 +3021,14 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const reservation = hostPool.reservations.find(r => r.harnessId === native)!
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [{ harnessId: native, generation: 'old-generation' }] })
-  const stillReserved = (await store.read(owner, tab)).state
-  expect(stillReserved.machines![0]!.availableSlots).toBe(2)
+  // A machine's room is its free memory since saved counts went (2026-11-10): the reservation is read where its host reads it.
+  const reserved = async () => (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.reservations.some(r => r.harnessId === native)
+  expect(await reserved()).toBe(true)
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [reservation] })
-  const physicallyStopped = (await store.read(owner, tab)).state
-  expect(physicallyStopped.machines![0]!.availableSlots).toBe(3)
+  expect(await reserved()).toBe(false)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
-  const delayedAgain = (await store.read(owner, tab)).state
-  expect(delayedAgain.machines![0]!.availableSlots).toBe(3)
+  expect(await reserved()).toBe(false)
 })
 
 it('fences a shared native session globally while its release is pending', async () => {
@@ -4456,7 +4456,8 @@ describe('Swarm parts under concurrent writes', () => {
     expect(c.attempts).toBe(waiting.length + 1)
   })
 
-  it('gives a machine\'s last slot to exactly one of two concurrent starts', async () => {
+  // Its last room is memory since saved counts went (2026-11-10): 28 GB free holds one 15 GiB start, not two.
+  it('gives a machine\'s last room to exactly one of two concurrent starts', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Slots')).id
     await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
       .then(r => run(tab, { type: 'invite.accept', inviteId: r.result.inviteId as string }, host))
@@ -4468,11 +4469,11 @@ describe('Swarm parts under concurrent writes', () => {
     // Started in a task: the project chat holds only its coordinator among agents (#2207).
     const group = String((await run(tab, { type: 'conversation.create', title: 'Slots work', brief: '', checks: [] })).result.conversationId)
     const request = (name: string) => ({ conversationId: group, machineId: 'test-host', engine: 'codex', name, cwd: '/fixture/repo', worktree: false,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
+      requirements: { memoryBytes: 15 * 1024 ** 3, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
     const results = await Promise.allSettled([run(tab, { type: 'agent.start', request: request('One') }, host),
       run(tab, { type: 'agent.start', request: request('Two') }, host)])
     expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'MACHINE_FULL' } })
+    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'MACHINE_FULL', details: { reason: 'memory' } } })
   })
 
   it('never keeps a message from a person removed while it was being sent', async () => {

@@ -300,12 +300,17 @@ describe('projects inside an invite-only swarm', () => {
     expect(projectsOf(f.state)[0]!.repository).toEqual(f.state.project)
   })
 
-  it('keeps active work visible after its contributed agent is removed', () => {
+  // Swarm v4 (anh Dee, 2026-11-10: "can't delete project lamp?"): a project's v3 task work refused its delete, "Resolve this
+  // project's active work", but v4 retired every command that settled it (S13a), so nothing could and the project stayed.
+  // Its work goes with it now, as its conversations do.
+  it('deletes a project whose v3 task work is still open, its work with it', () => {
     const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false), work = f.task(p.projectId)
     storedAssignment(f.state, work, agentId, 1000)
     f.run({ type: 'agent.remove', agentId })
-    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('active work')
     expect(readConversation(f.state, owner, work).assignment?.status).toBe('reconciling')
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(projectsOf(f.state).some(project => project.id === p.projectId)).toBe(false)
+    expect(f.state.conversations.some(c => c.id === work)).toBe(false)
   })
 })
 

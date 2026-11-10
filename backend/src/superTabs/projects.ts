@@ -656,11 +656,8 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
     fail('STARTS_PENDING', `Resolve this project’s pending agent starts before deleting it: ${pending.slice(0, 3)
       .map(s => `${s.request.name} in “${titled(s.request.conversationId)}”`).join(', ')}${pending.length > 3 ? ` and ${pending.length - 3} more` : ''}.`)
   }
-  const active = ownerless ? [] : groups.filter(activeWork)
-  if (active.length) {
-    fail('WORK_ACTIVE', `Resolve this project’s active work before deleting it: ${active.slice(0, 3).map(c => `“${titled(c.id)}”`).join(', ')}${
-      active.length > 3 ? ` and ${active.length - 3} more` : ''}.`)
-  }
+  // Its tasks' v3 work goes with it, as its conversations do: Swarm v4's tasks are GitHub issues, and v4 retired every command
+  // that settled that work (S13a), so a refusal to "resolve" it kept lampOS's project for good (anh Dee, 2026-11-10).
   state.retiredConversationNumber = nextConversationNumber(state) - 1
   state.projects = state.projects!.filter(p => p.id !== project.id)
   state.rules = state.rules?.filter(r => r.projectId !== project.id)
