@@ -24,6 +24,7 @@ subtables, which lv_font_conv does not read (without them the face comes out unk
 re-cuts them (INTER). The default run reads the vendored files and needs node and fontTools (pip install
 fonttools: it reads each font's coverage).
 """
+import json
 import re
 import subprocess
 import sys
@@ -39,8 +40,30 @@ FONTS = root / 'fonts'
 # Inter has no check / cross marks; they come from Noto Sans Symbols 2 (OFL, vendored), so recaps keep showing them.
 MARKS = {0x2713, 0x2717}
 MARKS_FONT = FONTS / 'NotoSansSymbols2-Regular.ttf'   # github.com/google/fonts ofl/notosanssymbols2
-# Latin Extended-A is cut to the eight letters Vietnamese needs; terminal.c's plookup draws the base letter of the rest.
-KEEP = (base.TEXT - set(range(0x100, 0x180))) | {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169}
+# Latin Extended-A is cut to the letters terminal.c's plookup cannot draw as one ASCII letter: Vietnamese's eight, and
+# every letter neither display_fallbacks.inc nor plookup's stroked-letter table maps to a single ASCII character
+# (Ĳ ĳ ĸ Ŀ ŀ ŉ Ŋ ŋ Œ œ ...); the rest draw their base letter.
+STROKED = {0x126, 0x127, 0x131, 0x141, 0x142, 0x166, 0x167}   # terminal.c plookup's `stroked` table
+VIETNAMESE = {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169}
+
+
+def one_letter_bases():
+    """Codepoints display_fallbacks.inc maps to a single ASCII character (the table plookup consults)."""
+    inc = (root / 'main/ui/habitat/display_fallbacks.inc').read_text()
+    pool = ''.join(json.loads(m.replace('\\000', '\\u0000')) for m in re.findall(r'^    ("[^\n]*")$', inc.split('display_pool[] =')[1].split(';')[0], re.M))
+    offset_bits = int(re.search(r'DISPLAY_OFFSET_BITS = (\d+)', inc).group(1))
+    entries = re.findall(r'^    (0x[0-9a-f]+),$', inc.split('display_entries[] = {')[1], re.M)
+    out = set()
+    for e in entries:
+        value = int(e, 16)
+        text = pool[value & ((1 << offset_bits) - 1):].split('\0')[0]
+        if len(text) == 1 and ord(text) < 0x80:
+            out.add(value >> offset_bits)
+    return out
+
+
+NO_BASE = {cp for cp in range(0x100, 0x180) if cp not in STROKED and cp not in one_letter_bases()} - VIETNAMESE
+KEEP = (base.TEXT - set(range(0x100, 0x180))) | VIETNAMESE | (NO_BASE & base.TEXT)
 assert MARKS <= KEEP
 
 # name -> (font file in fonts/, px, fallback face).

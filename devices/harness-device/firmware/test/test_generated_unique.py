@@ -37,6 +37,13 @@ for i, c in enumerate(table):
         entries.append(table[start:i + 1].lstrip(','))
         start = i + 1
 assert len(entries) == 14, len(entries)
+# An engine the marks script leaves empty must have a built-in pet, or it would show neither a mark nor a pet.
+script = (fw / 'scripts/gen_focus_marks.py').read_text()
+empty = re.findall(r"'(\w+)'", re.search(r'^PET_ENGINES = \((.*)\)$', script, re.M).group(1))
+assert empty == ['claude', 'codex', 'muse'], empty
+pets = re.search(r'^const ht_pet_t ht_pets\[\] = \{(.*)\};$', (habitat / 'pets.c').read_text(), re.M).group(1)
+pet_engines = set(re.findall(r'\{"(\w+)",', pets))
+assert set(empty) <= pet_engines, (empty, sorted(pet_engines))
 for index in (0, 1, 11):
     assert entries[index] == '{0,0,NULL,NULL}', (index, entries[index])
 # --- focus_faces.c: shared tables change no face's rendering; the wordmark's kerning is cut to its own letters ---
@@ -92,11 +99,11 @@ for name in old:
             for field in ('kl', 'kr', 'kv', 'rcnt'):
                 assert o[field] == n[field], (name, field)
     else:
-        # Latin Extended-A cut to Vietnamese: only that block may go, and every kept letter draws and kerns as before.
+        # Latin Extended-A cut to Vietnamese's eight and the letters with no one-letter base that Inter covers (it has no U+0149): only that block may go, and every kept letter draws and kerns as before.
         assert set(n['codes']) < set(o['codes']) and name.startswith('ht_lv_inter'), name
         assert {c for c in o['codes'] if c not in n['codes']} <= set(range(0x100, 0x180)), name
         assert {c for c in o['codes'] if 0x100 <= c < 0x180} - set(n['codes']) == {c for c in o['codes'] if c not in n['codes']}
-        assert {c for c in n['codes'] if 0x100 <= c < 0x180} == {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169}, name
+        assert {c for c in n['codes'] if 0x100 <= c < 0x180} == {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169} | {0x132, 0x133, 0x138, 0x13F, 0x140, 0x14A, 0x14B, 0x152, 0x153}, name
         oi = {c: i for i, c in enumerate(o['codes'])}
         ni = {c: i for i, c in enumerate(n['codes'])}
         assert n['count'] == len(n['codes'])
