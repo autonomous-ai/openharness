@@ -394,9 +394,14 @@ void main() {
     );
 
     scene(
-      'forty panes: every row is there by name, the list scrolls to the last '
+      'forty panes: eight show, "N more" opens every row, the list scrolls to the last '
       'and a click on it still brings its tab forward',
       (tester, f, c) async {
+        expect(key('super-pane-m-p39'), findsNothing);
+        // Atlas, already in the Swarm, and forty panes: eight of 41 show.
+        expect(find.text('33 more'), findsOneWidget);
+        await tester.tap(key('super-team-more'));
+        await tester.pump();
         final scroll = find
             .descendant(
               of: find.byType(ProjectSidebar),
