@@ -1,4 +1,3 @@
-import { proposalDueAt } from '../proposalClock.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { activeWork, stableId, type AgentStart, type Agent } from '../model.js'
@@ -106,9 +105,8 @@ function hostDigest(group: GroupData): string {
 export function extracted(kind: PartKind, data: unknown, stamp: number): Record<string, unknown> {
   switch (kind) {
     case 'group': {
-      const group = data as GroupData, dueAt = proposalDueAt(group.proposal)
+      const group = data as GroupData
       return { projectId: group.projectId ?? null, kind: group.kind ?? null, archived: group.archived, dormant: !!group.dormant,
-        proposalDueAt: dueAt == null ? null : new Date(dueAt),
         agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),

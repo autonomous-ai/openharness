@@ -148,9 +148,11 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     }
   })
 
-  // Free slots count every session the machine runs, as today, even ones this reader cannot see.
-  it('derives a machine\'s free slots, and cuts its harness ids to what the reader can see', () => {
-    const { parts } = scene()
+  // Free slots are what its free memory takes, whatever count its owner saved before (capacity settings went, 2026-11-10).
+  it('derives a machine\'s free slots from its free memory, and cuts its harness ids to what the reader can see', () => {
+    const { s } = scene()
+    s.edit(state => { state.machines![0]!.observation!.resources = { memoryTotalBytes: 16 * 1024 ** 3, memoryUsedBytes: 13 * 1024 ** 3 } as never })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const view = readerView(parts, peer, NOW, {})
     expect(view.parts.machines.map(m => m.key)).toEqual(['mac'])
     expect(view.parts.machines[0]!.data.observation!.runningHarnessIds).toEqual(['lead-harness'])

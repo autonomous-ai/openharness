@@ -8,6 +8,7 @@
 import type { SuperTabState } from './model.js'
 import { canReadProject, ownsProject, type SwarmProject } from './projects.js'
 
+
 /** Whether [project] works the Board way. */
 export const switched = (project: Pick<SwarmProject, 'boardMode'>): boolean => project.boardMode === true
 

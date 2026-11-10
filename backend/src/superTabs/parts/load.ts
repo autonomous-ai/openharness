@@ -153,13 +153,6 @@ export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts
     start: { ...live, finishedAt: null }, progress: live })
 }
 
-/** The head and the live groups with these keys, dormant ones too, and no other part: what the GitHub reads before a
- *  command look up (store.ts factsLoad). A whole command load there read every agent and machine (task #4368). */
-export function loadGroupsByKey(tx: Transaction, tabId: string, keys: string[]): Promise<SwarmParts> {
-  return assemble(tx, tabId, { member: null, agent: null, machine: null, start: null, progress: null,
-    group: keys.length ? [['key', { key: { $in: [...new Set(keys)] } }]] : [] })
-}
-
 /** What a read check needs of a Swarm, and no more (read/service.ts oneGroup, task #2875): its head, members and agents. The
  *  read cache holds it as `access` and patches it from those kinds alone (cachePatch.ts accessRule). */
 export function loadAccess(tx: Transaction, tabId: string): Promise<SwarmParts> {

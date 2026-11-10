@@ -92,7 +92,6 @@ function calls(tab: string, chat: string, project: string) {
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/shipping', `${t}/shipping`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
-    json('GET', 'GET /api/super-tabs/:tabId/proposals', `${t}/proposals?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/project-list', `${t}/project-list?invitedTo=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/sharing', `${t}/sharing`),
     json('POST', 'POST /api/super-tabs/:tabId/sharing', `${t}/sharing`, { operationId: op(), revision: 0, access: { mode: 'link', role: 'viewer' } }),
@@ -248,7 +247,7 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     }
   })
 
-  // Decisions, tags, Activity, reminders, followed threads, the inbox and catch-up are gone with Swarm v4: an older Desktop, phone or
+  // Decisions, tags, Activity, reminders, followed threads, the inbox, catch-up and proposals are gone with Swarm v4: an older Desktop, phone or
   // host still reads and marks them, and gets the same answer whoever asks and whatever Swarm it names, even a missing one, so the
   // answer says nothing of any of them.
   it('answers the retired reads and writes alike to everyone, naming nothing of the Swarm', async () => {

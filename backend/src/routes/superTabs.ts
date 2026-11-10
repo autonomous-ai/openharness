@@ -25,7 +25,6 @@ import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superT
 import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
-import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -103,8 +102,6 @@ const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
 const noQuery = z.object({}).strict()
-// The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
-const proposalsQuery = z.object({ projectId: id }).strict()
 /** The Cmd-N and join project list's query (superTabs/projectList.ts): the project the person was invited to, if any. */
 const projectListQuery = z.object({ invitedTo: id.optional() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
@@ -250,7 +247,6 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
       workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
-      ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
       // When a moved rule's task merged, as GitHub dates it, read at the instructions save (superTabs/ruleMoves.ts, task #3463).
       ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
@@ -584,10 +580,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => reads.machineReadings(req.user!, req.params.tabId, req.query.asAgentId)))
-  // One project's Buddy proposals its PM has not answered, oldest first (superTabs/proposals.ts): the Tasks view's Proposals.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
-    { preHandler: [validateParams(tabParams), validateQuery(proposalsQuery)] },
-    (req, reply) => respond(reply, () => store.proposals(req.user!, req.params.tabId, req.query.projectId)))
   // The projects a person may pick a main project from (superTabs/projectList.ts, task #4540), read when Cmd-N or Join opens.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof projectListQuery> }>('/api/super-tabs/:tabId/project-list',
     { preHandler: [validateParams(tabParams), validateQuery(projectListQuery)] },

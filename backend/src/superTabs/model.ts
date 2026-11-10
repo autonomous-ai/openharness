@@ -218,8 +218,6 @@ export interface AgentStartRequest {
   cwd: string
   worktree: boolean
   branchRef?: string
-  /** Stamped by the server for Team-written code (teamWritten.ts): the agent reads no project settings and its folder gets no trust. */
-  projectSettings?: 'off'
   permissionMode?: string
   codexHome?: string
   gridModel?: string
@@ -420,13 +418,6 @@ export interface Conversation {
   process?: import('./process.js').ProjectProcess
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
-  /** A Harness Team agent was assigned to build this task, or GitHub shows the app's bot pushed to its branch: its code runs
-   *  only in a Team account (teamWritten.ts, audit H2). */
-  teamWritten?: true
-  /** What set [teamWritten] (#3304): `assigned` (a Team agent given the task) and `branch` (a bot's push on a branch a start
-   *  named) are never cleared; `pushed` names the pull requests GitHub showed a bot's push among, and only a clean read of all
-   *  of them clears it. Absent on a mark from before #3304, which a join may have set. */
-  teamWrittenBy?: { kind: 'assigned' | 'branch' } | { kind: 'pushed'; pulls: string[] }
   /** A step of the task `reviewOf` names (task steps design, 2026-11-02): its name as the instructions give it, in any
    *  language. Readers show it inside its task, never as a task of its own. Absent on a linked group opened before steps. */
   step?: string
@@ -447,12 +438,8 @@ export interface Conversation {
   talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
-  /** The pull requests its own code is in, which GitHub's push read covers for its Team-written mark (teamWritten.ts, task
-   *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
-   *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
-  codePullRequestUrls?: string[]
-  /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most 50, until Swarm v4 retired the unlink
-   *  (2026-11-10): what keeps a later post's link from linking one again (task #3953). */
+  /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
+   *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
   unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
   /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
@@ -484,9 +471,12 @@ export interface Conversation {
   /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
    *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
   foldedInto?: string[]
-  /** A durable proposal on this card (#3817); retained when its accepted work becomes a task. */
-  proposal?: import('./proposalCards.js').ProposalRecord
-  /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
+  /** A proposal card, written until proposals went (2026-11-10), as its readers still take it: a card its PM did not accept or
+   *  reshape is no task to queue, start or approve (taskApproval.ts undecidedProposal), and a person's Tasks show it with its
+   *  senders, its decision and its merge (read/personalTasks.ts, read/feedIds.ts). Goes with the task records (slice S13). */
+  proposal?: { senders: Array<{ personId: string; generation: string }>; decision?: { kind: 'accept' | 'reshape' | 'later' | 'no'; reason: string }
+    mergedInto?: string }
+  /** A Buddy chat's owner messages its Buddy proposed for, written until proposals went (2026-11-10): never served (read/views.ts). */
   proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
@@ -572,20 +562,6 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
  *  (in the project's spelling) and a link into any other repository is left out, so one pull request is one link. */
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
-
-/** The pull requests [group]'s own code is in (codePullRequestUrls). A conversation from before the list reads every link it
- *  recorded, posts' included: an access rule loses no protection it had (task #3554). */
-export const codePullRequests = (group: Pick<Conversation, 'codePullRequestUrls' | 'pullRequestUrls'>): string[] =>
-  group.codePullRequestUrls ?? group.pullRequestUrls ?? []
-
-/** Adds the pull request links of [texts], its own code's sources, to [group]'s code list, and corrects the ones it holds. A
- *  conversation from before the list gets none: it keeps reading what it recorded (codePullRequests). */
-export function appendCodePullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
-  if (group.codePullRequestUrls === undefined) return
-  const urls = new Set(group.codePullRequestUrls.flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
-  group.codePullRequestUrls = [...urls]
-}
 
 /** Whether [url] was unlinked from [group]: no later text links it again. */
 const unlinked = (group: Pick<Conversation, 'unlinkedPullRequests'>, url: string): boolean => !!group.unlinkedPullRequests?.some(entry => entry.url === url)
@@ -805,7 +781,8 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  // Proposal history, and the private Buddy notices stored before task #4558, are visible to the people who can read their card/chat.
+  // Proposal history, written until proposals went (2026-11-10), and the private Buddy notices stored before task #4558, are visible
+  // to the people who can read their card/chat. Delete them with the notice readers of v1-v3 (slice S18).
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // Decisions, written until Swarm v4 removed them (2026-11-10), read still: an agent's question to a person in a switched
@@ -911,8 +888,6 @@ export interface CommandEffects {
   settles?: { messageId: string; agentId: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
-  /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
-  closedProposal?: { messageId: string; conversationId: string; reason: string }
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>

@@ -32,11 +32,10 @@ function setup() {
     leadId: null, agentIds: ['buddy'], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
     audience: { people: [{ id: 'peer', generation: 'first' }] } }
   state.conversations.push(chat)
-  /** peer's Buddy sends their proposal; the store reads the ask it names. */
-  const proposed = () => run({ type: 'buddy.propose', conversationId: chat.id, ownerMessageId: 'ask', ...proposal }, agentActor('buddy'),
-    { proposalAsk: { id: 'ask', conversationId: chat.id, source: false, createdAt: 900, text: proposal.text,
-      author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages
-  const propose = () => proposed()[0]!
+  /** peer's proposal in the project chat, as their Buddy posted it until proposals went (2026-11-10). */
+  const propose = (): MessageDraft => ({ id: 'proposal', conversationId: app.conversationId, text: proposal.text, recipients: [pm], replyTo: null,
+    author: { kind: 'person', id: 'peer', name: peer.email, membershipGeneration: 'first' },
+    source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: 'ask', ...proposal } })
   /** The PM's post in the project chat, replying to [root] or to a reply in [root]'s thread, as the store loads that reply. */
   const pmPost = (text: string, extra: { replyTo?: MessageDraft; root?: MessageDraft; mentions?: string[] } = {}, actor: Actor = agentActor(pm)) => {
     const reply = extra.replyTo && { id: extra.replyTo.id, conversationId: extra.replyTo.conversationId, author: extra.replyTo.author, createdAt: 900,
@@ -44,7 +43,7 @@ function setup() {
     return run({ type: 'message.send', conversationId: app.conversationId, text, recipientIds: [], replyTo: extra.replyTo?.id ?? null,
       ...(extra.mentions ? { mentions: extra.mentions } : {}) }, actor, reply ? { reply } : {}).messages.at(-1)!
   }
-  return { run, app, pm, chat: chat.id, proposed, propose, pmPost, get state() { return state } }
+  return { run, app, pm, chat: chat.id, propose, pmPost, get state() { return state } }
 }
 
 describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
@@ -115,103 +114,5 @@ describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
     const tagged = f.run({ type: 'message.send', conversationId: group, text: '@peer which drafts?', recipientIds: [], replyTo: null, mentions: ['peer'] },
       agentActor(f.pm)).messages.at(-1)!
     expect(tagged.buddyRecipients).toBeUndefined()
-  })
-})
-
-describe('work the PM opens from a Buddy\'s proposal without naming anyone (groups #294 and #327, 10-30)', () => {
-  /** peer's Buddy proposes; the PM opens a group from it, the store loading the proposal row by its id. */
-  function opened(extra: Record<string, unknown> = {}) {
-    const f = setup(), sent = f.propose()
-    const created = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
-      checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: sent.id, ...extra } as Command, agentActor(f.pm),
-      { proposal: { id: sent.id, conversationId: sent.conversationId, author: sent.author, source: sent.source ?? null } })
-    const group = created.result.conversationId as string
-    return { created, find: () => f.state.conversations.find(c => c.id === group)! }
-  }
-
-  it('is requested by the person the proposal was sent for', () => {
-    const { created, find } = opened()
-    expect(find().requesterId).toBe('peer')
-    expect(created.result.requesterUnknown).toBeUndefined()
-  })
-
-  it('keeps the requester the PM names, even someone else', () => {
-    const { find } = opened({ requesterId: 'owner' })
-    expect(find().requesterId).toBe('owner')
-  })
-
-  it('is refused naming the requester when the proposal\'s person left the Swarm or no longer reads the project, and opens once the PM names one (task #3389)', () => {
-    for (const lose of [(f: ReturnType<typeof setup>) => { f.state.people = f.state.people.filter(p => p.id !== 'peer') },
-      (f: ReturnType<typeof setup>) => { f.state.projects!.find(p => p.id === f.app.projectId)!.visibility = 'private' }]) {
-      const f = setup(), sent = f.propose()
-      lose(f)
-      const open = (extra: Record<string, unknown> = {}) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
-        checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: sent.id, ...extra } as Command, agentActor(f.pm),
-        { proposal: { id: sent.id, conversationId: sent.conversationId, author: sent.author, source: sent.source ?? null } })
-      expect(() => open()).toThrow(expect.objectContaining({ code: 'TASK_CONTRACT_MISSING', message: expect.stringContaining('requester') }))
-      const opened = open({ requesterId: 'owner' }).result.conversationId
-      const group = f.state.conversations.find(c => c.id === opened)!
-      expect(group.requesterId).toBe('owner')
-      expect(group.ledger?.proposal).toEqual({ buddyId: 'buddy', messageId: sent.id })
-    }
-  })
-
-  // A proposal stored before task #2926 has its Buddy's first reply holding its details, the row its PM was delivered.
-  describe('named by its details, the first reply and the row the PM is delivered (Scholes, 11-04)', () => {
-    /** A proposal's root and the Buddy's details reply under it, as buddy.propose wrote them before task #2926. */
-    const stored = (f: ReturnType<typeof setup>): [MessageDraft, MessageDraft] => {
-      const root = f.propose()
-      return [root, { id: 'details', conversationId: root.conversationId, author: { kind: 'agent', id: 'buddy', name: 'Buddy', membershipGeneration: 'first' },
-        text: 'Goal: Sync edits made offline\nScope: Desktop drafts only\nPriority: high', replyTo: root.id, thread: root.id, recipients: [f.pm] }]
-    }
-    /** The row the store loads for the named reply, with the row it replies to. */
-    const loaded = (reply: MessageDraft, root: MessageDraft) => ({ proposal: { id: reply.id, conversationId: reply.conversationId, author: reply.author,
-      source: reply.source ?? null, root: { id: root.id, conversationId: root.conversationId, author: root.author, source: root.source ?? null } } })
-    const open = (f: ReturnType<typeof setup>, reply: MessageDraft, root: MessageDraft) => f.run({ type: 'conversation.create', projectId: f.app.projectId,
-      title: 'Offline edits', brief: 'Save edits offline.', checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: reply.id } as Command,
-    agentActor(f.pm), loaded(reply, root))
-
-    it('links the proposal itself: its person asked, nothing is written in the project chat, its Buddy is credited', () => {
-      const f = setup(), [root, details] = stored(f)
-      const created = open(f, details, root)
-      const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
-      expect(group.requesterId).toBe('peer')
-      expect(group.ledger?.proposal).toEqual({ buddyId: 'buddy', messageId: root.id })
-      expect(created.messages.filter(m => m.conversationId === f.app.conversationId)).toEqual([])
-    })
-
-    it('refuses any other reply in its thread, and the Buddy\'s reply under anything but its own proposal: nothing opens', () => {
-      const f = setup(), [root, details] = stored(f)
-      const before = f.state.conversations.length
-      const wrongs: Array<[MessageDraft, MessageDraft]> = [
-        [{ ...details, author: { ...details.author, id: f.pm } }, root],
-        [{ ...details, author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } }, root],
-        [{ ...details, source: { kind: 'route' } }, root],
-        [details, { ...root, source: { kind: 'route', personId: 'peer', buddyId: 'buddy' } }],
-        [details, { ...root, source: { ...root.source, buddyId: 'other-buddy' } }],
-        [details, { ...root, conversationId: f.chat }],
-      ]
-      for (const [reply, under] of wrongs) {
-        expect(() => open(f, reply, under), JSON.stringify([reply, under])).toThrow('Name a Buddy\'s proposal posted in this project\'s chat, or leave the proposal out.')
-      }
-      expect(f.state.conversations.length).toBe(before)
-    })
-  })
-
-  it('credits nobody from a proposal posted in another project\'s chat, a private chat or by anyone but a Buddy: refused alike, nothing opened', () => {
-    const f = setup(), sent = f.propose()
-    const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
-    const before = f.state.conversations.length
-    const wrongs = [{ ...sent, conversationId: web.conversationId }, { ...sent, conversationId: f.chat },
-      { ...sent, author: { kind: 'person' as const, id: 'owner', name: 'owner', membershipGeneration: 'first' } },
-      { ...sent, source: { ...sent.source, buddyId: f.pm } },
-      { ...sent, author: { ...sent.author, id: f.pm } }, { ...sent, source: { kind: 'route', personId: 'peer' } }]
-    for (const wrong of wrongs) {
-      expect(() => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline', brief: 'Save.',
-        checks: [{ description: 'Done', independent: false }], proposalMessageId: wrong.id } as Command, agentActor(f.pm),
-        { proposal: { id: wrong.id, conversationId: wrong.conversationId, author: wrong.author, source: wrong.source ?? null } }), JSON.stringify(wrong))
-        .toThrow('Name a Buddy\'s proposal posted in this project\'s chat, or leave the proposal out.')
-    }
-    expect(f.state.conversations.length).toBe(before)
   })
 })

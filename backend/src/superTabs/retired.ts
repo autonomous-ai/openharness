@@ -28,6 +28,8 @@ export const RETIRED_COMMANDS = [
   // The Board way of working and task approval (2026-11-10): an older Desktop's Board settings, Accept and Decline, and its PM's
   // suggestion. A project switched before keeps its stored settings, read where they apply (boardRights.ts).
   'project.process', 'project.boardMode', 'project.canChat', 'project.decider', 'member.approvalMode', 'task.suggest', 'task.approve', 'task.reject',
+  // Proposals (2026-11-10): a person asks an agent in their 1:1 chat, and a task is the project's GitHub issue.
+  'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close', 'buddy.propose',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
@@ -42,6 +44,10 @@ export const opensRetiredStep = (command: { type?: unknown; reviewOf?: unknown; 
 
 const TASKS_RETIRED = { code: 'TASKS_RETIRED', status: 410, message: 'Tasks are GitHub issues now.' }
 const BOARD_RETIRED = { code: 'BOARD_RETIRED', status: 410, message: 'Board settings can’t be changed any more.' }
+
+/** A proposal a person sends or answers in an older Desktop: refused in these words, which it shows where it was typed. */
+const PROPOSALS_RETIRED = { code: 'PROPOSALS_RETIRED', status: 410, message: 'Proposals are gone. Ask an agent in its chat.' }
+
 /** A check verdict a person records in an older Desktop's work details (work.check) is refused in these words, which it shows
  *  where the verdict was typed, rather than answered as ignored: the app takes an ok answer for a saved verdict and closes the
  *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
@@ -53,6 +59,9 @@ export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; s
   'task.approve': TASKS_RETIRED, 'task.reject': TASKS_RETIRED, 'member.approvalMode': TASKS_RETIRED,
   // An older Desktop's Board settings: it takes an ok answer for a setting saved.
   'project.process': BOARD_RETIRED, 'project.boardMode': BOARD_RETIRED, 'project.canChat': BOARD_RETIRED, 'project.decider': BOARD_RETIRED,
+  // An older Desktop's proposal from the Board, and its answer to a PM's question on one.
+  'proposal.create': PROPOSALS_RETIRED,
+  'proposal.answer': PROPOSALS_RETIRED,
 }
 
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or
@@ -79,6 +88,8 @@ export const RETIRED_READS: Readonly<Record<string, object>> = {
   '/api/super-tabs/:tabId/inbox': { threads: [], latest: [], more: false },
   // Personal tasks (2026-11-10): an older Desktop's and phone's own tasks, now the project's GitHub issues.
   '/api/super-tabs/:tabId/personal-tasks': NO_PERSONAL_TASKS,
+  // Proposals (2026-11-10): an older Desktop's Proposals in its Tasks view.
+  '/api/super-tabs/:tabId/proposals': { proposals: [] },
 }
 
 /** An older Desktop's catch-up of a chat since its mark (GET .../conversations/:conversationId/catch-up?after=N): nothing missed,
