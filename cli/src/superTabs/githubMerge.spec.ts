@@ -544,3 +544,56 @@ describe('the rule\'s parts', () => {
     expect(await ledProjects({ me: 'dee', live: async () => false, read, roster: async () => [row] })).toEqual([])
   })
 })
+
+// A verdict made by command (githubVerdict.ts) is recorded with the backend as its agent's. The merger counts that agent, not
+// the name the comment opens with: the signature reads one or two plain words, so "Đức Anh" or "Atlas Reed Two" on the login
+// that opened the pull request read as unsigned and counted for nothing (review of #3902).
+describe('the merger counts the agent the backend recorded for a verdict', () => {
+  function recordedSetup(names: Record<string, string>) {
+    const github = fakeGitHub()
+    const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+    const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
+    const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
+    const log = vi.fn()
+    const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, authors })
+    return { github, merger, clock, authors, log, merges: () => github.sent.filter(s => s.method === 'PUT'),
+      comments: () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body)) }
+  }
+  const from = (id: number, body: string, at = '2026-11-09T07:00:00Z'): Json => ({ id, body, author_association: 'MEMBER', user: { login: 'deehw' }, created_at: at })
+
+  it('takes a recorded verdict as its agent\'s, however the comment signs, from the login that opened the pull request too', async () => {
+    const f = recordedSetup({ 'issue:501': 'Đức Anh' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(501, `Đức Anh, 14:20: READ-OK ${HEAD}`)])
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+    expect(f.comments()).toEqual([expect.stringMatching(/merged\. READ-OK on f6edb44 by Đức Anh, checks green\.$/)])
+    expect(f.authors).toHaveBeenCalledWith(expect.objectContaining({ repo: 'acme/app', tabId: 'tab' }), ['issue:501'])
+  })
+
+  it('counts the recorded agent over the name typed: its own writer\'s verdict is none, whoever it says it is', async () => {
+    const f = recordedSetup({ 'issue:502': 'Pip' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(502, `Juno, 14:20: READ-OK ${HEAD}`)])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+  })
+
+  it('asks the backend once for a comment it knows, and reads names as typed while the backend cannot be asked, saying so once', async () => {
+    const f = recordedSetup({ 'issue:501': 'Đức Anh' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(501, `Đức Anh, 14:20: READ-OK ${HEAD}`), from(503, 'Thanks, rebased.')])
+    await f.merger.tick()
+    f.clock.now += 60_000
+    await f.merger.tick()
+    // Only a comment that gives a verdict is asked about, and one answered is not asked about again.
+    expect(f.authors.mock.calls.map(call => call[1])).toEqual([['issue:501']])
+    const down = recordedSetup({})
+    down.authors.mockRejectedValue(new Error('Could not reach this Super Tab.'))
+    down.github.repo.comments.set(4, [from(504, `Juno, 14:20: READ-OK ${HEAD}`)])
+    await settle(down)
+    expect(down.merges()).toHaveLength(1)
+    expect(down.log.mock.calls.filter(call => String(call[0]).includes('AUTHORS_UNREAD'))).toHaveLength(1)
+  })
+})
