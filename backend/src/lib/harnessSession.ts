@@ -168,7 +168,6 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
     where: { refreshHash: harnessTokenHash(refreshToken) },
   })
   if (!session || session.revokedAt || session.expiresAt <= new Date()) return null
-  if (session.kind === 'team') return null
   const user = await userService.get(session.userId)
   if (!user) return null
   const sso = await recheckSsoSession(session)
@@ -194,11 +193,10 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
  */
 async function endTeamSession(refreshToken: string): Promise<null> {
   const refreshHash = harnessTokenHash(refreshToken)
-  const { count } = await prisma.harnessSession.updateMany({ where: { refreshHash, kind: 'team', ...notRevoked }, data: endedSessionData() })
-  if (count > 0) {
-    const session = await prisma.harnessSession.findUnique({ where: { refreshHash }, select: { userId: true } })
-    if (session) await signInsChanged(session.userId)
-  }
+  const session = await prisma.harnessSession.findUnique({ where: { refreshHash }, select: { userId: true } })
+  if (!session) return null
+  await prisma.harnessSession.updateMany({ where: { refreshHash, kind: 'team', ...notRevoked }, data: endedSessionData() })
+  await signInsChanged(session.userId)
   return null
 }
 
@@ -283,7 +281,7 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
   return { ...answer }
 }
 
-/** What a live session answers; throws INVALID_TOKEN for a Team account's (made before they went). */
+/** What a live session answers. A Team account's never gets here: its tokens alone were `hta_` (refused above). */
 function identityOf(
   user: NonNullable<Awaited<ReturnType<typeof userService.get>>>,
   sessionId: string,
@@ -296,7 +294,6 @@ function identityOf(
     autonomousEnv: storedAutonomousEnvironment(user.autonomousEnv),
     harnessSessionId: sessionId,
   }
-  if (kind === 'team') throw invalid()
   if (kind === 'computer') return { ...identity, harnessSessionKind: 'computer' }
   return { ...identity, harnessSessionKind: 'viewer' }
 }

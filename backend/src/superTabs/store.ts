@@ -760,7 +760,7 @@ export class SuperTabStore {
       // whether its target was in a Team account, so a workflow the check blocks shows up before people work around it.
       logger.warn('[super-tab] team command refused', { tabId: state.id, command: command.type, teamMachineId: team,
         ...target ? { targetMachineId: target.machineId, targetTeamAccount: onTeamAccount(state, target) } : {} })
-      fail('TEAM_SESSION_LIMITED', 'A team sign-in can only run Swarm agents on its own machine.', 403)
+      fail('TEAM_SESSION_LIMITED', 'A PM in a Harness Team account can only run Swarm agents on its own machine.', 403)
     }
     const onTeam = (agentId: string) => {
       const target = state.agents.find(a => a.id === agentId)
@@ -3227,7 +3227,7 @@ export class SuperTabStore {
         }
         const refusal = now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
           ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
-          : await this.terminalRefusal(tx, states.get(row.tabId)!, row, false)
+          : await this.terminalRefusal(tx, states.get(row.tabId)!, row)
         if (refusal) {
           const refused = await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'done', ok: false, error: refusal } })
           if (refused.count) this.terminalAnswered(tx, row.id)
@@ -3244,11 +3244,12 @@ export class SuperTabStore {
   }
 
   private async terminalRefusal(tx: Transaction, state: SuperTabState | null,
-    row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string }, team = true): Promise<string | null> {
+    row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string }): Promise<string | null> {
     const target = state?.agents.find(a => a.id === row.agentId && a.machineId === row.machineId && a.machineOwnerId === row.machineOwnerId)
     if (!state || !target) return 'The agent is no longer in the Swarm.'
-    // Only its Team account answers for an agent there, never its owner's own sign-in (security re-check 2 of #2089).
-    if (!team && onTeamAccount(state, target)) return 'Only this computer\'s Harness Team account answers for its agents.'
+    // Only its Team account answered for an agent there, never its owner's own sign-in (security re-check 2 of #2089); since
+    // Team sessions went (2026-11-10), nobody does.
+    if (onTeamAccount(state, target)) return 'Only this computer\'s Harness Team account answers for its agents.'
     if (target.harnessId !== row.harnessId) return 'The agent’s terminal changed since the request. Read it again.'
     const [kind, id] = [row.requesterKey.slice(0, row.requesterKey.indexOf(':')), row.requesterKey.slice(row.requesterKey.indexOf(':') + 1)]
     const requester: Actor = kind === 'person' ? { kind: 'person', userId: id, email: '' }

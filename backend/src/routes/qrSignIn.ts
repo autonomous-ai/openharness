@@ -20,7 +20,7 @@ import { createRateLimiter } from '../lib/rateLimit.js'
 const start = z.object({
   label: z.string().trim().min(1).max(80),
   kind: z.enum(['computer', 'viewer']),
-  // A computer names the computer it is; an app does not.
+  // The computer it is, sent by every computer client: read by nothing since Team accounts went (2026-11-10), still taken.
   computerId: z.string().regex(/^[0-9a-fA-F-]{16,64}$/).optional(),
   // A device with no screen asks for a code it can say aloud (lib/harnessSession.ts).
   spokenCode: z.boolean().optional(),
@@ -55,9 +55,6 @@ export async function qrSignInRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: z.infer<typeof start> }>('/api/auth/qr/start', { preHandler: validateBody(start) }, async (req, reply) => {
     const ip = clientIpFromHeaders(req.headers, req.socket.remoteAddress)
     if (!(await startLimit.allows(ip ?? 'unknown'))) return tooMany(reply)
-    if (req.body.kind === 'computer' && !req.body.computerId) {
-      return sendError(reply, 'A computer names itself to sign in.', 'COMPUTER_ID_REQUIRED', 400)
-    }
     // A spoken code is for a device with no screen signing itself in; an app always has a screen for a QR.
     if (req.body.spokenCode && req.body.kind !== 'computer') {
       return sendError(reply, 'Only a device signing itself in can ask for a spoken code.', 'SPOKEN_CODE_COMPUTER_ONLY', 400)

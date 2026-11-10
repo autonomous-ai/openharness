@@ -156,7 +156,8 @@ export const deviceService = {
       where: { userId, ...(autonomousEnv ? { autonomousEnv } : {}), ...machineAlive },
       orderBy: { createdAt: 'asc' },
     })
-    return rows.filter(machineBillingAllowsDataPlane).map((r) => {
+    // Never a Harness Team account's machine (Team accounts are gone, 2026-11-10), as the account's machine list.
+    return rows.filter((r) => r.sessionKind !== 'team' && machineBillingAllowsDataPlane(r)).map((r) => {
       const authMode = r.authMode === 'managed' || r.authMode === 'remote' || r.authMode === 'provider' ? r.authMode : 'self'
       // `remote` here means "backed by the owner's own machine", which drives the device's
       // "Offline" badge. A provider machine is never offline in that sense, so it is NOT remote.
