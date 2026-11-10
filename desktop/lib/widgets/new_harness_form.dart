@@ -991,7 +991,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       final availability = box.browserAvailability!;
       final install = await showBrowserSetupDialog(
         context,
-        restart: availability.restart,
         ownMachine: availability.ownMachine,
       );
       if (!mounted || !install || !await box.setUpBrowser() || !mounted) {

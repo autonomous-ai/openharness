@@ -305,7 +305,7 @@ class AgentBrowser {
   /// `setup`, `starting`, `ready` or `failed`.
   final String state;
 
-  /// During `setup`: `installing`, `starting_podman`, `building` or `restart_needed`.
+  /// During `setup`: `installing`, `starting_podman` or `building`.
   final String? step;
 
   /// During `failed`: one of [errors].
@@ -315,7 +315,6 @@ class AgentBrowser {
     'installing',
     'starting_podman',
     'building',
-    'restart_needed',
   };
   static const errors = {
     'needs_setup',

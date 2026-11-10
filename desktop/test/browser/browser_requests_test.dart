@@ -67,22 +67,16 @@ void main() {
   });
   tearDown(() => app.dispose());
 
-  test('available reads each state, with restart and ownMachine', () async {
-    daemon.reply = {
-      'state': 'needs_setup',
-      'restart': true,
-      'ownMachine': true,
-    };
+  test('available reads each state, with ownMachine', () async {
+    daemon.reply = {'state': 'needs_setup', 'ownMachine': true};
     final setup = await app.agentBrowserAvailable('m');
     expect(daemon.requests.single.type, 'agent_browser_available');
     expect(setup.state, BrowserAvailability.needsSetup);
-    expect(setup.restart, isTrue);
     expect(setup.ownMachine, isTrue);
     for (final state in ['ready', 'stopped', 'podman_old', 'podman_memory']) {
       daemon.reply = {'state': state};
       final answer = await app.agentBrowserAvailable('m');
       expect(answer.state, state);
-      expect(answer.restart, isFalse);
       expect(answer.ownMachine, isFalse);
     }
   });
@@ -124,18 +118,15 @@ void main() {
     );
   });
 
-  test('setup, restart and retry send their requests', () async {
+  test('setup and retry send their requests', () async {
     daemon.reply = {'ok': true};
     await app.agentBrowserSetup('m');
-    await app.agentBrowserRestart('m');
     await app.agentBrowserRetry('m', 'a1');
     expect(daemon.requests.map((r) => r.type), [
       'agent_browser_setup',
-      'agent_browser_restart',
       'agent_browser_retry',
     ]);
     expect(daemon.requests.map((r) => r.payload), [
-      isEmpty,
       isEmpty,
       {'agentId': 'a1'},
     ]);

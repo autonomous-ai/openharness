@@ -4,8 +4,8 @@
 //
 // Host to page: harnessBrowserReceive({t:'config', mac} | {t:'open'} |
 // {t:'data', b64} | {t:'closed', reason} | {t:'paste', text}).
-// Page to host: {t:'ready'} | {t:'data', b64} | {t:'copy', text} |
-// {t:'state', connected}.
+// Page to host: {t:'ready'} | {t:'data', b64} | {t:'consumed', bytes} |
+// {t:'copy', text} | {t:'state', connected}.
 
 const XK_Control_L = 0xffe3;
 const XK_v = 0x76;
@@ -34,6 +34,30 @@ export function startViewer(RFB, win) {
   let channel = null;
   let connected = false;
 
+  // Bytes noVNC has read out of its receive queue, which the host acks. Fed
+  // faster than it draws, noVNC holds the rest and disconnects at 40 MiB, so
+  // the credit window has to bound what is not drawn yet, not only what is on
+  // the wire. Read once a frame at most, and only while bytes wait.
+  let received = 0;
+  let reported = 0;
+  let scheduled = false;
+  function report() {
+    scheduled = false;
+    if (!rfb) return;
+    // noVNC 1.7.0's own Websock: build.mjs pins the version.
+    const consumed = received - rfb._sock.rQlen();
+    if (consumed > reported) {
+      post({ t: 'consumed', bytes: consumed - reported });
+      reported = consumed;
+    }
+    if (consumed < received) schedule();
+  }
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    win.requestAnimationFrame(report);
+  }
+
   // Shaped like an open WebSocket, so noVNC's Websock attaches it as one.
   function openChannel() {
     const ch = {
@@ -58,6 +82,8 @@ export function startViewer(RFB, win) {
   }
 
   function open() {
+    received = 0;
+    reported = 0;
     channel = openChannel();
     const current = new RFB(screen, channel);
     current.scaleViewport = true;
@@ -104,7 +130,12 @@ export function startViewer(RFB, win) {
         open();
         break;
       case 'data':
-        if (channel && channel.readyState === 'open') channel.onmessage({ data: fromBase64(message.b64) });
+        if (channel && channel.readyState === 'open') {
+          const data = fromBase64(message.b64);
+          received += data.byteLength;
+          channel.onmessage({ data });
+          schedule();
+        }
         break;
       case 'closed':
         if (channel && channel.readyState === 'open') {

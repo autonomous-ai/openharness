@@ -2,11 +2,7 @@
 /// services/agentBrowser/podman.ts `Availability`), plus the two answers this app gives for a daemon that could not
 /// say: [unsupported] for one too old to know the request, [unavailable] for one whose service did not answer.
 class BrowserAvailability {
-  const BrowserAvailability(
-    this.state, {
-    this.restart = false,
-    this.ownMachine = false,
-  });
+  const BrowserAvailability(this.state, {this.ownMachine = false});
 
   static const ready = 'ready';
   static const stopped = 'stopped';
@@ -18,9 +14,6 @@ class BrowserAvailability {
 
   final String state;
 
-  /// With [needsSetup]: Windows restarts once to enable WSL 2.
-  final bool restart;
-
   /// With [needsSetup]: the person's own Podman machine will not start, so Harness sets up one of its own.
   final bool ownMachine;
 
@@ -29,7 +22,6 @@ class BrowserAvailability {
     if (state == needsSetup) {
       return BrowserAvailability(
         needsSetup,
-        restart: j['restart'] == true,
         ownMachine: j['ownMachine'] == true,
       );
     }
@@ -42,6 +34,9 @@ class BrowserAvailability {
 }
 
 /// Browser is offered where [offersBrowser] asks for it (Swarm New agent and its agents' headers), never on the web
-/// build, which cannot show the browser in v1.
-bool browserOffered({required bool web, required bool offersBrowser}) =>
-    offersBrowser && !web;
+/// build or on Windows, which v1 does not cover.
+bool browserOffered({
+  required bool web,
+  required bool windows,
+  required bool offersBrowser,
+}) => offersBrowser && !web && !windows;

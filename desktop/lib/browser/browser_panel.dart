@@ -1,0 +1,465 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../core/models.dart';
+import '../core/runtime_platform.dart';
+import '../logging/app_log.dart';
+import '../shared/theme/app_icons.dart';
+import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/swarm_layout.dart';
+import '../shared/widgets/app_icon_button.dart';
+import '../state/app_state.dart';
+import '../widgets/desktop_chrome.dart';
+import '../widgets/native_webview_host.dart';
+import '../widgets/web_pane_panel.dart';
+import 'browser_bridge.dart';
+import 'browser_settings_page.dart';
+import 'browser_setup_dialog.dart';
+import 'browser_stream.dart';
+import 'browser_view.dart';
+
+/// An agent chat's Browser icon, after Terminal: selected while its panel is open.
+class BrowserButton extends StatelessWidget {
+  const BrowserButton({super.key, required this.open, required this.onPressed});
+  final bool open;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => AppIconButton(
+    key: const ValueKey('swarm-browser-button'),
+    icon: AppIcons.globe,
+    size: AppIcons.inlineSize,
+    tooltip: 'Browser',
+    selected: open,
+    onPressed: onPressed,
+  );
+}
+
+/// What a failed browser says (`browser.error`), in the agent frame's words.
+const _failed = {
+  'needs_setup': 'Browser isn\'t set up',
+  'podman_install_failed': 'Podman didn\'t install',
+  'podman_manual': 'Install Podman, then retry',
+  'podman_old': 'Update Podman, then retry',
+  'podman_memory': 'Give Podman 4 GB of memory, then retry',
+  'state_unreadable': 'Browser data can\'t be read',
+  'podman_down': 'Podman is not running',
+  'image_failed': 'Browser image failed to build',
+  'browser_stopped': 'Browser stopped',
+  'profile_unwritable': 'Browser can\'t save its login',
+  'proxy_failed': 'Proxy is not reachable',
+  'browser_limit': 'Too many browsers on this machine',
+};
+
+/// The setup steps, in order, and the line each one has.
+const _steps = ['installing', 'starting_podman', 'building'];
+const _stepLines = [
+  'Podman installed',
+  'Starting Podman…',
+  'Building browser',
+  'Starting browser',
+];
+
+/// What only the panel knows, after a stream it had ended: its line, and whether Retry opens another.
+typedef _Failure = ({String line, bool retry});
+
+/// An agent's own Chrome beside its chat (Mockups 3 and 4): while it is set up or starts, its progress; when it
+/// failed, why and what to press; when ready, its screen through noVNC, which the person uses as the agent does.
+class BrowserPanel extends StatefulWidget {
+  const BrowserPanel({
+    super.key,
+    required this.app,
+    required this.machineId,
+    required this.agentId,
+    required this.thisComputer,
+    this.onClose,
+    @visibleForTesting this.newView,
+  });
+
+  final AppNotifier app;
+  final String machineId, agentId;
+
+  /// The agent runs on this computer: setup can be started only here.
+  final bool thisComputer;
+  final VoidCallback? onClose;
+
+  /// The page for each stream; a test gives its own.
+  final BrowserView Function()? newView;
+
+  @override
+  State<BrowserPanel> createState() => _BrowserPanelState();
+}
+
+class _BrowserPanelState extends State<BrowserPanel> {
+  BrowserView? _view;
+  BrowserBridge? _bridge;
+  bool _open = false;
+  _Failure? _failure;
+
+  /// The agent frame's browser when the machine said it is not ready: no stream opens until the frame changes.
+  AgentBrowser? _waiting;
+  int _routeLosses = 0;
+  bool _settings = false;
+
+  /// A request the machine did not take, in one line.
+  String? _refused;
+
+  AppNotifier get _app => widget.app;
+  MachineState? get _machine => _app.stateOf(widget.machineId);
+  String get _machineName =>
+      _machine?.machine.displayName ?? widget.machineId;
+
+  AgentBrowser? get _browser => _machine?.agents
+      .where((a) => a.id == widget.agentId)
+      .firstOrNull
+      ?.browser;
+
+  bool get _online {
+    final machine = _machine;
+    return machine != null &&
+        machine.nodeOnline != false &&
+        machine.connectionStatus == ConnectionStatus.connected;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _app.addListener(_sync);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _sync());
+  }
+
+  @override
+  void dispose() {
+    _app.removeListener(_sync);
+    _end();
+    super.dispose();
+  }
+
+  /// Opens a stream when the browser is ready and nothing holds it back, and ends one that should no longer be open.
+  void _sync() {
+    if (!mounted) return;
+    final browser = _browser;
+    if (_waiting != null && browser != _waiting) _waiting = null;
+    final wanted =
+        WebPanePanel.webviewAvailable &&
+        _online &&
+        browser?.state == 'ready' &&
+        _failure == null &&
+        _waiting == null &&
+        !_settings;
+    if (wanted && _bridge == null) unawaited(_connect());
+    if (!wanted && _bridge != null) _end();
+    setState(() {});
+  }
+
+  Future<void> _connect() async {
+    final view = (widget.newView ?? BrowserView.new)();
+    final stream = _app.browserStream(widget.machineId, widget.agentId);
+    final bridge = BrowserBridge(view, stream, mac: RuntimePlatform.isMacOS);
+    _view = view;
+    _bridge = bridge;
+    _open = false;
+    try {
+      await bridge.start();
+    } on BrowserStreamError catch (error) {
+      if (!mounted || _bridge != bridge) return;
+      _end();
+      _refusedOpen(error.code);
+      return;
+    }
+    if (!mounted || _bridge != bridge) return;
+    _app.productMeasurement.agentBrowserOpened();
+    unawaited(stream.closed.then((reason) => _closed(bridge, reason)));
+    setState(() => _open = true);
+  }
+
+  /// Ends the open stream, if any, without a word: what to show comes from whoever ended it.
+  void _end() {
+    unawaited(_bridge?.close());
+    _bridge = null;
+    _view = null;
+    _open = false;
+  }
+
+  void _refusedOpen(String code) {
+    switch (code) {
+      case 'VIEWER_LIMIT':
+        _failure = (line: 'Browser is open in too many places', retry: false);
+      case 'NOT_OWNER':
+        _failure = (line: 'Only its owner can open this browser', retry: false);
+      case 'NOT_READY' || 'NO_BROWSER':
+        _waiting = _browser;
+      case BrowserStreamError.page:
+        _failure = (line: 'This computer can\'t show the browser', retry: false);
+      default:
+        return _lostRoute();
+    }
+    _sync();
+  }
+
+  void _closed(BrowserBridge bridge, String? reason) {
+    if (!mounted || _bridge != bridge) return;
+    _end();
+    if (reason == 'route') return _lostRoute();
+    _routeLosses = 0;
+    switch (reason) {
+      case 'rate' || 'backlog':
+        _failure = (line: 'Browser is slow here', retry: true);
+      case 'agent':
+        _waiting = _browser;
+      default:
+        // noVNC closed its own side.
+        _failure = (line: 'Browser lost its connection', retry: true);
+    }
+    _sync();
+  }
+
+  /// The stream's route went away: the next stream takes whatever route there is now, once; twice in a row says so.
+  void _lostRoute() {
+    if (++_routeLosses > 1) {
+      _failure = (line: 'Browser lost its connection', retry: true);
+    }
+    _sync();
+  }
+
+  void _retryStream() {
+    _failure = null;
+    _routeLosses = 0;
+    _sync();
+  }
+
+  /// Sends [request] to the agent's machine, and says so in one line when it was not taken.
+  Future<void> _ask(Future<void> Function() request) async {
+    setState(() => _refused = null);
+    try {
+      await request();
+    } catch (error) {
+      appLog.warn('browser', 'request to ${widget.machineId} failed: $error');
+      if (!mounted) return;
+      setState(
+        () => _refused = error is StateError
+            ? error.message
+            : 'Browser isn\'t available on $_machineName right now',
+      );
+    }
+  }
+
+  Future<void> _install() async {
+    final availability = await _app.agentBrowserAvailable(widget.machineId);
+    if (!mounted) return;
+    final install = await showBrowserSetupDialog(
+      context,
+      ownMachine: availability.ownMachine,
+    );
+    if (install) await _ask(() => _app.agentBrowserSetup(widget.machineId));
+  }
+
+  Future<void> _paste() async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (text != null && text.isNotEmpty) _bridge?.paste(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return ColoredBox(
+      key: const ValueKey('swarm-browser-panel'),
+      color: DesktopChrome.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            height: 52,
+            padding: const EdgeInsets.symmetric(
+              horizontal: SwarmLayout.barSide,
+            ),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: DesktopChrome.rim)),
+            ),
+            child: Row(
+              spacing: 4,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Browser',
+                    style: DesktopChrome.text(medium: true),
+                  ),
+                ),
+                AppIconButton(
+                  key: const ValueKey('swarm-browser-settings'),
+                  icon: AppIcons.settings,
+                  tooltip: 'Browser settings',
+                  selected: _settings,
+                  onPressed: () {
+                    _settings = !_settings;
+                    _sync();
+                  },
+                ),
+                AppIconButton(
+                  key: const ValueKey('swarm-browser-paste'),
+                  icon: AppIcons.clipboardPaste,
+                  tooltip: 'Paste',
+                  onPressed: _open && !_settings ? _paste : null,
+                ),
+                AppIconButton(
+                  key: const ValueKey('swarm-browser-close'),
+                  icon: AppIcons.close,
+                  tooltip: 'Close',
+                  onPressed: widget.onClose,
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: _body()),
+        ],
+      ),
+    );
+  }
+
+  Widget _body() {
+    if (!_online) return _line('Reconnect this machine to open its browser');
+    if (_settings) {
+      return BrowserSettingsPage(
+        app: _app,
+        machineId: widget.machineId,
+        agentId: widget.agentId,
+        onBack: () {
+          _settings = false;
+          _sync();
+        },
+      );
+    }
+    if (_failure case final failure?) {
+      return _line(
+        failure.line,
+        action: failure.retry ? ('Retry', _retryStream) : null,
+      );
+    }
+    final browser = _browser;
+    if (browser == null) return const SizedBox.shrink();
+    final view = _view;
+    return switch (browser.state) {
+      'setup' => _progress(browser.step),
+      'failed' => _failedLine(browser.error),
+      // Setup and its failures are words; only the screen needs a webview.
+      'ready' when !WebPanePanel.webviewAvailable => _line(
+        'This computer can\'t show the browser',
+      ),
+      'ready' when view != null && _waiting == null => Stack(
+        fit: StackFit.expand,
+        children: [
+          NativeWebViewHost(child: view.build(context)),
+          if (!_open) _starting(),
+        ],
+      ),
+      _ => _starting(),
+    };
+  }
+
+  Widget _failedLine(String? error) {
+    final retry = (
+      'Retry',
+      () => _ask(() => _app.agentBrowserRetry(widget.machineId, widget.agentId)),
+    );
+    return switch (error) {
+      'needs_setup' when !widget.thisComputer => _line(
+        'Set up Browser on $_machineName first',
+      ),
+      'needs_setup' => _line(_failed[error]!, action: ('Install', _install)),
+      'podman_install_failed' => _line(
+        _failed[error]!,
+        action: widget.thisComputer
+            ? (
+                'Retry',
+                () => _ask(() => _app.agentBrowserSetup(widget.machineId)),
+              )
+            : null,
+      ),
+      'state_unreadable' => _line(_failed[error]!),
+      // A failure this build has no words for reads as the browser stopping, which Retry answers too.
+      _ => _line(_failed[error] ?? _failed['browser_stopped']!, action: retry),
+    };
+  }
+
+  Widget _starting() => Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      spacing: DesktopChrome.controlGap,
+      children: [
+        const SizedBox.square(
+          dimension: grid.AppControl.iconSize,
+          child: CircularProgressIndicator(strokeWidth: 1.5),
+        ),
+        Text('Starting browser…', style: DesktopChrome.control()),
+      ],
+    ),
+  );
+
+  /// One centred line, with an action under it.
+  Widget _line(String line, {(String, VoidCallback)? action}) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        spacing: DesktopChrome.controlGap,
+        children: [
+          Text(line, textAlign: TextAlign.center, style: DesktopChrome.control()),
+          if (action case (final label, final onPressed))
+            FilledButton(onPressed: onPressed, child: Text(label)),
+          if (_refused case final refused?)
+            Text(refused, style: DesktopChrome.metadata()),
+        ],
+      ),
+    ),
+  );
+
+  /// The four setup lines: earlier steps ticked, the current one turning, the rest still to come.
+  Widget _progress(String? step) {
+    final current = _steps.indexOf(step ?? '');
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < _stepLines.length; i++)
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                vertical: grid.AppDesktop.listRowGap,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                spacing: DesktopChrome.controlGap,
+                children: [
+                  if (i < current)
+                    Icon(
+                      AppIcons.circleCheck,
+                      size: grid.AppControl.iconSize,
+                      semanticLabel: 'Done',
+                    )
+                  else if (i == current)
+                    const SizedBox.square(
+                      dimension: grid.AppControl.iconSize,
+                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                    )
+                  else
+                    Icon(
+                      AppIcons.circle,
+                      size: grid.AppControl.iconSize,
+                      color: DesktopChrome.muted,
+                    ),
+                  Text(
+                    _stepLines[i],
+                    style: DesktopChrome.control(
+                      color: i <= current ? null : DesktopChrome.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}

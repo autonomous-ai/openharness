@@ -591,6 +591,18 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  /// An agent's Browser panel opened a stream to its screen (spec § Measures): the name alone, never the agent,
+  /// machine or route.
+  void agentBrowserOpened() {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'agent_browser_opened',
+    );
+  }
+
   /// A new non-machine key joined while Add Phone was open, by its opening only.
   void addPhonePaired(AddPhoneOpening from) {
     if (!healthEnabled || !sharing || _disposed) return;
@@ -719,9 +731,10 @@ class ProductMeasurement extends ChangeNotifier {
 
   /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
   /// Phone card's flow and the ways Add Phone opened are 3, the card offered
-  /// after work or after time away 4, and first-run/invite counters 5. Other
+  /// after work or after time away 4, first-run/invite counters 5, and an opened agent Browser 8. Other
   /// health measures use [health] to wait for support before counting.
   static int _vocabularyOf(String metric) {
+    if (metric == 'agent_browser_opened') return 8;
     if (metric.startsWith('ui_desktop_phone_offer_skipped_') ||
         metric.startsWith('ui_desktop_add_phone_paired_')) {
       return 6;

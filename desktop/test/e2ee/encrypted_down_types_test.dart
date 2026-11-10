@@ -74,6 +74,7 @@ void main() {
         'AGENT_MESSAGES_REQUEST_TYPES',
       ),
       ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
+      ...namesIn(frames, 'AGENT_BROWSER_DOWN_TYPES'),
     };
   });
 
@@ -103,6 +104,7 @@ void main() {
       'PAIR_REQUESTS',
       'PLATE_REQUEST',
       'AGENT_MESSAGES_REQUEST_TYPES',
+      'AGENT_BROWSER_DOWN_TYPES',
     });
     expect(body, contains('isEncryptedDownType(type)'));
   });

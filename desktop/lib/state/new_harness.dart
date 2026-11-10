@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 
 import '../browser/browser_availability.dart';
 import '../core/home_dir.dart';
+import '../core/runtime_platform.dart';
 import '../logging/app_log.dart';
 import '../core/codex_profiles.dart';
 import '../core/launch_setup.dart';
@@ -1043,9 +1044,10 @@ class NewHarnessController extends ChangeNotifier {
     _refresh();
   }
 
-  /// Browser is drawn: Swarm New agent, on the desktop build.
+  /// Browser is drawn: Swarm New agent, on the desktop build, not on Windows.
   bool get offersBrowser => browserOffered(
     web: kIsWeb,
+    windows: RuntimePlatform.isWindows,
     offersBrowser: integration?.offersBrowser ?? false,
   );
 

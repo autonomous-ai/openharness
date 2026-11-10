@@ -6,7 +6,6 @@ import 'package:harness/browser/browser_setup_dialog.dart';
 void main() {
   Future<Future<bool>> open(
     WidgetTester tester, {
-    bool restart = false,
     bool ownMachine = false,
   }) async {
     late Future<bool> answer;
@@ -16,7 +15,6 @@ void main() {
           builder: (context) => TextButton(
             onPressed: () => answer = showBrowserSetupDialog(
               context,
-              restart: restart,
               ownMachine: ownMachine,
             ),
             child: const Text('Open'),
@@ -50,16 +48,6 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(await answer, isFalse);
-  });
-
-  testWidgets('the dialog shows "Windows restarts once." only when restart is '
-      'true', (tester) async {
-    await open(tester);
-    expect(find.text('Windows restarts once.'), findsNothing);
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    await open(tester, restart: true);
-    expect(find.text('Windows restarts once.'), findsOneWidget);
   });
 
   testWidgets('a Podman machine that will not start gets its own line', (

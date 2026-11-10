@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'support/swarm_v4_channel.dart';
 import 'support/swarm_v4_data.dart';
+import 'swarm_state_test.dart' show createApp;
 
 /// A person's first minutes in Swarm v4, in one go and by clicking, as they do it: the left pane, an agent's own chat
 /// (they write to it), its instructions and terminal beside it, a project's channel (they only read it), the project's
@@ -137,6 +141,60 @@ void main() {
     await tester.tap(key('super-agent-second'));
     await tester.pumpAndSettle();
     expect(c.selectedId, 'agent-chat-second');
+    expect(tester.takeException(), isNull);
+  });
+
+  // Ticking Browser, Start and Install are the New agent form's (super_tab_new_agent_launch_test.dart); this is what the
+  // person sees next, in the agent's chat.
+  testWidgets('a browser agent: Browser opens its setup beside its chat, '
+      'follows it, and closes', (tester) async {
+    final app = createApp(connected: true);
+    void browser(AgentBrowser state) {
+      app.stateOf('host')!.agents = [
+        Agent(id: 'session-second', name: 'second', engine: 'claude', browser: state),
+      ];
+      app.notifyListeners();
+    }
+
+    const host = Machine(
+      machineId: 'host',
+      authMode: MachineAuthMode.managed,
+      name: 'Mac Studio',
+      status: 'online',
+    );
+    app.machineStates['host'] = MachineState(host)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded;
+    browser(const AgentBrowser(state: 'setup', step: 'installing'));
+    final server = swarmV4Server();
+    await openSwarmV4(
+      tester,
+      server,
+      saved: 'agent-chat-second',
+      size: const Size(2000, 900),
+      app: app,
+    );
+
+    await tester.tap(key('swarm-browser-button'));
+    await tester.pump();
+    expect(key('swarm-browser-panel'), findsOneWidget);
+    expect(find.text('Podman installed'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    // The chat stays beside it.
+    expect(find.byType(EditableText), findsOneWidget);
+
+    browser(const AgentBrowser(state: 'setup', step: 'building'));
+    await tester.pump();
+    expect(find.byIcon(AppIcons.circleCheck), findsNWidgets(2));
+    browser(const AgentBrowser(state: 'starting'));
+    await tester.pump();
+    expect(find.text('Starting browser…'), findsOneWidget);
+
+    await tester.tap(key('swarm-browser-close'));
+    await tester.pumpAndSettle();
+    expect(key('swarm-browser-panel'), findsNothing);
+    expect(find.byType(EditableText), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

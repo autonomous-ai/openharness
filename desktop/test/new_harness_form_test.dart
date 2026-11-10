@@ -1062,10 +1062,14 @@ void main() {
       expect(pillOf(tester).tooltip, 'A sandboxed Chrome the agent drives');
     });
 
-    test('the pill is not offered on the web', () {
-      expect(browserOffered(web: true, offersBrowser: true), isFalse);
-      expect(browserOffered(web: false, offersBrowser: false), isFalse);
-      expect(browserOffered(web: false, offersBrowser: true), isTrue);
+    test('the pill and the Browser button are not offered on the web or on '
+        'Windows', () {
+      bool offered({bool web = false, bool windows = false, bool asked = true}) =>
+          browserOffered(web: web, windows: windows, offersBrowser: asked);
+      expect(offered(web: true), isFalse);
+      expect(offered(windows: true), isFalse);
+      expect(offered(asked: false), isFalse);
+      expect(offered(), isTrue);
     });
 
     testWidgets('ready, stopped, podman_old and podman_memory: the pill works '
@@ -1084,7 +1088,7 @@ void main() {
         'setup · about 15 min"', (tester) async {
       final box = await mountBrowser(
         tester,
-        available: {'state': 'needs_setup', 'restart': false},
+        available: {'state': 'needs_setup'},
       );
       expect(find.text(line), findsOneWidget);
       await tester.tap(pill);
@@ -1094,7 +1098,7 @@ void main() {
 
     for (final (available, why) in [
       (
-        {'state': 'needs_setup', 'restart': false},
+        {'state': 'needs_setup'},
         'Set up Browser on Ken Mac first',
       ),
       ({'state': 'unsupported'}, 'Update Harness on Ken Mac first'),

@@ -31,7 +31,7 @@ class _NoPodman extends SuperTabFixtureConnection {
       timeout: timeout,
     );
     return type == 'agent_browser_available'
-        ? {'state': 'needs_setup', 'restart': false}
+        ? {'state': 'needs_setup'}
         : answer;
   }
 }

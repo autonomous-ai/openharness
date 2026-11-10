@@ -619,6 +619,23 @@ void main() {
     },
   );
 
+  test('an opened agent Browser counts its name alone, once a CLI forwards '
+      'it, at 8', () async {
+    await usage.flush();
+    usage.agentBrowserOpened();
+    usage.proxyVocabulary = 7;
+    await usage.flush();
+    expect(totals()['agent_browser_opened'], isNull);
+    usage.proxyVocabulary = 8;
+    usage.agentBrowserOpened();
+    await usage.flush();
+    expect(totals()['agent_browser_opened'], 2);
+    expect(
+      totals().keys.where((k) => k.contains('browser')),
+      ['agent_browser_opened'],
+    );
+  });
+
   group('Add Phone', () {
     test(
       'returning flow, every skip and pairing way wait for vocabulary 6',

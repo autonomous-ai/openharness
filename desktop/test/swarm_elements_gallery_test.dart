@@ -6,12 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/browser/browser_panel.dart';
 import 'package:harness/browser/browser_pill.dart';
 import 'package:harness/browser/browser_settings.dart';
 import 'package:harness/browser/browser_settings_page.dart';
 import 'package:harness/browser/browser_setup_dialog.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_icons.dart';
@@ -180,7 +182,7 @@ Future<List<SuperTabController>> _show(
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 4039);
+  tester.view.physicalSize = const Size(760, 4340);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -695,10 +697,10 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
-              title('Set up Browser, on Windows without WSL 2'),
+              title('Set up Browser'),
               const SizedBox(
                 width: 500,
-                child: BrowserSetupPrompt(restart: true, ownMachine: false),
+                child: BrowserSetupPrompt(ownMachine: false),
               ),
               title('Browser settings: a proxy with a saved password'),
               SizedBox(
@@ -710,6 +712,36 @@ class _Gallery extends StatelessWidget {
                   agentId: 'faye',
                   onBack: () {},
                 ),
+              ),
+              title(
+                'Browser in an agent\'s bar, closed and open; its panel setting up, and failed',
+              ),
+              Row(
+                children: [
+                  SizedBox(child: BrowserButton(open: false, onPressed: () {})),
+                  gap(),
+                  SizedBox(child: BrowserButton(open: true, onPressed: () {})),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final agent in ['faye-setup', 'faye-failed']) ...[
+                    SizedBox(
+                      width: 340,
+                      height: 230,
+                      child: BrowserPanel(
+                        app: browserApp,
+                        machineId: 'm',
+                        agentId: agent,
+                        thisComputer: true,
+                        onClose: () {},
+                      ),
+                    ),
+                    gap(),
+                  ],
+                ],
               ),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
               // is not there.
@@ -797,14 +829,40 @@ class _Gallery extends StatelessWidget {
   }
 }
 
-/// Faye's computer as Browser settings asks it: a SOCKS5 proxy whose password it keeps.
+/// Faye's computer as Browser settings and her Browser panels ask it: a SOCKS5 proxy whose password it keeps.
 class _BrowserSettingsApp extends AppNotifier {
   _BrowserSettingsApp()
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
-      );
+      ) {
+    // Her computer, with one browser building and one whose Podman is down.
+    const machine = Machine(
+      machineId: 'm',
+      authMode: MachineAuthMode.remote,
+      name: 'Ken Mac',
+    );
+    machines = [machine];
+    machineStates['m'] = MachineState(machine)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = const [
+        Agent(
+          id: 'faye-setup',
+          name: 'Faye',
+          engine: 'claude',
+          browser: AgentBrowser(state: 'setup', step: 'building'),
+        ),
+        Agent(
+          id: 'faye-failed',
+          name: 'Faye',
+          engine: 'claude',
+          browser: AgentBrowser(state: 'failed', error: 'podman_down'),
+        ),
+      ];
+  }
 
   @override
   Future<BrowserSettings> agentBrowserSettings(

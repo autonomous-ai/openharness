@@ -7,26 +7,21 @@ import '../widgets/terminal_prompt.dart';
 /// Set up Browser: asked once, on Start, only at the computer being set up. True on Install.
 Future<bool> showBrowserSetupDialog(
   BuildContext context, {
-  required bool restart,
   required bool ownMachine,
 }) async =>
     await showTerminalPrompt<bool>(
       context,
       builder: (context) =>
-          BrowserSetupPrompt(restart: restart, ownMachine: ownMachine),
+          BrowserSetupPrompt(ownMachine: ownMachine),
     ) ==
     true;
 
-/// What [showBrowserSetupDialog] shows. [restart]: Windows without WSL 2 restarts once. [ownMachine]: the person's
-/// Podman machine will not start, so Harness makes its own beside it.
+/// What [showBrowserSetupDialog] shows. [ownMachine]: the person's Podman machine will not start, so Harness makes its
+/// own beside it.
 class BrowserSetupPrompt extends StatelessWidget {
-  const BrowserSetupPrompt({
-    super.key,
-    required this.restart,
-    required this.ownMachine,
-  });
+  const BrowserSetupPrompt({super.key, required this.ownMachine});
 
-  final bool restart, ownMachine;
+  final bool ownMachine;
 
   @override
   Widget build(BuildContext context) {
@@ -55,7 +50,6 @@ class BrowserSetupPrompt extends StatelessWidget {
                 'its own.',
                 style: body,
               ),
-            if (restart) Text('Windows restarts once.', style: body),
           ],
         ),
         actions: [

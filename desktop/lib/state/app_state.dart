@@ -1,5 +1,6 @@
 import '../browser/browser_availability.dart';
 import '../browser/browser_settings.dart';
+import '../browser/browser_stream.dart';
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
@@ -3220,8 +3221,6 @@ class AppNotifier extends ChangeNotifier {
       _agentBrowserRequest(machineId, 'agent_browser_setup');
 
   /// Restarts Windows to finish setup, from this computer only.
-  Future<void> agentBrowserRestart(String machineId) =>
-      _agentBrowserRequest(machineId, 'agent_browser_restart');
 
   Future<void> agentBrowserRetry(String machineId, String agentId) =>
       _agentBrowserRequest(
@@ -3267,6 +3266,26 @@ class AppNotifier extends ChangeNotifier {
       timeout: const Duration(seconds: 25),
     ),
   );
+
+  /// Each machine's open views of an agent's browser, which its `agent_browser_*` frames and kind-8 bytes reach.
+  final _browserStreams = <String, Set<BrowserStream>>{};
+
+  /// A view of [agentId]'s browser on [machineId], not yet opened, routed until it closes.
+  BrowserStream browserStream(String machineId, String agentId) {
+    final stream = BrowserStream(
+      machineId: machineId,
+      agentId: agentId,
+      send: (type, payload) => _conn(machineId).sendTerminalFrame(type, payload),
+      sendBinary: (frame) => _sendTerminalBinary(machineId, frame),
+    );
+    final streams = _browserStreams.putIfAbsent(machineId, () => {})
+      ..add(stream);
+    stream.closed.whenComplete(() {
+      streams.remove(stream);
+      if (streams.isEmpty) _browserStreams.remove(machineId);
+    });
+    return stream;
+  }
 
   void openOrchestratorProject(String machineId, String id, String title) {
     final existing = swarms
@@ -10196,6 +10215,10 @@ class AppNotifier extends ChangeNotifier {
     } else if (nextStatus == ConnectionStatus.reconnecting ||
         nextStatus == ConnectionStatus.disconnected) {
       _stopAgentSyncTimer(machineId);
+      // The daemon ends their execs with this connection; a new one opens a new stream.
+      for (final stream in [...?_browserStreams[machineId]]) {
+        stream.connectionLost();
+      }
       _clearMachineActivity(machine);
       if (machine.isLocalMachine) {
         machine.transportMode = MachineTransportMode.localOffline;
@@ -13399,6 +13422,16 @@ class AppNotifier extends ChangeNotifier {
   /// scheduling turn to the socket's incoming queue. Matching frames enter the
   /// session's ordered renderer queue synchronously, regardless of tab order.
   Future<void> _handleTerminalBinary(String machineId, Uint8List raw) async {
+    // An agent browser's bytes go to its stream alone, by their header, without visiting the terminals.
+    final browser = peekTerminalLocal(raw);
+    if (browser?.kind == TerminalBinaryKind.browser) {
+      final frame = decodeTerminalLocal(raw);
+      if (frame == null) return;
+      for (final stream in [...?_browserStreams[machineId]]) {
+        stream.handleBinary(frame);
+      }
+      return;
+    }
     final targets = _terminalSessionsFor(machineId).toList();
     if (targets.isEmpty) return;
     final clear = decodeTerminalLocal(raw);
@@ -22944,6 +22977,17 @@ class AppNotifier extends ChangeNotifier {
     // scroll and discovery events must not await every retained terminal.
     // Each session still sees terminal frames: ready replies match their own
     // request/agent, while transport errors must reach the whole machine.
+    if (type.startsWith('agent_browser_')) {
+      for (final stream in [...?_browserStreams[machineId]]) {
+        // The relay refused one of this machine's browser frames; it cannot say whose.
+        if (type == 'agent_browser_transport_error') {
+          stream.transportError();
+        } else {
+          stream.handleFrame(type, payload);
+        }
+      }
+      return;
+    }
     if (type.startsWith('terminal_')) {
       for (final session in _terminalSessionsFor(machineId).toList()) {
         await session.handleFrame(type, payload);

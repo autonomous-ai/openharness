@@ -35,6 +35,10 @@ function page({ mac }) {
   doc.getElementById = (id) => (id === 'screen' ? screen : null);
   win.document = recorded(doc, touches);
   const posted = [];
+  // Frames run when the test says, so it can tell what the page reports per frame.
+  const frames = [];
+  win.requestAnimationFrame = (callback) => frames.push(callback);
+  const frame = () => frames.splice(0).forEach((callback) => callback());
   win.HarnessBrowser = { postMessage: (message) => posted.push(JSON.parse(message)) };
   const rfbs = [];
   class FakeRFB extends EventTarget {
@@ -43,9 +47,9 @@ function page({ mac }) {
       this.target = target;
       this.channel = channel;
       this.log = [];
-      this.sock = new Websock();
-      this.sock.attach(channel);
-      this.sock.on('close', () => this.dispatchEvent(new CustomEvent('disconnect', { detail: { clean: true } })));
+      this._sock = new Websock();
+      this._sock.attach(channel);
+      this._sock.on('close', () => this.dispatchEvent(new CustomEvent('disconnect', { detail: { clean: true } })));
       rfbs.push(this);
     }
     sendKey(keysym, code, down) { this.log.push(['key', keysym, code, down]); }
@@ -59,7 +63,7 @@ function page({ mac }) {
   send({ t: 'open' });
   const rfb = rfbs[0];
   rfb.dispatchEvent(new Event('connect'));
-  return { win, doc, posted, rfb, send, touches };
+  return { win, doc, posted, rfb, send, touches, frame };
 }
 
 function key(type, props) {
@@ -90,12 +94,31 @@ test("the channel has every property noVNC's Websock checks, including protocol"
 test('bytes pass both ways', () => {
   const { rfb, posted, send } = page({ mac: false });
   send({ t: 'data', b64: Buffer.from([0, 1, 254, 255]).toString('base64') });
-  assert.deepEqual([...rfb.sock.rQshiftBytes(4)], [0, 1, 254, 255]);
+  assert.deepEqual([...rfb._sock.rQshiftBytes(4)], [0, 1, 254, 255]);
   const big = Uint8Array.from({ length: 100000 }, (_, i) => i % 251);
-  rfb.sock.sQpushBytes(big);
-  rfb.sock.flush();
+  rfb._sock.sQpushBytes(big);
+  rfb._sock.flush();
   const sent = Buffer.concat(posted.filter((m) => m.t === 'data').map((m) => Buffer.from(m.b64, 'base64')));
   assert.deepEqual(new Uint8Array(sent), big);
+});
+
+test('bytes are reported consumed only once noVNC has read them, at most once a frame', () => {
+  const { rfb, posted, send, frame } = page({ mac: false });
+  const consumed = () => posted.filter((m) => m.t === 'consumed').map((m) => m.bytes);
+  send({ t: 'data', b64: Buffer.alloc(10).toString('base64') });
+  send({ t: 'data', b64: Buffer.alloc(6).toString('base64') });
+  frame();
+  // Nothing read yet: noVNC still holds all 16 bytes, as it does while it draws.
+  assert.deepEqual(consumed(), []);
+  rfb._sock.rQshiftBytes(12);
+  frame();
+  assert.deepEqual(consumed(), [12]);
+  rfb._sock.rQshiftBytes(4);
+  frame();
+  assert.deepEqual(consumed(), [12, 4]);
+  // All read: no frame is asked for until more bytes come.
+  frame();
+  assert.deepEqual(consumed(), [12, 4]);
 });
 
 test('cmd+letter is sent as ctrl+letter on mac, and cmd never reaches the remote', () => {
@@ -163,7 +186,7 @@ test('closed posts state and draws nothing of its own', () => {
 
 test('a close from noVNC reaches the host as a state', async () => {
   const { rfb, posted } = page({ mac: false });
-  rfb.sock.close();
+  rfb._sock.close();
   await Promise.resolve();
   assert.equal(rfb.channel.readyState, 'closed');
   assert.deepEqual(posted.at(-1), { t: 'state', connected: false });
