@@ -1,6 +1,6 @@
 /**
- * The Windows pieces of the team daemon and of `harness team status` (docs/superpowers/plans/2026-10-28-harness-team-
- * account-windows.md, Tasks 4 and 5), as pure functions and PowerShell queries the platform code runs: the privacy
+ * The Windows pieces of the team daemon (docs/superpowers/plans/2026-10-28-harness-team-account-windows.md, Task 4), as
+ * pure functions and PowerShell queries the platform code runs: the privacy
  * probes, the pinned gh zips, and the account's SID from `whoami` (guest sharing reads it too).
  *
  * A query is a short script and its inputs, for lib/windows/powershell.ts `runPowershell`: the inputs travel in
@@ -15,8 +15,6 @@ import {
 } from './windowsLayout.js'
 
 export interface PowershellQuery { script: string; inputs: Record<string, string> }
-/** What lib/windows/powershell.ts `runPowershell` answers. */
-export interface QueryResult { status: number | null; stdout: string; stderr: string }
 
 // ── The privacy check ─────────────────────────────────────────────────────────────────────────
 

@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../lib/guestAccounts.js'
 import { adminAppleScript } from '../lib/guestHelperInstall.js'
+import { ps } from '../lib/windows/powershellQuote.js'
 import { WHOAMI_USER_ARGS, windowsUserSid } from './windowsTeam.js'
 
 export type AdminResult =
@@ -39,7 +40,7 @@ export type AdminVia = 'prompt' | 'sudo'
  *  step the script says it is on ([readProgress]), while it runs. */
 export type RunAdmin = (build: (stageDir: string) => AdminScript, prompt: string, via?: AdminVia, progress?: (step: string) => void) => Promise<AdminResult>
 
-/** The file a setup script writes its step in, in its staging folder (./script.ts `step`). */
+/** The file an elevated script writes its step in, in its staging folder. */
 export const PROGRESS_FILE = 'progress'
 const STEP = /^[a-z][a-z-]{0,23}$/
 
@@ -91,12 +92,10 @@ function stopped(stderr: string, code: number | null): AdminResult {
     ...(code !== null ? { status: code } : {}) }
 }
 
-/** PowerShell single quotes: nothing is special inside but the quote itself, doubled. */
-export const psQuote = (word: string): string => `'${word.replaceAll("'", "''")}'`
 
 /**
- * What runs elevated on Windows: the team script, with what it says kept in the staging folder. `Start-Process -Verb
- * RunAs` cannot hand an elevated process's output back, and this is how it reaches the owner's `harness team`.
+ * What runs elevated on Windows (guest sharing's installer), with what it says kept in the staging folder. `Start-Process
+ * -Verb RunAs` cannot hand an elevated process's output back, and this is how it reaches the owner's command.
  *
  * run.ps1 runs as a child powershell.exe whose own stdout and stderr are the two files. Run in this process with
  * `1> $out 2> $err`, only PowerShell's streams were kept, and the team scripts write through [Console]
@@ -157,7 +156,7 @@ async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, build
   if (elevated.includes('"')) throw new Error(`not a usable staging folder: ${JSON.stringify(stageDir)}`)
   const outer = [
     'try {',
-    `  $p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${psQuote(`-NoProfile -ExecutionPolicy Bypass -File "${elevated}"`)}`,
+    `  $p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${ps(`-NoProfile -ExecutionPolicy Bypass -File "${elevated}"`)}`,
     '  exit $p.ExitCode',
     '} catch {',
     `  if ($_.Exception.NativeErrorCode -eq ${UAC_CANCELLED} -or $_.Exception.InnerException.NativeErrorCode -eq ${UAC_CANCELLED}) { exit ${UAC_CANCELLED} }`,

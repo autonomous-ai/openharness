@@ -7,15 +7,11 @@
  * teammate's agent on this Mac cannot read the owner's files. It is listed in System Settings > Users & Groups
  * and named "Harness Team" on purpose: a hidden user with a LaunchDaemon is the persistence pattern endpoint
  * security tools and careful engineers treat as malware, and anyone auditing the Mac should find it at a glance.
- * macOS lists an account only when it has a password, so it gets a random one that nobody knows (./script.ts).
+ * macOS lists an account only when it has a password, so setup (removed 2026-11-10) gave it a random one nobody knows.
  */
 import { isAbsolute, normalize, win32 } from 'node:path'
 
 export const TEAM_USER = 'harnessteam'
-export const TEAM_REAL_NAME = 'Harness Team'
-/** The team daemon's control port. Not 18473 (the owner's daemon) or 18474 (a dev daemon beside it): the team
- *  daemon runs as its own OS user and would find another port anyway, but a fixed one is easier to audit. */
-export const TEAM_PORT = 18493
 
 export type TeamPlatform = 'darwin' | 'linux' | 'win32'
 
@@ -99,8 +95,6 @@ export function teamLayout(platform: NodeJS.Platform): TeamLayout | null {
 // The macOS values under the names every Mac caller has used since the account was made.
 const MAC = LAYOUTS.darwin
 export const TEAM_HOME = MAC.home
-export const TEAM_LABEL = MAC.service.label
-export const TEAM_PLIST = MAC.service.file
 export const TEAM_SHARED_DIR = MAC.sharedDir
 export const TEAM_SHARED_MARK = MAC.sharedMark
 export const TEAM_CONFIG_FILE = MAC.configFile
@@ -239,5 +233,3 @@ export function carriedBackendEnv(source: NodeJS.ProcessEnv): Record<string, str
   return carried
 }
 
-/** A handoff code as the shell checks it too: plain token characters only. */
-export const HANDOFF_CODE = /^[A-Za-z0-9_-]{16,256}$/

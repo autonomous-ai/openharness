@@ -10,7 +10,7 @@
  *
  * Values go in single-quoted (`ps`), assigned once. The processor reads its request as JSON at run time, so no value
  * from a person is ever interpolated into PowerShell source. Account passwords are made inside the processor and handed
- * only to Task Scheduler's COM call, as the Team setup does.
+ * only to Task Scheduler's COM call.
  */
 import { ps } from './powershellQuote.js'
 import { WINDOWS_GUEST_ANSWERS, WINDOWS_GUEST_RECORDS, WINDOWS_GUEST_REQUESTS, WINDOWS_GUEST_ROOT,

@@ -24,15 +24,13 @@ export type TeamEngine = 'claude' | 'codex'
 export interface TeamEngineInfo {
   engine: TeamEngine
   name: string
-  /** The vendor's npm package (lib/engineInstall.ts), installed by the team account under `~/.local`. */
-  packageName: string
   /** What the owner runs in a terminal on the team machine to sign it in. */
   signIn: string
 }
 
 export const TEAM_ENGINES: readonly TeamEngineInfo[] = [
-  { engine: 'claude', name: 'Claude Code', packageName: '@anthropic-ai/claude-code', signIn: 'claude' },
-  { engine: 'codex', name: 'Codex', packageName: '@openai/codex', signIn: 'codex login --device-auth' },
+  { engine: 'claude', name: 'Claude Code', signIn: 'claude' },
+  { engine: 'codex', name: 'Codex', signIn: 'codex login --device-auth' },
 ]
 
 export interface EngineReadiness { installed: boolean; signedIn: boolean | null }

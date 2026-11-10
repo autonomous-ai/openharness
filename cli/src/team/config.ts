@@ -1,6 +1,7 @@
 /**
  * What setup made, written root-owned to /Library/Application Support/Harness/team.json (on Linux /etc/harness/team.json)
- * and read by the team daemon (its privacy check) and by the owner's `harness team status`. Nothing in it is secret:
+ * and read by the team daemon (its privacy check, and whether it is a Team account, which stops itself: superTabs/inCore/
+ * teamRetire.ts). Setup and `harness team` were removed on 2026-11-10; the file stays on computers set up before. Nothing in it is secret:
  * names and paths. On Linux `label` and `plist` name the systemd unit and its file.
  */
 import { readFileSync } from 'node:fs'
@@ -25,11 +26,11 @@ export interface TeamConfig {
   label: string
   plist: string
   statusFile: string
-  /** The team account's Node and CLI, which `harness team remove` runs as that account to sign it out. */
+  /** The team account's Node and CLI. */
   node: string
   cli: string
   /** The backend settings carried from the owner's environment (./layout.ts `carriedBackendEnv`), which the team
-   *  daemon runs with and `harness team remove` signs it out against. */
+   *  daemon runs with. */
   env: Record<string, string>
   createdAt: string
 }

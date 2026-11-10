@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  TEAM_CONFIG_FILE, TEAM_HOME, TEAM_LABEL, TEAM_PLIST, TEAM_SHARED_DIR, TEAM_SHARED_MARK, TEAM_STATUS_DIR, TEAM_STATUS_FILE,
+  TEAM_CONFIG_FILE, TEAM_HOME, TEAM_SHARED_DIR, TEAM_SHARED_MARK, TEAM_STATUS_DIR, TEAM_STATUS_FILE,
   TeamInputError, checkPath, checkWindowsPath, teamLayout,
 } from './layout.js'
 
@@ -15,7 +15,6 @@ describe('teamLayout', () => {
     expect(mac.configFile).toBe(TEAM_CONFIG_FILE)
     expect(mac.statusDir).toBe(TEAM_STATUS_DIR)
     expect(mac.statusFile).toBe(TEAM_STATUS_FILE)
-    expect(mac.service).toEqual({ kind: 'launchd', label: TEAM_LABEL, file: TEAM_PLIST })
     expect(mac.relayDir('owner-placeholder')).toBe('/Users/Shared/.harness-team-relay-owner-placeholder')
     expect(mac.group).toBe('staff')
   })

@@ -52,7 +52,6 @@ import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
-import { revokeHarnessRefresh } from './lib/harnessRefresh.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -414,7 +413,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   else if (signInAgain) {
     console.log('\n  ✗ Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account for 7 days. Run: harness login\n')
   } else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness login signs it in as you)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness login --force signs it in as you)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -634,7 +633,7 @@ async function loginCommand(
       const stopped = stop !== null && stop.pid !== null
       const replaced = readAuthSession()?.refreshToken
       const outcome = await signIn()
-      // The sign-in this one replaced ends on the server too, as `harness team on` ends the one it replaces.
+      // The sign-in this one replaced ends on the server too.
       if (outcome.signedIn && replaced && readAuthSession()?.refreshToken !== replaced) await endSignInOnServer(replaced, 'the previous sign-in')
       // The daemon stopped for the switch comes back once it is made (`restartDaemonForIdentity`).
       return outcome.signedIn && stopped ? { ...outcome, stoppedDaemon: true } : outcome
@@ -1395,7 +1394,7 @@ const SIGN_OUT_REVOKE_TIMEOUT_MS = 5_000
  */
 async function endSignInOnServer(refreshToken: string | undefined, which = 'this sign-in'): Promise<void> {
   if (!/^(hnr|htr)_/.test(refreshToken ?? '')) return
-  const ended = await revokeHarnessRefresh((path, body) => postJson(path, body, {}, AbortSignal.timeout(SIGN_OUT_REVOKE_TIMEOUT_MS)), refreshToken)
+  const ended = await postJson('/api/auth/revoke', { refreshToken }, {}, AbortSignal.timeout(SIGN_OUT_REVOKE_TIMEOUT_MS)).then(() => true, () => false)
   if (!ended) console.log(`Could not end ${which} on the server; it can no longer be used from here, and ends on its own after 90 days unused.`)
 }
 
@@ -3109,6 +3108,15 @@ switch (cmd) {
         get: (path, headers) => requestJson('GET', path, undefined, headers),
       }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'team':
+    // An old Team account's boot job (set up before 2026-11-07, on macOS, Linux and Windows) still runs `team __start <file>`
+    // before its daemon, which then stops itself once no agent runs (superTabs/inCore/teamRetire.ts). It does nothing and
+    // exits 0, quietly: the job's next step, the daemon, starts as before, and its log gets no usage text. Any other `team`
+    // is an unknown command (the command was removed, anh Dee, 2026-11-10).
+    if (rest[0] === '__start') break
+    console.error(`Unknown command: ${cmd}`)
+    usage(1)
     break
   case 'reset':
     resetCommand().catch(onError)
