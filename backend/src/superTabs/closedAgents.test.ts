@@ -169,7 +169,6 @@ describe('what may come back', () => {
     expect(restoreRefusal(theirs, record(), 'owner', facts)).toBeNull()
   })
 
-
   // #2207 (Ken): the project chat holds only its coordinator among agents, so a session that was a member there comes back to
   // its tasks alone, unless it comes back as the project chat's coordinator.
   it('comes back to the project chat only as its coordinator', () => {

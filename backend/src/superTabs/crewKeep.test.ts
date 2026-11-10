@@ -113,7 +113,6 @@ describe('crewKeep: folders', () => {
   })
 })
 
-
 describe('crewKeep: a machine that refused a move (security review 2 of #3229)', () => {
   it('a machine that refused the member\'s move start is not picked again for an hour', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini', { resetIn: 86_400_000 }), machine('late')])

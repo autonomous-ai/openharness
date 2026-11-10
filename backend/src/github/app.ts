@@ -134,7 +134,6 @@ export class GitHubApp {
     return this.config.slug ? `https://github.com/apps/${this.config.slug}/installations/new` : null
   }
 
-
   /** The app's own JWT (RS256, ten minutes at most): issued a minute back against clock drift, valid nine minutes, and
    *  reused until a minute before it ends. */
   jwt(): string {
@@ -397,7 +396,6 @@ export class GitHubApp {
     if (answer.status === 204 || answer.status === 401) return
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub did not revoke the token (HTTP ${answer.status}).`, 502)
   }
-
 
   /** The default branch and whether pushing to it straight needs a pull request, read with the agent's own token
    *  (metadata and contents read): rulesets first (GET /repos/{owner}/{repo}/rules/branches/{branch}), then classic

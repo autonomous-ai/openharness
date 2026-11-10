@@ -249,7 +249,6 @@ describe('installation tokens', () => {
     expect(HARNESS_CO_AUTHOR).toBe('Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>')
   })
 
-
   it('revokes a token with the token itself, takes one already ended as done, and reports any other failure', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo)
@@ -300,7 +299,6 @@ describe('default branch protection', () => {
     expect(FAKE_API).not.toContain('api.github.com')
   })
 })
-
 
 describe('what installation tokens may never carry (task #1788)', () => {
   it('installation tokens never ask for administration or repository creation', async () => {

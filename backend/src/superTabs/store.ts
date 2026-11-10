@@ -1207,7 +1207,6 @@ export class SuperTabStore {
     }
   }
 
-
   /**
    * When GitHub says the pull requests merged that an instructions save's dropped lines may wait on (task #3463): those linked
    * to the project's code tasks whose brief carries a line the save removes, in the project's own repository (a link

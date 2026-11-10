@@ -25,8 +25,6 @@ export const RETIRED_COMMANDS = [
   'member.start', 'member.helper',
   // Proposals (2026-11-10): a person asks an agent in their 1:1 chat, and a task is the project's GitHub issue.
   'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close', 'buddy.propose',
-  // The Team-written mark (2026-11-10): Harness Team accounts are gone, so no task's code is a Team agent's any more.
-  'work.teamWritten',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 

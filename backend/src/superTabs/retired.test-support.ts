@@ -44,7 +44,6 @@ export const OLD_PAYLOADS = {
   'proposal.close': { projectId: 'lead', messageId: 'm-3', reason: 'Built already' },
   'buddy.propose': { conversationId: 'buddy-chat', ownerMessageId: 'm-4', projectId: 'lead', text: 'Sync my edits', title: 'Sync edits',
     goal: 'Edits sync', scope: 'Desktop and phone', priority: 'normal', attachmentIds: ['file-1'] },
-  'work.teamWritten': { conversationId: 'task-1' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

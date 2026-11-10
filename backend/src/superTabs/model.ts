@@ -572,7 +572,6 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
 
-
 /** The most unlinked pull requests a task remembers. */
 export const UNLINKS_KEPT = 50
 /** Whether [url] was unlinked from [group]: no later text links it again. */

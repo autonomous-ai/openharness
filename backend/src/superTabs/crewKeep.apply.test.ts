@@ -80,7 +80,6 @@ describe('waking and moving through commands', () => {
   })
 })
 
-
 describe('a refused move start (security review 2 of #3229)', () => {
   it('records the machine that refused it, so the next pass tries another', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
@@ -123,7 +122,6 @@ describe('the head of the list when the move is placed (review of #3229, River)'
     expect(rank(task.id)).toBeLessThan(rank(other.id))
   })
 })
-
 
 describe('a member that keeps stopping is moved and its task goes back at once (#3662)', () => {
   it('hands its task on as soon as the move is decided, not after its start runs, and says why', () => {
