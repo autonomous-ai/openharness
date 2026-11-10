@@ -527,6 +527,44 @@ describe('SessionInputController', () => {
       }
     })
 
+    // The frame comes once: a window that connects meanwhile reads the wait off the agent's row (standard 9).
+    it('says the agent waits for its engine while its reader starts, and nothing once it is up', async () => {
+      let started: (ok: boolean) => void = () => {}
+      const onSubmitted = vi.fn(), onWaitChanged = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(),
+        onSubmitted, onWaiting: vi.fn(), onWaitChanged, injectTeam: async () => ({ state: 'succeeded', dispatch: 'executed' }), beforeTeamWrite: async () => null,
+        engineStarting: () => new Promise<boolean>(resolve => { started = resolve }) })
+      expect(controller.waitingFor('a1')).toBeNull()
+      controller.submit('a1', 'sent as it started')
+      await vi.waitFor(() => expect(controller.waitingFor('a1')).toBe('engine'))
+      // Every window hears the change: once as the wait starts, once as it ends.
+      expect(onWaitChanged.mock.calls).toEqual([['a1']])
+      started(true)
+      await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+      expect(controller.waitingFor('a1')).toBeNull()
+      expect(onWaitChanged.mock.calls).toEqual([['a1'], ['a1']])
+      controller.forget('a1')
+      // A team delivery's wait is logged, not shown (no message_waiting), so not on the frame either.
+      controller.submit('a2', 'from the Swarm', 'team:service:superTabs:A')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(controller.waitingFor('a2')).toBeNull()
+      started(true)
+      controller.forget('a2')
+    })
+
+    it('ends the wait on the frame even when the wait itself fails', async () => {
+      let failed: (error: Error) => void = () => {}
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(),
+        onWaiting: vi.fn(), engineStarting: () => new Promise<boolean>((_, reject) => { failed = reject }) })
+      controller.submit('a1', 'sent as it started')
+      await vi.waitFor(() => expect(controller.waitingFor('a1')).toBe('engine'))
+      failed(new Error('gone'))
+      await vi.waitFor(() => expect(controller.waitingFor('a1')).toBeNull())
+      controller.forget('a1')
+    })
+
     it('says nothing of a wait when its engine\'s reader is up', async () => {
       const onWaiting = vi.fn(), onSubmitted = vi.fn()
       const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
