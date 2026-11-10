@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, postable, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
+import { PERSONAL_SWARM_OPERATION } from './deletion.js'
+import { createSuperTab, stableId, SuperTabError, type Actor, type SuperTabState } from './model.js'
+import { projectsOf } from './projects.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
@@ -89,5 +91,36 @@ describe('a project\'s channel and its tasks\' chats', () => {
     expect(refusal(() => postable(f.state, owner, f.task))).toMatchObject({ code: 'AGENTS_ONLY' })
     expect(refusal(() => postable(f.state, owner, ada.chat))).toBeNull()
     expect(refusal(() => postable(f.state, f.asPm, 'lead'))).toBeNull()
+  })
+})
+
+// Exempt for now: a Personal Swarm. Its Desktop still starts a project's PM on the person's first message in the project's chat:
+// the message waits for the PM (leadWaiting) and the first lead.claim starts it on the person's machine (leadWaiting.test.ts).
+// The exemption goes when the Personal Swarm v4 (every pane an agent under Your Team) lands; then these two cases become one refusal.
+describe('a project\'s chat in a Personal Swarm, until the Personal Swarm v4', () => {
+  function project(personal: boolean) {
+    let state: SuperTabState = createSuperTab(personal ? stableId('super-tab', 'prod', 'owner', PERSONAL_SWARM_OPERATION) : 'team',
+      personal ? 'Personal' : 'Team', { id: 'owner', email: owner.email }, 'prod')
+    let sequence = 0
+    const run = (command: Command) => {
+      const effects = applyCommand(state, owner, command, { now: 1_000, operationId: `op-${++sequence}` })
+      state = effects.state
+      return effects
+    }
+    const created = run({ type: 'project.create', name: 'Games', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
+    return { run, ...created, get project() { return projectsOf(state).find(p => p.id === created.projectId)! } }
+  }
+
+  it('keeps the person\'s first message for the PM, and the first claim starts it', () => {
+    const f = project(true)
+    const sent = f.run(post(f.conversationId, 'make the landing page dark')).result.messageId as string
+    expect(f.project.leadWaiting).toEqual([{ id: sent, at: 1_000 }])
+    expect(f.run({ type: 'lead.claim', projectId: f.projectId, machineId: 'mac' }).result.leadStart).toBe('start')
+  })
+
+  it('is the only exemption: the same message in any other Swarm\'s project chat is refused', () => {
+    const f = project(false)
+    expect(refusal(() => f.run(post(f.conversationId, 'make the landing page dark')))).toMatchObject({ code: 'AGENTS_ONLY', status: 403, message: SENTENCE })
+    expect(f.project.leadWaiting).toBeUndefined()
   })
 })
