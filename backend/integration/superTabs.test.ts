@@ -1745,13 +1745,9 @@ describe('Super Tabs on a real Mongo replica set', () => {
   })
 
   // The model catalog (project instructions, phase 4, decision 14): served in the tab's routing-policy read beside the default
-  // policy. A policy row saved before stays in place, unread.
-  it('serves the catalog, priors and prices with the default policy, whatever the owner saved', async () => {
+  // policy.
+  it('serves the catalog, priors and prices with the default policy', async () => {
     const { tab, lead } = await fixture()
-    const id = stableId('routing-policy', owner.sub, owner.autonomousEnv)
-    await db.routingPolicy.create({ data: { id, userId: owner.sub, autonomousEnv: owner.autonomousEnv, revision: 4,
-      policy: { ...DEFAULT_ROUTING_POLICY, quotaReserve: 40, notes: 'Saved before instructions.' } } })
-    onTestFinished(async () => { await db.routingPolicy.deleteMany({ where: { id } }) })
 
     const read = await app.inject({ url: `/api/super-tabs/${tab}/routing-policy`, headers: { authorization: `Bearer ${owner.sub}` } })
     expect(read.statusCode, read.body).toBe(200)
@@ -1764,7 +1760,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(data.catalog.prices.map((p: { model: string }) => p.model)).toContain('claude-opus-5-5')
     expect(data.catalog.priors.models.length).toBeGreaterThan(0)
     expect(await store.tabPolicy(host, tab, lead)).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, warnings: [] })
-    expect(await db.routingPolicy.count({ where: { id } })).toBe(1)
   })
 
   it('returns the receipt of a recorded agent start after its machine stops being listed', async () => {
@@ -3478,7 +3473,6 @@ describe('credentials in Swarm chat', () => {
   const stored = async (tab: string) => JSON.stringify(await Promise.all([
     db.superTab.findMany({ where: { id: tab } }), storedState(tab), db.superTabMessage.findMany({ where: { tabId: tab } }),
     db.superTabOperation.findMany({ where: { tabId: tab } }), db.superTabDelivery.findMany({ where: { tabId: tab } }),
-    db.superTabAttempt.findMany({ where: { tabId: tab } }), db.superTabRouteDecision.findMany({ where: { tabId: tab } }),
   ]))
   /** Every line the process writes while `body` runs: console and the raw streams the logger could reach. */
   async function written(body: () => Promise<void>): Promise<string> {

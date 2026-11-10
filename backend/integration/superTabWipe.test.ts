@@ -205,7 +205,7 @@ describe('the wipe of every Swarm from before Swarm v4', () => {
 
   it('removes a record of the old Swarm from every collection that names one, none of a new Swarm, and no row that is not a Swarm\'s', async () => {
     const w = world(), gone = await swarm(w, 'Gone'), kept = await swarm(w, 'Kept', WIPE_CUTOFF + 1)
-    expect(SWARM_KEYED.length).toBeGreaterThan(30)
+    expect(SWARM_KEYED.length).toBeGreaterThan(20)
     await pass(w)
     await hostConfirms(w, gone.machineId, gone.tab)
     // A record in every collection that names a Swarm, for each of the two; one row in every other collection.

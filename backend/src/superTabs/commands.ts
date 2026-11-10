@@ -291,6 +291,9 @@ export interface CommandContext {
   /** For `swarm.delete`: set by the store's one-time wipe of every Swarm from before Swarm v4 alone (store.ts wipeSwarm), never
    *  from a request. */
   wipe?: true
+  /** For `message.delete`: set by the store's one-time removal of notices of retired kinds alone (store.ts removeRetiredNotice,
+   *  migration/retiredNotices.ts), never from a request: the notice goes as its author's delete would take it. */
+  retiredNotice?: true
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** The name the machine's owner gave it, from its account row (machines.ts accountMachineName); absent when it has none. */
@@ -1970,7 +1973,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (result.changed) effects.messageEdit = { messageId: command.messageId, text: command.text }
       break
     case 'message.delete':
-      Object.assign(result, { changed: true }, deleteMessage(open(state, command.conversationId), actor, command.messageId, context.messageChange))
+      Object.assign(result, { changed: true }, deleteMessage(context.retiredNotice ? conversation(state, command.conversationId) : open(state, command.conversationId), actor,
+        command.messageId, context.messageChange, context.retiredNotice))
       break
     case 'member.remove': {
       if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== command.userId)) {
