@@ -149,7 +149,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
       if (guarded(deliveryId) && !owned(service, deliveryId)) return { error: 'INVALID_DELIVERY' }
       if (query === 'cancel_delivery') return { cancelled: cancel(deliveryId) }
       const agentId = text(payload.agentId)
-      if (query === 'delivery_hold') return agentId ? holdOf(agentId, deliveryId).then(hold => ({ hold })) : { error: 'INVALID_DELIVERY' }
+      // A pane's state is read only for a delivery its own maker holds (team:service:<it>:): never another agent's pane at large.
+      if (query === 'delivery_hold') return agentId && owned(service, deliveryId) ? holdOf(agentId, deliveryId).then(hold => ({ hold })) : { error: 'INVALID_DELIVERY' }
       if (!agentId || typeof payload.text !== 'string') return { error: 'INVALID_DELIVERY' }
       // Known before it is written: the input says `queued` as it takes it, and that is the maker's to hear.
       makers.delete(deliveryId)

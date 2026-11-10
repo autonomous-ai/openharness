@@ -134,6 +134,13 @@ describe('the session input controller\'s dependencies', () => {
     expect(await holdOf('nobody', 'team:service:superTabs:held')).toBe('team_waiting_unavailable')
     t.deps.deliveries.canWrite = () => false
     expect(await holdOf('a1', 'team:service:superTabs:held')).toBe('team_waiting_control')
+    // Held by the short-turn guard: said before the pane is read.
+    let at = 0
+    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
+    for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
+    const held = deps({ shortTurns })
+    expect(await createInput(held.deps).holdOf('a1', 'team:service:superTabs:held')).toBe('team_waiting_control')
+    expect(held.deps.terminal.captureTerminal).not.toHaveBeenCalled()
   })
 
   it('still checks authority and engine support for Swarm input', async () => {

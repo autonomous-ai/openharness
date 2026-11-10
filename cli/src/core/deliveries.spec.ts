@@ -73,6 +73,8 @@ describe('delivered turns', () => {
     // Another's delivery, none at all, or not a deliverer: refused as any delivery query is.
     expect(await deliveries.answer('superTabs', 'delivery_hold', { agentId: 'agent-1', deliveryId: 'team:service:other:d1' })).toEqual({ error: 'INVALID_DELIVERY' })
     expect(await deliveries.answer('superTabs', 'delivery_hold', { deliveryId: id })).toEqual({ error: 'INVALID_DELIVERY' })
+    // Never any agent's pane for a delivery that is no maker's own.
+    expect(await deliveries.answer('superTabs', 'delivery_hold', { agentId: 'agent-1', deliveryId: 'x' })).toEqual({ error: 'INVALID_DELIVERY' })
     expect(await deliveries.answer('stranger', 'delivery_hold', { agentId: 'agent-1', deliveryId: id })).toEqual({ error: 'NOT_A_DELIVERER' })
     // A core that cannot read panes says nothing holds it, as before this question: the write itself still checks.
     const blind = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs']) })
