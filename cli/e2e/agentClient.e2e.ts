@@ -19,6 +19,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import { retainContributions, retainedHarnesses } from '../src/superTabs/retention.js'
+import { AGENTS_START_AGENTS_OFF } from '../src/agentClient/commands.js'
 import { overOldRoutes } from './harness/swarmReads.js'
 
 const HARNESS_INSTRUCTIONS = 'You are running in Harness, and the person can watch you. You can hand work to other agents (Claude Code, Codex) that run in their own harnesses: `harness new`, `harness wait`, `harness show`, `harness close` (see `harness --help`). Start one only for work that can run in parallel, needs another model, or takes long; do quick work yourself, and close each one once you have its answer. Only use or close harnesses you started.'
@@ -565,11 +566,11 @@ describe('Harness for agents, end to end', () => {
     // Every switch off by default (owner, 2026-10-12): signed in, with an account that never turned any on.
     const { relay, d } = await signedIn({})
     expect(await kept(d)).toMatchObject({ agentsStartAgents: false, pullRequestLine: false, agentMessages: false })
-    // Claude Code in a terminal app, refused with where the person turns it on.
+    // Claude Code in a terminal app, refused and told to ask its person, and to turn it on only on their yes (#1719).
     const asAgent = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'held-session' }
     const refused = await harness(d, '', ['new', 'claude', 'held', '--name', 'held', '--', 'hello'], asAgent)
     expect(refused.code, refused.out).toBe(5)
-    expect(refused.err.trim()).toBe('Agents may not start harnesses: the person turns on "Agents can start other agents" in Harness Settings ▸ Experimental, or runs `harness settings agents-start-agents on`. Until then, do the work yourself.')
+    expect(refused.err.trim()).toBe(AGENTS_START_AGENTS_OFF)
     expect(JSON.parse((await harness(d, '', ['ps', '--json'])).out).harnesses).toEqual([])
     // The person, at a terminal: written through this computer's daemon to the account, and kept here at once.
     const on = await harness(d, '', ['settings', 'agents-start-agents', 'on'])
@@ -592,7 +593,7 @@ describe('Harness for agents, end to end', () => {
     await kept(d, (settings) => settings.agentsStartAgents === false)
     const again = await harness(d, '', ['new', 'claude', 'again', '--name', 'again', '--', 'hello'], asAgent)
     expect(again.code, again.out).toBe(5)
-    expect(again.err).toContain('Settings ▸ Experimental')
+    expect(again.err.trim()).toBe(AGENTS_START_AGENTS_OFF)
   })
 
   it('keeps delegation instructions without PR attribution, even with an older account setting', async () => {
