@@ -13,7 +13,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { cliSignedIn, type EngineStatusRun } from '../lib/engineAccount.js'
 import { buddyAccountFile, buddyOwnerOf, signedInAccount } from '../lib/buddyGuard.js'
 import { handoffBaseName } from '../lib/agentHandoff.js'
-import { profileHome } from '../lib/claudeProfiles.js'
+import { profileId as profileIdOf } from '../lib/claudeProfiles.js'
 import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
@@ -22,7 +22,9 @@ import { leadSwitchOf, leadSwitching, SWITCH_ADOPT_MS, switchWithin } from './le
 import { githubPromptLine, LAUNCH_MODEL_REFUSALS, startNote } from './start.js'
 import { backend, identifier, object } from './wire.js'
 
-const GONE = 'that account is no longer on this machine'
+/** Offering another account to the Swarm went with Desktop's accounts page (F9): a PM moves to an engine's default account. */
+const DEFAULT_ONLY = 'only the default account can take a PM now'
+const NO_ENGINE = 'a PM runs on Claude Code or Codex'
 const NO_HANDOFF = 'the handoff could not be prepared'
 const NO_STOP = 'the session could not be stopped'
 const NO_START = 'the new session could not start'
@@ -47,7 +49,6 @@ export interface SwitchRow {
 export interface LeadSwitchDeps {
   now: () => number
   open: (where: Where) => Promise<Daemon>
-  profiles: typeof profileHome
   /** Whether the engine's default account holds a usable sign-in. */
   signedIn: (engine: string) => Promise<boolean>
   /** What the default [signedIn] runs to ask the engine; injected by specs. */
@@ -82,7 +83,7 @@ export class LeadSwitchRequests {
   private readonly claimRetryAt = new Map<string, number>()
   private readonly deps: LeadSwitchDeps
   constructor(private readonly core: CoreApi, private readonly machineId: string, deps: Partial<LeadSwitchDeps> = {}) {
-    this.deps = { now: Date.now, open: openDaemon, profiles: profileHome, log: () => {},
+    this.deps = { now: Date.now, open: openDaemon, log: () => {},
       signedIn: (engine) => profileSignedIn(engine, undefined, this.deps.run),
       readHandoff: (cwd, relativeFile, maxBytes) => {
         try {
@@ -140,9 +141,11 @@ export class LeadSwitchRequests {
 
   private async carryOut(row: SwitchRow, run: Run, request: NonNullable<SwitchRow['agent']['switchRequest']>): Promise<Run['outcome']> {
     const engine = String(request.engine), profileId = String(request.profileId ?? 'default')
-    // The hex id of the default account counts as the default. Another account no longer moves a PM: the owner's offer of one
-    // to the Swarm went with Desktop's accounts page (F9), and nothing else put an account on it.
-    if (this.deps.profiles(engine, profileId, this.machineId) !== 'default') return { ok: false, error: GONE }
+    if (engine !== 'claude' && engine !== 'codex') return { ok: false, error: NO_ENGINE }
+    // The default account of the machine the PM moves to, by its literal name or its hex id: for a move to another machine the
+    // Swarm names that machine's default (backend commands.ts defaultProfileId).
+    const target = run.crossMachine ? String(request.targetMachineId) : this.machineId
+    if (profileId !== 'default' && profileId !== profileIdOf(target, engine, 'default')) return { ok: false, error: DEFAULT_ONLY }
     const old = this.core.agents.byAgent(run.harnessId)
     // The PM comes back as a Swarm PM, from what it was started as: with no saved role or no conversation to rebuild its prompt
     // from, it would come back role-less, with no Swarm skill and the machine owner's own GitHub login.
@@ -163,7 +166,8 @@ export class LeadSwitchRequests {
         return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
       }
     }
-    if (!await this.deps.signedIn(engine)) return { ok: false, error: SIGNED_OUT }
+    // Here only: a move to another machine starts on that machine's account, which its own start checks.
+    if (!run.crossMachine && !await this.deps.signedIn(engine)) return { ok: false, error: SIGNED_OUT }
     const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
     try {
       const { changeId } = run, agentId = run.harnessId

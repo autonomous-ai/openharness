@@ -2,6 +2,10 @@
 
 Date: 2026-11-02. Requested by Diego.
 
+**Update 2026-11-10:** offering an account to the Swarm is gone (Desktop F9 removed Swarm accounts…; CLI #3831). A machine
+reports each engine's default account alone, and a PM moves to a default account only; `swarm_account_offer` answers
+`{ offered: false, ignored: true }` until 2026-12-10, and `lib/accountOffers.ts` and every `offered` mark below are history.
+
 ## Problem
 
 Two reports from 11-01:

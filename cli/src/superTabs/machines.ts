@@ -334,10 +334,10 @@ export class ContributedMachines {
   /** The accounts a Product Manager here could move to, by id and label only: each engine's default account, with the
    *  allowance already read. No other account is on the Swarm: offering one went with Desktop's accounts page (F9). */
   private profiles(engines: string[], allowances: Array<{ engine: string; windows: Parameters<typeof allowanceLeft>[0] }>) {
-    return (['claude', 'codex'] as const).filter(engine => engines.includes(engine)).map(engine => ({
-      engine, id: profileId(this.machineId, engine, 'default'), label: 'Default',
-      ...(({ left, resetsAt }) => ({ leftPercent: left, resetsAt }))(allowanceLeft(allowances.find(a => a.engine === engine)?.windows ?? [])),
-    }))
+    return (['claude', 'codex'] as const).filter(engine => engines.includes(engine)).map(engine => {
+      const { left, resetsAt } = allowanceLeft(allowances.find(a => a.engine === engine)?.windows ?? [])
+      return { engine, id: profileId(this.machineId, engine, 'default'), label: 'Default', leftPercent: left, resetsAt }
+    })
   }
   /** What the reading says of [engine]'s allowance. Windows that could not be read again stand for [USAGE_KEEP_MS] after
    *  they were read, unless the engine signed out; past that, unknown says why. */
