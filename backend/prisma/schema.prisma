@@ -1140,8 +1140,8 @@ model SuperTabMessage {
   @@index([tabId, conversationId, thread, sequence])
 }
 
-/// One reactor's emoji on one message (superTabs/reactions.ts). The id is derived from all four, so adding the same
-/// reaction twice keeps one row; message pages count them.
+/// One reactor's emoji on one message, written until reactions went (2026-11-09) and read by nothing. A Swarm's purge
+/// (superTabs/purge.ts) removes its rows.
 model SuperTabReaction {
   id             String   @id @map("_id")
   tabId          String

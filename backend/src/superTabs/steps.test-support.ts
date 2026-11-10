@@ -1,7 +1,7 @@
 /**
  * A task with its PM and Engineer, opened through commands as a Swarm opens one: shared by the tests that run commands and
  * sweeps on it (liveness.test.ts), so importing it never runs another file's tests. And the steps a Swarm from before Swarm v4
- * still stores, which v4 no longer opens (conversation.create with `reviewOf` answers as retired).
+ * still stores, which v4 no longer opens.
  */
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, nextConversationNumber, type Actor, type AgentConfiguration, type CommandEffects, type SuperTabState } from './model.js'
@@ -11,10 +11,12 @@ import { storedAssignment } from './storedWork.test-support.js'
 export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
-/** [command], a step or linked task an agent or person opened before Swarm v4, stored in [state] as conversation.create stored it
- *  then: in its task's project, its opener in it and, for a named step, in its task too. Its
- *  answer as that command's was: the new step's id. */
-export function storedStep(state: SuperTabState, command: Extract<Command, { type: 'conversation.create' }>, actor: Actor): CommandEffects {
+/** A step or linked task as an agent or person opened it before Swarm v4: conversation.create naming the task it is on. */
+export type StepCommand = Extract<Command, { type: 'conversation.create' }> & { reviewOf: string; step?: string }
+
+/** [command], a step or linked task opened before Swarm v4, stored in [state] as conversation.create stored it then: in its
+ *  task's project, its opener in it and, for a named step, in its task too. Its answer as that command's was: the new step's id. */
+export function storedStep(state: SuperTabState, command: StepCommand, actor: Actor): CommandEffects {
   const task = state.conversations.find(c => c.id === command.reviewOf)!
   const project = groupProject(state, task)
   const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId ?? null
@@ -32,13 +34,13 @@ export function storedStep(state: SuperTabState, command: Extract<Command, { typ
 }
 
 /** Whether [command] opens a step, which a test stores as a Swarm from before Swarm v4 did (storedStep). */
-export const opensStep = (command: Command): command is Extract<Command, { type: 'conversation.create' }> =>
-  command.type === 'conversation.create' && !!command.reviewOf
+export const opensStep = (command: Command | StepCommand): command is StepCommand =>
+  command.type === 'conversation.create' && 'reviewOf' in command && !!command.reviewOf
 
 export function stepsFixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0, now = 1000
-  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+  const run = (command: Command | StepCommand, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
     if (opensStep(command)) return storedStep(state, command, actor)
     const effects = applyCommand(state, actor, command, { now, operationId: `op-${++sequence}`, ...context })
     state = effects.state
@@ -53,7 +55,7 @@ export function stepsFixture() {
   const dev = add('dev', task)
   storedAssignment(state, task, dev, now)
   const step = (name: string, actor: Actor = as(dev), on = task, checks: Array<{ description: string; independent: boolean }> = []) =>
-    run({ type: 'conversation.create', title: name, brief: `${name} it.`, reviewOf: on, step: name, checks } as Command, actor).result.conversationId as string
+    run({ type: 'conversation.create', title: name, brief: `${name} it.`, reviewOf: on, step: name, checks }, actor).result.conversationId as string
   const group = (id: string) => state.conversations.find(c => c.id === id)!
   return { run, add, as, lead, task, dev, step, group, tick: (ms: number) => { now += ms }, get now() { return now }, get state() { return state } }
 }

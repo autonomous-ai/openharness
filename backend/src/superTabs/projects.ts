@@ -50,10 +50,6 @@ export interface SwarmProject {
   /** Tasks up to this number stay Simple after returning to Full. One watermark covers dormant tasks and repeated
    *  switches without loading or rewriting any task history; absent until the first Simple→Full switch (#3896). */
   simpleThrough?: number
-  /** v3's note of the oldest message a person sent its PM that the PM had not answered, which told its host to restart it while
-   *  it hung (task #3385). Swarm v4 writes none and its time checks clear what is left (store.ts runTimeChecks); kept to read and
-   *  clear old Swarms. Readers never get it: it may name a message in a person's private chat with the PM. */
-  owed?: { messageId: string; since: number }
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
@@ -119,10 +115,7 @@ export const GITHUB_SEEN = ['not-installed', 'not-approved', 'covered'] as const
 export type GitHubSeen = typeof GITHUB_SEEN[number]
 
 /** A project's status card: its text, when (ISO time) and by which agent it was written. */
-export interface ProjectStatus { text: string; at: string; by: string
-  /** The text is the coordinator's own lines (task #3593). Absent on a card saved before: that text held the lines of its tasks,
-   *  which Swarm v4 no longer writes, so it is not shown (model.ts visibleState). */
-  own?: true }
+export interface ProjectStatus { text: string; at: string; by: string }
 export const PROJECT_STATUS_MAX = 2_000
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'

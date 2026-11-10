@@ -240,10 +240,6 @@ export function teamAccountRequired(): boolean {
   return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1'
 }
 
-/** What a machine's record held before Swarm v4 retired it (machine.access, machine.projects, machine.ownAccountWork and the notice
- *  to a machine's owner of others' work): stored until the contribution is saved again, and read by no one (model.ts visibleState).
- *  Delete this list when the stored copies are cleaned from the Swarm collections (slice S19), and not before 2026-12-09. */
-export const RETIRED_MACHINE_FIELDS = ['ownAccountChoice', 'othersToldWeek', 'projects', 'access'] as const
 
 /**
  * Whether work for [project] may run on [machineId] under [contributorId]'s grant there: the pool's contributor for a start, the

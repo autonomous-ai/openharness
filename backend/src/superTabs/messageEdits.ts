@@ -36,7 +36,7 @@ function changeable(actor: Actor, messageId: string, target: MessageChangeTarget
 }
 
 /** `message.edit`: the author's new text replaces the old; no earlier text is kept. Empty only for a message with files.
- *  A change bumps the group, so every reader's next read takes the page again (reactions.ts). */
+ *  A change bumps the group, so every reader's next read takes the page again. */
 export function editMessage(group: { reactionSeq?: number }, actor: Actor, messageId: string, text: string,
   target: MessageChangeTarget | undefined): boolean {
   const found = changeable(actor, messageId, target, 'edit')

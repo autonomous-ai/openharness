@@ -36,7 +36,7 @@ import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js
 import { recipientShare } from '../src/routes/harnessShares.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { startMessageReachStats } from '../src/superTabs/messageReachStats.js'
-import { plan as planOf, profiled, reads } from './plans.test-support.js'
+import { profiled } from './plans.test-support.js'
 import { storeAssignment, storeStatus } from './storedWork.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -1580,50 +1580,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
       .rejects.toMatchObject({ code: 'INVALID_ANSWER' })
   })
 
-  // Task #3391: acknowledging is a reaction, not a post, so a reaction settles the recipient's delivery as an answer does.
-  it('closes the reacting agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
-    const { tab, lead } = await fixture()
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
-    const helper = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    await invite(tab)
-    const asked = await run(tab, { type: 'message.send', conversationId: group, text: 'Please look at the failing build.', replyTo: null,
-      recipientIds: [lead, helper] }, peer)
-    const messageId = asked.result.messageId as string
-    const held = (await store.deliveries(host, tab, lead)).find(d => d.messageId === messageId)!
-    const other = (await store.deliveries(host, tab, helper)).find(d => d.messageId === messageId)!
-    await store.delivery(host, tab, lead, held.id, { type: 'claim', claimId: randomUUID() })
-    const react = (emoji: string, on = true) => ({ type: 'message.react', conversationId: group, messageId, emoji, on }) as Command
-    // A person's reaction, and an agent taking its reaction back, settle nothing.
-    await run(tab, react('eyes'), peer)
-    await run(tab, react('eyes', false), host, lead)
-    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'claimed' })
-    await run(tab, react('check'), host, lead)
-    expect(await store.deliveryReceipt(host, tab, lead, held.id)).toEqual({ id: held.id, status: 'answered' })
-    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).not.toContain(messageId)
-    expect(await store.deliveryReceipt(host, tab, helper, other.id)).toEqual({ id: other.id, status: 'queued' })
-  })
-
-  // Backend AGENTS.md rule 3, ENGINEERING §4: the reaction's delivery queries are indexed and read only the agent's claimed rows and
-  // that message's deliveries, however many deliveries the Swarm holds.
-  it('settles a reaction\'s deliveries by index, examining only the claimed rows and that message\'s rows', async () => {
-    const { tab, lead } = await fixture()
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
-    await invite(tab)
-    const ids: string[] = []
-    // Twenty messages to the Lead, so the Swarm holds many deliveries beside the one this reaction settles.
-    for (let i = 0; i < 20; i++) {
-      ids.push((await run(tab, { type: 'message.send', conversationId: group, text: `Question ${i}`, replyTo: null, recipientIds: [lead] }, peer)).result.messageId as string)
-    }
-    const entries = await profiled(db, () => run(tab, { type: 'message.react', conversationId: group, messageId: ids[7]!, emoji: 'eyes', on: true } as Command, host, lead))
-    const queries = reads(entries, 'SuperTabDelivery', ['tabId', 'messageId', 'agentId'])
-    // The claimed-rows read (endDeliveries) goes by the agent's claimed rows, the update by the message: two operations, one row.
-    const plans = planOf(queries)
-    expect(plans.map(q => q.plan)).toEqual(['IXSCAN { tabId: 1, agentId: 1, status: 1, createdAt: 1 }', 'IXSCAN { tabId: 1, messageId: 1 }'])
-    expect(plans.map(q => q.docsExamined)).toEqual([0, 1])
-    expect(plans.map(q => q.keysExamined)).toEqual([0, 1])
-  })
-
   it('durably resumes a claim, never steals it on timeout, and does not resurrect revoked messages on rejoin', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
@@ -1698,7 +1654,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const group = String((await run(tab, { type: 'conversation.create', title: 'Task', brief: '', checks: [] })).result.conversationId)
     const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false })).result.agentId as string
-    // As a new definition kept a task's earlier attempts before Swarm v4, which defines none (work.define answers as retired).
+    // As a new definition kept a task's earlier attempts before Swarm v4, which defines none.
     const attempt = async (at: number, status: string, result: string | null) => {
       const id = randomUUID()
       await db.superTabAttempt.create({ data: { id, tabId: tab, conversationId: group, createdAt: new Date(at), snapshot: { brief: 'Build it.', checks: [],

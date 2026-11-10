@@ -866,7 +866,6 @@ describe('PM person receipt eyes', () => {
     expect(await db.superTabReaction.findMany({ where: { tabId: f.tab, messageId: message } })).toEqual([])
     const after = await f.timed.messages(owner, f.tab, 'lead', {})
     expect(after.reactionSeq).toBe(before.reactionSeq)
-    expect(after.messages.find(m => m.id === message)?.reactions).toEqual([])
     expect((await deliveryOf(message, f.lead)).status).toBe('delivered')
     expect((await deliveryOf(message, f.lead)).answeredAt).toBeNull()
   })
