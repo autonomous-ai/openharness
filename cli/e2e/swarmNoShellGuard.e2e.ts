@@ -31,7 +31,8 @@ it.each(['claude', 'codex'])('launches a %s Swarm agent with no shell guard hook
   // A Swarm agent all the same: it is told the team's basics.
   expect(args).toContain('You are a Swarm agent')
   expect(args).not.toMatch(/__swarm-shell-guard|PreToolUse/)
-  // What an agent a release before still runs before each tool: the installed CLI answers it with no decision.
+  // What an agent a release before still runs before each tool, here from the sources the daemon runs (leanEntry.spec.ts runs
+  // it from the shipped cli.js): it answers with no decision.
   const run = spawnSync(process.execPath, ['--import', join(CLI_ROOT, 'node_modules/tsx/dist/loader.mjs'), join(CLI_ROOT, 'src/entry.ts'), '__swarm-shell-guard'],
     { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'sudo npm ci' }, cwd }), encoding: 'utf8', timeout: 30_000, windowsHide: true, env: d.env })
   expect({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 0, stdout: '', stderr: '' })

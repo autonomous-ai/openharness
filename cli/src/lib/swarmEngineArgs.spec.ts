@@ -9,10 +9,17 @@ describe('what the Swarm adds to an engine\'s argv', () => {
   // The shell guard is gone (anh Dee, 2026-11-09): a Swarm agent runs with its person's own settings, and no hook of Harness's
   // runs before its tools.
   it('gives no hook to run before a tool, on any engine', () => {
-    expect(swarmEngineArgs('claude')).toEqual([])
     for (const engine of ['claude', 'codex']) {
-      expect(swarmEngineArgs(engine).join(' ')).not.toMatch(/--settings|hooks|__swarm-shell-guard/)
+      expect(swarmEngineArgs(engine).join(' ')).not.toMatch(/PreToolUse|"hooks"|__swarm-shell-guard/)
     }
+  })
+
+  // Kept from the guard's settings (task #3596): Harness's own hooks run in a Swarm Claude Code session, whatever the person's.
+  it('keeps hooks on for a Swarm Claude Code session even when inherited settings turn every hook off', () => {
+    const args = swarmEngineArgs('claude')
+    expect(args).toEqual(['--settings', '{"disableAllHooks":false}'])
+    const session = { ...{ disableAllHooks: true }, ...JSON.parse(args[1]!) as Record<string, unknown> }
+    expect(session.disableAllHooks).toBe(false)
   })
 
   it('adds nothing for the other engines', () => {

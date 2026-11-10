@@ -8,6 +8,8 @@ import { afterEach, expect, it } from 'vitest'
 const ENTRY = fileURLToPath(new URL('./entry.ts', import.meta.url))
 const LOADER = fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url))
 const homes: string[] = []
+/** What Node and the loader need on Windows to find its temporary folder; nothing on a Mac or Linux. */
+const WINDOWS_ENV = Object.fromEntries(['TEMP', 'TMP', 'SystemRoot'].flatMap(name => process.env[name] ? [[name, process.env[name]!]] : []))
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
 
 // The Swarm's shell guard is gone (anh Dee, 2026-11-09). An agent a release before started still runs its hook before each
@@ -23,7 +25,7 @@ it.each([
   const home = mkdtempSync(join(tmpdir(), 'retired-guard-')); homes.push(home)
   const run = spawnSync(process.execPath, ['--import', LOADER, ENTRY, '__swarm-shell-guard'], {
     input: JSON.stringify({ tool_name: tool, tool_input: input, cwd: home }), encoding: 'utf8', timeout: 30_000, windowsHide: true,
-    env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, ADAPTER_DATA_DIR: join(home, 'data') },
+    env: { ...WINDOWS_ENV, PATH: process.env.PATH, HOME: home, USERPROFILE: home, ADAPTER_DATA_DIR: join(home, 'data') },
   })
   expect({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 0, stdout: '', stderr: '' })
   expect(readdirSync(home)).toEqual([])
@@ -34,7 +36,7 @@ it('allows a call it cannot read, and one with no input at all', () => {
     const home = mkdtempSync(join(tmpdir(), 'retired-guard-')); homes.push(home)
     const run = spawnSync(process.execPath, ['--import', LOADER, ENTRY, '__swarm-shell-guard'], {
       input, encoding: 'utf8', timeout: 30_000, windowsHide: true,
-      env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home, ADAPTER_DATA_DIR: join(home, 'data') },
+      env: { ...WINDOWS_ENV, PATH: process.env.PATH, HOME: home, USERPROFILE: home, ADAPTER_DATA_DIR: join(home, 'data') },
     })
     expect({ status: run.status, stdout: run.stdout, stderr: run.stderr }, JSON.stringify(input)).toEqual({ status: 0, stdout: '', stderr: '' })
   }
