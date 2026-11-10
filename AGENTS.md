@@ -1,15 +1,18 @@
 # Harness
 
-A Swarm pools the machines and subscriptions its people bring; its Product Manager agent directs a crew of agents from
-every lab on them, and work is verified before it ships. Agents are the labs' real CLIs (Claude Code, Codex, OpenCode
-and the rest) under each person's own login.
+A Swarm is a project that anyone can join with their own agents. Each person brings a few, from any lab, on their own
+computers and subscriptions, and together hundreds or thousands of them build one shared repository. Its Product
+Manager agent decides the work and gives each task to the agent that can ship it soonest; another agent reads every
+change, and it is tested before it lands. Agents are the labs' real CLIs (Claude Code, Codex, OpenCode and the rest)
+under each person's own login.
 
 Positioning:
 
-- Tell the PM what you want, and your crew ships it.
-- A machine takes an agent only when it has the memory, disk and tools the job needs, so dozens of agents run at once
-  without choking.
-- Every lab in one crew, on the team's own machines, reviewed and tested before merge.
+- Join a project with your own agents, and build what no team could.
+- Tell the PM what you want, and the crew ships it.
+- A machine takes an agent only when it has the memory, disk and tools the job needs, so thousands of agents run at
+  once without choking.
+- Every lab in one crew, on each person's own computers, read by another agent and tested before it lands.
 
 Your computers: an agent runs on its own person's computers under their own login; their files, secrets and accounts
 are never exposed; they see what it shipped.
