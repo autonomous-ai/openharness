@@ -2081,28 +2081,21 @@ describe('registry across a reboot and pane loss', () => {
     expect(reloaded.releaseEngine(pending.agentId, true)).not.toHaveProperty('browser')
   })
 
-  // The conversation a fresh move onto a grid left (core/agents/retarget.ts): the way home reopens it.
-  it('keeps the remembered subscription session across a reload and the binds on the grid', async () => {
+  // A fresh move's remembered conversation went with the v3 Buddy's model switch (#3901): a row an older release saved with
+  // one loads without it, and its agent's moves reopen its own conversation (core/agents/retarget.ts).
+  it('loads a row saved with a remembered subscription session without it', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
-    const s1 = join(dataDir, 'S1.jsonl'), s2 = join(dataDir, 'S2.jsonl')
-    writeFileSync(s1, '{}\n'); writeFileSync(s2, '{}\n')
+    const s1 = join(dataDir, 'S1.jsonl')
+    writeFileSync(s1, '{}\n')
     registerProcess(registry, { launcherId: 'agent-1', sessionId: 'S1', transcriptPath: s1, tmuxPane: '%22', cwd: '/tmp/demo' })
-    expect(registry.setSubscriptionSession('agent-1', 'S1')).toBe(true)
-    expect(registry.setSubscriptionSession('nobody', 'S1')).toBe(false)
+    const file = join(dataDir, 'registry.json')
+    const rows = (JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>).map(row => ({ ...row, subscriptionSessionId: 'S0' }))
+    writeFileSync(file, JSON.stringify(rows), { mode: 0o600 })
     const { registry: reloaded } = await loadRegistryModule()
     reloaded.load()
-    expect(reloaded.byAgent('agent-1')?.subscriptionSessionId).toBe('S1')
-    // The fresh conversation on the grid reports in: the same agent, the left one still remembered.
-    const fresh = reloaded.register({ sessionId: 'S2', transcriptPath: s2, tmuxPane: '%22', cwd: '/tmp/demo' })
-    expect(fresh?.entry).toMatchObject({ agentId: 'agent-1', sessionId: 'S2', subscriptionSessionId: 'S1' })
-    // Home, the reopened conversation reports in: the same agent bound to it, not a new one.
-    const back = reloaded.register({ sessionId: 'S1', transcriptPath: s1, tmuxPane: '%22', cwd: '/tmp/demo' })
-    expect(back).toMatchObject({ rebound: 'S2', orphaned: null, entry: { agentId: 'agent-1', sessionId: 'S1' } })
-    expect(reloaded.list()).toHaveLength(1)
-    expect(reloaded.resolve('S1')?.agentId).toBe('agent-1')
-    expect(reloaded.setSubscriptionSession('agent-1', null)).toBe(true)
-    expect(reloaded.byAgent('agent-1')?.subscriptionSessionId).toBeUndefined()
+    expect(reloaded.byAgent('agent-1')).toMatchObject({ agentId: 'agent-1', sessionId: 'S1' })
+    expect(reloaded.byAgent('agent-1')).not.toHaveProperty('subscriptionSessionId')
   })
 
   it('fills an old supported session role once and persists it through reload', async () => {

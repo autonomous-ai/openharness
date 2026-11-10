@@ -1,10 +1,8 @@
 /**
- * A model switch on the real daemon (task #2354): onto a grid model and
- * back keeps the conversation; a conversation too long for the model starts fresh there, and the way home reopens the one it
- * left, as the same agent. The fake Claude Code (e2e/harness/fakeEngine.mjs) resumes the session `--resume` names, as the real
- * one does.
+ * A model switch on the real daemon (task #2354): onto a grid model and back keeps the conversation, as the same agent. The
+ * fake Claude Code (e2e/harness/fakeEngine.mjs) resumes the session `--resume` names, as the real one does.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -28,13 +26,13 @@ async function turn(agentId: string, content: string): Promise<void> {
   await ended
 }
 
-it('moves onto a grid model and back in the same conversation, and a fresh move comes home to the conversation it left', async () => {
+it('moves onto a grid model and back in the same conversation, whatever an older caller asks', async () => {
   const d = await IsolatedDaemon.create()
   daemon = d
   onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
   await d.start()
   client = await LocalClient.connect(d)
-  const cwd = join(d.projectsDir, 'buddy')
+  const cwd = join(d.projectsDir, 'switch')
   mkdirSync(cwd, { recursive: true })
   const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 90_000)
   expect(created.error, JSON.stringify(created)).toBeUndefined()
@@ -49,12 +47,17 @@ it('moves onto a grid model and back in the same conversation, and a fresh move 
   expect(await client.request('agent_retarget', { agentId, clearGrid: true }, 60_000)).toMatchObject({ retargeted: true })
   expect((await settled(agentId, id => id === s1, 'the same conversation at home')).sessionId).toBe(s1)
 
-  // Too long for the model: a fresh conversation on the grid, then home to the one it left, as the same agent.
+  // A fresh move served only the v3 Buddy's model switch (#3901): a request that still asks for one resumes the conversation.
+  // The fake engine records every launch's argv (e2e/harness/fakeEngine.mjs): the move's relaunch resumes s1.
+  const launches = (): Array<{ engine: string; args: string[] }> => readFileSync(join(d.root, 'launch-argv'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const before = launches().length
   expect(await client.request('agent_retarget', { agentId, grid: GRID, fresh: true }, 60_000)).toMatchObject({ retargeted: true })
-  const onGrid = await settled(agentId, id => id !== s1, 'a fresh conversation on the grid')
+  await until('the move\'s relaunch', () => launches().length > before || null, 60_000, 200)
+  expect(launches().at(-1)!.args).toEqual(expect.arrayContaining(['--resume', s1]))
+  const onGrid = await settled(agentId, id => id === s1, 'the same conversation on the grid')
   await turn(agentId, 'A question for the shared model')
   expect(await client.request('agent_retarget', { agentId, clearGrid: true }, 60_000)).toMatchObject({ retargeted: true })
-  const home = await settled(agentId, id => id === s1, 'the conversation it left, reopened at home')
+  const home = await settled(agentId, id => id === s1, 'the same conversation at home')
   expect([home.id, home.sessionId, onGrid.id]).toEqual([agentId, s1, agentId])
   expect((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents.filter(a => a.status === 'active'))
     .toHaveLength(1)

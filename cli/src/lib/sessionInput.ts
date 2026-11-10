@@ -100,7 +100,6 @@ function sayOnce(receipt?: MessageReceipt): MessageReceipt | undefined {
 
 interface QueuedInput {
   deliveryId?: string
-  inputContext?: string
   receipt?: MessageReceipt
   content: string
   bytes: number
@@ -159,7 +158,7 @@ export interface SessionInputDeps {
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
   /** Boolean is retained for direct controller tests and legacy embedders. Production returns dispatch evidence. */
-  inject: (terminalTarget: string, content: string, inputContext?: string) => Promise<boolean | TerminalActionResult>
+  inject: (terminalTarget: string, content: string) => Promise<boolean | TerminalActionResult>
   /** Host serializes the preflight and paste with other terminal writers. */
   injectTeam?: (terminalTarget: string, content: string, deliveryId: string) => Promise<boolean | TerminalActionResult>
   sendKey: (terminalTarget: string, key: string) => Promise<boolean | TerminalActionResult>
@@ -376,7 +375,7 @@ export class SessionInputController {
   }
 
   /** [receipt]: what became of a person's message (one with no [deliveryId]), for its measurement. */
-  submit(sessionId: string, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
+  submit(sessionId: string, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
     const said = sayOnce(receipt)
     // An agent changing host has no pane to type into until the move ends: the message waits, as itself, and
     // is submitted then, through every check `submitNow` makes, into the pane the row then names.
@@ -392,11 +391,11 @@ export class SessionInputController {
       gate.enqueue(agentId, async () => {
         const at = state.held.indexOf(item)
         if (at >= 0) state.held.splice(at, 1)
-        if (!item.cancelled) await this.submitNow(sessionId, content, deliveryId, inputContext, said)
+        if (!item.cancelled) await this.submitNow(sessionId, content, deliveryId, said)
       })
       return
     }
-    void this.submitNow(sessionId, content, deliveryId, inputContext, said)
+    void this.submitNow(sessionId, content, deliveryId, said)
   }
 
   /**
@@ -404,7 +403,7 @@ export class SessionInputController {
    * here or refused: the gate delivers what it held one at a time, and a keystroke held behind this message
    * must not land between its paste and its Enter.
    */
-  private submitNow(sessionId: string, content: string, deliveryId?: string, inputContext?: string, said?: MessageReceipt): Promise<void> {
+  private submitNow(sessionId: string, content: string, deliveryId?: string, said?: MessageReceipt): Promise<void> {
     const session = this.controlSession(sessionId)
     if (!session) {
       said?.('agent_gone')
@@ -415,7 +414,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     if (state.cancelling) {
       this.holdForCancel(sessionId, state, Buffer.byteLength(content, 'utf8'), deliveryId, said, 'sent',
-        () => void this.submitNow(sessionId, content, deliveryId, inputContext, said))
+        () => void this.submitNow(sessionId, content, deliveryId, said))
       return Promise.resolve()
     }
     this.dropExpired(sessionId, state)
@@ -425,7 +424,7 @@ export class SessionInputController {
         || (!this.swarmTypesWhileBusy(session.engine, deliveryId) && (state.turnOpen || state.settling))))
       || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
-      this.enqueue(sessionId, state, content, deliveryId, inputContext, said)
+      this.enqueue(sessionId, state, content, deliveryId, said)
       if (this.swarmTypesWhileBusy(session.engine, deliveryId) && state.turnOpen
         && !state.deliveryId && state.awaitingFingerprint && !state.timer) this.armSubmitCheck(sessionId, session, state)
       return Promise.resolve()
@@ -439,19 +438,19 @@ export class SessionInputController {
     // agent as it is by then, which a restart in between may have changed.
     // With nothing in flight the write starts at once, so a cancel or a control request that follows
     // the submit sees it, as before.
-    return this.scheduleWrite(sessionId, session, content, deliveryId, inputContext, said)
+    return this.scheduleWrite(sessionId, session, content, deliveryId, said)
   }
 
-  private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
+  private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     const write = (): Promise<void> => {
       // On its way before a cancel began, its turn to be typed came while the Ctrl-C is: it goes on after it.
       if (state.cancelling) {
         this.holdForCancel(sessionId, state, 0, deliveryId, receipt, 'writes',
-          () => void this.scheduleWrite(sessionId, session, content, deliveryId, inputContext, receipt))
+          () => void this.scheduleWrite(sessionId, session, content, deliveryId, receipt))
         return Promise.resolve()
       }
-      return this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext, receipt)
+      return this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, receipt)
     }
     const running = state.writes ? state.writes.then(write, write) : write()
     const settled: Promise<void> = running.catch(() => {}).then(() => {
@@ -737,7 +736,7 @@ export class SessionInputController {
   }
 
   /** Preserve the established injection path for every caller that opts out of receipts. */
-  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
+  private async injectLegacy(sessionId: string, session: RegisteredSession, content: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     state.personWriteVersion = (state.personWriteVersion ?? 0) + 1
     if (!(await this.deps.validateRuntime(session))) {
@@ -773,7 +772,7 @@ export class SessionInputController {
         return
       }
     }
-    const delivery = await this.injectWhenLeased(() => this.write(session.agentId, content, inputContext),
+    const delivery = await this.injectWhenLeased(() => this.deps.inject(session.agentId, content),
       () => this.controlSession(session.agentId) !== undefined)
     const accepted = typeof delivery === 'boolean'
       ? delivery
@@ -812,11 +811,7 @@ export class SessionInputController {
     this.armSubmitCheck(sessionId, session, state)
   }
 
-  private write(id: string, content: string, inputContext?: string) {
-    return inputContext ? this.deps.inject(id, content, inputContext) : this.deps.inject(id, content)
-  }
-
-  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
+  private async inject(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
     if (!deliveryId) {
       // A later person write replaces the shared composer-check fields. Read the Swarm
@@ -825,9 +820,9 @@ export class SessionInputController {
       // A local submission keeps its original scheduling. Overlap removes our ability
       // to attribute a later terminal turn to the lamp; it must not block local input.
       this.finishDelivery(sessionId, state, 'unknown', 'prompt_mismatch')
-      if (!receipt) return this.injectLegacy(sessionId, session, content, inputContext)
+      if (!receipt) return this.injectLegacy(sessionId, session, content)
       // A write that threw may have typed something: unknown, and thrown on as before.
-      return this.injectLegacy(sessionId, session, content, inputContext, receipt).catch((error: unknown) => {
+      return this.injectLegacy(sessionId, session, content, receipt).catch((error: unknown) => {
         receipt('ambiguous')
         throw error
       })
@@ -880,7 +875,7 @@ export class SessionInputController {
       if (state.cancelled || this.states.get(sessionId) !== state) return
       state.writing = true
       const delivery = await this.injectWhenLeased(() => (deliveryId.startsWith('team:') && this.deps.injectTeam
-        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.write(session.agentId, content, inputContext)),
+        ? this.deps.injectTeam(session.agentId, content, deliveryId) : this.deps.inject(session.agentId, content)),
       () => !state.cancelled && this.states.get(sessionId) === state)
       state.writing = false
       if (state.cancelled || this.states.get(sessionId) !== state) return
@@ -1263,14 +1258,14 @@ export class SessionInputController {
       if (!next.deliveryId?.startsWith('team:')) this.deps.onError(sessionId, 'This harness is no longer available.')
       return
     }
-    if (busySwarm) await this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
-    else await this.inject(sessionId, session, next.content, next.deliveryId, next.inputContext, next.receipt)
+    if (busySwarm) await this.scheduleWrite(sessionId, session, next.content, next.deliveryId, next.receipt)
+    else await this.inject(sessionId, session, next.content, next.deliveryId, next.receipt)
   }
 
-  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): void {
+  private enqueue(sessionId: string, state: InputState, content: string, deliveryId?: string, receipt?: MessageReceipt): void {
     const bytes = Buffer.byteLength(content, 'utf8')
     if (this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
-    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, inputContext, ...(receipt ? { receipt } : {}) })
+    state.queue.push({ content, bytes, expiresAt: Date.now() + ITEM_TTL_MS, deliveryId, ...(receipt ? { receipt } : {}) })
     this.delivery(sessionId, deliveryId, 'queued')
   }
 
