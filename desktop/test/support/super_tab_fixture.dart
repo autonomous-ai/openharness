@@ -606,6 +606,20 @@ class ConversationServer {
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
 
+  /// The Swarm's leaderboard of agents shipping (`GET .../shipping`); null answers 404, as a server before it. Reads of it are
+  /// listed in [shippingReads].
+  Map<String, dynamic>? shipping;
+  final shippingReads = <String>[];
+
+  /// Answers by the read's path instead of [shipping], as a server does.
+  Map<String, dynamic> Function(String path)? shippingAnswer;
+
+  /// Holds the next reads of the leaderboard until it completes.
+  Future<void>? shippingGate;
+
+  /// How many leaderboard reads fail as a server that is down does, before they answer again.
+  var failShippingReads = 0;
+
   /// A Member's own chat that agent.new opens is left out of a Swarm's first load, as a big Swarm's read can leave out
   /// a quiet chat (hotfix #4647): only a read of the chat itself finds it.
   bool newAgentChatsDormant = false;
@@ -2103,6 +2117,23 @@ class ConversationServer {
               .toList(),
         }),
       ) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'shipping') {
+      shippingReads.add(path);
+      if (failShippingReads > 0) {
+        failShippingReads--;
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
+      }
+      if (shippingGate case final gate?) await gate;
+      final board = shippingAnswer?.call(path) ?? shipping;
+      if (board == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'leaderboard') {
       leaderboardReads.add(path);
