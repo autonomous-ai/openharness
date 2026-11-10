@@ -43,7 +43,7 @@ export interface ReviewHour extends RanOn { hour: number; count: number }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
-  /** Why nobody is named as its requester, said by the agent that opened work no person asked for (taskContract.ts). */
+  /** Why nobody is named as its requester, said by the agent that opened work no person asked for before Swarm v4. */
   noRequesterReason?: string
   /** When it shipped: its earliest recorded merge, or without one the first time its work was done. A group is one request,
    *  so finishing it again ships nothing new. */
@@ -81,13 +81,6 @@ export const LEDGER_WEEKS = 5
 export const MAX_RUNS = 20
 /** Credits one conversation keeps, newest: a busy Lead conversation collects approvals and tag replies for weeks. */
 export const MAX_UNBLOCKS = 200
-
-/** A shared group is asked when it is opened. A private conversation is chat only and never counts. */
-export function recordAsked(group: Conversation, requesterId: string | undefined, now: number): void {
-  if (group.audience) return
-  if (requesterId) group.requesterId = requesterId
-  group.ledger = { askedAt: now }
-}
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
 export function waitedOn(state: SuperTabState, group: Conversation): string {

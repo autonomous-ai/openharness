@@ -1782,7 +1782,7 @@ class SuperTabController extends ChangeNotifier {
   bool messagesRead(String id) => _messages[id] != null;
 
   static bool _listed(SuperTabMessage m) =>
-      !m.terminalPrompt && !m.terminalGap && !m.instructionsSave;
+      !m.terminalPrompt && !m.terminalGap && !m.leadTerminalNote;
 
   bool hasOlder(String id) => _before[id] != null;
 

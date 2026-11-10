@@ -28,3 +28,16 @@ describe('a host row\'s resume', () => {
     expect(row!.resume).toBeNull()
   })
 })
+
+// The CLI installs no Swarm skills since #3912, but a CLI or Desktop from before reads a missing skillMode as Harness orchestration
+// and would launch a v4 agent with its skills: every project, host row and start read says 'default' until 2026-12-11.
+describe('a host row\'s skillMode', () => {
+  it('is always Default, as is every project\'s', async () => {
+    const s = swarm()
+    const task = s.group('Fix login')
+    const worker = s.add('dev', task, false, owner, 'host', owner.userId)
+    const { roster } = await hostTab('tab', s.state, 'host', user, null, lookups)
+    expect((roster.find(r => 'agent' in r && r.agent.id === worker) as { skillMode?: unknown }).skillMode).toBe('default')
+    expect(s.state.projects!.map(p => (p as { skillMode?: unknown }).skillMode)).toEqual(s.state.projects!.map(() => 'default'))
+  })
+})

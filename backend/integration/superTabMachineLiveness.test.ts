@@ -5,6 +5,8 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import { MACHINE_FRESH_MS, type MachineObservation } from '../src/superTabs/machines.js'
 import { localReportMemory, type ReportMemory } from '../src/superTabs/machineReports.js'
 import { clock as stamps } from '../src/superTabs/parts/index.js'
@@ -52,7 +54,8 @@ async function swarm(memory: 'fast' | 'full' = 'fast') {
   const store = new SuperTabStore(db, () => clock.now, null, { reports })
   const reads = new SwarmReads(store)
   const tab = (await store.create(owner, randomUUID(), 'Liveness', 'public')).id
-  const execute = (command: Command, user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command | StoredCreate, user = owner) => command.type === 'conversation.create' ? storeCreate(db, tab, command, user)
+    : store.execute(user, tab, { operationId: randomUUID(), command })
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
@@ -182,7 +185,8 @@ describe('a post to an agent whose session is down', () => {
   it('tells its sender the agent is offline, queues the post for it, and stops saying so once it is back', async () => {
     const store = new SuperTabStore(db, () => clock.now, null, { reports: never })
     const tab = (await store.create(owner, randomUUID(), 'Offline', 'public')).id
-    const execute = (command: Command, user = owner, asAgentId?: string) => store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+    const execute = (command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+      ? storeCreate(db, tab, command, user) : store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
     const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
     await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
