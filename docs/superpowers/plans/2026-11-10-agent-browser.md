@@ -146,7 +146,7 @@ Read it before starting any task. This plan does not repeat its reasons.
   other `.mjs` files with a dynamic import under `@ts-expect-error`, as `dsh/catalogPublisher.spec.ts:8` does.
 - **Container environment:** `TZ`, `ACCEPT_LANG`, `SCREEN` (as `1920x1080`), `PROXY=1` when a proxy is set, `DEVICE`
   (JSON) when Device is on. The proxy relay listens on `127.0.0.1:3128` inside the container.
-- **Pull requests** (standard 12), each with its own evidence from Task 20:
+- **Pull requests** (standard 12), each with its own evidence from Task 20 (Task 3b goes with Tasks 1-8):
   1. backend: Task 13;
   2. CLI container and service: Tasks 1-8 (this one also changes the backend's copy of the usage contract);
   3. agent tools: Tasks 9-11;
@@ -381,6 +381,38 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   `WAYLAND_DISPLAY`.
 - [ ] **Step 4: Run** the same test. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(cli): set up Podman for agent browsers`.
+
+### Task 3b: Harness's own Podman machine when the person's cannot start, and spike fixes to containers
+
+Added after the macOS spike. On the spike's Mac the only Podman machine was listed as stopped and could never start
+(its files had been deleted by another app). The spec's "Podman" section now names this case.
+
+**Files:**
+- Modify: `cli/src/services/agentBrowser/podman.ts`, `setup.ts`, `containers.ts`, `browsers.ts`, and their specs
+
+**Interfaces:**
+- `Podman` gains a connection: every call after setup runs as `podman --connection <name> …`, where `<name>` is the
+  person's default machine, or `harness` when Harness made its own. The name is stored in the state file.
+- `Availability` reports `needs_setup` when the default machine exists but `podman machine start` fails.
+- `Setup.run` creates `podman machine init harness` (sized as for a new machine) in that case, starts it, and never
+  touches the other machine or the default connection.
+- `memoryBytes()` reads `podman machine inspect` (`Resources.Memory`, MiB) while the machine is stopped.
+- `Containers` creates the `HOME` tmpfs with `mode=1777`.
+- The setup dialog's extra line for this case: "Podman on this computer won't start. Harness will set up its own."
+  (Task 17 shows it; the availability reply carries `ownMachine: true`.)
+
+- [ ] **Step 1: Write the failing tests:**
+  - `a default machine whose start fails is needs_setup with ownMachine true`;
+  - `setup then inits and starts a machine named harness, and never runs start, set, rm or reset on the other one`;
+  - `after setup every call carries --connection harness`, and `the connection name survives a restart through the
+    state file`;
+  - `the default connection is not changed` (no `podman system connection default`);
+  - `memoryBytes reads machine inspect while the machine is stopped`;
+  - `the HOME tmpfs has mode=1777`.
+- [ ] **Step 2: Run** the spec files of the four changed files. Expected: FAIL on the new cases.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the same files. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(cli): Harness's own Podman machine when the person's cannot start`.
 
 ### Task 4: Image build
 
@@ -817,6 +849,9 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - [ ] **Step 2: Run** `cd cli && npx vitest run src/services/agentBrowser/proxyRelay.spec.ts src/services/agentBrowser/deviceInject.spec.ts src/services/agentBrowser/assets.spec.ts`.
   Expected: FAIL.
 - [ ] **Step 3: Implement.**
+  - Spike fixes to the entrypoint, in this task since it edits the entrypoint anyway: end with a plain `wait -n` (with
+    process ids it missed a browser that had already exited); start openbox before the browser and wait until it runs,
+    so the browser window gets X focus and keys reach it. Add both to the entrypoint assertions.
   - Port the HTTP and HTTPS relay from the prior art, `electron/browser/proxy-relay.ts`. SOCKS5 is new code.
   - Port the device script from `gateway-source/scripts/sandbox-browser-inject.py:140-190` to Node.
 - [ ] **Step 4: Run** the same tests. Expected: PASS.
