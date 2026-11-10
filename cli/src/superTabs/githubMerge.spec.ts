@@ -8,8 +8,9 @@ type Json = Record<string, unknown>
 const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
 const OLD = 'a1b2c3d4e5f60000000000000000000000000000'
 const comment = (body: string, extra: Json = {}): Json => ({ body, author_association: 'MEMBER', user: { login: 'deehw' }, created_at: '2026-11-09T12:00:00Z', ...extra })
-const pull = (extra: Json = {}): Json => ({ number: 4, draft: false, base: { ref: 'main' }, head: { sha: HEAD, ref: 'pip/2' }, labels: [{ name: 'builder:pip' }],
-  body: 'Closes #2', ...extra })
+/** A pull request of the repository's own branch, as GitHub lists it: not a fork's, which the train leaves to merge alone. */
+const pull = ({ head, ...extra }: Json = {}): Json => ({ number: 4, draft: false, base: { ref: 'main' }, labels: [{ name: 'builder:pip' }], body: 'Closes #2', ...extra,
+  head: { sha: HEAD, ref: 'pip/2', repo: { full_name: 'acme/app' }, ...head as Json } })
 
 /** One repository as GitHub's REST API answers for it, with ETags, and what was sent to it. */
 function fakeGitHub() {
@@ -23,14 +24,17 @@ function fakeGitHub() {
     if (repo.status) return { status: repo.status, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
+    // Each pull request here is alone and holds main's tip (`behind_by` 0), so it merges on its own; the train is githubTrain.spec.ts.
+    const compared = p.split('...').at(-1)!
     const body = p === '/repos/acme/app' ? { default_branch: 'main' }
+      : p === '/repos/acme/app/pulls' && url.searchParams.get('state') === 'closed' ? []
       // A page of the list, as GitHub pages it.
       : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/commits$/.test(p) ? repo.commits.get(Number(p.split('/').at(-2))) ?? [{ sha: HEAD }]
-      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.get(p.split('...').at(-1)!) ?? null
+      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.has(compared) ? { behind_by: 0, ...repo.compare.get(compared) } : compared === HEAD ? { behind_by: 0, files: [] } : null
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
       : /\/pulls\/\d+$/.test(p) ? { mergeable_state: repo.state }

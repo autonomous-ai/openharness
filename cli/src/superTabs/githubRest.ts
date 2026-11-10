@@ -44,6 +44,8 @@ export class GitHubStop extends Error {
 
 /** GitHub's page size: a page shorter than this is the last. */
 export const PAGE = 100
+/** The most files GitHub lists in one compare: a change of that many or more cannot be read whole. */
+export const COMPARE_FILES_MAX = 300
 const MAX_KEPT = 500
 /** How long to wait before asking again: gh missing or signed out, a repository this login cannot read, a rate limit. */
 const OFF_RETRY_MS = 5 * 60_000, UNREADABLE_RETRY_MS = 10 * 60_000, LIMIT_MAX_MS = 15 * 60_000
