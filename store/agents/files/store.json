@@ -1,0 +1,9 @@
+{
+  "homepage": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/files",
+  "upstream": "https://github.com/autonomous-ai/openharness/tree/main/store/agents/files",
+  "license": "MIT",
+  "tagline": "Read, edit and look through a folder's files",
+  "screenshots": [
+    "https://raw.githubusercontent.com/autonomous-ai/openharness/main/store/showcase/files/trip-plan.jpg"
+  ]
+}
