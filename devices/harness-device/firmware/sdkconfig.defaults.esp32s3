@@ -19,8 +19,12 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 
 # --- Kernel, heap and ringbuffer code runs from flash (cached), not IRAM ---
-# Code executes from PSRAM/flash through the cache, and the cache is never disabled
-# (SPI_FLASH_CACHE_NO_DISABLE), so these need not sit in IRAM. Frees ~24 KB of DIRAM.
+# These keys exist only when the flash cache stays on during flash operations. SPI_FLASH_CACHE_NO_DISABLE is a
+# local macro in esp-idf components/spi_flash/spi_flash_os_func_app.c, true here because CONFIG_SPIRAM_FETCH_INSTRUCTIONS
+# and CONFIG_SPIRAM_RODATA are both y (code and rodata run from PSRAM, the cache is never disabled). Frees ~24 KB of DIRAM.
+# HEAP_PLACE_FUNCTION_INTO_FLASH also turns off SPI_MASTER_ISR_IN_IRAM (esp_driver_spi's Kconfig depends on
+# !HEAP_PLACE_FUNCTION_INTO_FLASH), so the display's QSPI done ISR runs through the PSRAM cache. If the dial A/B
+# shows a frame-time regression, drop HEAP_PLACE_FUNCTION_INTO_FLASH first.
 CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
 CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
 CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
