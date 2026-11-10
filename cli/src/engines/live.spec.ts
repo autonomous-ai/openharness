@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { newFold } from '../testing/transcriptOracle.js'
 import { liveFor } from './live.js'
 import { engineFor } from './registry.js'
@@ -48,7 +48,7 @@ describe('the live engine facet', () => {
     parser.ingest(prompt('two'))
     const two = parser.snapshot()
     expect(two.identity).not.toBe(one.identity)
-    expect(one).toEqual({ identity: one.identity, turnOpen: true, continued: false })
+    expect(one).toEqual({ identity: one.identity, turnOpen: true, continued: false, openedAt: one.openedAt })
     parser.closeTurn('hook')
     expect(two.turnOpen).toBe(true)
     parser.ingest(continuation)
@@ -57,6 +57,23 @@ describe('the live engine facet', () => {
     expect(continued.identity).not.toBe(two.identity)
     expect(liveFor('claude')!.create({ engine: 'claude' }).snapshot().identity).not.toBe(idle.identity)
     expect(idle.turnOpen).toBe(false)
+  })
+
+  // A Stop hook run before the daemon read its turn open is about an earlier turn (engines/kit/stopHook.ts).
+  it('says when it read the record that opened each turn, and keeps it while the turn goes on', () => {
+    const parser = liveFor('claude')!.create({ engine: 'claude' })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    expect(parser.snapshot().openedAt).toBeUndefined()
+    parser.ingest(prompt('one'))
+    now.mockReturnValue(2_000)
+    parser.ingest(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } }))
+    expect(parser.snapshot().openedAt).toBe(1_000)
+    parser.ingest(continuation)
+    expect(parser.snapshot().openedAt).toBe(1_000)
+    parser.closeTurn('hook')
+    parser.ingest(continuation)
+    expect(parser.snapshot().openedAt).toBe(2_000)
+    now.mockRestore()
   })
 
   it('keeps the previous cancel semantics, but clears abandoned tools on relaunch or Stop', () => {

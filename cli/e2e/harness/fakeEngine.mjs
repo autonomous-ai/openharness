@@ -35,8 +35,9 @@
 // `!permitnext <command>` keeps its turn open and asks permission to run the command the moment a
 // message is pasted, before its Enter (a request arriving mid-turn), `!latestart` (with `submissionGate` in
 // the config) takes the prompt off the composer and holds its turn's start, the prompt hook and the record,
-// until the test's release file exists, as a CLI does whose hooks or first record are slow, `!exit` ends the
-// process.
+// until the test's release file exists, as a CLI does whose hooks or first record are slow, `!latestop` (Claude
+// Code) has its Stop and the next prompt's hook reach the daemon only after that prompt's turn is on disk (see
+// `lateStop`), `!exit` ends the process.
 // Everything else is echoed as the answer. Codex's `/model` is not a prompt: it opens 0.160's model
 // picker over the `models_cache.json` in its CODEX_HOME, and a choice in it is applied to the turns
 // that follow (see `openModelPicker`).
@@ -99,6 +100,7 @@ const matcherTakes = (matcher, value) => {
 
 /** What the npm wrapper hands its child, the Codex engine itself: this module, run as a script. */
 const CODEX_NATIVE = 'HARNESS_FAKE_CODEX_NATIVE'
+const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
 
 /**
  * `@openai/codex`'s bin/codex.js (0.160.0): it starts the native binary as its child with the same
@@ -455,11 +457,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
    * environment (Claude Code adds CLAUDE_PROJECT_DIR), the event on stdin, killed once its `timeout`
    * (seconds) is up. Resolves when it exits or is killed: the CLI waits for its hooks before it goes on.
    */
-  const runHookCommand = (event, command, timeoutSeconds, input) => new Promise((done) => {
+  const runHookCommand = (event, command, timeoutSeconds, input, held) => new Promise((done) => {
     const started = Date.now()
     // What a test reads back: the event, why it fired, and the conversation it named.
     const what = `${event}${input.source || input.reason ? `(${input.source || input.reason})` : ''} session=${input.session_id}`
-    const env = engine === 'claude' ? { ...process.env, CLAUDE_PROJECT_DIR: cwd } : process.env
+    // A held hook starts now, which is when notify.mjs says it ran, and is read late (heldHook.mjs). Its own
+    // deadline is not spent waiting for that (notify.mjs HOOK_DEADLINE_MS).
+    const holding = held ? { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${heldHookUrl}`.trim(), FAKE_HOOK_RELEASE: held.file, HARNESS_HOOK_DEADLINE_MS: '30000' } : {}
+    const env = { ...process.env, ...(engine === 'claude' ? { CLAUDE_PROJECT_DIR: cwd } : {}), ...holding }
     let child
     try {
       // What a PostToolUse hook prints is read, as both CLIs read it: its additionalContext reaches the model.
@@ -503,7 +508,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     child.stdin.end(JSON.stringify(input))
   })
   /** Every hook the settings carry for this event, at once, each command once, and wait for them all. */
-  const runHooks = async (event, fields = {}) => {
+  const runHooks = async (event, fields = {}, held = null) => {
     if (!HOOK_EVENTS[engine].has(event)) return
     const blocks = Array.isArray(hookSettings[event]) ? hookSettings[event] : []
     const commands = new Map()
@@ -516,7 +521,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     if (!commands.size) return
     const input = hookInput(event, fields)
-    await Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input)))
+    await Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input, held)))
+  }
+  // `!latestop` (Claude Code): its Stop reaches the daemon only after the next turn has been read opening (the
+  // test's `late-stop.release` says when), and that turn's prompt hook 4 s after it, as a loaded daemon took them
+  // in the same-words end to end run (2026-11-10): the CLI ran the hooks in order, but their requests were read late.
+  let lateStop = null
+  const hookHeld = () => {
+    const file = join(config.root, `held-hook-${randomUUID()}`)
+    return { file, release: () => writeFileSync(file, '') }
   }
 
   announceProcess()
@@ -1274,18 +1287,31 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
     runningTool = null
     if (open) await finish('(interrupted by a new prompt)')
+    const late = lateStop
+    lateStop = null
+    const promptHeld = late ? hookHeld() : null
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
     // sends it through the same door as SessionStart, the catch hook that re-registers a session whose
     // start-up announcement the daemon missed. The fields beyond the prompt are those each CLI was
     // recorded sending.
-    await runHooks('UserPromptSubmit', engine === 'claude'
+    const promptHooks = runHooks('UserPromptSubmit', engine === 'claude'
       ? { prompt_id: randomUUID(), permission_mode: permissionMode, prompt }
-      : { turn_id: `turn-${turn + 1}`, prompt })
+      : { turn_id: `turn-${turn + 1}`, prompt }, promptHeld)
+    if (!late) await promptHooks
     turn++
     open = `turn-${turn}`
     if (engine === 'claude') {
       claude({ type: 'user', message: { role: 'user', content: prompt } })
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
+      if (late) {
+        const release = join(config.root, 'late-stop.release')
+        while (!existsSync(release)) await new Promise((resolve) => setTimeout(resolve, 20))
+        late.release()
+        await late.stop
+        await new Promise((resolve) => setTimeout(resolve, 4_000))
+        promptHeld.release()
+        await promptHooks
+      }
     } else {
       codex('event_msg', { type: 'task_started', turn_id: open })
       codex('turn_context', { turn_id: open, model: current.model, reasoning_effort: current.effort, collaboration_mode: { mode: 'default' } })
@@ -1501,6 +1527,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await finish(`goal met: ${condition}`)
       claude({ type: 'attachment', attachment: { type: 'goal_status', met: true, condition, reason: 'all checks pass' } })
       claude({ type: 'system', subtype: 'turn_duration', durationMs: 6_000, messageCount: 8 })
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'latestop') {
+      claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `answer ${turn}: ${prompt}` }], stop_reason: 'end_turn' } })
+      open = null
+      say(`\r\nanswer ${turn}: ${prompt}\r\n\r\n`)
+      const stop = hookHeld()
+      lateStop = { stop: runHooks('Stop', { stop_hook_active: false }, stop), release: stop.release }
       return
     }
     if (directive?.[1] === 'version') { await finish(versionLine); return }

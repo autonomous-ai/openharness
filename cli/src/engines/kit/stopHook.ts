@@ -24,11 +24,16 @@ export async function closeTurnOnStop(
   //   nothing (the time each hook was run comes with it, hook/notify.mjs);
   // - otherwise it is about the turn open as it arrives, and not one opened after that (read in the drain
   //   below), whose prompt hook has not come in yet; a StopFailure closes whichever turn is open.
+  // - nor, a failure included, a turn the daemon read opening after its engine ran the Stop: the same-words
+  //   end to end run under load (2026-11-10) had a Stop arrive after the queued next turn was read opening but
+  //   before that turn's prompt hook, so the check above could not tell, and it force-closed the next turn
+  //   2.5 s in, losing its reply and the question open in it. (core/AGENTS.md rule 7.)
   // A turn left open with no end of its own is closed by the next prompt (lib/normalize.ts).
   const stale = firedAt !== undefined && (latestPromptAt(sessionId) ?? 0) > firedAt
+  const readAfter = (st: LiveTurn): boolean => firedAt !== undefined && st.openedAt !== undefined && st.openedAt > firedAt
   const arrived = turnState(sessionId)
   const about = arrived?.turnOpen ? arrived.identity : null
-  const itsTurn = (st: LiveTurn): boolean => !stale && (status === 'error' || (about !== null && st.identity === about))
+  const itsTurn = (st: LiveTurn): boolean => !stale && !readAfter(st) && (status === 'error' || (about !== null && st.identity === about))
   await drain(sessionId)
   // A Stop hook is the one precise "the engine stopped writing" signal we get. When the mirror is
   // HOLDING a turn-end for finished async sub-agents, this is what tells it the wrap-up message is
@@ -36,6 +41,7 @@ export async function closeTurnOnStop(
   // to the punch (measured: recap at 10:18:41, wrap-up written at 10:18:44).
   noteEngineStopped(sessionId)
   const open = turnState(sessionId)
+  if (open?.turnOpen && readAfter(open)) console.log(`[turn] ${sid(sessionId)} ${status === 'error' ? 'StopFailure' : 'Stop'} run before the open turn was read opening: left open`)
   if (!open?.turnOpen || leftToTranscript(open) || !itsTurn(open)) return // natural JSONL close already won → nothing to do
   // Still open: the transcript may just be lagging the Stop hook. Wait, re-poll, and only force-close
   // if it STILL hasn't closed — a genuinely wedged turn, whose assistant text is on disk by now.

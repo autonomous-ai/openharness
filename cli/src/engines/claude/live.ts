@@ -6,11 +6,18 @@ import { lineToEvents, newTurnState } from './normalize.js'
 function create(session: Parameters<EngineLive['create']>[0]): LiveParser {
   const state = newTurnState()
   const generation = randomUUID()
+  let openedAt: number | undefined
   return {
     engine: session.engine,
     get turnOpen() { return state.turnOpen },
-    ingest: (line) => ({ events: lineToEvents(line, state) }),
-    snapshot: () => ({ identity: `${generation}:${state.opened ?? 0}`, turnOpen: state.turnOpen, continued: state.continued === true }),
+    ingest: (line) => {
+      const before = state.opened
+      const events = lineToEvents(line, state)
+      if (state.opened !== before) openedAt = Date.now()
+      return { events }
+    },
+    snapshot: () => ({ identity: `${generation}:${state.opened ?? 0}`, turnOpen: state.turnOpen, continued: state.continued === true,
+      ...(openedAt === undefined ? {} : { openedAt }) }),
     closeTurn(reason) {
       state.turnOpen = false
       // A cancel has historically kept tool links and pending calls; a relaunch or Stop clears them.
