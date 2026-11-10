@@ -194,8 +194,7 @@ export function agentTmpLaunch(engine: AgentEngine, skill: Pick<SwarmSkill, 'rol
   const shared = agentTmpFolder(deps.dataDir)
   // Whoever launches: what is left here must still go.
   sweepWhenDue(shared, deps)
-  if (isTerminalEngine(engine) || skill?.role === 'buddy') return none
-  if (!skill) return none
+  if (!skill || skill.role === 'buddy' || isTerminalEngine(engine)) return none
   const folder = agentTmpOf(skill.key, deps)
   return folder ? { env: { TMPDIR: folder }, args: ADDED_FOLDER[engine]?.(folder) ?? [] } : none
 }

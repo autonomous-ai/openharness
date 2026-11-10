@@ -17,8 +17,12 @@ import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv
-if ((await import('./team/bootGuard.js')).isOldTeamAccount()) {
-  // An old Harness Team account's boot job: it ends here, quietly, before anything loads (team/bootGuard.ts).
+// What an old Team account's boot job runs (its first step, its master, and what its master starts): only these load the guard.
+const guard = command !== undefined && ['team', '__harnessd', '__run', '__service'].includes(command)
+  ? await import('./team/bootGuard.js') : null
+if (guard?.isOldTeamAccount()) {
+  // An old Harness Team account's boot job: it ends here, before anything loads, with one line in its log (team/bootGuard.ts).
+  console.error(guard.OLD_TEAM_ACCOUNT_LINE)
   process.exit(0)
 } else if (command === '__swarm-shell-guard') {
   // The Swarm's shell guard is gone (anh Dee, 2026-11-09), but an agent a release before started still runs its hook before
