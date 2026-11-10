@@ -39,7 +39,7 @@ export function teamConfigJson(config: TeamConfig): string {
   return `${JSON.stringify(config, null, 2)}\n`
 }
 
-/** Where setup writes the Team config on [platform]: the one place every reader looks (superTabs/teamDaemon.ts too). */
+/** Where setup wrote the Team config on [platform]: the one place every reader looks. */
 export function teamConfigFile(platform: NodeJS.Platform = process.platform): string {
   return platform === 'darwin' ? TEAM_CONFIG_FILE : teamLayout(platform)?.configFile ?? TEAM_CONFIG_FILE
 }

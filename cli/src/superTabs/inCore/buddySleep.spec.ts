@@ -6,12 +6,10 @@ import { CloseAgentService, type CloseAgentServiceDeps } from '../../lib/closeAg
 import { registry } from '../../lib/registry.js'
 import { createSwarmAgents } from './agents.js'
 import * as retention from '../retention.js'
-import * as team from '../teamDaemon.js'
 
 let dir: string, close: CloseAgentService
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'buddy-native-close-'))
-  vi.spyOn(team, 'isTeamDaemon').mockReturnValue(false)
 })
 afterEach(() => {
   close?.dispose()
@@ -48,18 +46,16 @@ function fixture(options: { phase?: 'activity' | 'checkpoint' | 'stop'; revoke?:
       registry.removeAgent(id)
     } }
   close = new CloseAgentService(deps)
-  const purge = vi.fn(async () => ({ ok: true }))
   const swarm = createSwarmAgents({ byAgent: id => registry.byAgent(id), stoppedIds: () => [], closeAgent: request => close.request(request),
     members: { harnesses: () => retention.retainedHarnesses(dir), leads: () => retention.retainedLeads(dir),
-      sleepingBuddies: () => retention.retainedSleepingBuddies(dir) }, purgeEnded: purge })
-  return { row, roster, swarm, purge }
+      sleepingBuddies: () => retention.retainedSleepingBuddies(dir) } })
+  return { row, roster, swarm }
 }
 
 it('sleeps a server-managed idle Buddy through the real close guard, without deleting its conversation', async () => {
   const f = fixture()
   expect(await f.swarm.closeMember(f.row.agentId)).toEqual({ closed: true })
   expect(registry.byAgent(f.row.agentId)).toBeUndefined()
-  expect(f.purge).not.toHaveBeenCalled()
 })
 
 it.each(['working', 'unknown'] as const)('preserves a Buddy whose last native activity is %s', async activity => {
@@ -96,12 +92,10 @@ it.each([
   expect(registry.byAgent(f.row.agentId)).toBe(f.row)
 })
 
-it('never sleeps a Buddy on a Team daemon or grants a normal window close the sleep permit', async () => {
+it('never grants a normal window close the sleep permit', async () => {
   const f = fixture()
   const request = { agentId: f.row.agentId, sessionId: f.row.sessionId, createdAt: new Date(f.row.registeredAt).toISOString(), mode: 'idle' as const }
   expect(await close.request(request)).toMatchObject({ error: 'BUDDY_PROTECTED' })
-  vi.mocked(team.isTeamDaemon).mockReturnValue(true)
-  expect(await f.swarm.closeMember(f.row.agentId)).toMatchObject({ error: 'BUDDY_PROTECTED' })
   expect(registry.byAgent(f.row.agentId)).toBe(f.row)
 })
 

@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Whether this process runs as a Harness Team account, which a Buddy is never prepared in (lib/swarmSkills.ts prepareBuddyFolder).
 // The tests set it, so they pass the same in an owner account, a Team account and CI: it reports an owner account unless a test says.
 const team = vi.hoisted(() => ({ value: false }))
-vi.mock('./teamDaemon.js', async original => ({ ...await original<typeof import('./teamDaemon.js')>(), isTeamDaemon: () => team.value }))
 vi.mock('../team/config.js', async original => ({ ...await original<typeof import('../team/config.js')>(), isTeamAccount: () => team.value }))
 vi.mock('./buddyHome.js', async original => {
   const real = await original<typeof import('./buddyHome.js')>()

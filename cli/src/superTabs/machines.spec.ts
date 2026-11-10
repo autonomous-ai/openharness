@@ -3,15 +3,12 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { availableParallelism, homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
-import { createSwarmAgents } from './inCore/agents.js'
-import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
-import { PM_HOMES } from './teamDaemon.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { recordCleanupClose } from './cleanupCloses.js'
@@ -1117,25 +1114,9 @@ describe('contributed machine executor', () => {
         const REASON = 'This project already has Mine as its Product Manager.'
         const refusedStart = { ok: false, error: REASON, refused: REASON, startId: 'start', machineId: 'host', creationId: 'creation', harnessId: 'launched' }
 
-        it('removes a Team account\'s engine home for it, through the Swarm\'s own close', async () => {
-          const home = mkdtempSync(join(tmpdir(), 'refused-start-'))
-          onTestFinished(() => rmSync(home, { recursive: true, force: true }))
-          const own = join(home, PM_HOMES, 'super-start', 'codex')
-          mkdirSync(own, { recursive: true })
-          const purge = async (request: Record<string, unknown>) => request.mode === 'inspect' ? { reviewId: 'review' } : { ok: true }
-          const ended = createConfidentialPurge({ confidential: () => true, home, record: purgeRecord(join(home, 'purges.json')), purge,
-            session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
-          const { f, fail } = failedLater(() => ({ error: REASON }))
-          f.core.agents.closeMember = createSwarmAgents({ byAgent: () => null, stoppedIds: () => ['launched'], closeAgent: async () => ({ closed: true }), purgeEnded: ended,
-            members: { leads: () => new Set(), harnesses: () => new Set() } } as never).closeMember as never
-          f.start.mockResolvedValue(refusedStart as never)
-          await f.machine.tick()
-          fail(); f.advance(); await f.machine.tick(); await settle(); await vi.waitFor(() => expect(existsSync(dirname(own))).toBe(false))
-        })
-
-        it('tries again when the purge fails, and stops once it has gone', async () => {
+        it('tries again when its close fails, and stops once it has gone', async () => {
           const { f, closeMember, fail } = failedLater(() => ({ error: REASON }))
-          closeMember.mockResolvedValueOnce({ error: 'PURGE_FAILED', detail: 'Something still names the session' })
+          closeMember.mockResolvedValueOnce({ error: 'AGENT_BUSY' })
           f.start.mockResolvedValue(refusedStart as never)
           await f.machine.tick()
           fail(); f.advance(); await f.machine.tick(); await settle()
@@ -3178,7 +3159,7 @@ describe('a launched start whose engine stops on a screen', () => {
   const RESTRICTED = screens('codex-0165-open-restricted'), TRUST = screens('codex-0165-trust-fresh-home')
   const waiting = { error: 'START_PENDING', startId: 'start', creationId: 'creation', harnessId: 'launched',
     detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
-  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex', projectSettings: 'off' }, result: Record<string, unknown> = waiting) {
+  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex' }, result: Record<string, unknown> = waiting) {
     const f = fixture()
     f.pool.starts = [{ id: 'start', dispatched: true, request } as never]
     f.start.mockResolvedValue(result as never)
@@ -3192,15 +3173,6 @@ describe('a launched start whose engine stops on a screen', () => {
   /** Two passes, 16 s apart: a screen fails a start only when two reads in a row show it the same (security review 1 of #3063). */
   const twice = async (f: ReturnType<typeof fixture>) => { await f.machine.tick(); f.advance(); await f.machine.tick() }
 
-  it.each(['0165', '0166'])('opens a Team-written Codex %s start\'s untrusted checkout restricted, with Enter on that exact screen alone', async version => {
-    const restricted = screens(`codex-${version}-open-restricted`)
-    const { f, screen, inputIfScreen, failures } = launched(restricted, 'trust_open')
-    await f.machine.tick()
-    expect(screen).toHaveBeenCalledWith('launched', 0)
-    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], restricted)
-    expect(failures()).toEqual([])
-  })
-
   it('fails it at once on the trust question, naming it, and types nothing', async () => {
     const { f, inputIfScreen, failures } = launched(TRUST, 'trust_open')
     await twice(f)
@@ -3210,12 +3182,12 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   it('also when its own check already read the screen as needing a person', async () => {
-    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' }, { ...waiting, needsPerson: true })
+    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex' }, { ...waiting, needsPerson: true })
     await twice(f)
     expect(failures()[0]?.error).toContain('folder trust question')
   })
 
-  it('fails, never answers, the restricted screen of a start that is not Team-written', async () => {
+  it('fails, never answers, Codex\'s restricted screen on a start', async () => {
     const { f, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open', { engine: 'codex' })
     await twice(f)
     expect(inputIfScreen).not.toHaveBeenCalled()
@@ -3223,13 +3195,10 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   // On 2026-11-04 another program's two hooks stopped every Codex start on DESKTOP-0TFH0OJ at this screen. Esc goes on with
-  // those hooks off: nothing is trusted on the person's behalf, and it applies to any Swarm Codex start, Team-written or not.
-  it.each([
-    ['a Team-written start', { engine: 'codex', projectSettings: 'off' }],
-    ['any other Swarm start', { engine: 'codex' }],
-  ])("skips Codex's review of another program's hooks on %s, with Esc alone", async (_name, request) => {
+  // those hooks off: nothing is trusted on the person's behalf.
+  it("skips Codex's review of another program's hooks on a Swarm start, with Esc alone", async () => {
     const REVIEW = screens('codex-0163-hooks-review')
-    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open', request)
+    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open')
     await twice(f)
     expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Escape'], REVIEW)
     expect(failures()).toEqual([])
@@ -3276,15 +3245,14 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   it('leaves it waiting while its creation is still preparing, with no agent to read', async () => {
-    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' },
+    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex' },
       { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending', detail: 'Preparing.' })
     await f.machine.tick()
     expect(screen).not.toHaveBeenCalled()
     expect(failures()).toEqual([])
   })
 
-  // Security review 1 of #3063: one read of a screen still drawing, or of a Codex that words its restricted screen otherwise,
-  // failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
+  // Security review 1 of #3063: one read of a screen still drawing failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
   it('fails it only once two passes in a row read the same waiting screen', async () => {
     const { f, failures } = launched(TRUST, 'trust_open')
     await f.machine.tick()
