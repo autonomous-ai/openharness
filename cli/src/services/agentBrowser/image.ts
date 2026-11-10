@@ -42,7 +42,9 @@ async function build(podman: Podman, tag: string): Promise<void> {
     for (const [name, content] of Object.entries(browserContextFiles())) await writeFile(join(dir, name), content)
     await podman.run(['build', '-t', tag, dir], { timeoutMs: BUILD_TIMEOUT_MS })
   } catch (error) {
-    throw new PodmanError('image_failed', (error as Error).message.split('\n').slice(-FAILURE_LINES).join('\n'))
+    // The build's own output says why (apt's error is on stdout); Podman's message names only the step that failed.
+    const output = (error instanceof PodmanError && error.output) || (error as Error).message
+    throw new PodmanError('image_failed', output.split('\n').slice(-FAILURE_LINES).join('\n'))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

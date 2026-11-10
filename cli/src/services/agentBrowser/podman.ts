@@ -10,7 +10,8 @@ import { resolveViaLoginShell } from '../../lib/tmuxOnPath.js'
 import { ownProcessGroup } from '../../lib/windows/noWindow.js'
 
 export class PodmanError extends Error {
-  constructor(readonly state: string, message: string) {
+  /** A call that exited with an error: all it printed, stdout then stderr. A build's RUN steps print to stdout. */
+  constructor(readonly state: string, message: string, readonly output?: string) {
     super(message)
     this.name = 'PodmanError'
   }
@@ -109,7 +110,8 @@ export function createPodman(deps: {
         if (!error) return done({ stdout, stderr })
         fail(new PodmanError('podman_failed', error.killed
           ? `podman ${args[0]} timed out after ${timeoutMs} ms`
-          : `podman ${args[0]} failed: ${stderr.trim().slice(-MESSAGE_LIMIT)}`))
+          : `podman ${args[0]} failed: ${stderr.trim().slice(-MESSAGE_LIMIT)}`,
+          error.killed ? undefined : `${stdout.trimEnd()}\n${stderr.trimEnd()}`.trim()))
       })
       // Always closed, so a command that reads stdin never waits on it.
       child.stdin?.end(opts.stdin)

@@ -144,6 +144,22 @@ describe('ensureImage', () => {
     expect((error as PodmanError).message).toBe(Array.from({ length: 50 }, (_, n) => `line ${n + 31}`).join('\n'))
   })
 
+  it('a failed build logs and throws its own output, where apt says why, not only Podman\'s step line', async () => {
+    // As two macOS runs failed: apt's error is the RUN step's output, on stdout; stderr has only the failed step.
+    const apt = [...Array.from({ length: 60 }, (_, n) => `Get:${n + 1} http://deb.debian.org/debian bookworm InRelease`), 'E: Unable to locate package chromium']
+    const step = 'Error: building at STEP "RUN apt-get install -y chromium": while running runtime: exit status 100'
+    fake.reply(LIST, { stdout: '[]' })
+    fake.reply('build', { code: 100, stdout: apt.join('\n'), stderr: step })
+    const log = vi.fn()
+    const error = await ensureImage(podman, NOW, log).catch((e: unknown) => e)
+    expect((error as PodmanError).state).toBe('image_failed')
+    const lines = (error as PodmanError).message.split('\n')
+    expect(lines).toHaveLength(50)
+    expect(lines.slice(-2)).toEqual(['E: Unable to locate package chromium', step])
+    await settled()
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('E: Unable to locate package chromium'))
+  })
+
   it('one build at a time', async () => {
     fake.reply(LIST, { stdout: '[]' })
     fake.reply('build', { hangMs: 200 })
