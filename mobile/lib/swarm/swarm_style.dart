@@ -7,7 +7,6 @@ import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
@@ -643,33 +642,6 @@ class SwarmTags extends StatelessWidget {
           : text,
     );
   }
-}
-
-/// A count in a filled circle: blue, or yellow for what waits on the person.
-class SwarmBadge extends StatelessWidget {
-  const SwarmBadge(this.count, {super.key, this.warn = false});
-
-  final int count;
-  final bool warn;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-    padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
-    alignment: Alignment.center,
-    decoration: ShapeDecoration(
-      color: warn ? AppColors.warning : AppPalette.accent,
-      shape: const StadiumBorder(),
-    ),
-    child: Text(
-      '$count',
-      style: AppType.caption(
-        color: warn ? SwarmInk.onWarning : AppInk.onFill,
-        fontWeight: AppFont.semibold,
-        height: 1,
-      ),
-    ),
-  );
 }
 
 /// How a [SwarmButton] is drawn.

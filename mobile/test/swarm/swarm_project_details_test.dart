@@ -7,7 +7,6 @@ import 'package:harness_mobile/swarm/swarm_invites_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_project_details.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_status.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_project_team.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -201,7 +200,7 @@ void main() {
       expect(quick[0].dx, lessThan(quick[1].dx));
       expect(quick[1].dx, lessThan(quick[2].dx));
       final rows = [
-        for (final name in ['status', 'work', 'team', 'leaderboard'])
+        for (final name in ['work', 'team', 'leaderboard'])
           tester.getTopLeft(detail(name)).dy,
       ];
       expect(rows, [...rows]..sort());
@@ -222,7 +221,7 @@ void main() {
       await openDetails(tester);
 
       expect(detail('terminal'), findsNothing);
-      expect(detail('status'), findsOneWidget);
+      expect(detail('work'), findsOneWidget);
     });
   });
 
@@ -283,7 +282,6 @@ void main() {
 
   group('each row opens its sheet once the details are gone', () {
     for (final (name, type) in [
-      ('status', SwarmProjectStatusSheet),
       ('work', SwarmProjectSheet),
       ('team', SwarmProjectTeamSheet),
       ('leaderboard', SwarmLeaderboardPage),
