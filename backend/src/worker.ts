@@ -132,9 +132,9 @@ async function start(): Promise<void> {
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) } })
   stopSweeps = startSwarmSweeps(prisma)
-  // The collections of what Swarm v4 removed, and the dead old state of migrated Swarms, go by themselves, a few rows at a time
-  // (superTabs/migration/dropLegacyJob.ts).
-  stopLegacyDrop = startLegacyDrop(prisma)
+  // The collections of what Swarm v4 removed, the Leads conversations through the store's own write, and the dead old state of
+  // migrated Swarms, go by themselves, a few rows at a time (superTabs/migration/dropLegacyJob.ts).
+  stopLegacyDrop = startLegacyDrop(prisma, swarms)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
   // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
   stopTimeChecks = startTimeChecks(prisma, swarms)

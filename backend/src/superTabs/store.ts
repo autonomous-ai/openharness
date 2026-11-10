@@ -4006,6 +4006,27 @@ export class SuperTabStore {
 
   /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked
    *  writes nothing. */
+  /**
+   * Removes the Leads conversations [ids] of [tabId] from its state, the Swarm-wide chat Swarm v4 removed (model.ts leadsRemoved),
+   * and the head's pointer to it, through the parts' own write: each group leaves a tombstone at its next version, so caches and
+   * clients drop it as for any removed conversation (migration/dropLeads.ts). Only those still of kind `leads`, in a Swarm stored
+   * by parts and not deleted; a second run, or another pod's, finds them gone and writes nothing. The ids it removed.
+   */
+  async dropLeads(tabId: string, ids: string[]): Promise<string[]> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt || row.format !== 2) return []
+      const loaded = await this.ensure(tx, await loadRow(tx, row, {}), { groupIds: ids })
+      const gone = new Set(loaded.state.conversations.filter(c => ids.includes(c.id) && isLeads(c)).map(c => c.id))
+      if (!gone.size && !loaded.state.leadsConversationId) return []
+      const state = cloneData(loaded.state)
+      state.conversations = state.conversations.filter(c => !gone.has(c.id))
+      delete state.leadsConversationId
+      await this.save(tx, loaded, state, clock.next())
+      return [...gone]
+    })
+  }
+
   private async moveGitHub(tabId: string, moves: (project: SwarmProject) => boolean, also?: (project: SwarmProject) => void): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })

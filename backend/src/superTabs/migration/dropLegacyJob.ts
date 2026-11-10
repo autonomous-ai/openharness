@@ -9,6 +9,8 @@ import type { PrismaClient } from '@prisma/client'
 import { logger } from '../../utils/logger.js'
 import { dropLegacyStates, type DropReport } from './dropLegacy.js'
 import { dropRemovedCollections } from './dropCollections.js'
+import { dropLeadsChats } from './dropLeads.js'
+import type { SuperTabStore } from '../store.js'
 
 /** A busy Swarm's old state is about 1 MB: this bounds a write to a few megabytes. */
 export const JOB_BATCH = 5
@@ -25,6 +27,8 @@ export interface JobOptions {
   /** Counts, sizes and collection names only, or the error text of a failed try. */
   log?: (line: Record<string, unknown>) => void
   signal?: AbortSignal
+  /** The store whose own write removes each Leads conversation (dropLeads.ts); without it they are left. */
+  leads?: Pick<SuperTabStore, 'dropLeads'>
 }
 
 /** Waits `ms`, or until `signal` aborts; either way its timer and its stop listener are gone. */
@@ -38,8 +42,8 @@ export const sleeper = (signal?: AbortSignal) => (ms: number) => new Promise<voi
 /** Tries until no removed collection is left and no Swarm keeps an old state, or `signal` aborts (then it returns the last report,
  *  or an empty one). The collections go first: a Swarm still in one row holds the old states back, and must not hold them. A try
  *  that finds nothing to remove from the collections logs nothing of them, and once they are gone they are not looked for again. */
-export async function dropLegacyUntilDone(db: PrismaClient, { batch = JOB_BATCH, pause, wait = sleeper(), log = () => {}, signal }: JobOptions = {}): Promise<DropReport | null> {
-  let report: DropReport | null = null, collectionsDone = false
+export async function dropLegacyUntilDone(db: PrismaClient, { batch = JOB_BATCH, pause, wait = sleeper(), log = () => {}, signal, leads }: JobOptions = {}): Promise<DropReport | null> {
+  let report: DropReport | null = null, collectionsDone = false, leadsDone = !leads
   while (!signal?.aborted) {
     if (!collectionsDone) {
       try {
@@ -50,10 +54,19 @@ export async function dropLegacyUntilDone(db: PrismaClient, { batch = JOB_BATCH,
         log({ failed: `collections: ${error instanceof Error ? error.message : String(error)}` })
       }
     }
+    if (!leadsDone) {
+      try {
+        const dropped = await dropLeadsChats(db, leads!, { pause, signal })
+        leadsDone = dropped.done
+        if (!dropped.done) log({ leads: dropped })
+      } catch (error) {
+        log({ failed: `leads: ${error instanceof Error ? error.message : String(error)}` })
+      }
+    }
     try {
       report = await dropLegacyStates(db, { apply: true, batch, pause, signal })
       log({ ...report })
-      if (report.done && collectionsDone) return report
+      if (report.done && collectionsDone && leadsDone) return report
     } catch (error) {
       log({ failed: error instanceof Error ? error.message : String(error) })
     }
@@ -63,10 +76,10 @@ export async function dropLegacyUntilDone(db: PrismaClient, { batch = JOB_BATCH,
 }
 
 /** Starts the removal in the background; the returned function stops it. */
-export function startLegacyDrop(db: PrismaClient, delayMs = START_DELAY_MS, batch = JOB_BATCH): () => void {
+export function startLegacyDrop(db: PrismaClient, leads: Pick<SuperTabStore, 'dropLeads'>, delayMs = START_DELAY_MS, batch = JOB_BATCH): () => void {
   const control = new AbortController()
   const wait = sleeper(control.signal)
-  void wait(delayMs).then(() => dropLegacyUntilDone(db, { batch, signal: control.signal, wait, pause: () => wait(PAUSE_MS),
+  void wait(delayMs).then(() => dropLegacyUntilDone(db, { batch, signal: control.signal, wait, pause: () => wait(PAUSE_MS), leads,
     log: line => 'failed' in line || (line.collectionsFailed as unknown[] | undefined)?.length
       ? logger.warn('[legacy-drop] failed', line) : logger.info('[legacy-drop] run', line) }))
   return () => control.abort()
