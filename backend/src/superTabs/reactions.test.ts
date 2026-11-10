@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, REACTIONS_GONE, type Command, type CommandContext } from './commands.js'
+import type { PrismaClient } from '@prisma/client'
+import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
+import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
+import { RETIRED_NOTE } from './retired.js'
+import { counted } from './retired.test-support.js'
+import { SuperTabStore } from './store.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -33,10 +38,21 @@ describe('reactions', () => {
     const f = fixture()
     for (const on of [true, false]) {
       const effects = f.run(react(on), owner, target)
-      expect(effects.result).toMatchObject({ changed: false, ignored: true, note: REACTIONS_GONE })
+      expect(effects.result).toEqual({ ignored: true, note: RETIRED_NOTE })
       expect(effects.settles).toBeUndefined()
     }
     expect(f.lead().reactionSeq).toBeUndefined()
+  })
+
+  it('answers a person\'s reaction before anything is read, counted as a retired command by client', async () => {
+    const queries: Query[] = []
+    const store = new SuperTabStore(recordingDb(queries) as PrismaClient)
+    const user = { sub: 'u1', email: 'u@example.com', autonomousEnv: 'prod', role: 'user' } as never
+    const before = await counted('message.react', 'desktop')
+    expect(await store.execute(user, 'tab-1', { operationId: 'op-1', command: react(true) }, undefined, undefined, { kind: 'desktop', version: '1.4.0' }))
+      .toEqual({ result: { ignored: true, note: RETIRED_NOTE }, parts: [] })
+    expect(queries).toEqual([])
+    expect(await counted('message.react', 'desktop')).toBe(before + 1)
   })
 
   // Task #3391: an agent acknowledges with a reaction rather than an "on it" post, and that settles its delivery of the message,
@@ -49,7 +65,7 @@ describe('reactions', () => {
     for (const emoji of ['eyes', 'check', 'thumbs_up']) {
       const effects = f.run(react(true, emoji), asAgent(builder), target)
       expect(effects.settles, emoji).toEqual({ messageId: 'm1', agentId: builder })
-      expect(effects.result, emoji).toMatchObject({ changed: false })
+      expect(effects.result, emoji).toMatchObject({ changed: true })
     }
     expect(f.run(react(false, 'eyes'), asAgent(builder), target).settles).toBeUndefined()
     expect(f.lead().reactionSeq).toBeUndefined()

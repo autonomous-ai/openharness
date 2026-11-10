@@ -626,7 +626,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof projectListQuery> }>('/api/super-tabs/:tabId/project-list',
     { preHandler: [validateParams(tabParams), validateQuery(projectListQuery)] },
     (req, reply) => respond(reply, () => store.projectList(req.user!, req.params.tabId, req.query.invitedTo)))
-  // A person's Activity (superTabs/activity.ts): replies to their messages and reactions to them, read when its digest moves.
+  // A person's Activity (superTabs/activity.ts): replies to their messages, read when its digest moves.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/activity',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
       const wait = await activityWait(req.user!, req.params.tabId)

@@ -282,16 +282,16 @@ describe('reactions', () => {
   const page = async (tab: string, user = owner, conversationId = 'lead') =>
     (await read(tab, user, `conversations/${conversationId}/messages`)).body.data as { messages: Array<{ id: string; reactions: unknown[] }>; reactionSeq: number }
 
-  it('answers a person\'s reaction as ignored, stores and moves nothing, and still refuses a reader outside the Swarm', async () => {
+  it('answers a person\'s reaction as ignored, anyone\'s, and stores and moves nothing', async () => {
     const tab = await swarm()
     const messageId = await post(tab)
     const before = await page(tab, peer)
-    for (const [on, user] of [[true, owner], [true, peer], [false, peer]] as const) {
-      expect((await react(tab, messageId, on, user)).result).toMatchObject({ changed: false, ignored: true })
+    // As a retired command: before anything is read, so a reader outside the Swarm is answered alike and learns nothing.
+    for (const [on, user] of [[true, owner], [true, peer], [false, peer], [true, outsider]] as const) {
+      expect((await react(tab, messageId, on, user)).result).toEqual({ ignored: true, note: RETIRED_NOTE })
     }
     expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
     expect(await page(tab, peer)).toEqual(before)
-    await expect(react(tab, messageId, true, outsider)).rejects.toMatchObject({ status: 403 })
   })
 
   it('shows no reaction stored before, on any page', async () => {
@@ -313,7 +313,7 @@ describe('reactions', () => {
     const builder = await agentIn(tab, 'lead', 'Kai', true)
     const messageId = await post(tab, 'Kai, please add avatars.')
     const before = await page(tab, peer)
-    for (const emoji of ['eyes', 'check'] as const) expect((await agentReact(tab, 'lead', messageId, builder, emoji)).result).toMatchObject({ changed: false })
+    for (const emoji of ['eyes', 'check'] as const) expect((await agentReact(tab, 'lead', messageId, builder, emoji)).result).toMatchObject({ changed: true })
     expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
     expect(await page(tab, peer)).toEqual(before)
   })

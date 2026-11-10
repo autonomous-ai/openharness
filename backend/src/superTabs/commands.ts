@@ -91,7 +91,7 @@ import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, pr
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
 import { laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
-import { retiredCommandSchemas } from './retired.js'
+import { retiredCommandSchemas, retiredAnswer } from './retired.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none, on a decision whose chosen candidate was not a pick (a person's choice, or an older record). */
@@ -103,8 +103,6 @@ const ONLY_CANDIDATE = 'Only candidate that can run this task.'
 /** How long a Swarm invitation stays open; its sent time is its expiry minus this (store.ts invite.accept). */
 export const SWARM_INVITATION_MS = 7 * 86_400_000
 
-/** What a person's reaction is answered with: an older app still offers one. */
-export const REACTIONS_GONE = 'Swarm no longer has reactions. Nothing was done.'
 export const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
@@ -4432,9 +4430,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
       break
     case 'message.react': {
-      // Nothing of a reaction is kept or shown (reactions.ts). A person's does nothing.
+      // Nothing of a reaction is kept or shown (reactions.ts). A person's is answered as a retired command (the store answers
+      // it before this).
       if (actor.kind !== 'agent') {
-        Object.assign(result, { changed: false, ignored: true, note: REACTIONS_GONE })
+        Object.assign(result, retiredAnswer().result)
         break
       }
       // An agent's joins it to nothing: only where it already is (project instructions, phase 4), or in its project's chat while it
@@ -4445,7 +4444,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
       }
       if (context.reaction?.messageId !== command.messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
-      result.changed = false
+      // It changes nothing anyone sees; it settles what it acknowledges.
+      result.changed = command.on
       settleReaction(state, group, actor.agentId, command.messageId, command.on)
       // It is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
       if (command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }

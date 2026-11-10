@@ -169,7 +169,7 @@ export async function activityDigest(tx: Tx, tabId: string, personId: string, no
   // A plain `$match` through the unread index: `readAt: null` matches a row with no readAt too. Prisma's read sent an `$expr`
   // the index could bound only by person, and examined every row of theirs of 30 days (task #3146).
   const rows = await readBy(tx, 'SuperTabActivity', 'unread', [
-    { $match: { tabId, personId, readAt: null, createdAt: { $gt: { $date: new Date(now - ACTIVITY_EXPIRY_MS).toISOString() } } } },
+    { $match: { tabId, personId, readAt: null, kind: 'reply', createdAt: { $gt: { $date: new Date(now - ACTIVITY_EXPIRY_MS).toISOString() } } } },
     { $sort: { createdAt: -1 } }, { $limit: ACTIVITY_DIGEST_ROWS }, { $project: { _id: 1 } }])
   return createHash('sha256').update(rows.map(r => r._id as string).sort().join('\n')).digest('base64url').slice(0, 16)
 }
@@ -180,7 +180,7 @@ export interface ActivityItem {
   conversationId: string
   conversationTitle: string
   projectName: string
-  /** The reply, or the message reacted to. */
+  /** The reply. */
   messageId: string
   /** Where the message is in its chat. */
   messageSequence: number
@@ -188,7 +188,7 @@ export interface ActivityItem {
   threadId: string | null
   actor: { kind: 'person' | 'agent'; id: string; name: string }
   emoji: string | null
-  /** The reply's text, or the reacted message's, cut by the database. */
+  /** The reply's text, cut by the database. */
   text: string
   createdAt: string
   read: boolean
@@ -199,10 +199,11 @@ export interface ActivityItem {
 /** The person's own unexpired rows, newest first, those they can read now (see the file's comment). */
 export async function listActivity(db: PrismaClient, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number):
   Promise<{ items: ActivityItem[]; more: boolean }> {
-  const rows = await db.superTabActivity.findMany({ where: { tabId, personId: actor.userId, createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) } },
+  // Replies only: a reaction's row, the last written 2026-11-09, is listed to nobody (reactions.ts) and expires by 2026-12-09.
+  const rows = await db.superTabActivity.findMany({ where: { tabId, personId: actor.userId, kind: 'reply', createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) } },
     orderBy: { createdAt: 'desc' }, take: ACTIVITY_LIST + 1 })
   const more = rows.length > ACTIVITY_LIST
-  const kept = rows.slice(0, ACTIVITY_LIST).filter(r => r.kind === 'reply')
+  const kept = rows.slice(0, ACTIVITY_LIST)
   if (!kept.length) return { items: [], more }
   const shown = await readableMessages(db, tabId, state, actor, kept)
   const items = kept.flatMap(r => {

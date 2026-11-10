@@ -1424,7 +1424,8 @@ export class SuperTabStore {
     // A command v4 no longer has is ignored before anything is read, written or checked: the answer is one constant, as
     // `updateRequired`'s is, and names nothing of the Swarm (retired.ts). It is counted by type and kind of client, which says
     // when the last older client has stopped sending it.
-    if (isRetiredCommand(input.command?.type)) {
+    // A person's reaction is gone too (reactions.ts), though an agent's still acknowledges: ignored the same way.
+    if (isRetiredCommand(input.command?.type) || (input.command?.type === 'message.react' && !asAgentId)) {
       metrics.retiredCommand(input.command.type, client?.kind ?? 'other')
       return retiredAnswer()
     }
@@ -3054,7 +3055,8 @@ export class SuperTabStore {
       { q: { _id: { $in: files }, tabId, proposedBy: row.id }, u: { $unset: { proposedBy: '' } }, multi: true },
     ] })
     // Activity has no index by message: its rows go by the ids they were written with (activity.ts), each reaction's from its row,
-    // the reply's for every member it could have told.
+    // the reply's for every member it could have told. Reactions were last written 2026-11-09 (reactions.ts): their two lines go
+    // once the last such row is gone, 30 days on, from 2026-12-09.
     const reactions = await tx.superTabReaction.findMany({ where: { tabId, messageId: row.id }, select: { id: true } })
     const activityIds = [...reactions.map(r => stableId(tabId, 'reaction', r.id)), ...people.map(personId => stableId(tabId, 'reply', row.id, personId))]
     await tx.superTabReaction.deleteMany({ where: { tabId, messageId: row.id } })

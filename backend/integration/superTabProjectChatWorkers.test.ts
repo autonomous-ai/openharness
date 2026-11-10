@@ -50,8 +50,7 @@ describe('an agent with a task in the project, in its project chat', () => {
     const { tab, lead, task, engineer, members } = await working()
     expect(await members()).toEqual([lead])
     const asked = String((await run(tab, post('Can someone check the login bug?'))).result.messageId)
-    // Its reaction acknowledges, kept nowhere and shown to nobody (reactions.ts).
-    expect((await run(tab, { type: 'message.react', conversationId: 'lead', messageId: asked, emoji: 'eyes', on: true }, host, engineer)).result.changed).toBe(false)
+    expect((await run(tab, { type: 'message.react', conversationId: 'lead', messageId: asked, emoji: 'eyes', on: true }, host, engineer)).result.changed).toBe(true)
     const line = String((await run(tab, post('I am on it: the token expires early.', asked), host, engineer)).result.messageId)
     const top = String((await run(tab, post('Fixed in the next build.'), host, engineer)).result.messageId)
     const inThread = String((await run(tab, post('Thanks, which build?', top))).result.messageId)
