@@ -3109,6 +3109,14 @@ switch (cmd) {
       }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
+  case '__remove-team-account': // internal: Desktop asks the person, then runs this hidden (team/remove.ts)
+    import('./team/remove.js')
+      .then(async ({ removeTeamAccount, teamRemovalDeps }) => {
+        const result = await removeTeamAccount(teamRemovalDeps())
+        console.log(JSON.stringify(result))
+        process.exitCode = result.ok ? 0 : 1
+      }).catch(onError)
+    break
   case 'reset':
     resetCommand().catch(onError)
     break
