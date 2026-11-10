@@ -402,3 +402,18 @@ it('accepts every Import agent outcome from a Desktop (task #2379), and keeps it
     expect(methods.ingestProductUsage).toHaveBeenLastCalledWith('account', report)
   }
 })
+
+// Team accounts are removed from people's computers (anh Dee, 2026-11-10): the Desktop counts how each removal ends, so a removal
+// that the system refused or the person cancelled is seen (standard 8). Removed (or already gone) is ok; refused or kept is failed.
+it('takes the Desktop\'s Team account removal outcomes, and keeps no outcome it does not know', async () => {
+  const context = { surface: 'desktop', release: '1.2.80', platform: 'macos', channel: 'production' }
+  const counters = { ui_desktop_team_account_removal_started: 3, ui_desktop_team_account_removal_ok: 1, ui_desktop_team_account_removal_failed: 1,
+    ui_desktop_team_account_removal_cancelled: 1, ui_desktop_team_account_removal_under_1s: 1 }
+  expect((await submit({ ...good, context, counters })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account', { ...good, context, counters })
+  // `kept` is no outcome: it is counted failed. A report carrying it keeps its known names and counts the other as unknown.
+  methods.ingestProductUsage.mockClear()
+  expect((await submit({ ...good, context, counters: { ui_desktop_team_account_removal_ok: 1, ui_desktop_team_account_removal_kept: 1 } })).statusCode).toBe(200)
+  expect(methods.ingestProductUsage).toHaveBeenCalledExactlyOnceWith('account',
+    { ...good, context, counters: { ui_desktop_team_account_removal_ok: 1, health_desktop_report_unknown_metric: 1 } })
+})
