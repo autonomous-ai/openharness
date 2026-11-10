@@ -1,5 +1,6 @@
 /**
- * The agent browser on the real daemon (services/agentBrowser.ts), with a fake `podman` on the fixture's PATH: the real
+ * The agent browser on the real daemon (services/agentBrowser.ts), with a fake `podman` first on the fixture's PATH and
+ * in its login shell: the real
  * Podman is never run here, another process may be using it. An agent created with Browser gets its browser and says
  * so in its frame; its purge removes its container, volume, network and proxy secret; and the service failing costs the
  * agent nothing.
@@ -29,8 +30,13 @@ else if (line.startsWith('images')) process.stdout.write(JSON.stringify([{ Names
 else if (line.startsWith('ps')) process.stdout.write('[]')
 else if (line.startsWith('machine list')) process.stdout.write('[{"Running":true}]')
 `
-  mkdirSync(join(daemon.root, 'bin'), { recursive: true })
-  writeFileSync(join(daemon.root, 'bin', 'podman'), script, { mode: 0o755 })
+  const bin = join(daemon.root, 'bin')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'podman'), script, { mode: 0o755 })
+  // The daemon finds podman through the login shell (podman.ts), and on macOS that shell's /etc/zprofile puts
+  // /etc/paths.d, with the real /opt/podman/bin, ahead of the daemon's PATH. The fixture's own rc files put the fake
+  // first again, after every system file, for zsh and bash alike.
+  for (const rc of ['.zshrc', '.bashrc']) appendFileSync(join(daemon.root, 'home', rc), `export PATH='${bin}':"$PATH"\n`)
   appendFileSync(calls, '')
   return calls
 }
