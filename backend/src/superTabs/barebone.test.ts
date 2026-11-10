@@ -39,8 +39,8 @@ describe('a barebone agent\'s reads (task #4673)', () => {
     const rows = (await hostTab('tab', s.state, 'host', user, null, lookups())).roster.flatMap(r => 'agent' in r && 'instructions' in r ? [r] : [])
     const row = (id: string) => rows.find(r => r.agent.id === id)!
     expect(row(lead).lead).toBe(true)
-    expect(row(lead).instructions).not.toBeNull()
-    expect(row(lead).instructions).not.toHaveProperty('builtInHash')
-    expect(row(worker).instructions).not.toHaveProperty('builtInHash')
+    // Swarm v4 (slice S7): no host installs project instructions, the coordinator's included.
+    expect(row(lead).instructions).toBeNull()
+    expect(row(worker).instructions).toBeNull()
   })
 })

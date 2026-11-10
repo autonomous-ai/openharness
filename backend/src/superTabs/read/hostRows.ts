@@ -12,7 +12,7 @@ import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCl
 import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
 import { hostEtag } from './hostEtag.js'
-import { coordinatorNameOf, FIRST_INSTRUCTIONS, roleNameOf } from '../instructions.js'
+import { roleNameOf } from '../instructions.js'
 
 export interface HostLookups {
   /** The Swarm's people with their account emails (observers). */
@@ -81,13 +81,10 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
       && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub))
       && state.conversations.some(c => !c.archived && c.leadId === target.id),
     skillMode: home ? skillModeOf(home) : 'orchestration',
-    // What the host installs as the agent's instructions, read again when the revision moves (project instructions, phase 3).
     roleName: roleNameOf(state, target),
-    // At revision 0 (nothing saved) the hash is the template's, so a backend release that changes the template moves it and
-    // running daemons read the text again (2026-11-02: agents kept the old routing after #2495, as revision 0 never moves).
-    instructions: home ? { projectId: home.id, revision: home.instructionsRevision ?? 0,
-      hash: home.instructionsHash ?? (home.instructionsRevision ? null : FIRST_INSTRUCTIONS.instructionsHash),
-      coordinatorName: coordinatorNameOf(home) } : null,
+    // Swarm v4 (slice S7, 2026-11-10): agents start plain, with no project instructions installed by their host. A host of the
+    // last 30 days still reads the field: null is what a row of an agent in no project always said. Remove it not before 2026-12-10.
+    instructions: null,
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
     lead: !!ledProject(state, target.id),
     // Swarm v4 restarts no PM on the server's word (timeChecks.ts): an older host still reads the field, so it stays, always empty.

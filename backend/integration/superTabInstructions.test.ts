@@ -260,19 +260,19 @@ describe('PM notes storage', () => {
 })
 
 describe('role names and the coordinator\'s name in reads', () => {
-  it('names each agent\'s role and its project\'s instructions in its host\'s rows and the members\' read', async () => {
+  it('names each agent\'s role in its host\'s rows, no project instructions there (Swarm v4), and them in the members\' read', async () => {
     const { tab, lead } = await withLead()
     const tester = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
       name: 'Tester', configuration: config, lead: false, roleName: 'Tester' })).result.agentId as string
     const rows = async () => (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab) as Array<{ agent: { id: string }; roleName: string;
       instructions: unknown }>
     const of = async (id: string) => (await rows()).find(r => r.agent.id === id)!
-    expect(await of(lead)).toMatchObject({ roleName: 'PM', instructions: { projectId: 'lead', revision: 1, hash: instructionsHash(INSTRUCTIONS_TEMPLATE),
-      coordinatorName: 'Product Manager' } })
+    expect(await of(lead)).toMatchObject({ roleName: 'PM', instructions: null })
     expect((await of(tester)).roleName).toBe('Tester')
     await run(tab, { type: 'project.coordinatorName', projectId: 'lead', name: 'Lead engineer' }, host, lead)
     await run(tab, save(1, 'Our own way.'))
-    expect((await of(tester)).instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash('Our own way.'), coordinatorName: 'Lead engineer' })
+    // A save moves nothing a host reads (slice S7): agents start plain.
+    expect((await of(tester)).instructions).toBeNull()
     const read = await get(owner, `/api/super-tabs/${tab}/parts`)
     expect(read.statusCode, read.body).toBe(200)
     const { head, derived } = read.json().data
@@ -474,10 +474,10 @@ describe('the instructions read, with no built-in text', () => {
     }
   })
 
-  it('names no built-in hash on any roster row, the coordinator\'s included', async () => {
+  it('names no instructions on any roster row, the coordinator\'s included', async () => {
     const { tab, lead, worker } = await withWorker()
-    const rows = (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab) as Array<{ agent: { id: string }; instructions: Record<string, unknown> }>
-    for (const id of [lead, worker]) expect(rows.find(r => r.agent.id === id)!.instructions).not.toHaveProperty('builtInHash')
+    const rows = (await rosterRows(store, host, 'test-host')).filter(r => r.tabId === tab) as Array<{ agent: { id: string }; instructions: unknown }>
+    for (const id of [lead, worker]) expect(rows.find(r => r.agent.id === id)!.instructions).toBeNull()
   })
 
   it('takes a save holding the old built-in heading as the project\'s own text', async () => {

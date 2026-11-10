@@ -9,7 +9,6 @@ import { budgetParts, INSTRUCTIONS_BUDGET } from './instructionsDiff.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
 import { projectsOf } from './projects.js'
 import { hostTab } from './read/hostRows.js'
-import { FIRST_INSTRUCTIONS } from './instructions.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -735,10 +734,10 @@ describe('role names and the coordinator\'s name', () => {
   })
 })
 
-// 2026-11-02, the rollout of #2495: running agents kept the template they first read, because a project with no saved
-// document stays at revision 0 and the host's hash was null, so nothing told the daemon the template had moved.
+// Swarm v4 (slice S7): a host installs no project instructions, so no row names them, a project on the template included
+// (before, its row named the template's hash, 2026-11-02, the rollout of #2495).
 describe('a project on the template', () => {
-  it('names the template\'s hash to its host', async () => {
+  it('names no instructions to its host', async () => {
     const f = fixture()
     const agentId = f.add('worker-1')
     // A project from before project instructions: nothing saved, so it reads the template.
@@ -747,7 +746,7 @@ describe('a project on the template', () => {
     const user = { sub: 'host-owner', email: 'host@example.com', role: 'user', autonomousEnv: 'test' } as never
     const rows = await hostTab('tab', f.state, 'host', user, null, lookups as never)
     const row = rows.roster.find(r => (r as { agent?: { id: string } }).agent?.id === agentId) as { instructions?: { revision: number; hash: string | null } }
-    expect(row.instructions).toMatchObject({ revision: 0, hash: FIRST_INSTRUCTIONS.instructionsHash })
+    expect(row).toHaveProperty('instructions', null)
   })
 })
 
