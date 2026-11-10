@@ -119,15 +119,15 @@ class SwarmActivityPage extends StatelessWidget {
 }
 
 /// Activity, in place of Needs you (Tony's prototype C3): its title in the
-/// terminal's face, the filters — All · Needs you · Mentions · Replies ·
-/// Reactions (Threads from a server before Activity) — each with its count,
+/// terminal's face, the filters — All · Needs you · Mentions · Replies
+/// (Threads from a server before Activity) — each with its count,
 /// then the open filter's rows. All, the tab's first (Slack's one feed, Tony,
 /// 2026-11-03), has what needs the person first, then the rest newest first.
 /// On the tab, the invitations to a Swarm head All and Needs you, counted in
 /// both and on the tab's badge ([swarmActivityTabBadge]): they wait on the
 /// person's answer. Each row: where and who over what, and Approve (which
 /// asks first) or Reply at the row's end. A need the person handled stays,
-/// dimmed, under the others; a reply or reaction is bold while unread. The
+/// dimmed, under the others; a reply is bold while unread. The
 /// rows shown are read on every device once Activity is left
 /// ([SwarmActivity.showing]). The Activity tab's screen, and
 /// [SwarmActivityPage]'s.
@@ -191,8 +191,6 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
   }) => switch (key) {
     final key? when key.startsWith('mention:') => SwarmActivityFilter.mentions,
     final key? when key.startsWith('thread:') => SwarmActivityFilter.threads,
-    final key? when key.startsWith('reaction:') =>
-      SwarmActivityFilter.reactions,
     null when all => null,
     _ => SwarmActivityFilter.needsYou,
   };
@@ -419,9 +417,7 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
   ) {
     final activity = session.activity, inbox = session.inbox;
     final fromChats =
-        _filter == null ||
-        _filter == SwarmActivityFilter.threads ||
-        _filter == SwarmActivityFilter.reactions;
+        _filter == null || _filter == SwarmActivityFilter.threads;
     final note = AppType.caption(color: AppPalette.textSecondary, height: 1.35);
     final missing = _focusMissing(session, items);
     if (missing == null) _showFocus();
@@ -592,7 +588,6 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     SwarmActivityFilter.threads when replies =>
       'No replies to your messages yet.',
     SwarmActivityFilter.threads => 'No threads with you yet.',
-    SwarmActivityFilter.reactions => 'No reactions to you yet.',
   };
 
   Widget _row(
@@ -1044,7 +1039,7 @@ class SwarmActivityFilterPill extends StatelessWidget {
 
 /// One row of Activity, as prototype C3 draws it: who it is from, "#project ·
 /// who · when" over what it is in bold, maybe a line under that (a thread's
-/// replies, the reactions), and at its end Approve or Reply. A decision
+/// replies), and at its end Approve or Reply. A decision
 /// whose answer is held or on its way shows that, with Undo, in place of
 /// the button; a handled row is dimmed, with what was done at its end.
 class SwarmActivityRow extends StatelessWidget {
@@ -1066,7 +1061,7 @@ class SwarmActivityRow extends StatelessWidget {
   /// What was done with it; null while it is still to handle.
   final String? handled;
 
-  /// Bold: still to handle, or a reply or reaction not read.
+  /// Bold: still to handle, or a reply not read.
   final bool unread;
   final DateTime now;
   final VoidCallback onTap, onApprove, onReply;
@@ -1207,7 +1202,6 @@ class SwarmActivityRow extends StatelessWidget {
       SwarmWorkNeed(:final work) => work.project.name,
     },
     SwarmActivityThread(:final project) => project.name,
-    SwarmActivityReaction(:final project) => project.name,
     // The project as this Swarm's own read has the chat: never the server's
     // word for it.
     SwarmActivityServerItem(:final conversationId) =>
@@ -1225,11 +1219,9 @@ class SwarmActivityRow extends StatelessWidget {
       final text? when text.trim().isNotEmpty => text.trim(),
       _ => 'A thread in #${project.name}',
     },
-    SwarmActivityReaction(:final message) => message.text.trim(),
-    SwarmActivityServerItem(:final entry) => swarmActivityDid(
-      entry,
-      swarmActivityWho(item, session.inbox.reader(item.swarmId)).name,
-    ),
+    SwarmActivityServerItem() =>
+      '${swarmActivityWho(item, session.inbox.reader(item.swarmId)).name} '
+          'replied to your message',
   };
 
   String? _line() => switch (item) {
@@ -1239,9 +1231,6 @@ class SwarmActivityRow extends StatelessWidget {
     },
     SwarmActivityThread(:final thread) =>
       thread.replies == 1 ? '1 reply' : '${thread.replies} replies',
-    SwarmActivityReaction(:final reactions) => [
-      for (final r in reactions) '${r.emoji.glyph} ${r.count}',
-    ].join('  '),
     _ => null,
   };
 }
@@ -1294,20 +1283,6 @@ class SwarmActivityRow extends StatelessWidget {
       ),
       _ => (id: thread.id, name: 'Someone'),
     },
-    SwarmActivityReaction(:final reactions) => () {
-      final by = [
-        for (final r in reactions)
-          for (final who in r.by) who,
-      ];
-      final names = {for (final who in by) named(who.kind, who.id, 'Someone')}
-          .toList();
-      return (
-        id: by.isEmpty ? item.key : by.first.id,
-        name: names.length <= 2
-            ? names.join(', ')
-            : '${names.take(2).join(', ')} +${names.length - 2}',
-      );
-    }(),
     // An agent the Swarm no longer lists keeps the server's name for it; a
     // person is named only as this Swarm lists them.
     SwarmActivityServerItem(:final entry) => (
@@ -1321,14 +1296,3 @@ class SwarmActivityRow extends StatelessWidget {
   };
 }
 
-/// What [entry]'s [who] did, as Desktop's Activity says it.
-String swarmActivityDid(SwarmActivityEntry entry, String who) =>
-    switch (entry.kind) {
-      SwarmActivityKind.reply => '$who replied to your message',
-      SwarmActivityKind.reaction => switch (SuperTabReactionEmoji.of(
-        entry.emoji,
-      )?.glyph) {
-        final glyph? => '$who reacted $glyph to your message',
-        null => '$who reacted to your message',
-      },
-    };

@@ -6,18 +6,11 @@ import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 
-/// What a server Activity row is: a reply to the person's message, or a
-/// reaction to it (backend superTabs/activity.ts).
-enum SwarmActivityKind { reply, reaction }
-
-/// One reply to the person's message, or one reaction to it, as the server
-/// lists it: the desktop's `SuperTabActivityItem`.
+/// One reply to the person's message, as the server lists it (backend
+/// superTabs/activity.ts): the desktop's `SuperTabActivityItem`.
 class SwarmActivityEntry {
   SwarmActivityEntry.fromJson(Map<String, dynamic> row)
     : id = row['id'] as String,
-      kind = row['kind'] == 'reaction'
-          ? SwarmActivityKind.reaction
-          : SwarmActivityKind.reply,
       conversationId = row['conversationId'] as String,
       messageId = row['messageId'] as String,
       threadId = row['threadId'] as String?,
@@ -33,7 +26,6 @@ class SwarmActivityEntry {
         {'name': final String name} => name,
         _ => '',
       },
-      emoji = row['emoji'] as String?,
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       read = row['read'] == true,
@@ -41,33 +33,27 @@ class SwarmActivityEntry {
 
   SwarmActivityEntry._read(SwarmActivityEntry e)
     : id = e.id,
-      kind = e.kind,
       conversationId = e.conversationId,
       messageId = e.messageId,
       threadId = e.threadId,
       actorKind = e.actorKind,
       actorId = e.actorId,
       actorName = e.actorName,
-      emoji = e.emoji,
       text = e.text,
       createdAt = e.createdAt,
       read = true,
       rings = e.rings;
 
   final String id, conversationId, messageId;
-  final SwarmActivityKind kind;
 
   /// The thread a reply that lives only there is in; null in the main stream.
   final String? threadId;
 
-  /// Who replied or reacted: `person` or `agent`, its id, and the server's
+  /// Who replied: `person` or `agent`, its id, and the server's
   /// name for it — used only for an agent the Swarm no longer lists.
   final String actorKind, actorId, actorName;
 
-  /// The reaction (`thumbs_up`, `check`, …); null for a reply.
-  final String? emoji;
-
-  /// The reply's text, or the reacted message's.
+  /// The reply's text.
   final String text;
   final DateTime? createdAt;
 
@@ -81,7 +67,7 @@ class SwarmActivityEntry {
   final bool rings;
 }
 
-/// One Swarm's replies and reactions to the person, read from the server
+/// One Swarm's replies to the person, read from the server
 /// (`/activity`, #2453) as Desktop's `SuperTabActivity` reads them: when the
 /// Swarm's Activity digest moves or Activity opens, never on a timer; marked
 /// read on every device (`/activity/read`) once Activity is left.
@@ -101,7 +87,7 @@ class SwarmActivityFeed extends ChangeNotifier {
 
   final SwarmReader reader;
 
-  /// Replies and reactions, newest first, in chats [reader] holds.
+  /// Replies, newest first, in chats [reader] holds.
   List<SwarmActivityEntry> items = const [];
 
   /// Read once since access last moved; [error] says whether it failed.
@@ -117,7 +103,7 @@ class SwarmActivityFeed extends ChangeNotifier {
   /// Told of each reply row that a read lists and the one before it did not,
   /// unread: what came in since the first read, which tells nothing, as a
   /// read under another hold of the Swarm ([SwarmReader.generation]) does
-  /// not either. Never a reaction.
+  /// not either.
   void Function(SwarmActivityEntry entry)? onReply;
 
   /// The ids the last read listed, in any chat: a reply among them is not
@@ -143,7 +129,7 @@ class SwarmActivityFeed extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/activity';
 
-  /// This Swarm's replies and reactions come from the server: it sends an
+  /// This Swarm's replies come from the server: it sends an
   /// Activity digest and has not answered 404.
   bool get fromServer =>
       !_refused &&
@@ -156,7 +142,7 @@ class SwarmActivityFeed extends ChangeNotifier {
 
   /// Replies not read on any device: what the Activity badge adds.
   int get unreadReplies =>
-      items.where((e) => e.kind == SwarmActivityKind.reply && !e.read).length;
+      items.where((e) => !e.read).length;
 
   /// Activity is in sight: reads now; what is unread stays bold until
   /// [closed].
@@ -331,6 +317,8 @@ class SwarmActivityFeed extends ChangeNotifier {
       final read = <SwarmActivityEntry>[];
       final before = _listed, listed = <String>{};
       for (final row in answer['items'] as List? ?? const []) {
+        // A reaction's row from a backend before they went (2026-11-09).
+        if (row is Map && row['kind'] == 'reaction') continue;
         final SwarmActivityEntry entry;
         try {
           entry = SwarmActivityEntry.fromJson(superTabMap(row));
@@ -357,9 +345,7 @@ class SwarmActivityFeed extends ChangeNotifier {
       _listed = listed;
       if (before != null) {
         for (final entry in items) {
-          if (entry.kind == SwarmActivityKind.reply &&
-              !entry.read &&
-              !before.contains(entry.id)) {
+          if (!entry.read && !before.contains(entry.id)) {
             onReply?.call(entry);
           }
         }

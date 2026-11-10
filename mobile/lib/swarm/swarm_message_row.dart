@@ -255,7 +255,7 @@ const swarmDeletedText = 'This message was deleted.';
 
 /// One message: avatar, who wrote it, their role and when — none of it for a
 /// follow-up — then what it answers, its text ("(edited)" under it once its
-/// author changed it), its files, its [reactions] and its [thread]'s line. A
+/// author changed it), its files and its [thread]'s line. A
 /// deleted one keeps only "This message was deleted." and its thread's line.
 /// A tap opens its actions, a long-press [onLongPress]; lit for a moment when
 /// a quote leads to it, and while it is find's current match; a quieter fill
@@ -284,7 +284,6 @@ class SwarmMessageRow extends StatelessWidget {
     required this.onReply,
     this.inThread = false,
     this.onAuthor,
-    this.reactions,
     this.thread,
     this.below,
     this.receipt,
@@ -361,13 +360,11 @@ class SwarmMessageRow extends StatelessWidget {
   /// (swarm_link_previews.dart); null when it links to none.
   final Widget? links;
 
-  /// Drawn under its text and files: its reaction counts.
-  final Widget? reactions;
-
-  /// Under its reactions: the line of the thread it is the root of.
+  /// Under its text, files and links: the line of the thread it is the root
+  /// of.
   final Widget? thread;
 
-  /// Under its reactions: what the person may do with it besides Reply — the
+  /// Under that: what the person may do with it besides Reply — the
   /// PM's private line answered in the project chat.
   final Widget? below;
 
@@ -375,8 +372,8 @@ class SwarmMessageRow extends StatelessWidget {
   /// (swarm_message_receipt.dart); null for every other message.
   final Widget? receipt;
 
-  /// Opens its long-press sheet: reactions, Copy link to message, and Edit
-  /// and Delete on the reader's own. None for a deleted message.
+  /// Opens its long-press sheet: Copy link to message, and Edit and Delete
+  /// on the reader's own. None for a deleted message.
   final VoidCallback? onLongPress;
 
   /// One of the message's files, with what asks for a fresh link to it
@@ -519,7 +516,6 @@ class SwarmMessageRow extends StatelessWidget {
             for (final file in message.attachments) _attachment(context, file),
             ?card,
             ?links,
-            ?reactions,
             ?thread,
             ?below,
             ?receipt,
@@ -548,7 +544,7 @@ class SwarmMessageRow extends StatelessWidget {
               ),
           ],
     );
-    // A deleted message has nothing left to react to, copy or change.
+    // A deleted message has nothing left to copy or change.
     final held = onLongPress == null || message.deleted
         ? frame
         : GestureDetector(

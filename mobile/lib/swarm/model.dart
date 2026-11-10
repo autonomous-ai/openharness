@@ -582,8 +582,9 @@ class SuperTabConversation {
   /// not, as it is not in the chat.
   int get mainSequence => lastMainSequence ?? lastMessageSequence;
 
-  /// Moves whenever a reaction here is added or taken back (backend
-  /// reactions.ts): the messages shown are read again for their counts.
+  /// Moves whenever a message here is edited or deleted (backend
+  /// messageEdits.ts): the messages shown are read again. Named for the
+  /// reactions it first counted, which are gone.
   final int reactionSeq;
 
   /// When it last changed, a message included: its part's `changedAt`,
@@ -1770,9 +1771,6 @@ class SuperTabMessage {
       editedAt = DateTime.tryParse(row['editedAt'] as String? ?? ''),
       deletedAt = DateTime.tryParse(row['deletedAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
-      reactions = List.unmodifiable(
-        SuperTabReactionCount.listFromJson(row['reactions']),
-      ),
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
@@ -1815,12 +1813,11 @@ class SuperTabMessage {
 
   /// When its author deleted it: kept only as the root of a thread with
   /// replies, its text then the backend's "This message was deleted.", with
-  /// no files and no reactions. One without replies leaves the pages.
+  /// and no files. One without replies leaves the pages.
   final DateTime? deletedAt;
 
   bool get deleted => deletedAt != null;
   final List<SuperTabAttachment> attachments;
-  final List<SuperTabReactionCount> reactions;
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;
