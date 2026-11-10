@@ -2291,8 +2291,12 @@ class _PaneContent extends StatelessWidget {
         icon: AppIcons.terminal,
         message:
             'Open this harness here. Another screen may be using its terminal; '
-            'opening takes it, because ${machine.machine.displayName} runs an '
-            'older Harness CLI.',
+            'opening takes it, because ${machine.machine.displayName} '
+            // Blame the CLI only when the machine answered and did not offer
+            // `noTakeover`. A machine that has not answered yet, or whose answer
+            // failed, leaves the flag at its default `false` — that is "not known",
+            // not "older".
+            '${machine.terminalCapabilityLoaded && machine.terminalCapabilityError == null ? 'runs an older Harness CLI' : 'has not confirmed how it opens terminals'}.',
         onClose: single && !swarmMode ? null : close,
         actionLabel: 'Open here',
         onAction: () {

@@ -1489,8 +1489,12 @@ describe('local CLI WebSocket', () => {
     ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
     await connected
     const closed = new Promise<number>((resolve) => ws.once('close', resolve))
-    ws.send(JSON.stringify({ type: 'service_notice', payload: { role: 'service', data: 'a'.repeat(512 * 1024) } }))
-    await expect(closed).resolves.toBe(4400)
+    const said = onceMessage(ws)
+    const frame = JSON.stringify({ type: 'service_notice', payload: { role: 'service', data: 'a'.repeat(512 * 1024) } })
+    ws.send(frame)
+    // Refused by name, with its size and the limit, before the close: never a close with no word (Q3, 2026-11-10).
+    await expect(said).resolves.toEqual({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes: Buffer.byteLength(frame), limit: 512 * 1024 } })
+    await expect(closed).resolves.toBe(1009)
     expect(backend.frames).toEqual([])
   })
 

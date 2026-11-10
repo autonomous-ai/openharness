@@ -255,6 +255,9 @@ export interface CoreApi {
      * IDs use `team:service:<service>:`; expired or absent permission means wait.
      * This guards the final terminal write even when its authorizing service stops. */
     leaseDeliveries(service: string, leases: Record<string, number>): Promise<boolean>
+    /** What holds a typed delivery from [agentId]'s pane now (`team_waiting_*`), as its write would read it, with nothing written;
+     *  null when nothing does, or the core cannot say. A service asks before it writes its own intent to type it (superTabs/host.ts). */
+    holdOf(agentId: string, deliveryId: string): Promise<string | null>
   }
   questions: {
     /** Answer a live agent's question, keyed by the question keys it asked with. */
@@ -593,13 +596,14 @@ export interface TurnEnd { agentId: string; sessionId: string; aborted: boolean;
 
 /** The delivery and turn-end members of a core that delivers nothing for this service: nothing is written, nothing is
  *  taken back, and nothing is heard. */
-export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onEnd' | 'answerOf' | 'leaseDeliveries'> = {
+export const DELIVERIES_OFF: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'onEnd' | 'answerOf' | 'leaseDeliveries' | 'holdOf'> = {
   deliver: () => {},
   cancelDelivery: () => false,
   onDelivery: () => () => {},
   onEnd: () => () => {},
   answerOf: async () => null,
   leaseDeliveries: async () => false,
+  holdOf: async () => null,
 }
 
 /** A turn's card for the devices: the dial's and the Wi-Fi device's tiles and their notifications. */
@@ -1239,7 +1243,8 @@ export type SwarmAgents = Required<Pick<CoreApi['agents'], 'closeSwarm' | 'keepL
 type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 /** The Swarm's part of an agent's start (superTabs/inCore/launch.ts), handed to the launches while the Swarm is on: the
  *  roles and skill modes a start may ask for, the role's skill written into the project folder (what the engine is told
- *  to read), and the Harness GitHub App's git and gh for another person's project work (null where it has none). */
+ *  to read), and the Harness GitHub App's git and gh at the relaunch of a session started with it before the App's removal
+ *  (null where it has none; lib/swarmGitHub.ts, until 2026-12-10). */
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
