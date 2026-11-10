@@ -23786,6 +23786,16 @@ class AppNotifier extends ChangeNotifier {
     for (final request in _joinAccountRequests) {
       request.complete(null);
     }
+    // Its sockets redial on timers of their own: one that outlived the app kept redialling and reported to a notifier that was
+    // gone. The sessions above were told to close first, while their sockets are open.
+    unawaited(
+      _pool?.closeAll().catchError((Object error) {
+        appLog.warn(
+          'app',
+          'A socket did not close with the app: ${error.runtimeType}',
+        );
+      }),
+    );
     super.dispose();
   }
 }

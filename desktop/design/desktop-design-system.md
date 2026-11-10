@@ -108,7 +108,10 @@ values to creation, search and desktop presenters; it is not a second palette.
 `DesktopDialogHeader` provides the shared title/dismiss anatomy.
 `DesktopPromptSurface` keeps form actions visible beneath scrolling content.
 `DesktopPill` is the selector/scope variant of the same control family.
-`AppMenuItem` is the ordinary context-menu row. Controllers, keymaps, pending
+`AppMenuItem` is the ordinary context-menu row. `AppDropdown` is every
+dropdown: however a click or a key opened it, the control that opened it holds
+focus, and Escape closes the menu from there and leaves focus on the control (on
+a submenu's own row it closes the submenu first). Controllers, keymaps, pending
 receipts, transport state and persistence remain independent of presentation.
 
 Do not solve a local styling problem by inventing another button or palette.
@@ -576,6 +579,19 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   round send (`SwarmSendButton`, 28, blue) in its place once there is text or
   a file. A thread's box keeps its row under the text, with a grey send until
   there is something to send. No @ button: an @ typed tags.
+- **Chat column.** A chat is one column, at most 720 wide and centred in its
+  pane (`SwarmChatColumn`, `super_tabs/chat/column.dart`; anh Dee, 2026-11-09).
+  Its message rows, day lines, New messages line, composer and the notes
+  around it (an error, a reply being written, the agents-only line) share it,
+  each keeping its own 24-point inset inside it, so a pane under 720 is filled
+  with 24 each side. The header stays the pane's whole width, and so does the
+  list, so its scrollbar sits at the pane's edge, and the bars across the top
+  of the chat (the connection line, Find, the unread bar) and the Jump to
+  latest button over it. Two panes open together (a
+  chat with its terminal, its instructions, a task's thread, or a project's
+  tasks and one task) share the width the left pane leaves half and half, the
+  column centred in the chat's half. The browser keeps its full-width chat until
+  it moves to v4. `test/swarm_chat_column_test.dart` measures it.
 - **Blue.** Blue is for the main action and for your own bubbles, nothing
   else.
 - **Adding or changing one.** A new or changed element updates this section
@@ -586,7 +602,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 The Desktop's Swarm left pane (anh Dee, 2026-11-07, tasks #4466 and #4645; Swarm v4, 2026-11-08) follows the
 Swarm's six rules: grey everywhere, colour only on agent faces; blue only for
 the main action, red only for failed; 14 chat, 15 rows, 12 details, and in a
-list bold means unread; an agent row is a face and a name, nothing else;
+list bold means unread; an agent row is a face, a name and at most one word of state;
 dropdowns plain text until hovered; nothing that does not help you decide.
 Top to bottom:
 
@@ -594,11 +610,13 @@ Top to bottom:
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
  Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
  ◎  River                     the PM wears the gold ring
- ◉  Kai                       bold: something new from it
+ ◉  Kai                 free  bold: something new from it; the state at the right
+ ◉  Quinn             on #12
+ ◌  Wren             offline  a grey face
  ◉  Docs bot   Mac Studio     your Personal Swarm only: a pane you run that is not in the Swarm yet, with its computer
  Projects              ⌄  +  quiet heading; ⌄ folds the list (open); + opens New project
  #  lampos                    a project's channel; bold: something new; your Personal Swarm: each repo your panes work in
- Your Machines         ›     quiet heading, folded; each row a computer of this account, `offline` at its right when it is
+ Your Machines         ›     quiet heading, folded, but open by itself while a computer is off; each row a computer of this account, `offline` at its right when it is
                               (a click opens Manage's Machines)
  Top Teams             ›     quiet heading, folded, only once someone has points
  D  dee                 120   the board's top 8 by points; a tap opens it
@@ -610,7 +628,8 @@ Top to bottom:
 | Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
-| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded; the reader's choice is kept. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
+| Agent state | `SwarmAgentStates` (`super_tabs/agent_state.dart`) | An agent's row ends with one state in the row's detail, in this order: `offline` (its machine reports its session gone, `SuperTabAgent.downSince`), `on #12` (its project's board has the open issue labelled `status:taken` and `builder:<its name>`), `free` (its latest post in its project's channel says `free: <name>`, as the Swarm's basics ask of an agent with no task); none of them shows nothing. An offline agent's face is grey (`SuperTabAvatar.agent` draws it so, `super-face-offline`) wherever it is drawn: its row, its 1:1 chat's header and its posts. Read only for the projects the person's own agents are in: a channel again when the Swarm says it moved, a board once a minute while the Swarm is on screen. |
+| Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded, except that Your Machines opens by itself while a computer is off, so why an agent is silent is in sight; the reader's choice is kept and then stands. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail (`Mac laptop · offline` while that computer is). Nothing is sent for it: a click brings forward the tab where it was last focused (else the first that holds it) with the pane focused. |
 | Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
