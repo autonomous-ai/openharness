@@ -171,9 +171,7 @@ export class Setup {
     try {
       const { stdout } = await podman.run(['machine', 'list', '--format', 'json'])
       const names = (JSON.parse(stdout) as Array<{ Name?: string }>).map(machine => machine.Name)
-      // A machine of that name is one an earlier setup made and was cut off before it was recorded.
-      const own = podman.connection() !== null || names.includes(OWN_MACHINE)
-        || (names.length > 0 && await podman.available().then(answer => answer.state === 'needs_setup' && answer.ownMachine === true))
+      const own = await this.usesOwnMachine(names)
       if (own) podman.useConnection(OWN_MACHINE)
       if (own ? !names.includes(OWN_MACHINE) : names.length === 0) {
         const init = ['machine', 'init', '--memory', String(Math.floor(Math.min(hostMemoryBytes / 2, MAX_MACHINE_MEMORY) / MiB)), '--cpus', String(Math.max(2, Math.floor(hostCpus / 2)))]
@@ -183,5 +181,18 @@ export class Setup {
       throw new PodmanError('podman_down', (error as Error).message)
     }
     await podman.startMachine()
+  }
+
+  /**
+   * Whether Harness runs its own machine: it already has one, or the person's would not start. A machine of that name
+   * is one an earlier setup made and was cut off before it was recorded. Its own function so the one await runs on
+   * every call: an await inside a short-circuit left the next `if` with a negative implicit-else count under v8.
+   */
+  private async usesOwnMachine(names: Array<string | undefined>): Promise<boolean> {
+    const { podman } = this.deps
+    if (podman.connection() !== null || names.includes(OWN_MACHINE)) return true
+    if (names.length === 0) return false
+    const answer = await podman.available()
+    return answer.state === 'needs_setup' && answer.ownMachine === true
   }
 }

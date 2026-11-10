@@ -218,6 +218,9 @@ describe('createPodman', () => {
     fake.reply('machine inspect harness', { stdout: JSON.stringify([{ Name: 'harness', Resources: { Memory: 4096 } }]) })
     expect(await own.memoryBytes()).toBe(4 * GiB)
     expect(fake.calls().map(call => call.args).filter(args => args[0] === 'machine')).toEqual([['machine', 'inspect'], ['machine', 'inspect', 'harness']])
+    // An inspect that names no size reads as no memory, as an info with none does.
+    fake.reply('machine inspect', { stdout: '[]' })
+    expect(await found('darwin').memoryBytes()).toBe(0)
     // Linux has no machine: an unanswered info is the failure itself.
     expect((await failure(found('linux').memoryBytes())).state).toBe('podman_failed')
   })

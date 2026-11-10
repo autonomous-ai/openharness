@@ -162,6 +162,15 @@ describe('ensureImage', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('E: Unable to locate package chromium'))
   })
 
+  it('a build that times out throws image_failed naming the timeout, as it printed no output of its own', async () => {
+    fake.reply(LIST, { stdout: '[]' })
+    fake.reply('build', { hangMs: 60_000 })
+    // The real limit is 15 minutes: the same Podman, with a build that gets 100 ms.
+    const short: Podman = { ...podman, run: (args, opts) => podman.run(args, args[0] === 'build' ? { ...opts, timeoutMs: 100 } : opts) }
+    const error = await ensureImage(short, NOW, () => {}).catch((e: unknown) => e)
+    expect(error).toMatchObject({ state: 'image_failed', message: 'podman build timed out after 100 ms' })
+  })
+
   it('one build at a time', async () => {
     fake.reply(LIST, { stdout: '[]' })
     fake.reply('build', { hangMs: 200 })
