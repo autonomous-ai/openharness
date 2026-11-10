@@ -6,7 +6,9 @@ import { imageFacts, thumbKeyOf } from '../superTabs/thumbnails.js'
 
 /**
  * Removes Swarm uploads nobody used within a day (Diego, 10-30): chat files never sent and pictures never set, row and stored
- * file, so the bucket stops growing. A file a message, a proposal or an avatar uses is never touched.
+ * file, so the bucket stops growing. A file a message, a proposal or an avatar uses is never touched. No picture can be uploaded
+ * any more (2026-11-09): the pictures this still removes are the last that were, and their branch goes on 2026-12-09, as the
+ * retired avatar commands do (superTabs/retired.ts).
  *
  * An upload is first taken with one conditional write: still unused, never proposed and still a day old, its `usedBy` becomes
  * [EXPIRED_UPLOAD]. Every use takes an upload only while `usedBy` is empty (superTabs/store.ts), so a send racing the sweep
