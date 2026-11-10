@@ -66,6 +66,22 @@ describe('how turns end', () => {
     client.close()
   })
 
+  // Seen once in seven Codex Stop runs (2026-11-10): a message sent within a second of Stop was received and never typed.
+  it.each(engines)('%s: a message sent right after Stop is typed, and runs as the next turn', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `stop-then-send-${engine}`)
+    const started = client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
+    client.send('message', { agentId: agent.id, content: '!hold' })
+    await started
+    const since = client.frames.length
+    client.send('cancel', { agentId: agent.id })
+    client.send('message', { agentId: agent.id, content: 'right after stop' })
+    const next = await client.waitFor((frame) => isTurn('turn_started', agent.id)(frame) && frame.payload?.userMessage === 'right after stop', 45_000, 'the message sent after Stop to start', since)
+    await client.waitFor(isTurn('turn_ended', agent.id), 45_000, 'its turn to end', client.frames.indexOf(next))
+    client.close()
+  })
+
   it.each(engines)('%s: a turn cancelled while a tool runs settles idle after the aborted tool\'s late output, not unknown for good', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

@@ -1734,6 +1734,142 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     controller.forget('s1')
   })
 
+  // Seen once in seven Codex Stop runs (2026-11-10): a message sent within a second of Stop was typed while the
+  // Ctrl-C was still on its way, then the cancel's bookkeeping, done after the key, settled it as cancelled and
+  // dropped its submit check, so it was received and never typed into a turn.
+  it.each(['cancel', 'cancelConfirmed'] as const)('types a message sent while %s is still pressing Ctrl-C after the key, and keeps it', async (how) => {
+    vi.useFakeTimers()
+    let pressed!: (ok: boolean) => void
+    const keys: string[] = [], typed: string[] = [], said: string[] = []
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('codex'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return true },
+      sendKey: (_id, key) => { keys.push(key); return key === 'C-c' ? new Promise<boolean>(resolve => { pressed = resolve }) : Promise.resolve(true) },
+      capture: async () => codexComposer(''), onError: vi.fn() })
+    controller.setTurnOpen('s1', true)
+    const cancelled = how === 'cancel' ? (controller.cancel('s1'), Promise.resolve(true)) : controller.cancelConfirmed('s1')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(keys).toEqual(['C-c'])
+    controller.submit('s1', 'after stop', undefined, undefined, (outcome) => { said.push(outcome) })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(typed).toEqual([])
+    pressed(true)
+    expect(await cancelled).toBe(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(typed).toEqual(['after stop'])
+    expect(said).toEqual([])
+    controller.onTurnStarted('s1', 'after stop')
+    expect(said).toEqual(['started'])
+    controller.forget('s1')
+  })
+
+  describe('while a cancel presses Ctrl-C', () => {
+    const pressing = (over: { validateRuntime?: () => Promise<boolean>; inject?: (text: string) => Promise<boolean>; key?: () => Promise<boolean> } = {}) => {
+      let pressed!: (ok: boolean) => void
+      const typed: string[] = [], said: Record<string, string[]> = {}, onError = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('codex'), validateRuntime: over.validateRuntime ?? (async () => true),
+        inject: async (_id, text) => { typed.push(text); return over.inject ? over.inject(text) : true },
+        sendKey: (_id, key) => key === 'C-c' ? over.key?.() ?? new Promise<boolean>(resolve => { pressed = resolve }) : Promise.resolve(true),
+        capture: async () => codexComposer(''), onError })
+      const send = (text: string) => controller.submit('s1', text, undefined, undefined, (outcome) => { (said[text] ??= []).push(outcome) })
+      return { controller, typed, said, onError, send, press: (ok = true) => pressed(ok) }
+    }
+
+    it('holds a device\'s control, then gives it', async () => {
+      vi.useFakeTimers()
+      const t = pressing()
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(t.controller.acquireControl('s1', { forAnswer: true })).toBeNull()
+      t.press()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(t.controller.acquireControl('s1', { forAnswer: true })).not.toBeNull()
+      t.controller.forget('s1')
+    })
+
+    it('types every message sent meanwhile, after the key and in order, without waiting for a turn', async () => {
+      vi.useFakeTimers()
+      const t = pressing()
+      t.controller.setTurnOpen('s1', true)
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      for (const text of ['a', 'b', 'c']) t.send(text)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual([])
+      t.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['a', 'b', 'c'])
+      t.controller.forget('s1')
+    })
+
+    it('holds a write already on its way whose turn to be typed comes meanwhile, and types it first', async () => {
+      vi.useFakeTimers()
+      let written!: (ok: boolean) => void
+      const t = pressing({ inject: (text) => text === 'one' ? new Promise<boolean>(resolve => { written = resolve }) : Promise.resolve(true) })
+      t.controller.setTurnOpen('s1', true)
+      t.send('one'); t.send('two')
+      await vi.advanceTimersByTimeAsync(1)
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      t.send('three')
+      written(true)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['one'])
+      t.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['one', 'two', 'three'])
+      t.controller.forget('s1')
+    })
+
+    it('lets what it held go on at once when the process is gone, the agent was forgotten meanwhile, or the key fails', async () => {
+      vi.useFakeTimers()
+      const gone = pressing({ validateRuntime: async () => { await new Promise(resolve => setTimeout(resolve, 100)); return false } })
+      gone.controller.cancel('s1')
+      gone.send('to nobody')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(gone.said).toEqual({ 'to nobody': ['runtime_gone'] })
+      expect(gone.onError).toHaveBeenCalledWith('s1', 'This agent process is no longer running.')
+      const forgotten = pressing()
+      forgotten.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      forgotten.send('to a forgotten agent')
+      forgotten.controller.forget('s1')
+      forgotten.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(forgotten.typed).toEqual(['to a forgotten agent'])
+      const failed = pressing({ key: () => Promise.reject(new Error('the terminal is gone')) })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      failed.controller.cancel('s1')
+      failed.send('after a failed stop')
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(failed.onError).toHaveBeenCalledWith('s1', 'Stop did not reach this agent.')
+      expect(failed.typed).toEqual(['after a failed stop'])
+      warn.mockRestore()
+    })
+
+    it('holds a message for at most 5 s behind a key that does not go, and a held one can be cancelled', async () => {
+      vi.useFakeTimers()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const t = pressing()
+      t.controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      t.send('waiting')
+      t.controller.submit('s1', 'withdrawn', 'delivery-withdrawn')
+      expect(t.controller.cancelDelivery('delivery-withdrawn')).toBe(true)
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(t.typed).toEqual([])
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(t.typed).toEqual(['waiting'])
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('cancel still pressing after 5000 ms'))
+      t.press()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(t.typed).toEqual(['waiting'])
+      warn.mockRestore()
+      t.controller.forget('s1')
+    })
+  })
+
   it('reports the original legacy cancellation error for a vanished process', async () => {
     const onError = vi.fn()
     const sendKey = vi.fn(async () => true)

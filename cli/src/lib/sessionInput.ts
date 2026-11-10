@@ -11,6 +11,8 @@ import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult 
 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
+/** The longest a cancel holds the messages sent while its Ctrl-C is on its way (`interrupting`). */
+const CANCEL_HOLD_MS = 5_000
 const ITEM_TTL_MS = 5 * 60_000
 // The window for an engine that declares none of its own (engines/submissionPolicies.ts declares Claude
 // Code's and Codex's, with the reasons).
@@ -129,6 +131,11 @@ interface InputState {
   /** Identical follow-ups still own different asynchronous composer observations. */
   personWriteVersion?: number
   controlLocked: boolean
+  /** Cancels still pressing their Ctrl-C: a message sent meanwhile waits for it, in `held` (`interrupting`). */
+  cancelling: number
+  /** What those cancels hold, to go on once they are done: writes that were already on their way first, then
+   *  messages sent since, each in the order it came. */
+  afterCancel: { writes: Array<() => void>; sent: Array<() => void> }
   settling: boolean
   queue: QueuedInput[]
   /** The messages the move gate holds for this agent, in arrival order. Counted against the queue's limits,
@@ -305,6 +312,8 @@ export class SessionInputController {
         awaitingFingerprint: null,
         awaitingContent: null,
         controlLocked: false,
+        cancelling: 0,
+        afterCancel: { writes: [], sent: [] },
         settling: false,
         queue: [],
         held: [],
@@ -404,6 +413,11 @@ export class SessionInputController {
       return Promise.resolve()
     }
     const state = this.state(sessionId)
+    if (state.cancelling) {
+      this.holdForCancel(sessionId, state, Buffer.byteLength(content, 'utf8'), deliveryId, said, 'sent',
+        () => void this.submitNow(sessionId, content, deliveryId, inputContext, said))
+      return Promise.resolve()
+    }
     this.dropExpired(sessionId, state)
     if (state.controlLocked
       || (this.swarmTypesWhileBusy(session.engine, deliveryId) && (state.writes || state.queue.length > 0))
@@ -430,7 +444,15 @@ export class SessionInputController {
 
   private scheduleWrite(sessionId: string, session: RegisteredSession, content: string, deliveryId?: string, inputContext?: string, receipt?: MessageReceipt): Promise<void> {
     const state = this.state(sessionId)
-    const write = (): Promise<void> => this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext, receipt)
+    const write = (): Promise<void> => {
+      // On its way before a cancel began, its turn to be typed came while the Ctrl-C is: it goes on after it.
+      if (state.cancelling) {
+        this.holdForCancel(sessionId, state, 0, deliveryId, receipt, 'writes',
+          () => void this.scheduleWrite(sessionId, session, content, deliveryId, inputContext, receipt))
+        return Promise.resolve()
+      }
+      return this.inject(sessionId, this.controlSession(sessionId) ?? session, content, deliveryId, inputContext, receipt)
+    }
     const running = state.writes ? state.writes.then(write, write) : write()
     const settled: Promise<void> = running.catch(() => {}).then(() => {
       if (state.writes !== settled) return
@@ -467,7 +489,7 @@ export class SessionInputController {
     const state = this.state(sessionId)
     this.dropExpired(sessionId, state)
     const turnBlocks = state.turnOpen && !opts?.forAnswer
-    if (state.controlLocked || turnBlocks || state.awaitingFingerprint || state.settling || state.queue.length > 0) return null
+    if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling || state.queue.length > 0) return null
     state.controlLocked = true
     let released = false
     return () => {
@@ -619,29 +641,75 @@ export class SessionInputController {
   }
 
   cancel(sessionId: string): void {
-    const session = this.controlSession(sessionId)
-    if (!session) return
-    void this.deps.validateRuntime(session).then(async (valid) => {
-      if (!valid) { this.deps.onError(sessionId, 'This agent process is no longer running.'); return }
-      await this.deps.sendKey(session.agentId, 'C-c')
-      const state = this.state(sessionId)
-      this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
-      this.settle(state, 'cancelled')
-      state.turnOpen = false
-      state.awaitingFingerprint = null
-      state.awaitingContent = null
-      state.ambiguousDispatch = false
-      if (state.timer) clearTimeout(state.timer)
-      state.timer = null
-      setTimeout(() => this.drainOne(sessionId, state), 250)
+    void this.interrupt(sessionId, true).catch((error) => {
+      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${error instanceof Error ? error.message : error}`)
+      this.deps.onError(sessionId, 'Stop did not reach this agent.')
     })
   }
 
-  async cancelConfirmed(sessionId: string): Promise<boolean> {
+  cancelConfirmed(sessionId: string): Promise<boolean> {
+    return this.interrupt(sessionId, false)
+  }
+
+  /**
+   * A cancel's Ctrl-C and what it settles. A message sent while the key is on its way (or a write whose turn
+   * to be typed comes then, or a device's control) waits, and goes on after it, once the cancel has settled
+   * what it interrupted: typed before, the cancel took it for its own and settled it as cancelled, with its
+   * submit check dropped, and the Ctrl-C could clear it from the composer (seen once in seven Codex Stop runs,
+   * 2026-11-10: received, never typed). Held at most CANCEL_HOLD_MS: a key stuck behind another writer does not
+   * hold them for good.
+   */
+  private async interrupt(sessionId: string, reportGone: boolean): Promise<boolean> {
     const session = this.controlSession(sessionId)
-    if (!session || !await this.deps.validateRuntime(session)) return false
-    const result = await this.deps.sendKey(session.agentId, 'C-c')
+    if (!session) return false
     const state = this.state(sessionId)
+    state.cancelling++
+    let held = true
+    const release = (): void => {
+      if (!held) return
+      held = false
+      clearTimeout(timer)
+      state.cancelling--
+      if (state.cancelling) return
+      const { writes, sent } = state.afterCancel
+      state.afterCancel = { writes: [], sent: [] }
+      // A moment for the engine to take the key, as before; a forgotten agent's held messages are told so there.
+      setTimeout(() => {
+        for (const next of [...writes, ...sent]) next()
+        if (this.states.get(sessionId) === state) this.drainOne(sessionId, state)
+      }, 250)
+    }
+    const timer = setTimeout(() => {
+      console.warn(`[inject] ${sid(sessionId)} cancel still pressing after ${CANCEL_HOLD_MS} ms · held messages go on`)
+      release()
+    }, CANCEL_HOLD_MS)
+    try {
+      if (!await this.deps.validateRuntime(session)) {
+        if (reportGone) this.deps.onError(sessionId, 'This agent process is no longer running.')
+        return false
+      }
+      const result = await this.deps.sendKey(session.agentId, 'C-c')
+      this.interrupted(sessionId, state)
+      return typeof result === 'boolean' ? result : result.dispatch === 'executed'
+    } finally { release() }
+  }
+
+  /** Hold one message for the cancel pressing now, counted against the queue's limits and cancellable as queued ones are. */
+  private holdForCancel(sessionId: string, state: InputState, bytes: number, deliveryId: string | undefined,
+    receipt: MessageReceipt | undefined, kind: 'writes' | 'sent', go: () => void): void {
+    if (bytes && this.refusedFull(sessionId, state, bytes, deliveryId, receipt)) return
+    const item: HeldInput = { deliveryId, bytes, cancelled: false }
+    state.held.push(item)
+    console.log(`[inject] ${sid(sessionId)} held · a cancel is pressing Ctrl-C · depth=${state.held.length}`)
+    state.afterCancel[kind].push(() => {
+      const at = state.held.indexOf(item)
+      if (at >= 0) state.held.splice(at, 1)
+      if (!item.cancelled) go()
+    })
+  }
+
+  /** What a Ctrl-C the person asked for ends: the message typed last, and the turn. */
+  private interrupted(sessionId: string, state: InputState): void {
     this.finishDelivery(sessionId, state, 'unknown', 'cancelled_after_paste')
     this.settle(state, 'cancelled')
     state.turnOpen = false
@@ -650,8 +718,6 @@ export class SessionInputController {
     state.ambiguousDispatch = false
     if (state.timer) clearTimeout(state.timer)
     state.timer = null
-    setTimeout(() => this.drainOne(sessionId, state), 250)
-    return typeof result === 'boolean' ? result : result.dispatch === 'executed'
   }
 
   forget(sessionId: string): void {
@@ -1186,7 +1252,7 @@ export class SessionInputController {
     // A person write may still be awaiting its terminal result when several chat
     // deliveries arrive. Reserve one Swarm receipt only after that writer finishes.
     if (busySwarm && state.writes) return
-    if (state.controlLocked || (!busySwarm && (state.turnOpen || state.settling)) || state.awaitingFingerprint) return
+    if (state.controlLocked || state.cancelling || (!busySwarm && (state.turnOpen || state.settling)) || state.awaitingFingerprint) return
     if (state.queue[0]?.deliveryId && (state.dispatching || state.deliveryId)) return
     const next = state.queue.shift()
     if (!next) return
