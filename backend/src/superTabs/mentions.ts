@@ -67,13 +67,28 @@ export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<s
  *  Swarm's usernames by person (usernames.ts swarmUsernames). In a project's chat, its channel (Swarm v4, anh Dee 2026-11-08), every agent of the
  *  project goes by its name, joined or not: agents there talk to each other by name, as lampOS's did in its issues. */
 export function agentsNamedIn(state: SuperTabState, group: Conversation, text: string, names: ReadonlyMap<string, string>): string[] {
+  // No tag at all: most posts. Nothing more is read for them.
+  if (!text.includes('@')) return []
   const people = new Set([...names.values()].map(name => name.toLowerCase()))
-  const tokens = tagTokens(text).filter(token => !token.includes('@') && !people.has(token))
-  if (!tokens.length) return []
   const project = projectsOf(state).find(p => p.leadConversationId === group.id)
   const members = state.agents.filter(a => group.agentIds.includes(a.id) || (project && inChannelOf(state, a, project)))
+  // A name of several words ("first builder", lampOS's PM; "a2a swarm" in the sandbox) is no one tag by TAG, which reads a
+  // word: `@first builder` named nobody, or the agent called "first". Such a name is looked for whole, the longest first,
+  // and what it covered is no shorter tag.
+  const spaced = [...new Set(members.flatMap(a => [a.displayName, a.name]).filter((name): name is string => !!name && /\s/.test(name.trim()))
+    .map(name => name.trim().toLowerCase()))].sort((a, b) => b.length - a.length)
+  let rest = prose(text)
+  const whole: string[] = []
+  for (const name of spaced) {
+    const said = new RegExp(`(?<![\\w@/])@${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}(?![\\w+-]|\\.[\\w+-])`, 'gi')
+    if (!said.test(rest)) continue
+    whole.push(name)
+    rest = rest.replace(said, match => blank(match))
+  }
+  const tokens = [...whole, ...[...rest.matchAll(TAG)].map(match => `${match[1]}${match[2] ?? ''}`.toLowerCase())
+    .filter(token => !token.includes('@') && !people.has(token))]
   return [...new Set(tokens.flatMap(token => {
-    const matches = members.filter(a => a.displayName?.toLowerCase() === token || a.name.toLowerCase() === token)
+    const matches = members.filter(a => a.displayName?.trim().toLowerCase() === token || a.name.trim().toLowerCase() === token)
     return matches.length === 1 ? [matches[0]!.id] : []
   }))]
 }
