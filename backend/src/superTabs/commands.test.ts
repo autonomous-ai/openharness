@@ -2410,10 +2410,7 @@ describe('a task that requires a machine or a device', () => {
   })
 })
 
-describe('the owner\'s rules in a Swarm of projects', () => {
-  // Backend v1.3.14: once the original 'lead' project is gone, every Lead rule.set failed NOT_FOUND.
-  const said = (patch: Record<string, unknown> = {}) => ({ askedIn: { author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: 'tab' },
-    source: false, createdAt: 1000, ...patch } }) as Partial<CommandContext>
+describe('a Swarm of projects', () => {
   function projects() {
     const f = fixture(); f.invite()
     const app = f.run({ type: 'project.create', name: 'App', visibility: 'public', brief: '' }).result.conversationId as string
@@ -2423,9 +2420,6 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     return { ...f, get state() { return f.state }, app, site, lead: agentActor(f.add('app-lead', 'owner', app, true)),
       worker: agentActor(f.add('app-worker', 'owner', app)), siteLead: agentActor(f.add('site-lead', 'owner', site, true)) }
   }
-  const projectOfChat = (f: ReturnType<typeof projects>, chat: string) => f.state.projects!.find(p => p.leadConversationId === chat)!
-
-  const projectIdOf = (f: ReturnType<typeof projects>, conversationId: string) => f.state.conversations.find(c => c.id === conversationId)!.projectId!
 
   it('tells each project\'s Lead chat which of its starts were abandoned when the machine joins', () => {
     const f = projects()

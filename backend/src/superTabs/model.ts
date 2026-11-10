@@ -11,7 +11,7 @@ import { publicReason, readsRawReason } from './startFailure.js'
 import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
-export type Role = 'owner' | 'collaborator' | 'viewer'
+type Role = 'owner' | 'collaborator' | 'viewer'
 
 export interface Person {
   id: string
@@ -211,9 +211,6 @@ export interface AgentStart {
  * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts).
  * `lost`: its agent died, stalled or hit a limit (liveness.ts); no longer active, so the Lead assigns it again or cancels it. */
 export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling' | 'lost'
-/** The first line of the system row `work.status` writes for each status an agent sets (commands.ts). */
-export const STATUS_LABELS = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done',
-  stopped: 'Stopped' } as const satisfies Partial<Record<WorkStatus, string>>
 export interface Check {
   id: string
   description: string

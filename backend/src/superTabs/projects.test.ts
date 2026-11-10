@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
-import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
+import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
-import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
+import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
 import { storedAssignment } from './storedWork.test-support.js'
 
@@ -315,11 +314,6 @@ describe('projects inside an invite-only swarm', () => {
 })
 
 describe('project skill modes', () => {
-  const said = (id: string, patch: Record<string, unknown> = {}): Partial<CommandContext> => ({ askedIn: {
-    author: { kind: 'person', id, name: id, membershipGeneration: 'first' }, source: false, createdAt: 1000, ...patch } })
-  const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
-  const modeOf = (f: ReturnType<typeof setup>, projectId: string) => skillModeOf(projectOf(f.state, projectId))
-
   it('reads a project with no stored mode as Harness orchestration, and new projects and Swarms as Default', () => {
     const legacy = createSuperTab('old', 'Old', { id: 'owner', email: 'owner@example.com' }, 'test')
     delete legacy.projects

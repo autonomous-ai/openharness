@@ -26,7 +26,6 @@ export function withRoleDefaults<T extends { engine: string; model?: string; eff
   const effort = request.effort ?? defaults.effort
   return { ...request, model: defaults.model, ...(effort ? { effort } : {}) }
 }
-export const MAX_ROLES = 20
 export const roleVersion = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
 export interface SwarmProject {
   id: string

@@ -16,7 +16,7 @@ import { jobKindOf } from './evidence/jobKind.js'
 import { endSteps, stepEndedRows } from './steps.js'
 import { noteWriter } from './stuck.js'
 import { routeRecordSchema, routeTitle, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
-import { askedInSchema, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema } from './rules.js'
+import { askedInSchema, RULE_MESSAGE_MS } from './rules.js'
 import { projectRulesSchema, rulesDiff, rulesEqual, seedRules, type ProjectRules } from './policy.js'
 import { isReview, machineRuleRefusal } from './machineRules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
@@ -35,7 +35,7 @@ import { deleteMessage, editMessage, type MessageChangeTarget } from './messageE
 import { bindPullRequestCards, bindTaskCard } from './cards.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isProjectChat, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isProjectChat, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -89,18 +89,11 @@ const project = z.object({ cwd: path, repositoryUrl: repositoryUrl.nullable() })
 const maxAgents = z.number().int().min(1).max(1024)
 // Copied Default roles keep the ids lead, dev and review; a role the owner adds gets 12 random hex characters from the client.
 const roleId = z.string().regex(/^([0-9a-f]{12}|lead|dev|review)$/)
-/** A role's default engine, model and effort (projects.ts RoleDefaults). */
-/** What a launch may be asked to run, one short word each, as the CLI checks it (cli lib/launchModel.ts MODEL and EFFORT). */
 /** How a CLI from before 2026-10-30 starts the why of a review on its Builder's own engine (cli superTabs/route.ts, removed). */
 const OLD_SAME_ENGINE = /^same-engine review: no Reviewer of another engine has quota\. /
+/** What a launch may be asked to run, one short word each, as the CLI checks it (cli lib/launchModel.ts MODEL and EFFORT). */
 const LAUNCH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\-[\]]{0,63}$/
 const LAUNCH_EFFORT = /^[a-z]{1,16}$/
-const roleDefaultsSchema = z.object({ engine: z.enum(['claude', 'codex']), model: z.string().trim().min(1).max(200).optional(),
-  effort: z.string().trim().min(1).max(80).optional() }).strict()
-const role = z.object({ id: roleId, name: z.string().trim().min(1).max(40), kind: z.enum(['lead', 'builder', 'reviewer']),
-  text: z.string().min(1).refine(value => Buffer.byteLength(value) <= 65_536, 'A role\'s skill text is at most 64 KB.'),
-  defaults: roleDefaultsSchema.optional() }).strict()
-const roleSet = z.array(role).min(1).max(MAX_ROLES)
 export const startRequestSchema = z.object({
   conversationId: id, machineId: id, engine: swarmEngine, name: title, cwd: path, role: z.enum(['builder', 'reviewer']).optional(), roleId: roleId.optional(),
   // The role it starts in, free text from the instructions (Agent.roleName). An older client sends none.
@@ -837,15 +830,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     fail('PM_CHAT_CLOSED', actor.kind === 'agent'
       ? 'Chat with PM is closed: tell a person in the project chat, tagging them.'
       : 'Chat with PM is closed: talk to the PM in the project chat.', 403)
-  /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
-   *  as rules are. */
-  const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {
-    if (actor.kind === 'person' && actor.userId === state.ownerId) return
-    const asked = actor.kind === 'agent' && ledProject(state, actor.agentId) && askedIn && context.askedIn
-    if (!asked || asked.author.kind !== 'person' || asked.author.id !== state.ownerId || asked.source || context.now - asked.createdAt > RULE_MESSAGE_MS) {
-      fail('OWNER_REQUIRED', `Only the Swarm owner, or a Lead passing on a chat message the owner wrote in the last day, ${what}.`, 403)
-    }
-  }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
     if (decision.outcome) fail('ROUTE_CLOSED', 'This routing decision is no longer open. Route the task again.')

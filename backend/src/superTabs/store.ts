@@ -42,12 +42,11 @@ import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { wordsOf, watchersLost, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { wordsOf, watchersLost, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, admitPerson, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
-import { swarmUsernames } from './usernames.js'
-import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
+import { deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
 import { SEED_RULES, seedRules, validMachineRules, type MachineRule } from './policy.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest } from './projectUpdates.js'
@@ -71,7 +70,7 @@ import { touchesFor } from './parts/touches.js'
 import { freeze, readHostStamp, stampOwed, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
 import { countReport, DEADLINE_CAP_MS, localReportMemory, RECORD_TTL_MS, recordHolds, type ReportMemory, type ReportRecord } from './machineReports.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
-import { STATUS_LABELS, activeWork, occupiesAgent, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker, SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type MessageDraft, type Person, type SuperTabState, projectPullRequestUrl } from './model.js'
+import { activeWork, occupiesAgent, actorKey, agent, agentOnly, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker, SuperTabError, isLeads, knownKind, parkLaterConversations, type Actor, type Agent, type Assignment, type Author, type CommandEffects, type MessageDraft, type Person, type SuperTabState } from './model.js'
 import { QUIET_CLAIM, type HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
@@ -83,7 +82,7 @@ import { recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
-import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
 import { catalogRead } from './catalog.js'
 import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
@@ -131,7 +130,7 @@ function requireParts(row: SwarmRow): SwarmRow {
 /** What a command or read works on: the index row, the parts it loaded, and the state reassembled from them. */
 export interface Loaded { row: SwarmRow; parts: SwarmParts; state: SuperTabState }
 /** Groups, agents, projects and starts a command names, loaded even when dormant or finished (design section 3.1). */
-export interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]; allGroups?: boolean; includeRecentStarts?: boolean }
+interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]; allGroups?: boolean; includeRecentStarts?: boolean }
 
 /** The groups, agents, projects and starts a command names in its own fields (design section 3.1). */
 /** Commands that register a session or can make one a Lead or a private member: checked against the other Swarms'
