@@ -1342,6 +1342,22 @@ model SuperTabOperation {
   @@index([createdAt], map: "operation_expiry")
 }
 
+/// Which agent wrote a GitHub comment it posted through Harness (superTabs/githubComments.ts). The id is "<repository lowercased>|
+/// <kind>|<GitHub's comment id>": first writer wins. Ids only, no words. Removed 90 days after createdAt by a TTL index.
+model SuperTabGithubComment {
+  id        String   @id @map("_id")
+  tabId     String
+  projectId String
+  agentId   String
+  createdAt DateTime
+
+  /// A Swarm's records, removed with it (purge.ts).
+  @@index([tabId])
+  /// A record goes 90 days after createdAt (githubComments.ts ensureCommentExpiry). Declared so db push keeps the index; the schema
+  /// step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "github_comment_expiry")
+}
+
 model SuperTabDelivery {
   id                    String   @id @map("_id")
   tabId                 String
