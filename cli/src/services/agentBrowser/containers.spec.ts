@@ -90,10 +90,12 @@ describe('Containers', () => {
   })
 
   it('with a proxy', async () => {
+    // Removed, then made: Podman 4.6 has no `secret create --replace` (added in 4.7).
+    fake.reply('secret rm', { code: 1, stderr: 'Error: harness-proxy-a1: no such secret' })
     await containers.start('a1', IMAGE, { ...base, proxy }, 'Europe/Berlin')
     const secret = named('secret')
-    expect(secret.map(call => call.args)).toEqual([['secret', 'create', '--replace', 'harness-proxy-a1', '-']])
-    expect(JSON.parse(secret[0]!.stdin)).toEqual(proxy)
+    expect(secret.map(call => call.args)).toEqual([['secret', 'rm', 'harness-proxy-a1'], ['secret', 'create', 'harness-proxy-a1', '-']])
+    expect(JSON.parse(secret[1]!.stdin)).toEqual(proxy)
     expect(pairs(createArgv())).toEqual(expect.arrayContaining(['--secret harness-proxy-a1,target=harness-proxy', '-e PROXY=1', '-e TZ=Europe/Berlin']))
     // The password reaches Podman on stdin only: never an argument, an environment variable or a log line.
     expect(fake.calls().flatMap(call => call.args).some(arg => arg.includes(proxy.password))).toBe(false)

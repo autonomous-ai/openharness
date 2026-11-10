@@ -53,6 +53,9 @@ const MiB = 1024 ** 2
 const MESSAGE_LIMIT = 2_000
 // An image build prints a line per package it installs, past execFile's 1 MB default, which kills the child.
 const OUTPUT_LIMIT = 64 * 1024 * 1024
+// `cat | podman …` with podman ($0 "$@") ended by the shell when a timeout ends the shell, never left running. In the
+// background so the trap runs at once; stdin is kept on fd 3, since a background list's own stdin is /dev/null.
+const STDIN_RELAY = `exec 3<&0; cat <&3 | "$0" "$@" 3<&- & trap 'kill $! 2>/dev/null' TERM; wait $!`
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */
 function installedPaths(platform: NodeJS.Platform): string[] {
@@ -103,10 +106,15 @@ export function createPodman(deps: {
     const file = await path()
     if (!file) throw new PodmanError('needs_setup', 'Podman is not installed')
     const timeoutMs = opts.timeoutMs ?? RUN_TIMEOUT_MS
+    // Podman 4 reads `secret create … -` only from a real pipe (cmd/podman/secrets/create.go, v4.9.3: "if `-` is
+    // used, data must be passed into stdin" unless stdin is os.ModeNamedPipe), and Node hands a child a socket on
+    // macOS and Linux. `cat` relays the data into a pipe the shell makes. Windows' stdio is already a named pipe.
+    const relay = opts.stdin !== undefined && platform !== 'win32'
+    const [command, commandArgs] = relay ? ['/bin/sh', ['-c', STDIN_RELAY, file, ...onConnection(args)]] : [file, onConnection(args)]
     return await new Promise((done, fail) => {
       // The daemon was started by launchd or systemd, not a shell: the login shell's environment is what the
       // person's own `podman` sees (its machine connections, its helpers on PATH).
-      const child = execFile(file, onConnection(args), { env: oneShotParentEnv(), timeout: timeoutMs, maxBuffer: OUTPUT_LIMIT, ...ownProcessGroup() }, (error, stdout, stderr) => {
+      const child = execFile(command, commandArgs, { env: oneShotParentEnv(), timeout: timeoutMs, maxBuffer: OUTPUT_LIMIT, ...ownProcessGroup() }, (error, stdout, stderr) => {
         if (!error) return done({ stdout, stderr })
         fail(new PodmanError('podman_failed', error.killed
           ? `podman ${args[0]} timed out after ${timeoutMs} ms`

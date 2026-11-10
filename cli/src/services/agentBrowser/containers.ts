@@ -68,8 +68,10 @@ export class Containers {
     }
     if (existing) await this.removeContainer(name)
     if (settings.proxy) {
+      // Removed, then made: `secret create --replace` came in Podman 4.7, and 4.6 is supported.
+      await unlessGone(this.podman.run(['secret', 'rm', secretOf(agentId)]))
       // The password goes on stdin only: never an argument or an environment variable.
-      await this.podman.run(['secret', 'create', '--replace', secretOf(agentId), '-'], { stdin: JSON.stringify(settings.proxy) })
+      await this.podman.run(['secret', 'create', secretOf(agentId), '-'], { stdin: JSON.stringify(settings.proxy) })
     } else {
       // A proxy taken out of the settings must not leave its password in Podman.
       await unlessGone(this.podman.run(['secret', 'rm', secretOf(agentId)]))

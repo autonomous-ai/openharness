@@ -225,9 +225,9 @@ describe('createPodman', () => {
   it('run uses the login shell env and ownProcessGroup, and passes stdin', async () => {
     fake.reply('secret create', { stdout: 'abc123\n' })
     const podman = found()
-    expect(await podman.run(['secret', 'create', '--replace', 's1', '-'], { stdin: '{"host":"h"}' }))
+    expect(await podman.run(['secret', 'create', 's1', '-'], { stdin: '{"host":"h"}' }))
       .toEqual({ stdout: 'abc123\n', stderr: '' })
-    expect(fake.calls()).toEqual([{ args: ['secret', 'create', '--replace', 's1', '-'], stdin: '{"host":"h"}', mark: 'login-shell' }])
+    expect(fake.calls()).toEqual([{ args: ['secret', 'create', 's1', '-'], stdin: '{"host":"h"}', mark: 'login-shell' }])
     expect(vi.mocked(execFile).mock.calls[0]![2])
       .toEqual(expect.objectContaining({ ...ownProcessGroup(), timeout: 30_000, env: expect.objectContaining({ FAKE_PODMAN_MARK: 'login-shell' }) }))
 
@@ -236,6 +236,34 @@ describe('createPodman', () => {
     await new Promise(resolve => child.once('close', resolve))
     expect(fake.calls()[1]).toEqual({ args: ['events', '--format', 'json'], stdin: '', mark: 'login-shell' })
     expect(vi.mocked(spawn).mock.calls[0]).toEqual([fake.path, ['events', '--format', 'json'], expect.objectContaining(ownProcessGroup())])
+  })
+
+  // Podman 4.9 takes `-` only from a real pipe (cmd/podman/secrets/create.go), and Node hands a child a socket: the
+  // proxy secret was refused on GitHub's Ubuntu runner. The fake refuses the same way.
+  it('stdin reaches podman through a real pipe, on a connection too', async () => {
+    const podman = found('linux')
+    await podman.run(['secret', 'create', 's1', '-'], { stdin: 'pw' })
+    podman.useConnection('harness')
+    await podman.run(['secret', 'create', 's2', '-'], { stdin: 'pw2' })
+    expect(fake.calls().map(call => [call.args, call.stdin])).toEqual([
+      [['secret', 'create', 's1', '-'], 'pw'],
+      [['--connection', 'harness', 'secret', 'create', 's2', '-'], 'pw2'],
+    ])
+    // Through the relay the data is on stdin alone: never in an argument or the environment.
+    for (const [file, args, opts] of vi.mocked(execFile).mock.calls as unknown as Array<[string, string[], { env: Record<string, string> }]>) {
+      expect([file, ...args].join(' ')).not.toMatch(/pw/)
+      expect(JSON.stringify(opts.env)).not.toMatch(/"pw2?"/)
+    }
+  })
+
+  it('a slow run with stdin still times out, its podman with it', async () => {
+    fake.reply('secret create', { hangMs: 10_000 })
+    // Long enough for the fake to start and read its stdin, so there is a podman to leave behind.
+    const slow = await failure(found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw', timeoutMs: 2_000 }))
+    expect(slow.message).toBe('podman secret timed out after 2000 ms')
+    const pid = fake.lastPid()
+    // Not left running behind the relay's shell (its hang is 10 s; a killed one is reaped in moments).
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(/ESRCH/), { timeout: 2_000 })
   })
 
   it('a failed or slow run is a named PodmanError', async () => {
