@@ -230,8 +230,8 @@ void main() {
     expect(c.hasNewer('lead'), isFalse);
   });
 
-  test('a reaction changing in the same poll as a burst while scrolled up '
-      'leaves no gap', () async {
+  test('an edit in the same poll as a burst while scrolled up leaves no '
+      'gap', () async {
     final server = ConversationServer();
     for (var i = 1; i <= 100; i++) {
       server.append('lead $i');
@@ -242,34 +242,16 @@ void main() {
     for (var i = 101; i <= 700; i++) {
       server.append('lead $i');
     }
-    // Someone reacts to a row the reader is on, in the same poll.
-    server.messages[49]['reactions'] = [
-      {
-        'emoji': 'thumbs_up',
-        'count': 1,
-        'by': [
-          {'kind': 'person', 'id': 'peer'},
-        ],
-      },
-    ];
-    final group = (server.state['conversations'] as List)
-        .cast<Map<String, dynamic>>()
-        .firstWhere((g) => g['id'] == 'lead');
-    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+    // Someone edits a row the reader is on, in the same poll.
+    server.editMessage(server.messages[49]['id'] as String, 'lead 50, edited');
 
     await c.loadMessages('lead');
 
     final shown = c.messages('lead').map((m) => m.sequence).toList();
     expect(shown, List.generate(200, (i) => i + 1));
     expect(
-      c
-          .messages('lead')
-          .firstWhere((m) => m.sequence == 50)
-          .reactions
-          .single
-          .emoji
-          .key,
-      'thumbs_up',
+      c.messages('lead').firstWhere((m) => m.sequence == 50).text,
+      'lead 50, edited',
     );
     expect(c.hasNewer('lead'), isTrue);
   });

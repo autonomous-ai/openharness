@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -74,33 +72,15 @@ void main() {
       });
     });
 
-    test('still shows a reaction that was made since the last poll', () {
+    test('still shows an edit that was made since the last poll', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Hello');
         final reads = _Reads(server);
         final c = _controller(reads)..start();
         async.flushMicrotasks();
-        final id = c.messages('lead').single.id;
-        // Another reader's reaction, as the backend keeps it.
-        unawaited(
-          server.request(
-            'POST',
-            '/api/super-tabs/tab/commands',
-            body: {
-              'operationId': 'react-1',
-              'command': {
-                'type': 'message.react',
-                'conversationId': 'lead',
-                'messageId': id,
-                'emoji': 'rocket',
-                'on': true,
-              },
-            },
-          ),
-        );
-        async.flushMicrotasks();
+        server.editMessage(c.messages('lead').single.id, 'Hello again');
         async.elapse(_poll);
-        expect(c.messages('lead').single.reactions, isNotEmpty);
+        expect(c.messages('lead').single.text, 'Hello again');
         c.dispose();
       });
     });

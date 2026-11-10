@@ -19,6 +19,7 @@ import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { recordPulse } from '../src/superTabs/pulse.js'
 import { decisionsWaiting } from '../src/superTabs/decisions.js'
+import { missingVerbs } from '../src/superTabs/cliVerbs.test-support.js'
 import { waitingMentions, waitingTagConversations } from '../src/superTabs/mentions.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
@@ -884,11 +885,12 @@ describe('decisions asked of one person (v2)', () => {
     // Nor the person who answered, beyond their own decision; nor the worker, which neither asked nor leads.
     expect(shows((await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages`, peer)).body.data)).toEqual([])
     expect(shows((await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages?asAgentId=${s.worker}`, owner)).body.data)).toEqual([])
-    // The Lead gets a notice with no content, pointing to the decisions read, which has the answer.
+    // The Lead gets a notice with no content of the answer, naming no command the CLI lacks; the decisions read has the answer.
     const lead = (await get(`/api/super-tabs/${s.tabId}/conversations/${s.web}/messages?asAgentId=${s.lead}`, owner)).body.data.messages as Array<{ id: string; text: string }>
     const notice = lead.find(m => m.id === answered.body.data.result.messageId)!
     expect(shows(notice)).toEqual([])
-    expect(notice.text).toContain('harness super-tab decisions --answered')
+    expect(notice.text).toBe('A decision asked in this conversation was answered.')
+    expect(missingVerbs(notice.text)).toEqual([])
     expect(await decisions(s.tabId, owner, 'answered', s.lead)).toEqual([expect.objectContaining({ id, choice: 1, note: 'Only for the Lead.' })])
   })
 

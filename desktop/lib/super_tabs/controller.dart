@@ -252,6 +252,9 @@ class SuperTabController extends ChangeNotifier {
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       yourMachinesGroupOpen =
           initial['yourMachinesGroupOpen'] as bool? ?? false;
+      // Saved before the choice was kept apart: a group left open was chosen so; one saved folded is the default.
+      yourMachinesGroupChosen =
+          initial['yourMachinesGroupChosen'] as bool? ?? yourMachinesGroupOpen;
       topTeamsGroupOpen = initial['topTeamsGroupOpen'] as bool? ?? false;
       modelsGroupOpen = initial['modelsGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
@@ -1142,6 +1145,9 @@ class SuperTabController extends ChangeNotifier {
   bool agentsGroupOpen = true, projectsGroupOpen = true;
   bool yourMachinesGroupOpen = false, topTeamsGroupOpen = false;
 
+  /// Whether its person opened or folded Your Machines: until they have, it is open while a computer is off and folded else.
+  bool yourMachinesGroupChosen = false;
+
   bool isMachineExpanded(String id) => expandedMachines.contains(id);
 
   void toggleMachineExpanded(String id) {
@@ -1224,8 +1230,9 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
-  void toggleYourMachinesGroup() {
-    yourMachinesGroupOpen = !yourMachinesGroupOpen;
+  void setYourMachinesGroup(bool open) {
+    yourMachinesGroupOpen = open;
+    yourMachinesGroupChosen = true;
     _saveSoon();
     _changed();
   }
@@ -2320,7 +2327,8 @@ class SuperTabController extends ChangeNotifier {
     return true;
   }
 
-  /// Each conversation's reaction counter as its last page said it.
+  /// Each conversation's `reactionSeq` (an edit or a delete moves it) as its
+  /// last page said it.
   final _reactionSeq = <String, int>{};
 
   /// The newest message held for [id] that reading the chat reads: one in
@@ -2777,6 +2785,7 @@ class SuperTabController extends ChangeNotifier {
     'agentsGroupOpen': agentsGroupOpen,
     'projectsGroupOpen': projectsGroupOpen,
     'yourMachinesGroupOpen': yourMachinesGroupOpen,
+    'yourMachinesGroupChosen': yourMachinesGroupChosen,
     'topTeamsGroupOpen': topTeamsGroupOpen,
     'modelsGroupOpen': modelsGroupOpen,
     'offlineMachinesOpen': offlineMachinesOpen,
@@ -3688,12 +3697,6 @@ class SuperTabController extends ChangeNotifier {
     id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
-    final group = snapshot!.conversation(id)!;
-    // A task's project's closed tasks, read once: the quick switcher finds an
-    // archived one by its number (#N). A Buddy chat reads none.
-    if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
-      unawaited(loadDormant(group.projectId));
-    }
     _moveView(to: id);
     // Held from an earlier visit: what arrived meanwhile is not among them.
     if (_messages[id]?.isNotEmpty ?? false) {
@@ -4708,11 +4711,12 @@ class SuperTabController extends ChangeNotifier {
     });
   }
 
-  /// The same messages with the same receipts: posted text does not change.
-  /// Whether [answer] says a reaction changed in [id] since its rows were
-  /// last refreshed: a poll then reads the page shown again (backend
-  /// reactions.ts). The first answer only records where it stands.
-  bool _reactionsMoved(String id, Map<String, dynamic> answer) {
+  /// Whether [answer] says a row changed in [id] since its rows were last
+  /// refreshed, by an edit or a delete: a poll then reads the page shown
+  /// again (backend messageEdits.ts). A reaction another client or the host
+  /// wrote moves it too, until the backend stops writing them: one read that
+  /// shows nothing new. The first answer only records where it stands.
+  bool _rowsChanged(String id, Map<String, dynamic> answer) {
     final seq = answer['reactionSeq'];
     final known = _reactionSeq[id];
     return seq is int && known != null && known != seq;
@@ -4752,6 +4756,8 @@ class SuperTabController extends ChangeNotifier {
         '',
   );
 
+  /// Whether [shown] already holds [next]: the same messages, with the same
+  /// words, edits, deletions and receipts.
   static bool _sameMessages(
     List<SuperTabMessage>? shown,
     List<SuperTabMessage> next,
@@ -4763,8 +4769,7 @@ class SuperTabController extends ChangeNotifier {
           a.text != b.text ||
           a.editedAt != b.editedAt ||
           a.deletedAt != b.deletedAt ||
-          a.deliveries.length != b.deliveries.length ||
-          !_sameReactions(a.reactions, b.reactions)) {
+          a.deliveries.length != b.deliveries.length) {
         return false;
       }
       for (var j = 0; j < b.deliveries.length; j++) {
@@ -4773,20 +4778,6 @@ class SuperTabController extends ChangeNotifier {
     }
     return true;
   }
-
-  static bool _sameReactions(
-    List<SuperTabReactionCount> a,
-    List<SuperTabReactionCount> b,
-  ) =>
-      a.length == b.length &&
-      [
-        for (var i = 0; i < a.length; i++)
-          a[i].emoji == b[i].emoji &&
-              listEquals(
-                [for (final who in a[i].by) '${who.kind}:${who.id}'],
-                [for (final who in b[i].by) '${who.kind}:${who.id}'],
-              ),
-      ].every((same) => same);
 
   String _messagesPath(String id) =>
       '$_path/conversations/${Uri.encodeComponent(id)}/messages';
@@ -4802,7 +4793,7 @@ class SuperTabController extends ChangeNotifier {
     // messages: the first read after it takes the latest page whole.
     if (_showingSaved || _latestWanted.contains(id)) return '';
     final tail = _messages[id]?.lastOrNull?.sequence;
-    // Holding: the rows shown, for their receipts and reactions.
+    // Holding: the rows shown, for their receipts and changes.
     if (tail != null && _holding(id)) return '?before=${tail + 1}';
     return tail != null ? '?after=$tail' : '';
   }
@@ -4820,12 +4811,12 @@ class SuperTabController extends ChangeNotifier {
       _readMessageSeq[id] ?? _messages[id]?.lastOrNull?.sequence ?? 0;
 
   /// [id]'s messages are as new as its own counters say (spec
-  /// 2026-11-02-poll-cost, Part 2): no message after those read, no reaction
-  /// changed since its page, no saved page, no newer page asked for. A reader
-  /// scrolled up holding the pages below waits for [showLatest]: only a
-  /// reaction reads their rows again. `lastMessageSequence` rather than the
-  /// main stream's, because a read of what came after brings thread replies
-  /// too.
+  /// 2026-11-02-poll-cost, Part 2): no message after those read, no edit or
+  /// delete since its page, no saved page, no newer page asked for. A reader
+  /// scrolled up holding the pages below waits for [showLatest]: only an
+  /// edit or a delete reads their rows again. `lastMessageSequence` rather
+  /// than the main stream's, because a read of what came after brings thread
+  /// replies too.
   bool _messagesCurrent(String id) {
     final group = snapshot?.conversation(id);
     if (!_policy.messagesWhenChanged ||
@@ -5017,7 +5008,7 @@ class SuperTabController extends ChangeNotifier {
           !holding &&
           tail != null &&
           (answer['messages'] as List).isNotEmpty;
-      final reacted = !older && _reactionsMoved(id, answer);
+      final rowsChanged = !older && _rowsChanged(id, answer);
       // Recorded only once the rows are refreshed: a read that fails leaves
       // the change for the next poll.
       final reactionSeq = older ? null : answer['reactionSeq'];
@@ -5030,7 +5021,7 @@ class SuperTabController extends ChangeNotifier {
       final keepPlace = skipped && _readingBack.contains(id);
       // A page read whole, latest or before a point: it holds every row
       // from its oldest on, so a held row it lacks was deleted (an edit or a
-      // delete moves `reactionSeq` as a reaction does).
+      // delete moves `reactionSeq`).
       ({Map<String, dynamic> page, int? before})? whole =
           older || query.startsWith('?after=')
           ? null
@@ -5039,9 +5030,9 @@ class SuperTabController extends ChangeNotifier {
         answer = await request('GET', _messagesPath(id));
         whole = (page: answer, before: null);
       } else if (!_disposed && keepPlace) {
-        // A changed reaction refreshes the page ending at the newest held:
-        // the latest page, under rows read back, would leave a gap.
-        final page = reacted
+        // A changed row refreshes the page ending at the newest held: the
+        // latest page, under rows read back, would leave a gap.
+        final page = rowsChanged
             ? await request('GET', '${_messagesPath(id)}?before=${tail! + 1}')
             : null;
         if (page != null) whole = (page: page, before: tail! + 1);
@@ -5053,20 +5044,20 @@ class SuperTabController extends ChangeNotifier {
           ],
         };
       } else if (!_disposed &&
-          reacted &&
+          rowsChanged &&
           tail != null &&
           (answer['messages'] as List).isEmpty) {
-        // No new text, but a reaction changed in the page shown: its counts
-        // are read again. Never for receipts alone (spec 2026-11-02-poll-cost,
-        // Part 2): the person's own one is read by itself ([_checkReceipt]).
+        // No new text, but an edit or a delete in the page shown: it is read
+        // again. Never for receipts alone (spec 2026-11-02-poll-cost, Part
+        // 2): the person's own one is read by itself ([_checkReceipt]).
         answer = await request(
           'GET',
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?before=${tail + 1}',
         );
         whole = (page: answer, before: tail + 1);
-      } else if (!_disposed && reacted && arrived) {
-        // New messages and a changed reaction at once: the rows already shown
-        // need their counts too, so the latest page is read with the new ones.
+      } else if (!_disposed && rowsChanged && arrived) {
+        // New messages and a changed row at once: the rows already shown need
+        // reading again too, so the latest page is read with the new ones.
         final page = await request('GET', _messagesPath(id));
         whole = (page: page, before: null);
         answer = {

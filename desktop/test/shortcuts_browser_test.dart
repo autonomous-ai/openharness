@@ -19,9 +19,7 @@ import 'keymap_host_test.dart' show key;
 import 'support/real_fonts.dart';
 
 void main() {
-  testWidgets('Swarm conversation shortcut explains its focus scope', (
-    tester,
-  ) async {
+  testWidgets('Swarm chat shortcut explains its focus scope', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
@@ -30,13 +28,10 @@ void main() {
     );
     await tester.enterText(
       find.byKey(const ValueKey('shortcuts-search')),
-      'Switch conversation',
+      'Find in chat',
     );
     await tester.pumpAndSettle();
-    expect(
-      find.widgetWithText(TextButton, 'Switch conversation'),
-      findsOneWidget,
-    );
+    expect(find.widgetWithText(TextButton, 'Find in chat'), findsOneWidget);
     expect(find.text('In a Swarm tab, outside a terminal'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
