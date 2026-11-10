@@ -1,7 +1,7 @@
 /**
  * The agent browser on real Podman (Task 20 of docs/superpowers/plans/2026-11-10-agent-browser.md): the image built from
- * the CLI's own files, a browser agent's Chrome driven through `harness browser-mcp` as an engine drives it, a page
- * that asks for a person, its login kept across a stop, its restart after a crash, Device, a proxy that fails closed,
+ * the CLI's own files, a browser agent's Chrome driven through `harness browser-mcp` as an engine drives it, its screen
+ * streamed as the Desktop opens it, a page that asks for a person, its login kept across a stop, its restart after a crash, Device, a proxy that fails closed,
  * and a delete that leaves nothing behind. agentBrowser.e2e.ts runs the same daemon against a fake `podman`.
  *
  * Linux only, on rootless Podman, in a store of its own: the daemon finds a `podman` first on its PATH that runs the
@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { daemonIdOf } from '../src/services/agentBrowser.js'
 import { artifactLog } from './harness/artifacts.js'
 import { LocalClient } from './harness/client.js'
@@ -98,6 +99,13 @@ const PAGES: Record<string, string> = {
     + ' vendor: gl ? String(gl.getParameter(0x9245)) : "", renderer: gl ? String(gl.getParameter(0x9246)) : "" }))'
     + '</script>',
   '/device-report': '',
+  // A different colour in every pixel of the viewport (the stream case).
+  '/noise': '<canvas id="c" style="position:fixed;inset:0"></canvas><script>'
+    + 'const c = document.getElementById("c"); c.width = innerWidth; c.height = innerHeight;'
+    + 'const g = c.getContext("2d"); const image = g.createImageData(c.width, c.height);'
+    + 'for (let i = 0; i < image.data.length; i++) image.data[i] = i % 4 === 3 ? 255 : Math.random() * 256;'
+    + 'g.putImageData(image, 0, 0)'
+    + '</script>',
 }
 
 /** The pages the browser opens, and every request they were asked, with where it came from. */
@@ -175,6 +183,22 @@ class LoginProxy {
   stop(): Promise<void> {
     this.server.closeAllConnections()
     return new Promise((done) => this.server.close(() => done()))
+  }
+}
+
+/** A stream's bytes from Xvnc, as the Desktop's page reads them: `take(n)` resolves with the next `n`, in order. */
+function screenOf(client: LocalClient, streamId: string): (n: number) => Promise<Buffer> {
+  let buffered = Buffer.alloc(0)
+  let since = client.binaries.length
+  return async (n) => {
+    while (buffered.length < n) {
+      const frame = await client.waitForBinary((f) => f.kind === TerminalBinaryKind.browser && f.streamId === streamId, 30_000, `${n} bytes of the stream`, since)
+      since = client.binaries.indexOf(frame) + 1
+      buffered = Buffer.concat([buffered, frame.bytes])
+    }
+    const taken = buffered.subarray(0, n)
+    buffered = buffered.subarray(n)
+    return taken
   }
 }
 
@@ -444,6 +468,52 @@ describe('the agent browser on real Podman', () => {
     expect(reply.text).toContain(CHAT_LINE)
   })
 
+  step('a stream opened as the Desktop opens one: the banner, a handshake, the local profile at Xvnc, and a close that ends the exec', 2 * CALL_MS, async () => {
+    // Xvnc sends a full-colour rectangle as Tight JPEG only when the viewer set a quality level. This viewer sets none,
+    // so a JPEG rectangle is the shaper's level (q6/c2 for a local connection, core/browserStreams.ts) reaching Xvnc.
+    const noise = await relay!.call('browser_navigate', { url: pages!.url('/noise') })
+    expect(noise.isError, noise.text).toBe(false)
+    const opened = await client!.request<{ streamId?: string; error?: string }>('agent_browser_open', { agentId: agent!.id })
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const streamId = opened.streamId!
+    const take = screenOf(client!, streamId)
+    let seq = 0
+    const send = (...bytes: number[]) => client!.sendBinary({ kind: TerminalBinaryKind.browser, streamId, seq: seq++, bytes: Uint8Array.from(bytes), compressed: false })
+    const u16 = (value: number) => [value >> 8, value & 0xff]
+
+    expect((await take(12)).toString('latin1')).toBe('RFB 003.008\n')
+    send(...Buffer.from('RFB 003.008\n', 'latin1'))
+    // RFB 3.8 (RFC 6143 § 7.1-7.3): the security types, None chosen, its result, then a shared ClientInit.
+    const types = await take((await take(1))[0])
+    expect([...types]).toContain(1)
+    send(1)
+    expect((await take(4)).readUInt32BE(0)).toBe(0)
+    send(1)
+    const init = await take(24)
+    await take(init.readUInt32BE(20))
+    const [width, height] = [init.readUInt16BE(0), init.readUInt16BE(2)]
+    // Tight (7) alone, then one 64 × 64 update from the middle of the screen, inside the page.
+    send(2, 0, ...u16(1), 0, 0, 0, 7)
+    send(3, 0, ...u16(width / 2 - 32), ...u16(height / 2 - 32), ...u16(64), ...u16(64))
+    const update = await take(4)
+    expect(update[0], 'a FramebufferUpdate').toBe(0)
+    expect(update.readUInt16BE(2)).toBeGreaterThan(0)
+    const rect = await take(13)
+    expect(rect.readInt32BE(8), 'Tight').toBe(7)
+    // The compression-control byte's high nibble: 9 is JPEG (RFC 6143 § 7.7.6).
+    expect(rect[12] >> 4, 'a JPEG rectangle').toBe(9)
+
+    const closed = client!.next((frame) => frame.type === 'agent_browser_close' && frame.payload?.streamId === streamId, 10_000, 'agent_browser_close')
+    client!.send('agent_browser_close', { streamId })
+    expect((await closed).payload?.reason).toBe('closed')
+    // The daemon's `podman exec` and the socat it ran in the container both go.
+    await until('the stream\'s exec to end', async () => {
+      const host = await run('pgrep', ['-f', '--', `${name()} socat STDIO`], 10_000)
+      const container = await inside(['pgrep', '-f', '--', 'socat STDIO'])
+      return (host.code === 1 && container.code === 1) || null
+    }, 30_000, 250)
+  })
+
   step('the daemon\'s loopback API refuses a request from inside the container', 60_000, async () => {
     const status = (url: string) => inside(['sh', '-c', `curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${quote(url)}; true`])
     // The container does reach this machine, so a refusal below is the daemon's, not a missing route.
@@ -494,16 +564,12 @@ describe('the agent browser on real Podman', () => {
     expect(forward.code, forward.stderr).toBe(0)
     await until('the loopback forward inside the container', async () => (await inside(['curl', '-sf', '--max-time', '5', `http://127.0.0.1:${SECURE_PORT}/addr`])).code === 0 || null, 30_000, 250)
     // Opened through Chrome's own DevTools HTTP endpoint, as a tab the person opens appears: no tool call, so only
-    // device-inject.mjs's own connection can report the device. It connects on its own once Chrome answers, which the
-    // ready marker does not wait for, so a tab may open before it has: each try opens another.
-    let last: Seen | undefined
-    const report = await until('a tab opened outside the tools to report the chosen device', async () => {
-      const from = pages!.seen.length
-      const opened = await inside(['curl', '-sf', '--max-time', '10', '-X', 'PUT', `http://127.0.0.1:9222/json/new?http://127.0.0.1:${SECURE_PORT}/device`])
-      if (opened.code !== 0) throw new Error(`no tab opened (${opened.code}): ${opened.stderr}`)
-      last = await until('the tab to report', () => pages!.seen.slice(from).find((seen) => seen.path === '/device-report'), 10_000, 100)
-      return last.query.get('cores') === String(DEVICE.cpuCores) ? last : null
-    }, 60_000, 500).catch((error: Error) => { throw new Error(`${error.message}; last report: ${last ? last.query.toString() : 'none'}`) })
+    // device-inject.mjs's own connection can report the device. The ready marker waits for it to attach, so the first
+    // tab after ready reports it.
+    const from = pages!.seen.length
+    const opened = await inside(['curl', '-sf', '--max-time', '10', '-X', 'PUT', `http://127.0.0.1:9222/json/new?http://127.0.0.1:${SECURE_PORT}/device`])
+    expect(opened.code, opened.stderr).toBe(0)
+    const report = await until('the tab to report', () => pages!.seen.slice(from).find((seen) => seen.path === '/device-report'), 10_000, 100)
     // Chrome reports memory rounded down to a power of two, at most 8 (device-inject.mjs).
     expect(Object.fromEntries(report.query)).toEqual({ cores: '12', memory: '4', vendor: DEVICE.gpuVendor, renderer: DEVICE.gpuRenderer })
   })
