@@ -54,6 +54,22 @@ export const HERMES_SOURCE: StoreSourceRule = {
   maxBuffer: 1 << 20,
 }
 
+/**
+ * The pane a Hermes 0.22+ session was opened from. Hermes now runs every session, and every shell hook, inside one shared
+ * gateway with the gateway's own environment (agent/shell_hooks.py `_spawn`), so a hook names the gateway's pane, not
+ * the session's. What does travel is the client's environment: names listed in `terminal.client_env_passthrough` are sent
+ * with `session.create` and frozen with the session's policy in `state_meta` (gateway/session_policy.py,
+ * hermes_state_local.py). Harness lists its pane names there (`HERMES_HOOK_SETTINGS.passthrough`) and reads them back here.
+ * The join to the session's own row keeps the read to the home that holds that session; `state_meta` must be a plain table.
+ */
+export const HERMES_SESSION_PANE = {
+  names: ['HARNESS_PANE', 'TMUX_PANE'],
+  key: (sessionId: string): string => `gateway.local_policy.v1:${sessionId}`,
+  query: "SELECT s.id AS id, json_extract(m.value, '$.policy.client_env_json') AS client_env FROM sessions s JOIN state_meta m ON m.key = ?"
+    + " WHERE s.id = ? AND (SELECT type FROM sqlite_schema WHERE name = 'state_meta') = 'table' LIMIT 2;",
+  maxBuffer: 1 << 20,
+} as const
+
 /** A profile needs its own command as soon as config exists, before its first history row (#191). */
 export const HERMES_CONFIG_HOMES = { directory: 'profiles', file: 'config.yaml', max: 64 } as const
 
@@ -76,5 +92,11 @@ export const HERMES_HOOK_SETTINGS = {
     collapsed: '[hooks] installed Hermes session hooks (collapsed {removed} stale blocks) → {file}',
     after: '[hooks] (takes effect on the next hermes session start)',
     failed: '[hooks] failed to write Hermes config.yaml:',
+  },
+  // Each session then carries the pane it was opened from (`HERMES_SESSION_PANE`). Hermes 0.21 ignores the key.
+  passthrough: {
+    section: 'terminal', key: 'client_env_passthrough', names: HERMES_SESSION_PANE.names,
+    unlisted: '[hooks] {file} has no terminal.client_env_passthrough list to add Harness\'s pane names to:'
+      + ' sessions from a shared Hermes gateway (Hermes 0.22+) will not bind to their harness',
   },
 } as const satisfies import('../kit/nativeHookYaml.js').NativeYamlHooks
