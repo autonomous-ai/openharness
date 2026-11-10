@@ -25,7 +25,7 @@ import { readAuthSession } from '../lib/authSession.js'
 import { computerId } from '../lib/daemonState.js'
 import { noticeReason, WithheldDeliveries } from './withheld.js'
 import { attentionOf } from './attention.js'
-import { prepareContribution, prepareTeamContribution } from './contribution.js'
+import { prepareContribution } from './contribution.js'
 import { homedir, hostname } from 'node:os'
 import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
 import { RebindSender, replacementObservations } from './replacements.js'
@@ -199,8 +199,6 @@ export interface SuperTabHostOptions {
   /** How long a delivery waits on each read for its context lines (CONTEXT_WAIT_MS), for a spec. */
   contextWaitMs?: number
   prepareContribution?: typeof prepareContribution
-  /** This Mac's Harness Team account preparing its workspace through the relay (contribution.ts), for a spec. */
-  prepareTeam?: (core: CoreApi, input: { tabId: string; machineId: string }) => Promise<Record<string, unknown>>
   /** The `… super-tab` prefix agents are told to run (superTabs/shortCommand.ts), for a spec. */
   agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
   /** The Swarm start this machine made of a harness (superTabs/reservations.ts), or null. */
@@ -478,11 +476,8 @@ export class SuperTabHost {
   private shareWoken = false
   private readonly attachedFiles: typeof attachedFiles
   private readonly prepareContribution: typeof prepareContribution
-  private readonly prepareTeam: NonNullable<SuperTabHostOptions['prepareTeam']>
   /** Per tab the roster marks, the add in progress or when the next may run. */
   private readonly joins = new Map<string, { running: boolean; failures: number; retryAt: number }>()
-  /** This Mac's Harness Team account being added to a Swarm, by `tabId:machineId` (joinTeams). */
-  private readonly teamJoins = new Map<string, { running: boolean; failures: number; retryAt: number; error?: string }>()
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, { text: string; paths: string[] }>()
@@ -621,7 +616,6 @@ export class SuperTabHost {
     this.contextWaitMs = options.contextWaitMs ?? CONTEXT_WAIT_MS
     this.prepareContribution = options.prepareContribution ?? prepareContribution
     this.machineDeps = options.machines ?? {}
-    this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.startReceipt = options.startReceipt ?? (() => null)
     this.claudeHome = options.claudeHome ?? homedir()
@@ -1155,7 +1149,6 @@ export class SuperTabHost {
     this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)
-    this.joinTeams(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
     if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data); void this.crew.tick(data) }
@@ -1858,54 +1851,6 @@ export class SuperTabHost {
         this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`)
       }).finally(() => { join.running = false })
     }
-  }
-
-  /**
-   * This Mac's Harness Team account joins wherever its owner added this Mac ("One machine" in
-   * docs/plans/2026-10-24-swarm-team-account.md): the roster names each Swarm where it is missing (backend store.ts hostTabs
-   * `joinTeam`). It prepares its own folder and engines, asked through the relay, and this host adds it as the person, who
-   * owns both; the backend gives it this Mac's name, slots and pause. Retried like joinSwarms while it is offline.
-   */
-  private joinTeams(rows: unknown[]): void {
-    const marked = new Map<string, { tabId: string; machineId: string; name: unknown; maxAgents: unknown }>()
-    for (const row of rows.map(object)) {
-      const team = object(row.joinTeam)
-      if (identifier(row.tabId) && identifier(team.machineId)) {
-        marked.set(`${row.tabId}:${team.machineId}`, { tabId: row.tabId, machineId: team.machineId, name: team.name, maxAgents: team.maxAgents })
-      }
-    }
-    for (const [key, join] of this.teamJoins) if (!marked.has(key) && !join.running) this.teamJoins.delete(key)
-    for (const [key, team] of marked) {
-      const join = this.teamJoins.get(key) ?? { running: false, failures: 0, retryAt: 0 }
-      if (join.running || join.retryAt > this.now()) continue
-      join.running = true
-      this.teamJoins.set(key, join)
-      void (async () => {
-        const prepared = await this.prepareTeam(this.core, { tabId: team.tabId, machineId: team.machineId })
-        await backend(this.core, 'POST', `/api/super-tabs/${team.tabId}/commands`, { operationId: randomUUID(), command: {
-          type: 'machine.contribute', machineId: team.machineId, name: typeof team.name === 'string' && team.name ? team.name : this.core.account.machineName() ?? hostname(),
-          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines,
-          maxAgents: typeof team.maxAgents === 'number' ? team.maxAgents : prepared.maxAgents, ifMissing: true } })
-      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS; delete join.error }, error => {
-        // Every refusal is tried again with the backoff, never for good (Amon, #3215: one stopped the join until a restart, and
-        // the row read "joining" with no reason). The roster stops asking once it no longer applies (backend hostRows.ts).
-        join.retryAt = this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
-        join.error = error instanceof Error ? error.message : String(error)
-        this.log(`Could not add this Mac's Harness Team account to its Swarm: ${join.error}`)
-      }).finally(() => { join.running = false })
-    }
-  }
-
-  /** Why adding this Mac's Harness Team account to a Swarm last failed, while it still fails; null when none does: what this
-   *  Mac's own row says instead of "joining" (service.ts teamJoinStatus). */
-  teamJoinFailure(): string | null {
-    for (const join of this.teamJoins.values()) if (join.error) return join.error
-    return null
-  }
-
-  /** Retry on the row: each Team account join that failed is tried on the next poll, not after its backoff. */
-  retryTeamJoins(): void {
-    for (const join of this.teamJoins.values()) if (join.error) join.retryAt = 0
   }
 
   /** Its owner removed this machine from a Swarm: the roster names the cleanup until this host acknowledges it, so a host
