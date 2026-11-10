@@ -728,6 +728,9 @@ void main() {
         expect(find.text('Show more'), findsNothing);
         expect(find.text('Show less'), findsNothing);
 
+        // The chat shows the block's end; its Copy is above, as a person scrolls to it.
+        await tester.ensureVisible(find.text('Copy'));
+        await tester.pumpAndSettle();
         await tester.tap(find.text('Copy'));
         await tester.pump();
         expect(copied, [lines.join('\n')]);

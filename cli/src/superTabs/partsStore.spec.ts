@@ -11,7 +11,7 @@ const changes = (patch: Partial<ChangedParts>): ChangedParts => ({ format: 2, re
 describe('a Swarm read as parts', () => {
   it('keeps every part of a first load in its order, with the cursor, epoch, change time and derived values', () => {
     const store = first()
-    expect(store).toMatchObject({ cursor: 'eyJ2IjoyLCJ0IjoxNzkzMDEwMDc0Mzc1LCJlIjozfQ', epoch: 3, lastChangedAt: 1793010101002, githubApp: true })
+    expect(store).toMatchObject({ cursor: 'eyJ2IjoyLCJ0IjoxNzkzMDEwMDc0Mzc1LCJlIjozfQ', epoch: 3, lastChangedAt: 1793010101002 })
     expect(store.head?.version).toBe(213990)
     expect(keys(store, 'group')).toEqual([FIXTURE.leadGroup, FIXTURE.leadsGroup, FIXTURE.workGroup, FIXTURE.doneGroup])
     expect(keys(store, 'agent')).toEqual([FIXTURE.leadId, FIXTURE.builderId])
@@ -27,7 +27,7 @@ describe('a Swarm read as parts', () => {
     expect(keys(store, 'start')).toEqual([])
     // Same version as held: the copy in the overlap window is the same part, kept as first read.
     expect(store.parts.get('agent')!.get(FIXTURE.leadId)!.data).toMatchObject({ displayName: 'River' })
-    expect(store).toMatchObject({ cursor: 'eyJ2IjoyLCJ0IjoxNzkzMDEwMDc3Mzc1LCJlIjozfQ', lastChangedAt: 1793010106120, githubApp: true })
+    expect(store).toMatchObject({ cursor: 'eyJ2IjoyLCJ0IjoxNzkzMDEwMDc3Mzc1LCJlIjozfQ', lastChangedAt: 1793010106120 })
     expect(store.derived.machines).toEqual({ [FIXTURE.machineId]: { availableSlots: 3, teamWork: { allowed: true } } })
     expect(store.head?.version).toBe(213990)
   })

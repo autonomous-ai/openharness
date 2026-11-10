@@ -7,16 +7,18 @@
  *
  * A pull request into the default branch is merged, squashed, when
  * - it is not a draft;
- * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` in a comment's first line, the reader the name
- *   the comment is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its GitHub login when unsigned; two from two
- *   readers when its text or a comment's first line says TWO READS. A comment signed by one of its writers (writersOf), in any
- *   spelling, is that writer's, and an unsigned READ-OK from the login that opened it counts for nothing (verdicts);
+ * - its head has a READ-OK from someone other than its writers: `READ-OK <sha>` as a comment's or a review's own, in its first
+ *   line (pullTalk, ownVerdict), the reader the name it is signed with ("Juno, 14:20, to **Pip**: READ-OK f6edb44"), or its
+ *   GitHub login when unsigned; two from two readers when its text or a comment's first line says TWO READS. A comment signed by
+ *   one of its writers (writersOf), in any spelling, is that writer's, and an unsigned READ-OK from the login that opened it
+ *   counts for nothing (verdicts);
  * - no reader's last word on it is a HOLD: a HOLD stands until that reader's later READ-OK;
  * - every check on its head passed;
  * - and GitHub says it can merge.
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
+import { createHash } from 'node:crypto'
 import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, Waits, waitWords } from './githubRest.js'
@@ -33,11 +35,58 @@ export const PULL_PAGES = 3
 export const openPullsPath = (repo: string): string => `/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PAGE}`
 /** How often the projects whose PM runs here are asked again: each ask reads the PM's Swarm. */
 const PROJECTS_FRESH_MS = 60_000
-/** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits. */
-const VERDICT = /(?<![\w-])(READ-OK|HOLD)\s+([0-9a-f]{7,40})(?![0-9a-f])/
+/** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits, in bold or
+ *  backticks and with its pull request's `#N` before the sha (markers.py parse_marker). */
+const VERDICT = /(?<![\w-])(READ-OK|HOLD)\*{0,2}\s+(?:#\d+\s+)?`?([0-9a-f]{7,40})(?![0-9a-f])/g
+
+/**
+ * The verdict a comment's first line gives as its own, or null. A verdict talked about is none, as lampOS's markers.py reads
+ * them, each rule from a pull request held or merged wrongly: one on a quoted line or a line opening a code fence (#5068: an
+ * author's "> READ-OK <head>" counted as a second read), named as a noun or as someone's (#3371: "your HOLD 889b694ea",
+ * #5068: "the Reviewer-lead's READ-OK"), in brackets (#3608: "(HOLD 3e741c220)"), right after a backtick or a quotation mark
+ * (#3781: "`HOLD 73aa8b23f`"), or inside quotation marks on the line (swarm-sandbox #24: "as in "Juno, HH:MM: READ-OK
+ * 239a631"", an ask's example).
+ */
+function ownVerdict(line: string): { verdict: 'READ-OK' | 'HOLD'; sha: string } | null {
+  if (/^\s*>/.test(line) || /^ {0,3}(?:`{3,}|~{3,})/.test(line)) return null
+  for (const found of line.matchAll(VERDICT)) {
+    const before = line.slice(0, found.index)
+    if (/(?:\b(?:your|for|the|that|this|their|his|her|its|my|our)|['’]s)\s+\**$/i.test(before)) continue
+    if (/[(\[]\**`?$/.test(before) || /[`"“”'‘]\**$/.test(before)) continue
+    if ((before.match(/["“”]/g) ?? []).length % 2 === 1) continue
+    return { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]! }
+  }
+  return null
+}
+
+/** A pull request's comments and its reviews' bodies, as one list in time order. A review's body reads exactly as a comment's
+ *  (lampOS #5212: El posted its reads as reviews, and four pull requests each counted one read short), its state (APPROVED,
+ *  CHANGES_REQUESTED, ...) is never a read, and a review with no words, not submitted or dismissed counts for nothing
+ *  (markers.py merge_reviews). A list that cannot be read stops the pass, as any read: nothing merges on half of it. */
+export async function pullTalk(reads: GitHubReads, repo: string, number: number): Promise<Json[]> {
+  const comments = await reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
+  const reviews = (await reads.current(repo, `/repos/${repo}/pulls/${number}/reviews?per_page=${PAGE}`, 3))
+    .filter(r => String(r.body ?? '').trim() && typeof r.submitted_at === 'string' && r.submitted_at && !['PENDING', 'DISMISSED'].includes(String(r.state)))
+    .map(r => ({ body: r.body, user: r.user, author_association: r.author_association, created_at: r.submitted_at, review: true }))
+  // Stable: a comment and a review of one time keep the comment first, as markers.py does.
+  return [...comments, ...reviews].sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
+}
 /** A post's signature: its writer's name first, then a comma, colon or bracket ("Juno, 14:20:", "**Faye** (PM):"). */
 const SIGNATURE = /^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
 const SELF = 'Harness'
+/** How each note to a pull request's author begins, after "not merged yet at <head>: ". A note is said once for each pull
+ *  request, kind and head, as lampOS's train bot keys what it told (`<PR> <kind> <head>`, train-bot.sh), never by its words:
+ *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
+ *  head can change and change order. A restart finds a note said by these first words. */
+const NOTES = { unsigned: 'the READ-OK from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ', blocked: 'GitHub\'s rules for ',
+  stacked: 'it carries open ' } as const
+type NoteKind = keyof typeof NOTES
+/** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
+ *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
+ *  yet, which read as all passed, and a job that needs another gets its check only when that one ends. */
+const CHECKS_SETTLE_MS = 3 * 60_000
+/** How many notes are remembered, as the train bot keeps the last 5,000 lines of its told list. */
+const TOLD_MAX = 5_000
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -85,7 +134,7 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     if (!TEAM.has(comment.author_association)) continue
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
     if (/\bTWO READS\b/.test(first)) twoReads = true
-    const found = VERDICT.exec(first)
+    const found = ownVerdict(first)
     if (!found) continue
     const login = String(object(comment.user).login ?? '')
     const fromOpener = people.opener !== '' && login.toLowerCase() === people.opener.toLowerCase()
@@ -101,12 +150,66 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     const last = readers.get(key)
     // A HOLD is lifted only by its own kind: a signature's by a signature, a login's (unsigned) by that login. A person whose
     // login reads as an agent's name is not that agent.
-    if (last?.verdict === 'HOLD' && found[1] === 'READ-OK' && last.signed !== !!signature) continue
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, ownLogin: !signature && fromOpener, signed: !!signature, at })
+    if (last?.verdict === 'HOLD' && found.verdict === 'READ-OK' && last.signed !== !!signature) continue
+    if (!last || at >= last.at) readers.set(key, { verdict: found.verdict, sha: found.sha, name: reader, ownLogin: !signature && fromOpener, signed: !!signature, at })
   }
   return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name, ownLogin: v.ownLogin }])), twoReads }
 }
 
+
+/** The most files GitHub lists in one compare: a change of that many or more cannot be read whole. */
+const COMPARE_FILES_MAX = 300
+/** Changes kept by each merger and assigner: what a commit changes since its merge base does not change. */
+const PATCHES_MAX = 1_000
+
+/** A compare's files as one change: each file's status and names and its added and removed lines, without context or line numbers;
+ *  null when one file has no patch (binary, or too large for GitHub to give) or the list may be cut short. */
+function changeOf(files: Json[]): string | null {
+  if (files.length >= COMPARE_FILES_MAX) return null
+  const parts: string[] = []
+  for (const file of [...files].sort((a, b) => String(a.filename ?? '').localeCompare(String(b.filename ?? '')))) {
+    if (typeof file.patch !== 'string' && Number(file.changes ?? 0) > 0) return null
+    const lines = String(file.patch ?? '').split('\n').filter(line => line.startsWith('+') || line.startsWith('-'))
+    parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''), lines]))
+  }
+  return createHash('sha256').update(parts.join('\n')).digest('hex')
+}
+
+/**
+ * What [sha] changes since its merge base with [base], as lampOS's lib.sh patch_of reads it (`git diff -U0 <merge base> <sha> |
+ * git patch-id`), from GitHub's compare, kept in [kept]. Null when GitHub cannot give it whole, or does not know the commit: no
+ * failure of the repository, and a verdict on it then counts only on its own head. Whitespace counts here, where patch-id drops
+ * it: a change of spaces alone is read again.
+ */
+async function patchOf(reads: GitHubReads, kept: Map<string, string | null>, repo: string, base: string, sha: string): Promise<string | null> {
+  const key = `${repo}\n${base}\n${sha}`
+  if (kept.has(key)) return kept.get(key)!
+  let change: string | null
+  try {
+    const files = (await reads.one(repo, `/repos/${repo}/compare/${base}...${sha}`)).files
+    change = Array.isArray(files) ? changeOf(files.map(object)) : null
+  } catch (error) {
+    if (!(error instanceof GitHubStop) || error.everywhere) throw error
+    change = null
+  }
+  kept.set(key, change)
+  if (kept.size > PATCHES_MAX) kept.delete(kept.keys().next().value!)
+  return change
+}
+
+/** Which of the verdicts' commits [shas] change what [head] changes (patchOf): lampOS counts a READ-OK for the head "or a head whose
+ *  diff from its merge base is the same patch, i.e. a plain rebase" (train-bot.sh). Updated from main with nothing of its own
+ *  changed, a pull request waited on a reader who had read it all. Read only when a verdict is on an earlier head. */
+export async function sameChange(reads: GitHubReads, kept: Map<string, string | null>, repo: string, base: string, head: string,
+  shas: Iterable<string>): Promise<Set<string>> {
+  const same = new Set<string>()
+  const earlier = [...new Set(shas)].filter(sha => !head.startsWith(sha))
+  if (!earlier.length) return same
+  const now = await patchOf(reads, kept, repo, base, head)
+  if (now === null) return same
+  for (const sha of earlier) if (await patchOf(reads, kept, repo, base, sha) === now) same.add(sha)
+  return same
+}
 
 /** Whether [name] is one of a pull request's [writers] (writersOf), however either is written. */
 export const isWriter = (writers: readonly string[], name: string): boolean => writers.some(writer => sameKey(writer) === sameKey(name))
@@ -152,19 +255,22 @@ export const pullPeople = (pull: Json, team: ReadonlySet<string>): PullPeople =>
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export const authorOf = (pull: Json): string | null => writersOf(pull)[0] ?? null
 
-/** Whether every check on a head passed (none at all passes), is still running, or failed with which names. */
-export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[] } {
-  const failed: string[] = []
+/** Whether every check on a head passed (none at all passes), is still running, or failed with which names, and what was read,
+ *  in one line, to tell two looks apart. */
+export function checksOf(runs: Json[], status: Json): { state: 'passed' | 'running' | 'failed'; failed: string[]; summary: string } {
+  const failed: string[] = [], seen: string[] = []
   let running = false
   for (const run of runs) {
+    seen.push(`${String(run.name ?? '')}:${String(run.status ?? '')}:${String(run.conclusion ?? '')}`)
     if (run.status !== 'completed') { running = true; continue }
     if (!['success', 'neutral', 'skipped'].includes(String(run.conclusion))) failed.push(String(run.name ?? 'a check'))
   }
   for (const each of Array.isArray(status.statuses) ? status.statuses.map(object) : []) {
+    seen.push(`${String(each.context ?? '')}:${String(each.state ?? '')}`)
     if (each.state === 'pending') running = true
     else if (each.state !== 'success') failed.push(String(each.context ?? 'a status'))
   }
-  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed }
+  return { state: failed.length ? 'failed' : running ? 'running' : 'passed', failed, summary: seen.sort().join('|') }
 }
 
 export class GitHubMerge {
@@ -173,8 +279,14 @@ export class GitHubMerge {
   private readonly reads: GitHubReads
   /** How long each repository is left alone after it failed: one this login cannot read, or one whose pass failed. */
   private readonly waits = new Waits()
-  /** What each pull request was last told, by head and reason, so it is told once for each head. */
-  private readonly told = new Map<string, string>()
+  /** The notes said, as `<repo>#<number> <kind> <head>` (NOTES), so each is said once. */
+  private readonly told = new Set<string>()
+  /** When each open team pull request's head (`<repo>#<number>@<head>`) was first seen, and its checks as last read: they count as
+   *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
+  private readonly seenAt = new Map<string, number>()
+  private readonly looked = new Map<string, string>()
+  /** What commits change (sameChange). */
+  private readonly patches = new Map<string, string | null>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -236,41 +348,59 @@ export class GitHubMerge {
   private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
-    const pulls = (await this.reads.current(repo, openPullsPath(repo), PULL_PAGES))
-      .filter(pull => pull.draft !== true && object(pull.base).ref === base)
+    // Every open pull request, drafts too, for what one may carry of another's (carriedPull); the ones that may merge.
+    const listed = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
+    const pulls = listed.filter(pull => pull.draft !== true && object(pull.base).ref === base)
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
-    if (!pulls.length) return
+    if (!pulls.length) { this.forgetHeads(repo, new Set()); return }
     const team = teamOf(await this.deps.crew(project), project.pm)
+    const open = new Set<string>()
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
       if (author === null || !team.has(labelOf(author))) continue
-      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
+      // Seen from now, whatever it waits for: a read that comes minutes after a push finds the head long settled.
+      const at = `${repo}#${number}@${head}`
+      open.add(at)
+      if (!this.seenAt.has(at)) this.seenAt.set(at, this.now())
+      const comments = await pullTalk(this.reads, repo, number)
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
+      // A READ-OK on an earlier head whose change is the head's is one on it (sameChange).
+      const same = await sameChange(this.reads, this.patches, repo, base, head, [...readers.values()].filter(r => r.verdict === 'READ-OK').map(r => r.sha))
       // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.
-      const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(people.writers, reader))
+      const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && (head.startsWith(r.sha) || same.has(r.sha)) && !isWriter(people.writers, reader))
       const reads = new Map(onHead.filter(([, r]) => !r.ownLogin))
       if (reads.size < (twoReads ? 2 : 1)) {
         // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
         const unsigned = onHead.find(([, r]) => r.ownLogin)?.[1]
-        if (unsigned) await this.tellOnce(repo, number, head, author, `the READ-OK from ${unsigned.name} is unsigned, and every agent of its person posts as that `
+        if (unsigned) await this.tellOnce(repo, number, head, author, 'unsigned', `${unsigned.name} is unsigned, and every agent of its person posts as that `
           + `login: its reader signs it, as in "<name>, HH:MM: READ-OK ${head.slice(0, 7)}".`, comments)
         continue
       }
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
-      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
+      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
+      // Passed, or none yet: only once they hold still (CHECKS_SETTLE_MS).
+      const before = this.looked.get(at)
+      this.looked.set(at, checks.summary)
+      if (this.now() - this.seenAt.get(at)! < CHECKS_SETTLE_MS || before !== checks.summary) continue
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
-      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`, comments); continue }
-      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`, comments); continue }
-      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`, comments); continue }
+      if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
+      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, 'dirty', `${base}: rebase it on ${base} and push.`, comments); continue }
+      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, 'blocked', `${base} block the merge. Ask your person.`, comments); continue }
       if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
+      const carried = await this.carriedPull(repo, number, head, listed)
+      if (carried) {
+        await this.tellOnce(repo, number, head, author, 'stacked', `#${carried.number}'s commits (its head ${carried.head.slice(0, 7)}), so merging it would `
+          + `merge them too. It waits until #${carried.number} merges; then update it from ${base}.`, comments)
+        continue
+      }
       const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: head })
       if (merged.status !== 200) {
         // A head that moved (409) or a merge GitHub refused (405) is read again next pass.
@@ -283,20 +413,43 @@ export class GitHubMerge {
       this.log(`[super-tab] merged ${repo}#${number} on ${head.slice(0, 7)} (READ-OK by ${by})`)
       this.reads.forget(repo)
     }
+    this.forgetHeads(repo, open)
   }
 
-  /** Says once for a head why it is not merged. It names the head, and a restart finds it among the pull request's comments:
-   *  remembered only in memory, every release (each restarts the PM's daemon, seven on 2026-11-10) said it again. */
-  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string, comments: Json[]): Promise<void> {
-    const key = `${repo}#${number}`, said = `${head}\n${what}`
-    if (this.told.get(key) === said) return
-    const line = `not merged yet at ${head.slice(0, 7)}: ${what}`
-    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(line))) {
-      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${line}`)
+  /** Another open pull request (a draft too) whose head is among [number]'s commits, or null: merging [number] would merge that one's
+   *  commits with it, unread or held. lampOS's train bot leaves such a pull request out until the one under it is merged
+   *  (train-bot.sh unstacked: #3014 and #3391 carried #3064's commit under their own). Read only when it could merge now. */
+  private async carriedPull(repo: string, number: number, head: string, open: Json[]): Promise<{ number: number; head: string } | null> {
+    const others = new Map(open.filter(pull => Number(pull.number) !== number).map(pull => [String(object(pull.head).sha ?? ''), Number(pull.number)]))
+    // Its own head is no other's: two pull requests of one head are the same commits, not one carried by the other.
+    others.delete('')
+    others.delete(head)
+    if (!others.size) return null
+    for (const commit of await this.reads.current(repo, `/repos/${repo}/pulls/${number}/commits?per_page=${PAGE}`, 3)) {
+      const under = others.get(String(commit.sha ?? ''))
+      if (under !== undefined) return { number: under, head: String(commit.sha) }
+    }
+    return null
+  }
+
+  /** Lets go of [repo]'s heads no longer open, as `<repo>#<number>@<head>`. */
+  private forgetHeads(repo: string, open: ReadonlySet<string>): void {
+    for (const key of [...this.seenAt.keys()]) if (key.startsWith(`${repo}#`) && !open.has(key)) { this.seenAt.delete(key); this.looked.delete(key) }
+  }
+
+  /** Says once for a pull request, [kind] and head why it is not merged (NOTES). It names the head, and a restart finds it among
+   *  the pull request's comments by its first words: remembered only in memory, every release (each restarts the PM's daemon,
+   *  seven on 2026-11-10) said it again. */
+  private async tellOnce(repo: string, number: number, head: string, author: string | null, kind: NoteKind, rest: string, comments: Json[]): Promise<void> {
+    const key = `${repo}#${number} ${kind} ${head}`
+    if (this.told.has(key)) return
+    const start = `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
+    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(start))) {
+      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${start}${rest}`)
     }
     // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
-    this.told.set(key, said)
-    if (this.told.size > 1_000) this.told.delete(this.told.keys().next().value!)
+    this.told.add(key)
+    if (this.told.size > TOLD_MAX) this.told.delete(this.told.values().next().value!)
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {

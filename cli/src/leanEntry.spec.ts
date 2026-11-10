@@ -116,7 +116,8 @@ describe('the lean bundle a release carries', () => {
   it.each([
     ['its side of the core', 'Only a stopped Product Manager of a Swarm project is reopened.'],
     ['its skills', 'A Swarm skill needs a role and session key'],
-    ['its GitHub App', 'The Harness GitHub App token is not in the form GitHub gives.'],
+    // The commit hook a session started with the App runs (lib/swarmGitHub.ts, kept for those sessions until 2026-12-10).
+    ['its GitHub App', 'git interpret-trailers --in-place --if-exists addIfDifferent'],
     ['its retention', 'Super Tab retention'],
     ['its replacements', 'Invalid agent replacement.'],
     ['its shared APIs', 'This computer could not open a local endpoint for the API.'],
