@@ -5,7 +5,6 @@ import 'package:cryptography/dart.dart' show DartSha256;
 import 'identity.dart' show superTabPersonName;
 import 'live_card_model.dart';
 import 'profile_model.dart';
-import 'pulse.dart';
 
 export 'profile_model.dart';
 
@@ -1044,16 +1043,6 @@ class SuperTabSnapshot {
       swarmBuddy = row['swarmBuddy'] == true,
       buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
-      _pulses = SuperTabPulse.readAll(row['pulse']),
-      _releaseTimes = {
-        if (row['releaseTimes'] case final Map projects)
-          for (final MapEntry(key: project, value: times) in projects.entries)
-            if (project is String && times is Map)
-              project: {
-                for (final MapEntry(key: part, value: at) in times.entries)
-                  if (part is String && at is num) part: at.toInt(),
-              },
-      },
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -1178,17 +1167,6 @@ class SuperTabSnapshot {
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.
   final bool autoJoin;
-
-  /// [projectId]'s board pulse (task #3384); null from a server before it,
-  /// or when its pulse could not be read.
-  SuperTabPulse? pulseOf(String projectId) => _pulses[projectId];
-  final Map<String, SuperTabPulse> _pulses;
-
-  /// When each release part (`desktop`, `cli`, `web`, `backend`) of [projectId] may next open, in ms: 0 is now, and a part
-  /// left to people has none (backend releases.ts nextReleaseAt, task #3827). Empty from an older server.
-  Map<String, int> releaseTimesOf(String projectId) =>
-      _releaseTimes[projectId] ?? const {};
-  final Map<String, Map<String, int>> _releaseTimes;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.

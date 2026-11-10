@@ -1,53 +1,7 @@
 import 'package:collection/collection.dart';
 
-import 'controller.dart';
 import 'linked_tasks.dart';
 import 'model.dart';
-
-/// How far back Shipped looks: fixed, with no control to change it (the PM's
-/// reshape of Scholes's ask, task #2551).
-const superTabBacklogShippedWindow = Duration(days: 7);
-
-/// Whether [task] merged and waits for the release that carries it (task
-/// #3452): the server lists its `releasing` parts from the merge until the
-/// release, an empty list included, so present is what says it.
-bool superTabTaskReleasing(SuperTabConversation task) => task.releasing != null;
-
-/// Whether [task] has shipped (task #2558, released since #3452): a recorded
-/// merge of any of its pull requests (a batch's counts, its own closed) that
-/// no release still waits on, or Done with none to merge. Its `shippedAt`
-/// alone cannot say: the server sets that at the first Done.
-bool superTabTaskShipped(SuperTabConversation task) =>
-    !superTabTaskReleasing(task) &&
-    (task.cards.pullRequests.any((card) => card.merged) ||
-        (task.assignment?['status'] == 'done' &&
-            task.cards.pullRequests.isEmpty &&
-            task.pullRequestUrls.isEmpty));
-
-/// [project]'s tasks the controller holds, open and closed, and of [closed],
-/// those read for a list alone: the groups the server lets this reader read,
-/// less its chat, Buddy chats, steps and private chats. What the controller
-/// holds is newer than a read, so it wins.
-List<SuperTabConversation> superTabProjectTasks(
-  SuperTabController c,
-  SuperTabProject project, {
-  Iterable<SuperTabConversation> closed = const [],
-}) {
-  final snapshot = c.snapshot;
-  if (snapshot == null) return const [];
-  return [
-    for (final g in superTabListedWork([
-      ...c.projectConversations(project.id),
-      for (final g in closed)
-        if (snapshot.conversation(g.id) == null) g,
-    ]))
-      if (g.id != project.leadConversationId &&
-          !g.isBuddyChat &&
-          !g.isAgentChat &&
-          !c.hiddenByBuddies(g))
-        g,
-  ];
-}
 
 /// A task's priority (task #3117): P0 goes first wherever work is ordered.
 enum SuperTabTaskPriority {
