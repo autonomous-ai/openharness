@@ -6,7 +6,7 @@
  * the paired relay (`machine_select` naming it).
  */
 import { randomUUID } from 'node:crypto'
-import { LOCAL_JSON_MAX_BYTES, tooLargeText } from '../lib/localJsonLimit.js'
+import { LOCAL_JSON_MAX_BYTES, refusedLineText, tooLargeText } from '../lib/localJsonLimit.js'
 import { WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -89,18 +89,16 @@ export async function openDaemon(where: Where, machineId: string = where.machine
     socket.on('error', (error) => failAll(new AgentClientError('DAEMON_UNREACHABLE', daemonUnreachableText(error, where.dataDir))))
     socket.on('close', (code) => failAll(code === 4404
       ? new AgentClientError('NO_PEER_LINK', 'That machine is not linked to this one. Run `harness link` first.')
-      : new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')))
+      // Too big for the transport itself (past its ceiling the daemon never reads the frame to say so).
+      : code === 1009 ? new AgentClientError('REQUEST_TOO_LARGE', refusedLineText(undefined))
+        : new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')))
     socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true } })))
     socket.on('message', (raw, binary) => {
       if (binary) return
       let frame: { type?: string; payload?: Record<string, unknown> }
       try { frame = JSON.parse(raw.toString()) } catch { return }
-      // The daemon refused a frame too large for it, and closes the line: what waits on it hears why.
-      if (frame.type === 'frame_too_large') {
-        const bytes = Number(frame.payload?.bytes)
-        failAll(new AgentClientError('REQUEST_TOO_LARGE', tooLargeText(Number.isFinite(bytes) ? bytes : LOCAL_JSON_MAX_BYTES + 1)))
-        return
-      }
+      // The daemon refused a frame too large for it, and closes the line: what waits on it hears why, with the daemon's own numbers.
+      if (frame.type === 'frame_too_large') { failAll(new AgentClientError('REQUEST_TOO_LARGE', refusedLineText(frame.payload))); return }
       if (frame.type === 'machine_select_error') {
         failAll(new AgentClientError(String(frame.payload?.error ?? 'MACHINE_UNAVAILABLE'), 'That machine is not reachable now. `harness machines` lists which are online.'))
         socket.close()

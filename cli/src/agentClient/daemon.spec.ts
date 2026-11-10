@@ -234,8 +234,9 @@ describe('a request too large for the daemon', () => {
       message: 'This request is 601 KiB, and Harness takes at most 512 KiB in one: nothing was sent. Put the rest in a file and send its path.' })
     expect(sent.map(text => JSON.parse(text).type)).toEqual(['machine_select'])
     // The line stays open for what fits.
-    void daemon.request('agents_list')
+    void daemon.request('agents_list').catch(() => {})
     expect(sent).toHaveLength(2)
+    daemon.close()
   })
 
   it('says the daemon\'s own refusal, before its close, to what was waiting', async () => {
@@ -244,7 +245,16 @@ describe('a request too large for the daemon', () => {
     const waiting = daemon.request('agents_list')
     socket.emit('message', Buffer.from(JSON.stringify({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes: 700 * 1024, limit: 512 * 1024 } })), false)
     socket.emit('close', 1009)
-    await expect(waiting).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE',
-      message: 'This request is 700 KiB, and Harness takes at most 512 KiB in one: nothing was sent. Put the rest in a file and send its path.' })
+    // The daemon's own numbers, and not that this request was refused: it is not named, and may have run.
+    await expect(waiting).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE', message: 'A request on this line was 700 KiB, and Harness takes at most '
+      + '512 KiB in one: it closed the line. What else waited on it may have run. Put the rest in a file and send its path.' })
+  })
+
+  it('says a frame too big for the transport itself as too large, not a bare close', async () => {
+    const { socket } = line()
+    const daemon = await openDaemon(where, 'm1', () => socket)
+    const waiting = daemon.request('agents_list')
+    socket.emit('close', 1009)
+    await expect(waiting).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE' })
   })
 })

@@ -27,12 +27,11 @@ const DAEMON_PLATE = 'daemon_plate'
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
 
-const MAX_JSON_BYTES = LOCAL_JSON_MAX_BYTES
 const LOCAL_IDLE_DEADLINE_MS = 40_000
 // The `ws` library enforces this on EVERY message on this socket, JSON or binary — so it has to
 // cover the largest binary frame this transport carries, not just JSON control frames. That is a
 // paste (see TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES in terminalBinary.ts), plus a little slack for
-// the local frame header; ordinary JSON frames stay bounded by MAX_JSON_BYTES regardless.
+// the local frame header; ordinary JSON frames stay bounded by LOCAL_JSON_MAX_BYTES regardless.
 const MAX_WS_MESSAGE_BYTES = TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES + 4_096
 
 import type { WindowVoiceReply } from './cable/windowRoute.js'
@@ -208,7 +207,7 @@ function rejectUpgrade(socket: Socket, status: number, reason: string): void {
   )
 }
 
-function jsonFrame(raw: RawData, maxBytes = MAX_JSON_BYTES): Frame | null {
+function jsonFrame(raw: RawData, maxBytes = LOCAL_JSON_MAX_BYTES): Frame | null {
   const bytes = Buffer.isBuffer(raw)
     ? raw
     : raw instanceof ArrayBuffer
@@ -284,6 +283,12 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
   }
   // Set by the window on the announce a device's pick caused, so the device is not told to follow its own choice back.
   return { active, swarms, tiles, ...(p.fromDevice === true ? { fromDevice: true } : {}) }
+}
+
+/** [raw]'s length in bytes, with nothing copied or made: it is read for every message. */
+function rawBytes(raw: RawData): number {
+  if (Array.isArray(raw)) { let total = 0; for (const part of raw) total += part.byteLength; return total }
+  return raw.byteLength
 }
 
 function binaryBytes(raw: RawData): Uint8Array {
@@ -522,13 +527,14 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       return
     }
 
-    // A JSON frame past MAX_JSON_BYTES is refused by name, with its size and the limit, before the close (1009, too big): closed
+    // A JSON frame past LOCAL_JSON_MAX_BYTES is refused by name, with its size and the limit, before the close (1009, too big): closed
     // with no word, an agent that posted a long log heard only "The connection to Harness closed." (Q3, 2026-11-10).
     const tooLarge = (raw: RawData, isBinary: boolean): boolean => {
-      if (isBinary || serviceLink) return false
-      const bytes = binaryBytes(raw).byteLength
-      if (bytes <= MAX_JSON_BYTES) return false
-      ws.send(JSON.stringify({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes, limit: MAX_JSON_BYTES } }))
+      if (isBinary || serviceLink || ws.readyState !== WebSocket.OPEN) return false
+      const bytes = rawBytes(raw)
+      if (bytes <= LOCAL_JSON_MAX_BYTES) return false
+      console.warn(`[local-ws] ${connId} FRAME_TOO_LARGE ${bytes} bytes, past ${LOCAL_JSON_MAX_BYTES}: refused, closing`)
+      ws.send(JSON.stringify({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes, limit: LOCAL_JSON_MAX_BYTES } }))
       close(1009, 'frame too large')
       return true
     }
