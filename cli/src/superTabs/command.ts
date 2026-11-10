@@ -182,8 +182,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
       command: { type: 'message.send', conversationId: first, text, replyTo, ...(answers ? { answers } : {}), recipientIds: to, ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'answer' && identifier(first) && identifier(second) && typeof third === 'string' && identifier(positional[4])) {
-    // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it, and
-    // refuses a second answer saying where the first is.
+    // The answer to the message [second] (task #3403): the server puts it in that message's thread, or right below it.
     const to: string[] = []
     for (let i = 5; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]

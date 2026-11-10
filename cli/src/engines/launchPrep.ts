@@ -8,7 +8,7 @@
 import { join } from 'node:path'
 import { homeRoots, launchHomeOf } from '../lib/engineHomes.js'
 import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
-import { acceptedIn, forgetTrustIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
+import { acceptedIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './kit/folderTrust.js'
 import { recordInheritedMcp } from './kit/inheritedMcp.js'
 import { repairHistory } from './kit/resumeRepair.js'
 import { launchContract } from './launches.js'
@@ -21,8 +21,6 @@ export interface FolderTrust {
   /** Record trust in `path`: never removes anything, and leaves a file it cannot safely extend alone. `create`: also on a
    *  computer where the engine never ran, making the file (a JSON one) with this folder alone. */
   record(path: string, options?: { create?: boolean }): 'trusted' | 'already' | 'skipped'
-  /** Clear the trust flag of `path` itself, for a folder Harness made and is deleting (kit/folderTrust.ts `forgetTrustIn`). */
-  forget(path: string): 'forgotten' | 'absent' | 'skipped'
 }
 
 /**
@@ -54,7 +52,6 @@ export function folderTrust(engine: AgentEngine, profile?: string | null, enviro
       }
       return recorded
     },
-    forget: (path) => network() ? 'skipped' : forgetTrustIn(trust, file(), path),
   }
 }
 
