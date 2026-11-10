@@ -71,6 +71,8 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1300, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarm()..shippingAnswer = answer;
+    // A message to open a thread on, as the places test does.
+    server.append('A root to thread on');
     final c = server.controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
@@ -226,6 +228,19 @@ void main() {
       await end(tester, c);
     },
   );
+
+  testWidgets('beside an open thread the narrow page still fits', (
+    tester,
+  ) async {
+    final (c, _) = await show(tester);
+    c.openThread('message-1');
+    await _settle(tester);
+    await tap(tester, key('project-sidebar-humans'));
+    await tap(tester, key('super-human-dee'));
+    expect(key('leaderboard-week'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await end(tester, c);
+  });
 
   testWidgets('one computer with two reasons says both', (tester) async {
     final (c, server) = await show(tester);
