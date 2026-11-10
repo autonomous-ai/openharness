@@ -1,47 +1,47 @@
 import { describe, expect, it } from 'vitest'
-import { NOTICE_READERS } from '../model.js'
-import { PAGE, removeRetiredNotices, RETIRED_NOTICE_KINDS } from './retiredNotices.js'
+import { NOTICE_READERS, SuperTabError } from '../model.js'
+import { CURSOR_ID, PAGE, removeRetiredNotices, RETIRED_NOTICE_KINDS, WALKED } from './retiredNotices.js'
 
-type Doc = Record<string, unknown> & { _id: string }
-const matches = (doc: Doc, q: Record<string, unknown>): boolean => Object.entries(q).every(([key, want]) => {
-  const have = key === 'source.kind' ? (doc.source as { kind?: unknown } | undefined)?.kind : doc[key]
-  if (want && typeof want === 'object' && '$in' in want) return (want.$in as unknown[]).includes(have)
-  return have === want
-})
+type Doc = { _id: string; tabId: string; conversationId: string; text: string; source?: { kind: string; detail: string } }
 
-/** A database that answers the find and deletes the job sends, in _id order, as Mongo would. */
+/** The messages and the walk's cursor, answering the find the job sends in _id order, as Mongo would. */
 class Database {
-  readonly collections = new Map<string, Doc[]>([['SuperTabMessage', []], ['SuperTabDelivery', []], ['SuperTabReceipt', []]])
+  readonly messages: Doc[] = []
   readonly commands: Array<Record<string, unknown>> = []
-  failDelete = new Set<string>()
+  cursor: string | undefined
   async $runCommandRaw(command: Record<string, unknown>): Promise<unknown> {
     this.commands.push(command)
-    if ('find' in command) {
-      const after = ((command.filter as { _id: { $gt: string } })._id.$gt)
-      const rows = [...this.collections.get(command.find as string)!].sort((a, b) => a._id < b._id ? -1 : 1).filter(doc => doc._id > after)
-      return { cursor: { firstBatch: rows.slice(0, command.limit as number).map(({ _id, tabId, source }) => ({ _id, tabId,
-        ...(source ? { source: { kind: (source as { kind?: unknown }).kind } } : {}) })) } }
-    }
-    if ('delete' in command) {
-      const name = command.delete as string
-      if (this.failDelete.has(name)) throw new Error('the database is busy')
-      const q = (command.deletes as Array<{ q: Record<string, unknown> }>)[0]!.q
-      const rows = this.collections.get(name)!
-      const kept = rows.filter(doc => !matches(doc, q))
-      this.collections.set(name, kept)
-      return { n: rows.length - kept.length, ok: 1 }
-    }
-    throw new Error(`unexpected command ${Object.keys(command)[0]}`)
+    const after = ((command.filter as { _id: { $gt: string } })._id.$gt)
+    const rows = [...this.messages].sort((a, b) => a._id < b._id ? -1 : 1).filter(doc => doc._id > after)
+    return { cursor: { firstBatch: rows.slice(0, command.limit as number).map(({ _id, tabId, conversationId, source }) => ({ _id, tabId, conversationId,
+      ...(source ? { source: { kind: source.kind } } : {}) })) } }
+  }
+  readonly superTabSweepCursor = {
+    findUnique: async ({ where }: { where: { id: string } }) => where.id === CURSOR_ID && this.cursor !== undefined ? { after: this.cursor } : null,
+    upsert: async ({ where, create }: { where: { id: string }; create: { after: string } }) => { if (where.id === CURSOR_ID) this.cursor = create.after },
   }
   message(id: string, tabId: string, kind?: string): this {
-    this.collections.get('SuperTabMessage')!.push({ _id: id, tabId, text: `text of ${id}`, ...(kind ? { source: { kind, detail: 'private words' } } : {}) })
-    this.collections.get('SuperTabDelivery')!.push({ _id: `d-${id}`, tabId, messageId: id })
-    this.collections.get('SuperTabReceipt')!.push({ _id: id, tabId })
+    this.messages.push({ _id: id, tabId, conversationId: `chat-${tabId}`, text: `text of ${id}`, ...(kind ? { source: { kind, detail: 'private words' } } : {}) })
     return this
   }
-  ids(name: string) { return this.collections.get(name)!.map(doc => doc._id).sort() }
+}
+/** The store's delete: removes the row, or answers 'gone' for one already gone; [refuse] answers with an error. */
+class Store {
+  readonly calls: Array<[string, string, string]> = []
+  refuse = new Map<string, Error>()
+  constructor(private readonly db: Database) {}
+  async removeRetiredNotice(tabId: string, conversationId: string, messageId: string): Promise<'removed' | 'gone'> {
+    this.calls.push([tabId, conversationId, messageId])
+    const refused = this.refuse.get(messageId)
+    if (refused) throw refused
+    const at = this.db.messages.findIndex(m => m._id === messageId)
+    if (at < 0) return 'gone'
+    this.db.messages.splice(at, 1)
+    return 'removed'
+  }
 }
 const asDb = (database: Database) => database as unknown as Parameters<typeof removeRetiredNotices>[0]
+const ids = (db: Database) => db.messages.map(m => m._id).sort()
 
 describe('removing stored notices of retired kinds', () => {
   it('lists no kind that is still written', () => {
@@ -49,52 +49,55 @@ describe('removing stored notices of retired kinds', () => {
     expect(RETIRED_NOTICE_KINDS).toEqual(expect.arrayContaining(['terminal-alert', 'terminal-input']))
   })
 
-  it('removes each retired notice with its deliveries and receipt, and keeps every v4 message with its own', async () => {
+  it('removes each retired notice through the store, by its Swarm and chat, and keeps every v4 message', async () => {
     const db = new Database().message('m1', 't1', 'terminal-alert').message('m2', 't1').message('m3', 't2', 'terminal-input')
       .message('m4', 't2', 'system').message('m5', 't1', 'work-stalled').message('m6', 't1', 'github').message('m7', 't2', 'a-kind-from-later')
-    const pass = await removeRetiredNotices(asDb(db), { after: '' })
-    expect(pass).toEqual({ examined: 7, removed: 3, deliveries: 3, receipts: 3, done: true })
-    expect(db.ids('SuperTabMessage')).toEqual(['m2', 'm4', 'm6', 'm7'])
-    expect(db.ids('SuperTabDelivery')).toEqual(['d-m2', 'd-m4', 'd-m6', 'd-m7'])
-    expect(db.ids('SuperTabReceipt')).toEqual(['m2', 'm4', 'm6', 'm7'])
+    const store = new Store(db)
+    expect(await removeRetiredNotices(asDb(db), store)).toEqual({ examined: 7, removed: 3, gone: 0, failed: 0, codes: {}, done: true })
+    expect(store.calls).toEqual([['t1', 'chat-t1', 'm1'], ['t2', 'chat-t2', 'm3'], ['t1', 'chat-t1', 'm5']])
+    expect(ids(db)).toEqual(['m2', 'm4', 'm6', 'm7'])
+    expect(db.cursor).toBe(WALKED)
   })
 
-  it('reads by the _id index, PAGE at a time, and stops a pass after its pages with the cursor where it left off', async () => {
+  it('reads by the _id index, PAGE at a time with a pause between pages, and carries on from its stored cursor', async () => {
     const db = new Database()
     for (let i = 0; i < 2 * PAGE + 10; i++) db.message(`m${String(i).padStart(5, '0')}`, 't', i % 2 ? 'route' : undefined)
-    const cursor = { after: '' }
     let paused = 0
-    const first = await removeRetiredNotices(asDb(db), cursor, { pages: 1, pause: async () => { paused++ } })
+    const first = await removeRetiredNotices(asDb(db), new Store(db), { pages: 1, pause: async () => { paused++ } })
     expect(first).toMatchObject({ examined: PAGE, removed: PAGE / 2, done: false })
-    expect(paused).toBe(1)
-    for (const find of db.commands.filter(c => 'find' in c)) expect(find).toMatchObject({ hint: '_id_', sort: { _id: 1 }, limit: PAGE })
-    const rest = await removeRetiredNotices(asDb(db), cursor)
+    expect(paused).toBe(0)
+    expect(db.cursor).toBe(`m${String(PAGE - 1).padStart(5, '0')}`)
+    // A worker that starts again goes on from there, not from the first message.
+    const rest = await removeRetiredNotices(asDb(db), new Store(db), { pause: async () => { paused++ } })
     expect(rest).toMatchObject({ examined: PAGE + 10, removed: PAGE / 2 + 5, done: true })
-    expect(db.collections.get('SuperTabMessage')!.filter(doc => doc.source)).toEqual([])
-    expect(db.collections.get('SuperTabMessage')).toHaveLength(PAGE + 5)
+    expect(paused).toBe(1)
+    for (const find of db.commands) expect(find).toMatchObject({ find: 'SuperTabMessage', hint: '_id_', sort: { _id: 1 }, limit: PAGE })
+    expect(db.messages.filter(doc => doc.source)).toEqual([])
+    expect(db.messages).toHaveLength(PAGE + 5)
   })
 
-  it('finds nothing to remove when it walks again from the start', async () => {
+  it('does not walk again once it has walked to the end', async () => {
     const db = new Database().message('m1', 't', 'idle').message('m2', 't')
-    await removeRetiredNotices(asDb(db), { after: '' })
-    const deletes = db.commands.filter(c => 'delete' in c).length
-    expect(await removeRetiredNotices(asDb(db), { after: '' })).toEqual({ examined: 1, removed: 0, deliveries: 0, receipts: 0, done: true })
-    expect(db.commands.filter(c => 'delete' in c)).toHaveLength(deletes)
+    await removeRetiredNotices(asDb(db), new Store(db))
+    const reads = db.commands.length
+    db.message('m0', 't', 'idle')
+    expect(await removeRetiredNotices(asDb(db), new Store(db))).toEqual({ examined: 0, removed: 0, gone: 0, failed: 0, codes: {}, done: true })
+    expect(db.commands).toHaveLength(reads)
   })
 
-  it('keeps the message when its deliveries could not go, so the next walk finds it again and finishes it', async () => {
-    const db = new Database().message('m1', 't', 'ship')
-    db.failDelete.add('SuperTabDelivery')
-    await expect(removeRetiredNotices(asDb(db), { after: '' })).rejects.toThrow('busy')
-    expect(db.ids('SuperTabMessage')).toEqual(['m1'])
-    db.failDelete.clear()
-    expect(await removeRetiredNotices(asDb(db), { after: '' })).toMatchObject({ removed: 1, deliveries: 1, receipts: 1 })
-    expect(db.ids('SuperTabMessage')).toEqual([])
+  it('counts a notice already gone, and one the store refuses by its code, and goes on', async () => {
+    const db = new Database().message('m1', 't', 'ship').message('m2', 't', 'ship').message('m3', 't', 'idle')
+    const store = new Store(db)
+    store.refuse.set('m1', new SuperTabError('SWARM_BUSY', 'busy', 503))
+    const removing = store.removeRetiredNotice.bind(store)
+    store.removeRetiredNotice = async (tabId, conversationId, messageId) => messageId === 'm2' ? 'gone' : removing(tabId, conversationId, messageId)
+    expect(await removeRetiredNotices(asDb(db), store)).toEqual({ examined: 3, removed: 1, gone: 1, failed: 1, codes: { SWARM_BUSY: 1 }, done: true })
+    expect(ids(db)).toEqual(['m1', 'm2'])
   })
 
   it('reports counts only: no id, Swarm, kind or text', async () => {
     const db = new Database().message('m-secret', 'tab-secret', 'terminal-input')
-    const pass = await removeRetiredNotices(asDb(db), { after: '' })
+    const pass = await removeRetiredNotices(asDb(db), new Store(db))
     expect(JSON.stringify(pass)).not.toMatch(/secret|terminal|text|private/)
   })
 
@@ -102,7 +105,8 @@ describe('removing stored notices of retired kinds', () => {
     const db = new Database().message('m1', 't', 'idle')
     const control = new AbortController()
     control.abort()
-    expect(await removeRetiredNotices(asDb(db), { after: '' }, { signal: control.signal })).toMatchObject({ examined: 0, done: false })
-    expect(db.ids('SuperTabMessage')).toEqual(['m1'])
+    expect(await removeRetiredNotices(asDb(db), new Store(db), { signal: control.signal })).toMatchObject({ examined: 0, done: false })
+    expect(ids(db)).toEqual(['m1'])
+    expect(db.cursor).toBeUndefined()
   })
 })

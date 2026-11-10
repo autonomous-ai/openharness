@@ -157,9 +157,9 @@ async function start(): Promise<void> {
   // Once after this release: every Swarm from before Swarm v4 is deleted, its hosts stop its agents, and then everything it kept
   // goes (superTabs/migration/wipeJob.ts).
   stopSwarmWipe = startSwarmWipe(prisma, swarms, env)
-  // Once after this release: stored notices of kinds nothing writes any more go, with their deliveries
+  // Once after this release: stored notices of kinds nothing writes any more go, each as its author's delete would take it
   // (superTabs/migration/retiredNotices.ts).
-  stopRetiredNotices = startRetiredNoticeRemoval(prisma)
+  stopRetiredNotices = startRetiredNoticeRemoval(prisma, swarms)
   // Once after this release: every avatar still stored goes, object and record (superTabs/migration/avatarRemoval.ts).
   stopAvatarRemoval = startAvatarRemoval(prisma, env)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs

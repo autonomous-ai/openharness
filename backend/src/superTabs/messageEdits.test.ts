@@ -76,6 +76,22 @@ describe('message edits', () => {
     expect(() => f.run(edit(), peer, target({ author: { kind: 'person', id: 'peer' } }))).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
   })
 
+  // The store's one-time removal of notices of retired kinds (store.ts removeRetiredNotice), which only the store gives a delete.
+  it('lets the store remove a retired notice, in an archived chat too, stepping the counters back, and never a person\'s post', () => {
+    const f = fixture()
+    const notice = (extra: Partial<MessageChangeTarget> = {}) => ({ ...target({ author: { kind: 'agent', id: 'gone-agent' }, plain: false, sequence: 4,
+      before: { message: 3, main: 3 }, ...extra }), retiredNotice: true as const })
+    Object.assign(f.lead(), { lastMessageSequence: 4, lastMainSequence: 4 })
+    expect(f.run(remove(), owner, notice()).result).toMatchObject({ changed: true, kept: false })
+    expect(f.lead()).toMatchObject({ lastMessageSequence: 3, lastMainSequence: 3, reactionSeq: 1 })
+    expect(f.run(remove(), owner, notice({ hasReplies: true })).result).toMatchObject({ kept: true })
+    expect(() => f.run(remove(), owner, { ...target(), retiredNotice: true })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(() => f.run(remove(), owner, notice({ deleted: true }))).toThrow(expect.objectContaining({ code: 'MESSAGE_DELETED' }))
+    f.lead().archived = true
+    expect(f.run(remove(), owner, notice()).result).toMatchObject({ changed: true })
+    expect(() => f.run(remove(), owner, target())).toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+  })
+
   it('refuses empty text unless the message has files, and an archived group', () => {
     const f = fixture()
     expect(() => f.run(edit('   '), owner, target())).toThrow(expect.objectContaining({ code: 'INVALID_MESSAGE' }))

@@ -6,6 +6,8 @@ import type { PrismaClient } from '@prisma/client'
 import { AVATAR_PURPOSE, MemoryAttachmentStore, SharedAvatarStore } from '../src/superTabs/attachments.js'
 import { removeAvatars } from '../src/superTabs/migration/avatarRemoval.js'
 import { removeRetiredNotices } from '../src/superTabs/migration/retiredNotices.js'
+import { SuperTabStore } from '../src/superTabs/store.js'
+import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // The one-time jobs that remove what Swarm v4 no longer writes from collections it still uses (superTabs/migration/retiredNotices.ts,
@@ -13,50 +15,62 @@ import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 // v4 row as it was. A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
-beforeAll(async () => { ({ replica, db } = await planDatabase('swarm_retired_rows_test')) })
+const owner: AuthUser = { sub: '300000000000000000000007', email: 'retired-owner@example.com', autonomousEnv: 'prod', role: 'user' }
+beforeAll(async () => {
+  ({ replica, db } = await planDatabase('swarm_retired_rows_test'))
+  await db.user.create({ data: { id: owner.sub, externalId: 'fixture-retired-owner', email: owner.email, autonomousEnv: 'prod' } })
+})
 afterAll(async () => {
   await db?.$disconnect()
   await replica?.stop()
 })
 
 const raw = (command: object) => db.$runCommandRaw(command as never)
-const ids = async (collection: string, filter: object = {}) => ((await raw({ find: collection, filter, projection: { _id: 1 }, sort: { _id: 1 }, limit: 10_000 })) as
+const ids = async (collection: string) => ((await raw({ find: collection, filter: {}, projection: { _id: 1 }, sort: { _id: 1 }, limit: 10_000 })) as
   { cursor: { firstBatch: Array<{ _id: string }> } }).cursor.firstBatch.map(doc => doc._id)
 
 describe('the stored notices of retired kinds', () => {
-  it('go with their deliveries and receipts, by the _id and [tabId, messageId] indexes; every other message stays, and a second walk removes nothing', async () => {
-    const tab = `tab-${randomUUID()}`, other = `tab-${randomUUID()}`
-    const kinds = [undefined, 'terminal-alert', 'system', 'work-stalled', 'github', undefined, 'terminal-input', 'pair-loop']
-    const messages = Array.from({ length: 40 }, (_, i) => ({ _id: `${tab}-m${String(i).padStart(3, '0')}`, tabId: i % 2 ? tab : other, conversationId: 'chat',
-      sequence: i, text: `message ${i}`, author: { kind: 'agent', id: 'a' }, recipientIds: [], mentions: [], createdAt: { $date: new Date(0).toISOString() },
-      ...(kinds[i % kinds.length] ? { source: { kind: kinds[i % kinds.length] } } : {}) }))
-    await raw({ insert: 'SuperTabMessage', documents: messages })
-    await raw({ insert: 'SuperTabDelivery', documents: messages.map(m => ({ _id: `d-${m._id}`, tabId: m.tabId, messageId: m._id, agentId: 'a', status: 'delivered' })) })
-    await raw({ insert: 'SuperTabReceipt', documents: messages.map(m => ({ _id: m._id, tabId: m.tabId, conversationId: 'chat', receipts: {}, deliveryIds: [] })) })
-    const retired = messages.filter(m => ['terminal-alert', 'work-stalled', 'terminal-input'].includes(m.source?.kind ?? '')).map(m => m._id)
-    const kept = messages.map(m => m._id).filter(id => !retired.includes(id))
+  it('go as their author\'s delete would take them, read by the _id index; every other message stays, and a finished walk does not walk again', async () => {
+    const store = new SuperTabStore(db)
+    const tab = (await store.create(owner, randomUUID(), 'Retired notices')).id
+    await db.machine.create({ data: { machineId: 'notice-host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const lead = String((await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead', machineId: 'notice-host',
+      harnessId: randomUUID(), name: 'Lead', configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }, lead: true } })).result.agentId)
+    const post = async (text: string, replyTo: string | null = null) => String((await store.execute(owner, tab, { operationId: randomUUID(),
+      command: { type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [] } }, lead)).result.messageId)
+    const alert = await post('An old terminal alert'), stalled = await post('An old stalled notice'), kept = await post('Kept')
+    const reply = await post('A reply under the stalled notice', stalled)
+    const newest = await post('An old terminal input')
+    const kind = (id: string, value: string) => raw({ update: 'SuperTabMessage', updates: [{ q: { _id: id }, u: { $set: { source: { kind: value } } } }] })
+    await kind(alert, 'terminal-alert')
+    await kind(stalled, 'work-stalled')
+    await kind(newest, 'terminal-input')
+    const group = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    const before = await group()
 
-    // Two pages a walk, so the cursor moves between finds.
     const entries = await profiled(db, async () => {
-      const cursor = { after: '' }
       let pass
-      do pass = await removeRetiredNotices(db, cursor, { pages: 1 }); while (!pass.done)
+      do pass = await removeRetiredNotices(db, store, { pages: 1 }); while (!pass.done)
     })
-    expect(await ids('SuperTabMessage', { tabId: { $in: [tab, other] } })).toEqual(kept)
-    expect(await ids('SuperTabDelivery', { tabId: { $in: [tab, other] } })).toEqual(kept.map(id => `d-${id}`).sort())
-    expect(await ids('SuperTabReceipt', { tabId: { $in: [tab, other] } })).toEqual(kept)
+    const rows = await db.superTabMessage.findMany({ where: { tabId: tab }, select: { id: true, text: true, deletedAt: true } })
+    // The Swarm's own notice of the agent joining stays too.
+    expect(rows.map(r => r.id)).toEqual(expect.arrayContaining([stalled, kept, reply]))
+    expect(rows.map(r => r.id).filter(id => id === alert || id === newest)).toEqual([])
+    expect(rows).toHaveLength(4)
+    // A notice with a reply under it stays as a deleted message, as its author's delete keeps it.
+    expect(rows.find(r => r.id === stalled)).toMatchObject({ text: 'This message was deleted.', deletedAt: expect.any(Date) })
+    // The chat's newest message went: its counter steps back to the reply, and readers are told the group changed.
+    const after = await group()
+    expect(after.lastMessageSequence).toBeLessThan(before.lastMessageSequence)
+    expect(after.reactionSeq ?? 0).toBeGreaterThan(before.reactionSeq ?? 0)
 
-    const finds = reads(entries, 'SuperTabMessage', ['_id'], ['source.kind'])
+    const finds = reads(entries, 'SuperTabMessage', ['_id']).filter(entry => entry.command?.find)
     expect(finds.length, JSON.stringify(plan(finds))).toBeGreaterThan(0)
     for (const find of finds) {
       expect(find.planSummary, JSON.stringify(plan(finds))).toMatch(/IXSCAN \{ _id: 1 \}/)
       expect(find.docsExamined, JSON.stringify(plan(finds))).toBeLessThanOrEqual(find.nreturned ?? 0)
     }
-    const deliveries = reads(entries, 'SuperTabDelivery', ['tabId', 'messageId'])
-    expect(deliveries.length).toBeGreaterThan(0)
-    for (const write of deliveries) expect(write.planSummary, JSON.stringify(plan(deliveries))).toMatch(/IXSCAN \{ tabId: 1, messageId: 1 \}/)
-
-    expect(await removeRetiredNotices(db, { after: '' })).toMatchObject({ removed: 0, deliveries: 0, receipts: 0, done: true })
+    expect(await removeRetiredNotices(db, store)).toEqual({ examined: 0, removed: 0, gone: 0, failed: 0, codes: {}, done: true })
   })
 })
 

@@ -73,7 +73,6 @@ export const NAMED_INDEX = {
     /** One message. */
     id: { _id: 1 },
   },
-  /** A project chat's open proposal roots, newest first (proposals.ts). */
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },

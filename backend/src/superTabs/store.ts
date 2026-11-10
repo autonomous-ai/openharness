@@ -51,6 +51,7 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { teamMachineIds } from './migration/teamMachinesJob.js'
 import { beforeCutoff, WIPE_CUTOFF } from './migration/wipeJob.js'
+import { isRetiredNotice } from './migration/retiredNotices.js'
 import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { clock, insertParts, loadActive, loadGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type HeadData, type MachineData, type SwarmParts } from './parts/index.js'
 import { listingDrops, readBy, withoutHints } from './parts/indexed.js'
@@ -831,6 +832,24 @@ export class SuperTabStore {
     return 'deleted'
   }
 
+  /** Removes notice [messageId] of a retired kind (migration/retiredNotices.ts) as its author's `message.delete` would, run as the
+   *  Swarm's owner and given `retiredNotice` by the store alone: its open deliveries are cancelled, a reply's thread summary is
+   *  written again, a root with replies stays as DELETED_TEXT, and the chat's counters step back. 'gone' when the Swarm, the chat
+   *  or the notice is no longer there; a repeat finds it gone. */
+  async removeRetiredNotice(tabId: string, conversationId: string, messageId: string): Promise<'removed' | 'gone'> {
+    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ownerId: true, autonomousEnv: true, deletedAt: true, format: true } })
+    if (!row || row.deletedAt || row.format !== 2) return 'gone'
+    const user: AuthUser = { sub: row.ownerId, email: '', autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+    try {
+      await this.executeOnce(user, tabId, { operationId: `retired-notice-${messageId}`, command: { type: 'message.delete', conversationId, messageId } },
+        undefined, undefined, { retiredNotice: true })
+    } catch (error) {
+      if (error instanceof SuperTabError && ['NOT_FOUND', 'MESSAGE_DELETED'].includes(error.code)) return 'gone'
+      throw error
+    }
+    return 'removed'
+  }
+
   /** A person who just joined [tabId] takes their account's name once more, outside the join: a rename committed while the join
    *  ran listed their Swarms before this one held them. Writes only when the name changed meanwhile; a failure is logged. */
   private async joined(tabId: string, userId: string): Promise<void> {
@@ -1018,9 +1037,10 @@ export class SuperTabStore {
   }
 
   /** [only]: what the store alone may give a command: `movedTo` for machine.moved (computerSignedIn), `teamMachineGone` for
-   *  machine.teamGone (takeOutTeamMachines), `wipe` for swarm.delete (wipeSwarm). */
+   *  machine.teamGone (takeOutTeamMachines), `wipe` for swarm.delete (wipeSwarm), `retiredNotice` for message.delete
+   *  (removeRetiredNotice). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true; retiredNotice?: true } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
@@ -1098,6 +1118,7 @@ export class SuperTabStore {
       const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
+      if (command.type === 'message.delete' && only.retiredNotice) context.retiredNotice = true
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
@@ -1180,7 +1201,10 @@ export class SuperTabStore {
         ({ attachments: context.attachments, voiceWords: context.voiceWords } = await this.sendable(tx, tabId, actor, command))
         claimed = context.attachments.map(a => a.id)
       }
-      if (command.type === 'message.edit' || command.type === 'message.delete') context.messageChange = await this.messageChangeTarget(tx, tabId, actor, command, original)
+      if (command.type === 'message.edit' || command.type === 'message.delete') {
+        context.messageChange = only.retiredNotice ? await this.retiredNoticeTarget(tx, tabId, command as Extract<Command, { type: 'message.delete' }>)
+          : await this.messageChangeTarget(tx, tabId, actor, command, original)
+      }
       // A start records the version of the machine it is dispatched to.
       if (command.type === 'agent.startDispatch') context.machineVersions = await this.machineVersions(tx, original)
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
@@ -1781,6 +1805,24 @@ export class SuperTabStore {
     // Only an author's delete reads further; anyone else is refused on the row alone.
     if (command.type !== 'message.delete' || actor.kind !== 'person' || target.author.id !== actor.userId) return target
     // A root with replies stays (by the thread index, one reply at most, never itself).
+    if (!message.thread || message.thread === message.id) {
+      const replies = await messagesPast(tx, { tabId, conversationId: command.conversationId, thread: message.id }, { sequence: message.sequence, id: message.id }, true, 1)
+      target.hasReplies = replies.some(r => r.id !== message.id)
+    }
+    if (!target.hasReplies) target.before = await countersBefore(tx, tabId, command.conversationId, message)
+    return target
+  }
+
+  /** The notice [command] removes for the store alone (removeRetiredNotice): absent unless it is of a retired kind, whoever reads it.
+   *  As an author's delete reads it: a root with replies stays as DELETED_TEXT, and the group's counters step back past it. */
+  private async retiredNoticeTarget(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>): Promise<MessageChangeTarget | undefined> {
+    const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
+      select: { id: true, source: true, thread: true, author: true, text: true, attachments: true, sequence: true, deletedAt: true, alsoInChat: true } })
+    if (!message || !isRetiredNotice(message.source)) return undefined
+    const author = message.author as { kind?: string; id?: string } | null
+    const target: MessageChangeTarget = { messageId: message.id, author: { kind: String(author?.kind ?? ''), id: String(author?.id ?? '') },
+      plain: false, deleted: !!message.deletedAt, hasFiles: Array.isArray(message.attachments) && message.attachments.length > 0,
+      hasReplies: false, text: message.text, sequence: message.sequence }
     if (!message.thread || message.thread === message.id) {
       const replies = await messagesPast(tx, { tabId, conversationId: command.conversationId, thread: message.id }, { sequence: message.sequence, id: message.id }, true, 1)
       target.hasReplies = replies.some(r => r.id !== message.id)

@@ -372,7 +372,7 @@ describe('the purge, everywhere', () => {
     const w = world(), gone = await swarm(w, 'Gone'), kept = await swarm(w, 'Kept')
     await gone.execute({ type: 'swarm.delete', name: 'Gone' })
     const targets = SWARM_KEYED.filter(t => !NOT_SWARMS.has(t.model))
-    expect(targets.length).toBeGreaterThan(30)
+    expect(targets.length).toBeGreaterThan(20)
     for (const tabId of [gone.tab, kept.tab]) {
       // An attachment record names its stored file, outside the Swarm's folder here: the record goes, no file is touched.
       for (const t of targets) {

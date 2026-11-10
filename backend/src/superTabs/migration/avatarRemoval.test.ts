@@ -1,7 +1,8 @@
 import { Readable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { AVATAR_PURPOSE, MemoryAttachmentStore, SharedAvatarStore } from '../attachments.js'
-import { PAGE, removeAvatars } from './avatarRemoval.js'
+import { logger } from '../../utils/logger.js'
+import { PAGE, removeAvatars, startAvatarRemoval } from './avatarRemoval.js'
 
 type Row = { _id: string; purpose: string | null }
 /** The attachment records, answering the find and delete removeChunk sends. */
@@ -71,6 +72,27 @@ describe('removing the avatars still stored', () => {
     expect(records.rows).toHaveLength(4)
     remove.mockRestore()
     expect(await removeAvatars(asDb(records), folder)).toEqual({ objects: 1, failed: 0, records: 2, done: true })
+  })
+
+  it('fails the pass when the bucket does not answer a list in time, and counts an object whose removal does not answer', async () => {
+    const { store, records, folder } = await bucket(2)
+    const list = vi.spyOn(folder.store, 'list').mockReturnValueOnce(new Promise(() => {}))
+    await expect(removeAvatars(asDb(records), folder, { callMs: 5 })).rejects.toMatchObject({ code: 'BUCKET_TIMEOUT' })
+    list.mockRestore()
+    vi.spyOn(store, 'delete').mockReturnValueOnce(new Promise(() => {}))
+    expect(await removeAvatars(asDb(records), folder, { callMs: 5 })).toEqual({ objects: 1, failed: 1, records: 0, done: false })
+    expect(records.rows).toHaveLength(4)
+  })
+
+  it('never empties the chat files\' folder: an avatar bucket that is the chat files\' bucket fails every pass, loudly', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => logger)
+    const db = { $runCommandRaw: vi.fn() }
+    const stop = startAvatarRemoval(db as never, { NODE_ENV: 'test', SUPER_TAB_ATTACHMENTS_BUCKET: 'files', SUPER_TAB_AVATARS_BUCKET: 'files',
+      SUPER_TAB_ATTACHMENTS_CREDENTIALS: '', SUPER_TAB_ATTACHMENTS_PREFIX: 'super-tabs', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'https://cdn.example.test' })
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(expect.stringContaining('[avatar-removal] pass failed'), expect.objectContaining({ code: 'SHARED_BUCKET' })))
+    stop()
+    expect(db.$runCommandRaw).not.toHaveBeenCalled()
+    error.mockRestore()
   })
 
   it('removes the records alone where no bucket is set', async () => {
