@@ -20,6 +20,7 @@ class SwarmSharedFile {
     required this.name,
     required this.text,
     this.truncated = false,
+    this.sameAs,
   });
 
   /// What the computer calls it: its path from the agent's folder when it sends one, else its name.
@@ -28,10 +29,13 @@ class SwarmSharedFile {
 
   /// The computer cut [text] at 64 KiB.
   final bool truncated;
+
+  /// The name of a file above with the same whole text (a `CLAUDE.md` that links to `AGENTS.md`), shown once.
+  final String? sameAs;
 }
 
 /// A file that is in the agent's folder and is not shown. [why] is the computer's own word for it: `link`, `not_text`,
-/// `unreadable` or `not_a_file`.
+/// `unreadable`, `not_a_file` or `too_much` (a read carries about 256 KiB of them), and any word a newer one adds.
 class SwarmSkippedFile {
   const SwarmSkippedFile(this.name, this.why);
   final String name;
@@ -78,11 +82,20 @@ class SwarmSharedInstructions {
       if (entry is! Map || label == null || entry['text'] is! String) {
         lost++;
       } else if ((entry['text'] as String).trim().isNotEmpty) {
+        final text = entry['text'] as String,
+            truncated = entry['truncated'] == true;
         files.add(
           SwarmSharedFile(
             name: label,
-            text: entry['text'] as String,
-            truncated: entry['truncated'] == true,
+            text: text,
+            truncated: truncated,
+            // Only a whole text: two files cut at 64 KiB can share their start and differ after it.
+            sameAs: truncated
+                ? null
+                : files
+                      .where((f) => !f.truncated && f.text == text)
+                      .firstOrNull
+                      ?.name,
           ),
         );
       }

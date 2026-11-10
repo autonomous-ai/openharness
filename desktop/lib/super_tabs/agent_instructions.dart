@@ -50,6 +50,9 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
 
   /// Why the file could not be read, in words.
   String? _readError;
+
+  /// A read is out: Try again turns until it answers.
+  bool _asking = false;
   bool _editing = false;
   bool _saving = false;
 
@@ -101,19 +104,26 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
     final link = widget.link;
     if (link == null) return;
     final agent = widget.agent, turn = ++_reading;
-    setState(() => _readError = null);
+    // What shows stays while the read is out (the retry turns); the answer replaces it.
+    setState(() => _asking = true);
     try {
       final read = await link.read(agent);
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() {
         _file = read.file;
         _shared = read.shared;
+        _readError = null;
+        _asking = false;
       });
     } on SwarmInstructionsError catch (error) {
       if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
       setState(() {
         _readError = _words(error.code, saving: false);
-        _shared = error.shared;
+        // A refusal that says nothing of the others (offline, a timeout) does not take back what was read of them.
+        if (error.shared.files.isNotEmpty || error.shared.skipped.isNotEmpty) {
+          _shared = error.shared;
+        }
+        _asking = false;
       });
     }
   }
@@ -311,6 +321,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
                 key: const ValueKey('swarm-instructions-retry'),
                 icon: AppIcons.refreshCw,
                 tooltip: 'Try again',
+                spinning: _asking,
                 onPressed: _read,
               ),
             ),
@@ -330,18 +341,7 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           'No instructions yet. Tell ${widget.name} how you want it to work, '
           'and it writes them here.',
         ),
-      for (final (i, one) in shared.files.indexed)
-        _sharedFile(
-          i,
-          one,
-          // A link inside the project comes as a second file with the same text (CLAUDE.md -> AGENTS.md): named, not
-          // shown twice.
-          sameAs: shared.files
-              .take(i)
-              .where((f) => f.text == one.text)
-              .firstOrNull
-              ?.name,
-        ),
+      for (final (i, one) in shared.files.indexed) _sharedFile(i, one),
     ];
     return SingleChildScrollView(
       child: Column(
@@ -375,45 +375,44 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
   }
 
   /// A file of the agent's folder, read only: its name, its text, and a line when the computer cut it. One with the text
-  /// of an earlier file, [sameAs], says so instead of repeating it.
-  Widget _sharedFile(int index, SwarmSharedFile file, {String? sameAs}) =>
-      Padding(
-        padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              file.name,
-              key: ValueKey('swarm-shared-name-$index'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.control(medium: true),
-            ),
-            const SizedBox(height: grid.AppDesktop.controlGap),
-            if (sameAs != null)
-              Text(
-                'Same as $sameAs.',
-                key: ValueKey('swarm-shared-same-$index'),
-                style: DesktopChrome.metadata(),
-              )
-            else
-              SelectableText(
-                file.text,
-                key: ValueKey('swarm-shared-text-$index'),
-                style: grid.AppType.mono(color: DesktopChrome.foreground),
-              ),
-            if (file.truncated && sameAs == null)
-              Padding(
-                padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-                child: Text(
-                  'Cut at 64 KB.',
-                  key: ValueKey('swarm-shared-cut-$index'),
-                  style: DesktopChrome.metadata(),
-                ),
-              ),
-          ],
+  /// of an earlier file ([SwarmSharedFile.sameAs]) says so instead of repeating it.
+  Widget _sharedFile(int index, SwarmSharedFile file) => Padding(
+    padding: const EdgeInsets.all(grid.AppDesktop.panelPadding),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          file.name,
+          key: ValueKey('swarm-shared-name-$index'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.control(medium: true),
         ),
-      );
+        const SizedBox(height: grid.AppDesktop.controlGap),
+        if (file.sameAs case final sameAs?)
+          Text(
+            'Same as $sameAs.',
+            key: ValueKey('swarm-shared-same-$index'),
+            style: DesktopChrome.metadata(),
+          )
+        else
+          SelectableText(
+            file.text,
+            key: ValueKey('swarm-shared-text-$index'),
+            style: grid.AppType.mono(color: DesktopChrome.foreground),
+          ),
+        if (file.truncated && file.sameAs == null)
+          Padding(
+            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+            child: Text(
+              'Cut at 64 KB.',
+              key: ValueKey('swarm-shared-cut-$index'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
+      ],
+    ),
+  );
 
   /// Why a file in the agent's folder is not shown, by the computer's own word for it.
   String _skippedWords(SwarmSkippedFile file) => switch (file.why) {

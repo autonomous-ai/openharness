@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -151,6 +152,58 @@ void main() {
       expect(find.text('Same as AGENTS.md.'), findsOneWidget);
       expect(key('swarm-shared-text-0'), findsOneWidget);
       expect(key('swarm-shared-text-1'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'two files cut at 64 KB with the same start are both shown: what follows the cut may differ',
+    (tester) async {
+      final computer = SwarmV4Computer()
+        ..shared = [
+          file('AGENTS.md', agentsMd, truncated: true),
+          file('CLAUDE.md', agentsMd, truncated: true),
+        ];
+      await show(tester, computer);
+      expect(find.text('Same as AGENTS.md.'), findsNothing);
+      expect(key('swarm-shared-text-1'), findsOneWidget);
+      expect(find.text('Cut at 64 KB.'), findsNWidgets(2));
+    },
+  );
+
+  testWidgets(
+    'Try again keeps what shows until the answer, and a read that fails again keeps the files it had',
+    (tester) async {
+      final computer = SwarmV4Computer(files: {'h/Faye': 'Be brief.'})
+        ..refuse = 'NOT_UTF8'
+        ..shared = [file('AGENTS.md', 'Ship small.')];
+      await show(tester, computer);
+      expect(find.text('Ship small.'), findsOneWidget);
+      // A slow computer: the answer waits.
+      final slow = Completer<void>();
+      computer.hold = () => slow.future;
+      await tester.tap(key('swarm-instructions-retry'));
+      await tester.pump();
+      expect(find.text('Ship small.'), findsOneWidget);
+      expect(key('swarm-instructions-error'), findsOneWidget);
+      expect(
+        tester.widget<AppIconButton>(key('swarm-instructions-retry')).spinning,
+        isTrue,
+      );
+      // It times out: no word on the others, so they stay.
+      computer
+        ..refuse = 'TIMEOUT'
+        ..shared = null;
+      slow.complete();
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(key('swarm-instructions-error')).data,
+        'Mac Studio didn\'t answer. Try again.',
+      );
+      expect(find.text('Ship small.'), findsOneWidget);
+      expect(
+        tester.widget<AppIconButton>(key('swarm-instructions-retry')).spinning,
+        isFalse,
+      );
     },
   );
 
