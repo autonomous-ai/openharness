@@ -1,5 +1,3 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -16,7 +14,6 @@ import 'model.dart';
 import 'pane.dart';
 import 'personal_machines.dart';
 import 'personal_projects.dart';
-import 'sharing.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
 import 'view.dart';
@@ -578,15 +575,10 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               children: [
                 if (!showTerminal) Offstage(child: terminal),
                 SuperTabView(
-                  // Swarm v4's layout on Desktop; the browser draws the v3 layout until the web moves (anh Dee,
-                  // 2026-11-09).
-                  board: !kIsWeb,
                   key: ValueKey('${controller.accountId}:$id'),
                   controller: controller,
                   // macOS and the web record; Linux and Windows draw no mic.
                   voiceRecorder: superTabVoiceRecorder(),
-                  onInvite: () =>
-                      unawaited(showSuperTabPeople(context, controller)),
                   onAddAgent: widget.onAddAgent,
                   onNewProject: widget.onNewProject,
                   onNewAgent: widget.onNewAgent,
@@ -627,8 +619,3 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
     );
   }
 }
-
-Future<void> showSuperTabPeople(
-  BuildContext context,
-  SuperTabController controller,
-) => showSuperTabSharing(context, controller);

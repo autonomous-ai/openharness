@@ -117,7 +117,6 @@ void main() {
             child: Scaffold(
               body: SuperTabView(
                 controller: c,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 onNewProject: () {},

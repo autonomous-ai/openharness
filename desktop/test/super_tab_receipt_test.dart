@@ -82,7 +82,6 @@ class ReceiptFixture {
           body: SuperTabView(
             controller: controller,
             app: app,
-            onInvite: () {},
             onAddAgent: (_) => addedLead = true,
             onOpenTerminal: (agent) => opened = agent.id,
             machineName: (_) => 'Team Mac',

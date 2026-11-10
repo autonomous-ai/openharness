@@ -3,10 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 
-import '../super_tab_activity_lists_test.dart' show load, swarm;
+import 'super_tab_swarm.dart' show load, swarm;
 import '../swarm_state_test.dart' show createApp;
 import 'super_tab_fixture.dart';
 
@@ -36,8 +35,7 @@ Future<SuperTabController> showLeftPane(
 }) async {
   final server = swarm();
   setup?.call(server);
-  final activity = (await tester.runAsync(() => load(server)))!;
-  final c = activity.controller;
+  final c = (await tester.runAsync(() => load(server)))!;
   final AppNotifier app = createApp();
   addTearDown(app.dispose);
   final previous = grid.AppTheme.brightness.value;
@@ -57,13 +55,10 @@ Future<SuperTabController> showLeftPane(
             app: app,
             onSelect: c.select,
             onNewAgent: () {},
-            places: SuperTabPlaces.of(c),
             onNewSwarm: () {},
             onNewProject: () {},
             onPage: (_) {},
-            attention: activity.attention,
             onManage: () {},
-            board: true,
           ),
         ),
       ),

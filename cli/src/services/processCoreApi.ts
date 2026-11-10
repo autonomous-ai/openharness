@@ -188,6 +188,11 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       // grant another process permission to write a queued instruction.
       leaseDeliveries: async (maker, leases) => maker === service &&
         (await ask?.('lease_deliveries', { leases }).catch(() => null))?.leased === true,
+      // A core from before this question answers with an error: nothing said holds it, and the write checks as before.
+      holdOf: async (agentId, deliveryId) => {
+        const hold = (await ask?.('delivery_hold', { agentId, deliveryId }).catch(() => null))?.hold
+        return typeof hold === 'string' ? hold : null
+      },
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn,

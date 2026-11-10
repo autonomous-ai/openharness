@@ -51,7 +51,6 @@ Future<void> main() async {
             Expanded(
               child: SuperTabView(
                 controller: controller,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 onOpenGroupTerminals: () =>

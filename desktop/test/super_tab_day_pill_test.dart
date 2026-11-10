@@ -67,7 +67,6 @@ Widget _app(SuperTabController c, {Brightness? brightness, Key? picture}) =>
       home: Scaffold(
         body: SuperTabView(
           controller: c,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Mac Studio',
