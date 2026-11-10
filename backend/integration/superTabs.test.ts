@@ -12,6 +12,7 @@ import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
+import { PERSONAL_SWARM_OPERATION } from '../src/superTabs/deletion.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { attachmentsFromEnv, MemoryAttachmentStore, MemoryAvatarStore, REMOVING_UPLOAD_PURPOSE } from '../src/superTabs/attachments.js'
 import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
@@ -3388,6 +3389,26 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
     await run(tab, { ...join, maxAgents: 8, cwd: '/elsewhere' })
     expect((await store.read(owner, tab)).state.machines!.find(m => m.machineId === machineId)).toEqual(added)
+  })
+
+  // Swarm v4: a plain agent leads no conversation, and a Personal Swarm may hold nothing else. Its host joined the machine only for a
+  // Lead, so such a Swarm never got its machine, and the machine's rows never came (Personal Swarm, 2026-11-10).
+  it('adds the machine a plain agent of the owner runs on, in a Personal Swarm with nothing else', async () => {
+    const machineId = `owner-plain-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const tab = (await store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const chat = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId, engine: 'codex', name: 'Ada', local: true })).result.conversationId)
+    await run(tab, { type: 'agent.add', conversationId: chat, machineId, harnessId: randomUUID(), name: 'Ada', configuration: config, lead: false })
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([true])
+    await run(tab, { type: 'machine.contribute', machineId, name: 'Ken Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 3, ifMissing: true })
+    expect((await store.read(owner, tab)).state.machines!.map(m => m.machineId)).toEqual([machineId])
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([false])
+    // Its person takes the machine out of the Swarm, then runs a new agent on it: the host is not asked to add it back (an older CLI
+    // does whatever this says).
+    await run(tab, { type: 'machine.remove', machineId })
+    const again = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId, engine: 'codex', name: 'Bo', local: true })).result.conversationId)
+    await run(tab, { type: 'agent.add', conversationId: again, machineId, harnessId: randomUUID(), name: 'Bo', configuration: config, lead: false })
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab && r.agent?.name === 'Bo').map(r => r.joinSwarm)).toEqual([false])
   })
 
   it('never adds another account\'s machine', async () => {

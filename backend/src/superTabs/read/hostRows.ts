@@ -6,7 +6,7 @@
 import { buddySleepManaged } from '../buddySleep.js'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
-import { buddyChatOf, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
+import { buddyChatOf, isBuddy, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
 import { buddyEngineChat } from '../buddyEngine.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
@@ -73,12 +73,14 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     resume,
     agent: target,
     ...(buddySleepManaged(state, target) ? { buddySleepManaged: true as const } : {}),
-    // A Buddy-only record is not the machine in the Swarm: the owner's Lead there still joins it, which makes the record an ordinary
-    // machine (commands.ts machine.contribute ifMissing; security review 2 of #2234).
-    // Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins.
-    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly)
-      && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub))
-      && state.conversations.some(c => !c.archived && c.leadId === target.id),
+    // The owner's host adds the machine any agent of theirs runs on, a Lead or a plain v4 agent (Swarm v4: a Personal Swarm may hold only
+    // plain agents, which lead nothing). Never for a Buddy: a Buddy-only record is not the machine in the Swarm. An agent of the owner
+    // there still joins it, which makes the record an ordinary machine (commands.ts machine.contribute ifMissing; security review 2 of
+    // #2234). Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins. Never a
+    // machine its person took out of the Swarm (removedMachines): an older host adds it back on this word alone (cli host.ts).
+    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !isBuddy(target)
+      && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly) && !state.removedMachines?.some(r => r.machineId === machineId)
+      && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub)),
     skillMode: home ? skillModeOf(home) : 'orchestration',
     // What the host installs as the agent's instructions, read again when the revision moves (project instructions, phase 3).
     roleName: roleNameOf(state, target),
