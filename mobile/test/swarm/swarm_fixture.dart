@@ -91,10 +91,13 @@ Map<String, dynamic> groupData(
   String? workerId,
   List<String>? audience,
   int lastMessageSequence = 0,
+  int? lastPersonSequence,
+  String? kind,
   bool dormant = false,
 }) => {
   'id': id,
   'projectId': project,
+  'kind': ?kind,
   'number': ?number,
   'title': title,
   'leadId': ?leadId,
@@ -117,6 +120,7 @@ Map<String, dynamic> groupData(
       'result': null,
     },
   'lastMessageSequence': lastMessageSequence,
+  'lastPersonSequence': ?lastPersonSequence,
   'pullRequestUrls': <String>[],
 };
 
