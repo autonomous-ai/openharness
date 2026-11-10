@@ -479,7 +479,7 @@ describe('SessionInputController', () => {
     // 40 (2026-11-10). A message sent within a second of the agent's start waited the lease's 15 s for a screen nobody could read,
     // and was lost with an error. Now it waits for the reader, bounded, says so once, and is typed once.
     it.each([[undefined, 'a person\'s message'], ['team:service:superTabs:A', 'a delivery']] as const)(
-      'waits for its engine\'s reader to start, says so once, and types it once it is up (%s, %s)', async (deliveryId) => {
+      'waits for its engine\'s reader to start, says so once, and types it once it is up (%s, %s)', async (deliveryId, _what) => {
         let up = false
         let started: (ok: boolean) => void = () => {}
         const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }

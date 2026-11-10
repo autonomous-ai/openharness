@@ -136,7 +136,7 @@ import { loopbackAnswer } from '../lib/loopbackGet.js'
 import { writeBrowserShim } from '../lib/browserShim.js'
 import { createAgentEvents } from './agents/events.js'
 import { createSessionNormalizers } from './transcripts/normalizers.js'
-import { createInput } from './input.js'
+import { createInput, ENGINE_START_WAIT_MS } from './input.js'
 import { createQuestionResponse, createQuestions } from './questions.js'
 import { createCloudAgents, type CloudAgents } from './agents/cloud.js'
 import { createCloudLink } from './cloudLink.js'
@@ -1409,6 +1409,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
     typed: (id) => ports.agentCleanup?.typed(id),
     moveGate,
+    // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
+    engineStarting: (engine) => !isolatedScreen(engine) || !readerEngine(engine) || !serviceLinksRef || serviceLinksRef.connected(READER_SERVICES[engine])
+      ? null : serviceLinksRef.whenUp(READER_SERVICES[engine], ENGINE_START_WAIT_MS),
   })
   const input = inputs.input
   const deviceInput = inputs.deviceInput

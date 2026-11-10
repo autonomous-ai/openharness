@@ -106,11 +106,12 @@ interface Waiting {
 /** The most notifications held for one service while it is down. */
 export const HELD_MAX = 1_000
 
-/** How long a request waits for its service on demand to start and connect, at most. A process starts in a
- *  second or two even on a loaded machine; one that has not connected in this long is not starting (it ends as
- *  it starts, and its master parks it). Models' requests wait up to fifteen minutes for their answers (grid's
- *  set-up, a download), which a request for a models that cannot start must not wait on its connection. */
-export const ON_DEMAND_START_MS = 20_000
+/** How long a service on demand may take to start and connect, from when it is first asked for. Claude Code's reader, from an
+ *  agent's create to connected, measured on this Mac: 6.9, 7.2 and 7.8 s at load 40 to 48 (its process 2.4 to 3.2 s of that), and
+ *  26 s once at load 40 (R, 2026-11-10), past the 20 s this was, which lost a person's first message. One that has not connected
+ *  in this long is not starting (it ends as it starts, and its master parks it). Models' requests wait up to fifteen minutes for
+ *  their answers (grid's set-up, a download), which a request for a models that cannot start must not wait on its connection. */
+export const ON_DEMAND_START_MS = 45_000
 
 /** The most requests held at once for one service to come back after it went (`waitsThroughRestart`); past it,
  *  a request is answered SERVICE_UNAVAILABLE at once, as before. A window asks the Store a few things at a time
@@ -137,6 +138,25 @@ export function createServiceLinks(options: ServiceLinksOptions) {
    *  and is parked). Its requests are answered at once, as a service that is down is, instead of each waiting
    *  the whole wait again (⌘K's 25 s, found end to end with the devices crashing on every start), until it connects. */
   const unstarted = new Set<string>()
+  /** Each start of a service on demand not yet connected: its start wait, from when it was first asked for. Only when that runs
+   *  out does it count as `unstarted`, and what still waits for it is answered. A screen read waits a second, and one that ran out
+   *  marked Claude Code's reader, which took 26 s to start on a Mac at load 40, as unable to start: every read after it was
+   *  refused at once (2026-11-10). */
+  const starts = new Map<string, unknown>()
+  /** Who waits for a service to connect (`whenUp`). */
+  const upWaiters = new Map<string, Set<(up: boolean) => void>>()
+  const startOver = (service: string): void => {
+    starts.delete(service)
+    if (links.has(service)) return
+    unstarted.add(service)
+    for (const [id, entry] of waiting) if (entry.service === service && entry.frame) settle(id, entry, unavailable(service))
+    for (const up of upWaiters.get(service) ?? []) up(false)
+  }
+  /** Asks the master for [service] on demand; its start wait begins with the first ask. */
+  const askFor = (service: string): void => {
+    if (!starts.has(service)) starts.set(service, setTimer(() => startOver(service), startWaitMs))
+    options.want?.(service)
+  }
   const waiting = new Map<string, Waiting>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
    *  its next connection; bounded, the oldest dropped first. */
@@ -188,13 +208,12 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
     const wait = waitMs ?? waitFor(service, type)
     const entry: Waiting = { service, type, reply, timer: null, wait, request: frame, connection: link, expiresAt: now() + wait, ...(starting ? { frame } : {}) }
+    // The start's own wait comes first: a request whose own wait is longer is answered as its start runs out (`startOver`).
+    if (starting) askFor(service)
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
-    entry.timer = setTimer(() => {
-      if (entry.frame) unstarted.add(service)
-      settle(id, entry, unavailable(service))
-    }, starting ? Math.min(wait, startWaitMs) : wait)
+    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), wait)
     waiting.set(id, entry)
-    if (starting) { options.want?.(service); return }
+    if (starting) return
     if (!link!.sink.sendFrame(frame)) settle(id, entry, unavailable(service))
   }
 
@@ -215,6 +234,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       seen.add(service)
       // Back: the next time it goes, it is waited for again.
       unstarted.delete(service)
+      clearTimer(starts.get(service))
+      starts.delete(service)
       log(`[services] ${service} connected`)
       // Found by QA on a quiet machine: a cold Share received its request before `connected`, so it
       // read agents without a core connection and answered HARNESS_NOT_FOUND. Welcome it first.
@@ -225,6 +246,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       // What the core tells it as it connects comes before the requests that woke it: the gateway answers
       // nothing until it is told what to start from (core/gatewayLink.ts `connected`).
       options.connected?.(service)
+      for (const up of upWaiters.get(service) ?? []) up(true)
+      upWaiters.delete(service)
       // The requests that woke an experiment, in the order they came.
       for (const [id, entry] of waiting) {
         if (entry.service !== service || !entry.frame) continue
@@ -282,6 +305,21 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       if (!service) return false
       ask(service, type, payload, asker, reply)
       return true
+    },
+
+    /** Whether [service] is connected, waiting up to [waitMs] for one on demand that is starting (asked for if it is not): true once it
+     *  connects, false when it does not in time, could not start, or is not one on demand. Never rejects. */
+    whenUp(service: string, waitMs: number): Promise<boolean> {
+      if (links.has(service)) return Promise.resolve(true)
+      if (!options.onDemand?.has(service) || unstarted.has(service) || seen.has(service)) return Promise.resolve(false)
+      askFor(service)
+      return new Promise((resolve) => {
+        const waiters = upWaiters.get(service) ?? new Set<(up: boolean) => void>()
+        upWaiters.set(service, waiters)
+        const done = (up: boolean): void => { clearTimer(timer); waiters.delete(done); resolve(up) }
+        const timer = setTimer(() => done(false), waitMs)
+        waiters.add(done)
+      })
     },
 
     /** Ask a service what the core itself needs (a port's call, core/monitorLink.ts): answered by its

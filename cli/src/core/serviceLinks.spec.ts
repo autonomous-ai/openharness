@@ -209,7 +209,8 @@ describe('service links', () => {
 
   it('answers SERVICE_UNAVAILABLE for one on demand that does not come in time, then at once until it comes, or will not take the request', () => {
     const want = vi.fn()
-    const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want })
+    const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want,
+      startWaitMs: 5_000 })
     const late = vi.fn()
     links.route('orchestrator', { action: 'list' }, ASKER, late)
     vi.advanceTimersByTime(5_000)

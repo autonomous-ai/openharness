@@ -30,6 +30,7 @@ import type { TerminalControl } from './terminals/control.js'
 import { launchBound } from './engines/sessionBinding.js'
 import { inputContextIn } from '../lib/nativeTurnObservations.js'
 import { teamHold } from '../engines/kit/screen.js'
+import { ON_DEMAND_START_MS } from './serviceLinks.js'
 import type { ShortTurnGuard } from './turns/shortTurnGuard.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
@@ -77,6 +78,9 @@ export interface InputDeps {
   controlHeld?: (agentId: string) => boolean
   /** An agent whose turns keep ending at once has its automatic writes held a while (turns/shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'holding'>
+  /** Whether an engine's reader is starting: null when it is up or the engine has none in a process of its own, else whether it
+   *  came up within its wait (core/serviceLinks.ts `whenUp`). */
+  engineStarting?: (engine: string) => Promise<boolean> | null
 }
 
 /**
@@ -142,6 +146,10 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
     })
   }
 }
+
+/** How long a message waits for its engine's reader to start before the lease's own wait: as long as a start may take
+ *  (core/serviceLinks.ts ON_DEMAND_START_MS). */
+export const ENGINE_START_WAIT_MS = ON_DEMAND_START_MS
 
 /** How long the check before a message's Enter asks again after a read that says nothing: 3 s. */
 const ENTER_CHECK_TRIES = 12
@@ -242,6 +250,11 @@ export function sessionInputDeps(
     }),
     sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
+    engineStarting: (session) => deps.engineStarting?.(session.engine) ?? null,
+    // The app hears that the message waits, and why: it shows the agent as starting until the message is typed or refused (`error`).
+    onWaiting: (sessionId, reason) => {
+      clients.send({ type: 'message_waiting', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { reason, waitMs: ENGINE_START_WAIT_MS } })
+    },
     onError: (sessionId, message) => {
       clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
       const engine = resolve(sessionId)?.engine

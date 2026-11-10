@@ -164,6 +164,11 @@ export interface SessionInputDeps {
    * moment at which a turn is known to have started, and this one is exact: we sent it.
    */
   onSubmitted?: (sessionId: string, content: string) => void
+  /** Whether the engine's reader of [session] is starting: null when it is up (or the engine needs none), else whether it came up
+   *  within its bounded wait (core/serviceLinks.ts `whenUp`). A message waits for it before the lease's wait begins. */
+  engineStarting?: (session: RegisteredSession) => Promise<boolean> | null
+  /** A message waits for something before it is typed: said once, as it starts to wait. */
+  onWaiting?: (sessionId: string, reason: 'engine_starting') => void
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -240,6 +245,18 @@ export class SessionInputController {
    * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
    * lost, and a real engine takes seconds to confirm.
    */
+  /** Waits, bounded, for the engine's reader to start (`engineStarting`), saying so once; one that does not come in time is
+   *  logged by name, and the write goes on to the lease's wait and its refusal as before. */
+  private async engineReady(sessionId: string, session: RegisteredSession): Promise<void> {
+    const starting = this.deps.engineStarting?.(session)
+    if (!starting) return
+    console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
+    this.deps.onWaiting?.(sessionId, 'engine_starting')
+    const since = (this.deps.now ?? Date.now)()
+    const up = await starting
+    console.warn(`[inject] ${sid(sessionId)} ${up ? 'reader up' : 'ENGINE_NOT_STARTED reader did not start'} · engine=${session.engine} · after ${Math.round(((this.deps.now ?? Date.now)() - since) / 1000)} s`)
+  }
+
   private async injectWhenLeased(
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
@@ -656,6 +673,7 @@ export class SessionInputController {
       // would corrupt it into a run-on prompt anyway, which is worse and harder to notice.
       await this.deps.sendKey(session.agentId, 'C-u')
     }
+    await this.engineReady(sessionId, session)
     const delivery = await this.injectWhenLeased(() => this.write(session.agentId, content, inputContext),
       () => this.controlSession(session.agentId) !== undefined)
     const accepted = typeof delivery === 'boolean'
@@ -726,6 +744,9 @@ export class SessionInputController {
         if (!deliveryId.startsWith('team:')) this.deps.onError(sessionId, 'This agent process is no longer running.')
         return
       }
+      if (state.cancelled || this.states.get(sessionId) !== state) return
+      // Before the team's own check of the pane, which a reader not yet up cannot read either.
+      await this.engineReady(sessionId, session)
       if (state.cancelled || this.states.get(sessionId) !== state) return
       if (deliveryId.startsWith('team:')) {
         const held = this.deps.beforeTeamWrite ? await this.deps.beforeTeamWrite(session, deliveryId) : 'team_waiting_unavailable'
