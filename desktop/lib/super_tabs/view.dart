@@ -102,6 +102,7 @@ import 'voice_row.dart';
 import 'voice_send.dart';
 import 'voice_take.dart';
 import 'swarm_type.dart';
+import '../terminal/terminal_font_store.dart';
 import 'visible_tick.dart';
 import 'chat/chat_card.dart';
 import 'chat/chat_time.dart';
@@ -5429,9 +5430,13 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget build(BuildContext context) {
     _syncThreadPane();
     _recordPlace();
-    return SuperTabFiles(
-      fresh: widget.controller.readFileLink,
-      child: SuperTabImageStage(open: _openImages, child: _swarm(context)),
+    // Every pane here reads at the terminal's size, and is drawn again when it changes (anh Dee, 2026-11-10).
+    return SwarmTextSize(
+      notifier: terminalFontStore,
+      child: SuperTabFiles(
+        fresh: widget.controller.readFileLink,
+        child: SuperTabImageStage(open: _openImages, child: _swarm(context)),
+      ),
     );
   }
 
