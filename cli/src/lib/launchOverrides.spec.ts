@@ -13,7 +13,7 @@ import { GRID_CONFLICTING_ENV_VARS, GRID_KEY_VAR, type GridLaunchOverride } from
 import { CLAUDE_ALLOW_WEB_TOOLS_ARG, CLAUDE_DISALLOW_WEB_TOOLS_ARG } from './gridWebMcp.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
-import { prepareSwarmSkill } from './swarmSkills.js'
+import { PM_BASICS, SWARM_BASICS, swarmBasics } from './swarmSkills.js'
 import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
@@ -45,7 +45,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    swarm: { prepare: (saved) => prepareSwarmSkill(saved), github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
+    swarm: { basics: (lead) => swarmBasics(lead).text, github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
     ...overrides,
   }
   return { d, calls }
@@ -484,6 +484,19 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(told(own.overrides.extraArgs)).toContain('Never watch GitHub yourself')
     expect(told(grid.overrides.extraArgs)).toContain(told(own.overrides.extraArgs))
   })
+
+  // Every relaunch carries the team's basics byte for byte, the PM's part for the PM alone (lib/swarmSkills.ts, until the
+  // plan's item 7 cuts the text): no skill mode or skill file changes them.
+  it('relaunches a Swarm agent with the team\'s basics, and its PM with the PM\'s part too', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'overrides-basics-'))
+    const told = async (role: 'agent' | 'coordinator') => {
+      const built = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd, swarmSkill: { role, key: `harness-claude-${role}` } }, 'a', () => true)
+      if (!built.ok) throw new Error('Fixture launch failed')
+      return built.overrides.extraArgs[built.overrides.extraArgs.indexOf('--append-system-prompt') + 1]
+    }
+    expect(await told('agent')).toBe(SWARM_BASICS)
+    expect(await told('coordinator')).toBe(`${SWARM_BASICS}\n${PM_BASICS}`)
+  })
 })
 
 describe('buildLaunchOverrides — opencode v2', () => {
@@ -614,7 +627,7 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
 
   // Task #4395: a relaunch rebuilds the engine's arguments, so the agent's own folder is added again, with its TMPDIR.
   it('names the saved Swarm skill of an agent, whose key names its folder, and adds its own folder again', async () => {
-    const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
+    const swarm = { args: () => [], basics: () => 'x' }
     told({ TMPDIR: '/data/agent-tmp/one' }, ['--add-dir=/data/agent-tmp/one'])
     const result = await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'agent', key: 'k' } as never }, 'a')
     expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', { role: 'agent', key: 'k' })

@@ -27,7 +27,6 @@ import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { derivedEtag, marksOf } from './derivedEtag.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
-import { AvatarLinks } from '../avatarLinks.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
@@ -104,10 +103,8 @@ export class SwarmReads {
   constructor(private readonly store: SuperTabStore, options: { now?: () => number } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
-    this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
     this.servedTops = new ServedTops(store.db)
   }
-  private readonly avatarLinks: AvatarLinks | null
   /** Each project chat's newest main row people read, as readers are served it (servedTops.ts, #2742). */
   private readonly servedTops: ServedTops
   /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
@@ -122,7 +119,7 @@ export class SwarmReads {
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         ...view.parts,
-        ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
+        ...stamped({ ...view.derived, ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
   }
@@ -150,14 +147,6 @@ export class SwarmReads {
       startsOfRule(listed)) : []
     const taken = new Set([...held, ...fresh.map(s => s.key)])
     return [...fresh, ...named.filter(s => !taken.has(s.key))]
-  }
-
-  /** The reader's avatar links (avatarLinks.ts), only ever in a member's read: issued afresh each time, never stored. */
-  private async withAvatars(view: ReaderView, now: number): Promise<Derived> {
-    if (!this.avatarLinks) return view.derived
-    const seen = new Set(Object.keys(view.derived.agents))
-    const avatars = await this.avatarLinks.forReader(view.state, view.state.agents.filter(a => seen.has(a.id)), now)
-    return Object.keys(avatars).length ? { ...view.derived, avatars } : view.derived
   }
 
   /** Every machine the reader sees, whole: what a client that asks for lines in its changes reads when it needs more than liveness. */
@@ -204,7 +193,7 @@ export class SwarmReads {
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
         epoch: read.parts.visibilityEpoch, ...sent,
-        ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
+        ...stamped({ ...read.view.derived, ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
 

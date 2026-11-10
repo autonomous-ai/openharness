@@ -75,8 +75,6 @@ export const NAMED_INDEX = {
   },
   /** A project chat's open proposal roots, newest first (proposals.ts). */
   SuperTabOpenProposal: { open: { tabId: 1, conversationId: 1, sequence: 1 }, id: { _id: 1 } },
-  /** A Swarm's newest route decisions: the route-decision list. */
-  SuperTabRouteDecision: { recent: { tabId: 1, createdAt: 1 } },
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },

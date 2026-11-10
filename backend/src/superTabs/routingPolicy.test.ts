@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ROUTING_POLICY, priorFor, routingPolicySchema } from './routingPolicy.js'
-import type { PriorsTable } from './benchmarkPriors/priors.js'
+import { DEFAULT_ROUTING_POLICY, routingPolicySchema } from './routingPolicy.js'
 
 describe('routing policy', () => {
   it('ships a valid default that needs no setup', () => {
@@ -42,47 +41,5 @@ describe('routing policy', () => {
     expect(bad({ models: [{ ...DEFAULT_ROUTING_POLICY.models[0], engine: 'cursor' }] })).toBe(false)
     expect(bad({ models: [{ ...DEFAULT_ROUTING_POLICY.models[0], cost: 0 }] })).toBe(false)
     expect(bad({ models: [] })).toBe(false)
-  })
-
-  describe('owner override of a benchmark prior', () => {
-    const src = 'https://example.org/board'
-    const entry = (model: string, value: number, engine: 'claude' | 'grid' = 'claude') => ({ engine, model, names: [model], benchmarkNames: [model],
-      scores: [{ benchmark: 'terminal-bench-4.0', score: value, harness: 'Claude Code', source: src, date: '2026-09-22', via: 'leaderboard' as const }] })
-    const table: PriorsTable = { refreshed: '2026-10-29', note: 'Depends on the harness.', benchmarks: [{ id: 'terminal-bench-4.0', name: 'Terminal-Bench 4.0', url: src }],
-      models: [entry('best', 80), entry('moonshotai/kimi-k3', 12, 'grid')] }
-    const withOverrides = (priorOverrides: unknown) => routingPolicySchema.parse({ ...DEFAULT_ROUTING_POLICY, priorOverrides })
-
-    it('uses the benchmark prior when the owner sets nothing, and says where it came from', () => {
-      const prior = priorFor(DEFAULT_ROUTING_POLICY, { engine: 'grid', model: 'moonshotai/kimi-k3' }, 'cli', table)
-      expect(prior?.quality).toBe(1)
-      expect(prior?.source).toBe('benchmark')
-    })
-
-    it('lets the owner replace one prior: that model and kind only, matched by the words of its name', () => {
-      const policy = withOverrides([{ model: 'kimi k3', kind: 'cli', quality: 3 }])
-      expect(priorFor(policy, { engine: 'grid', model: 'moonshotai/kimi-k3' }, 'cli', table)).toEqual({ quality: 3, source: 'owner' })
-      expect(priorFor(policy, { engine: 'grid', model: 'moonshotai/kimi-k3' }, 'backend', table)?.source).toBe('benchmark')
-      expect(priorFor(policy, { engine: 'claude', model: 'best' }, 'cli', table)?.quality).toBe(3)
-      expect(priorFor(policy, { engine: 'claude', model: 'best' }, 'cli', table)?.source).toBe('benchmark')
-    })
-
-    it('gives a model with no data an owner prior, and keeps first match first', () => {
-      const policy = withOverrides([{ model: 'qwen 3', kind: 'tests', quality: 2 }, { model: 'qwen', kind: 'tests', quality: 1 }])
-      expect(priorFor(policy, { engine: 'grid', model: 'qwen3:4b', label: 'Qwen 3 4B' }, 'tests', table)).toEqual({ quality: 2, source: 'owner' })
-      expect(priorFor(policy, { engine: 'grid', model: 'qwen3:4b', label: 'Qwen 3 4B' }, 'docs', table)).toBeUndefined()
-    })
-
-    it('rejects a level outside 1-3, an unknown kind, an empty or oversized model name, more than 100 rows and unknown fields', () => {
-      const bad = (rows: unknown) => routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, priorOverrides: rows }).success
-      const ok = { model: 'kimi k3', kind: 'cli', quality: 2 }
-      expect(bad([ok])).toBe(true)
-      expect(bad([{ ...ok, quality: 4 }])).toBe(false)
-      expect(bad([{ ...ok, quality: 0 }])).toBe(false)
-      expect(bad([{ ...ok, kind: 'ui' }])).toBe(false)
-      expect(bad([{ ...ok, model: ' ' }])).toBe(false)
-      expect(bad([{ ...ok, model: 'x'.repeat(201) }])).toBe(false)
-      expect(bad(Array.from({ length: 101 }, () => ok))).toBe(false)
-      expect(bad([{ ...ok, note: 'because' }])).toBe(false)
-    })
   })
 })

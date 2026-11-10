@@ -165,8 +165,9 @@ it('reuses the host timestamp at the same stamp, including a repeated wake with 
 
   // A committed change invalidates the timestamp along with the host inputs; a cold/direct read agrees.
   clock = Date.now()
+  // The worker's post: only agents post in a project's channel and its tasks' chats (agentsOnly.test.ts).
   await store.execute(owner, s.tabId, { operationId: randomUUID(), command: {
-    type: 'message.send', conversationId: s.web, text: 'A newer change', replyTo: null, recipientIds: [] } })
+    type: 'message.send', conversationId: s.web, text: 'A newer change', replyTo: null, recipientIds: [] } }, s.worker)
   const changed = await hosts.changes(owner, s.machineId, { full: true })
   const newest = (await lastChangedAt(db, [s.tabId])).get(s.tabId)
   expect(newest).toBeGreaterThan(first.tabs[0]!.lastChangedAt!)
@@ -193,7 +194,7 @@ it('reads each Swarm\'s newest change from one index key per part collection, wi
   const a = await scene(), b = await scene()
   clock = Date.now()
   await store.execute(owner, b.tabId, { operationId: randomUUID(), command: {
-    type: 'message.send', conversationId: b.web, text: 'A newer change', replyTo: null, recipientIds: [] } })
+    type: 'message.send', conversationId: b.web, text: 'A newer change', replyTo: null, recipientIds: [] } }, b.worker)
   const expected = await newestByScan([a.tabId, b.tabId])
   const entries = await profiled(async () => expect(await lastChangedAt(db, [a.tabId, b.tabId])).toEqual(expected))
   const scans = entries.filter(e => timestampScans([e]).length)
@@ -213,18 +214,25 @@ it('lists Swarms with their newest change read once per stamp, not on every list
   expect(timestampScans(await profiled(() => reads.list(owner)))).toEqual([])
   clock = Date.now()
   await store.execute(owner, s.tabId, { operationId: randomUUID(), command: {
-    type: 'message.send', conversationId: s.web, text: 'Listed again', replyTo: null, recipientIds: [] } })
+    type: 'message.send', conversationId: s.web, text: 'Listed again', replyTo: null, recipientIds: [] } }, s.worker)
   const again = await reads.list(owner)
   expect(again.tabs.find(t => t.id === s.tabId)?.lastChangedAt).toBe((await newestByScan([s.tabId])).get(s.tabId))
 })
 
 describe('delivery authority reads', () => {
   it.each(['person', 'agent'] as const)('claim, hold and ack from a %s leave unrelated conversations and machine parts unread', async sender => {
-    const s = await scene()
+    // A person writes to the worker in their own chat with it: only agents post in a project's channel (agentsOnly.test.ts).
+    const s = await scene({ edit: f => f.edit(state => {
+      const worker = state.agents.find(a => a.harnessId === 'worker-harness')!.id
+      const generation = state.people.find(p => p.id === owner.sub)!.generation
+      state.conversations.push({ id: 'worker-chat', kind: 'agent-chat', title: 'Worker', leadId: null, agentIds: [worker], archived: false, brief: '',
+        checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.sub, generation }] } })
+    }) })
     // Keep unrelated conversations active: dormant rows already escape loadActive.
     await db.swarmGroup.updateMany({ where: { tabId: s.tabId }, data: { dormant: false } })
     await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send',
-      conversationId: s.web, text: 'Please continue.', recipientIds: [s.worker], replyTo: null } }, sender === 'agent' ? s.lead : undefined)
+      conversationId: sender === 'agent' ? s.web : 'worker-chat', text: 'Please continue.', recipientIds: [s.worker], replyTo: null } },
+    sender === 'agent' ? s.lead : undefined)
     const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: s.tabId, agentId: s.worker, status: 'queued' } })
     for (const action of [{ type: 'claim', claimId: 'bounded' },
       { type: 'hold', claimId: 'bounded', reason: 'team_waiting_idle' },

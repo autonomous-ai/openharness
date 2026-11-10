@@ -86,13 +86,15 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
   })
 
-  // The PM's row still holds the GitHub App flag it was saved with (PM above): the replacement reads it as nothing.
-  it('recreates the PM as a Swarm PM: its role, skill mode, start prompt, then the handoff, with no GitHub App', async () => {
+  // The PM's row still holds the GitHub App flag and the skill mode it was saved with (PM above): the replacement reads them
+  // as nothing (the skill modes are gone, PM 2026-11-11).
+  it('recreates the PM as a Swarm PM: its role, start prompt, then the handoff, with no GitHub App or skill mode', async () => {
     const t = setup()
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
-    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', startedBy: 'agent', name: 'PM' })
+    expect(create).toMatchObject({ swarmRole: 'lead', startedBy: 'agent', name: 'PM' })
     expect(create).not.toHaveProperty('swarmGitHub')
+    expect(create).not.toHaveProperty('swarmSkillMode')
     const prompt = String(create.prompt)
     // Its name alone, as at its first start: no manual and no command (superTabs/start.ts startNote).
     expect(prompt.startsWith('You are PM. ')).toBe(true)
@@ -110,7 +112,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     }
   })
 
-  it('names no skill mode for a row without one', async () => {
+  it('recreates a PM whose row names nothing more than its role', async () => {
     const t = setup({ old: { swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } })
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]

@@ -3,9 +3,8 @@ import type { Derived } from './contract.js'
 import { derivedEtag, MARK_FIELDS } from './derivedEtag.js'
 
 const summary = (): Derived => ({
-  agents: { a1: { downSince: null, limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null, myAgent: false, role: 'member' as const, mainProjectId: null } },
+  agents: { a1: { downSince: null, limitedUntil: null, workDecision: null, kind: 'regular', chatId: null, myAgent: false, role: 'member' as const, mainProjectId: null } },
   machines: { m1: { availableSlots: 2, clientVersion: '0.5.82' } },
-  avatars: { 'person:p1': 'https://example.test/a?sig=1' },
 })
 
 // Task #2906: the etag a client echoes so an unchanged poll leaves the summary out.
@@ -16,7 +15,7 @@ describe('derivedEtag', () => {
 
   it('is the same for the same summary built in another key order', () => {
     const s = summary()
-    const reordered: Derived = { avatars: s.avatars,
+    const reordered: Derived = {
       machines: { m1: { clientVersion: '0.5.82', availableSlots: 2 } }, agents: s.agents }
     expect(derivedEtag(reordered)).toBe(derivedEtag(s))
   })
@@ -31,11 +30,9 @@ describe('derivedEtag', () => {
     const base = derivedEtag(summary())
     const changes: Array<(d: Derived) => void> = [
       d => { d.agents.a1!.downSince = '2026-11-04T00:00:00.000Z' },
-      d => { d.agents.a1!.roleName = 'Reviewer' },
+      d => { d.agents.a1!.myAgent = true },
       d => { d.machines.m1!.availableSlots = 1 },
       d => { d.machines.m1!.machineSuspended = 'full' },
-      d => { d.avatars = { 'person:p1': 'https://example.test/a?sig=2' } },
-      d => { delete d.avatars },
     ]
     for (const change of changes) {
       const d = summary()

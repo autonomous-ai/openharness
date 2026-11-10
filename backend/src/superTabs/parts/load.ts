@@ -107,7 +107,7 @@ export async function loadNamed(tx: Transaction, loaded: SwarmParts,
  * the conversations of agents stored with no project (projects.ts agentProjectId), and the private chats of this machine's
  * working agents (leaderboard/lent.ts accrueLent). A busy Swarm's finished conversations, briefs and checks were ~1.1 MB
  * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are. No project's report
- * progress either: only commands note reports (projectUpdates.ts), so none is loaded or committed.
+ * progress either: a report writes none, so none is loaded or committed.
  * Machine parts and conversations come through `held` (parts/held.ts): whole only those changed since this process last
  * read them (B3, #2597).
  */

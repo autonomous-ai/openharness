@@ -155,7 +155,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     // As Desktop's New Project does on the person's own computer: the project, then the session, then its join.
     const project = await command({ type: 'project.create', name: 'Shop', visibility: 'public', brief: 'Build the shop.' })
     channel = project.conversationId as string
-    const created = await startSession(A, { engine: 'claude', swarmRole: 'lead', swarmSkillMode: 'orchestration', prompt: 'You are Faye.\n\nBuild the shop.', name: 'Faye' })
+    const created = await startSession(A, { engine: 'claude', swarmRole: 'lead', prompt: 'You are Faye.\n\nBuild the shop.', name: 'Faye' })
     const running = await until('Faye to bind its conversation', async () => {
       const rows = (await A.client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents
       const row = rows.find(a => a.id === created.agent.id)

@@ -21,22 +21,21 @@ export interface DormantStub { key: string; version: number; changedAt: number; 
 export type PartChange<T> = LivePart<T> | Tombstone
 export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 
-/** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
+/** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects and
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
+  | 'environment' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
   | 'autoJoin'> & {
   /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
   projects?: Array<import('../projects.js').SwarmProject & {
     process: import('../process.js').ProjectProcess; columns: readonly import('../process.js').BoardColumn[]
   }>
 }
-/** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
-export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
-/** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
- *  role) come only in `derived.agents`, so an agent never changes without a new version. */
-export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'roleId' | 'avatar'> & { avatar?: import('../profile.js').AvatarView }
+export type MemberView = Person
+/** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision) come only in
+ *  `derived.agents`, so an agent never changes without a new version. */
+export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'mainProjectId' | 'member'>
 /** A private conversation's audience: the people it is shared with. The project's Lead always reads it too. */
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
@@ -65,12 +64,11 @@ export interface ProgressView {
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
 export interface Derived {
-  /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
-  /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
+  /** Every agent the reader can see. `workDecision` is null when the stored value stands. */
   /** `kind`: a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
    *  (agentKind.ts, task #4116). Absent from an older backend. */
   /** `myAgent`: whether it is in the reader's My agents (agentKind.ts inMyAgents, task #4192). Absent from an older backend. */
-  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string;
+  agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null;
     kind: import('../agentKind.js').AgentKind; chatId: string | null; myAgent: boolean
     /** Lead or Member, and its main project when the reader reads that project (agentKind.ts, task #4540). Absent from an older backend. */
     role: import('../agentKind.js').AgentRole; mainProjectId: string | null }>
@@ -87,9 +85,6 @@ export interface Derived {
   pmAccounts?: Array<{ machineId: string; engine: string; project: string; pm: string }>
   /** The Swarm's owner only: projects nobody owns, which they may delete but never read (projects.ts ownerlessProjects). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
-  /** Signed links to uploaded avatars, by `person:<id>` and `agent:<id>` (avatarLinks.ts): fresh with every read, the same
-   *  through each half hour, each opening for at most an hour. Absent when nobody visible has one. */
-  avatars?: Record<string, string>
   /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
@@ -261,7 +256,8 @@ export interface HostAgentRow {
   resume: null
   agent: Agent
   joinSwarm: boolean
-  skillMode: 'default' | 'orchestration'
+  /** A CLI or Desktop from before #3912 reads a missing skillMode as Harness orchestration and would launch a v4 agent with its skills: always 'default', until 2026-12-11. */
+  skillMode: 'default'
   lead: boolean
   /** v3's restart of a PM that hung on an unanswered message: null since Swarm v4, for a host from before that reads it. */
   owed: { messageId: string; since: number; restartAfterMs: number } | null

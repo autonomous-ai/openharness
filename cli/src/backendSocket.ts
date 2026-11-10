@@ -183,10 +183,8 @@ export class BackendSocket {
     /** Session-scoped built-in instructions for a newly launched Swarm agent: a coordinator or an agent. A launch an
      *  older CLI saved to finish later names it in the wire's values (lead, dev, review), which create.ts reads too. */
     swarmRole?: import('./lib/swarmSkills.js').SwarmRole
-    /** With swarmRole `agent`: an older client's Reviewer, which keeps its swarm-review file. */
+    /** With swarmRole `agent`: an older client's Reviewer, which keeps its Reviewer kind. */
     swarmFallback?: 'review'
-    /** The skills of the Swarm project it joins; absent from a start before modes, which launches on orchestration. */
-    swarmSkillMode?: import('./lib/swarmSkills.js').SwarmSkillMode
     /** Sent by a host from before the Harness GitHub App's removal, and ignored: no new agent uses the App. Delete on or after
      *  2026-12-10. */
     swarmGitHub?: true

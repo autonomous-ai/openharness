@@ -23,7 +23,7 @@ import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
-import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -571,7 +571,7 @@ describe('host form (design 4.10)', () => {
     const { cursor } = await fullRead(s.tabId)
     await command(s.tabId, { type: 'conversation.agent', conversationId: s.more.lonerGroup, agentId: s.more.loner, present: false, lead: false })
     await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Once' })
-    await command(s.tabId, { type: 'message.send', conversationId: s.more.lonerGroup, text: 'Twice', replyTo: null, recipientIds: [] })
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Twice' })
     clock = Date.now()
     const tab = (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
     expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
@@ -840,7 +840,7 @@ describe('what a read costs the database (group 3b)', () => {
   }
   /** Sixty more conversations with long briefs, as a busy Swarm's history makes them (about half a megabyte). */
   const bulky = (s: ReturnType<typeof swarm>) => {
-    for (let i = 0; i < 60; i++) s.run({ type: 'conversation.create', title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}`, checks: [] })
+    for (let i = 0; i < 60; i++) storedTask(s.state, { title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}` })
   }
 
   it('counts none of the reads an earlier test left running', async () => {
@@ -917,8 +917,9 @@ describe('what a read costs the database (group 3b)', () => {
     const s = await scene(f => bulky(f))
     clock = Date.now()
     const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.cursor
+    // The worker's post: only agents post in a task's chat (agentsOnly.test.ts).
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     let groups: string[] = []
     const bytes = await databaseBytes(async () => {
@@ -939,7 +940,7 @@ describe('what a read costs the database (group 3b)', () => {
     const first = (await post({ full: true })).json().data as { cursor: string; tabs: Array<{ tabId: string; etag: string }> }
     const etag = first.tabs.find(t => t.tabId === s.tabId)!.etag
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     let answer: Record<string, unknown> | undefined
     const bytes = await databaseBytes(async () => {
@@ -1017,7 +1018,7 @@ describe('what a read costs the database (group 3b)', () => {
     expect(idle.tabs).toEqual([])
     expect(newestReads()).toEqual([])
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     const woken = (await hosts.changes(owner, machineId, { cursor: idle.cursor })).tabs
     const posted = (await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.changedAt.getTime()
@@ -1207,9 +1208,9 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
       expect(changes.derived.agents[s.more.member].workDecision).toBe('awaiting')
     })
 
-    /** A reply's derived values without what differs by design: a first load sends every read mark (and avatar link), a
+    /** A reply's derived values without what differs by design: a first load sends every read mark, a
      *  change read only the marks moved since its cursor. */
-    const derivedOf = ({ readMarks: _marks, threadMarks: _threads, avatars: _avatars, ...rest }: Record<string, unknown>) => rest
+    const derivedOf = ({ readMarks: _marks, threadMarks: _threads, ...rest }: Record<string, unknown>) => rest
     /** The agent's part as prod still holds some (6 of 66 live agents, 10-30): no stored project (projects.ts agentProjectId). */
     async function withoutProject(tabId: string, agentId: string) {
       await swarmTransaction(db, async tx => {
