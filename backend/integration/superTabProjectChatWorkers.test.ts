@@ -5,8 +5,9 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
-import { storeAssignment, storeStatus } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate, storeStatus } from './storedWork.test-support.js'
 
 // Task #2924 (Dee and River, 2026-11-04): an agent with a task in the project talks in its project chat without joining it, and a
 // person's answer to its line there reaches it. Through the store, as hosts and apps call it. A fresh loopback replica set;
@@ -17,8 +18,8 @@ let store: SuperTabStore
 const owner: AuthUser = { sub: '100000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
-  store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+const run = (tab: string, command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+  ? storeCreate(db, tab, command, user, asAgentId) : store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
 const post = (text: string, replyTo: string | null = null): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [] })
 
 beforeAll(async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { mayDrive } from './terminal.js'
-import { storedAssignment } from './storedWork.test-support.js'
+import { storedAssignment, storedTask } from './storedWork.test-support.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -22,7 +22,7 @@ function swarm(peerRole: 'collaborator' | 'viewer' = 'collaborator') {
   const add = (harnessId: string, group: string, lead = false) => run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId,
     name: harnessId, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   const lead = add('lead', 'lead', true)
-  const group = run({ type: 'conversation.create', title: 'Drafts', brief: 'Save drafts.', checks: [{ description: 'Saved', independent: false }] }).result.conversationId as string
+  const group = storedTask(state, { title: 'Drafts', brief: 'Save drafts.', checks: [{ description: 'Saved' }], requesterId: 'owner' })
   run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
   const worker = add('worker', group)
   const other = run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result.conversationId as string
@@ -89,7 +89,7 @@ describe('reading and typing in an agent terminal', () => {
       { contribution: { machineOwnerId: host, contributorId: host } }).result.agentId as string
     const hosted = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: state.agents.find(a => a.id === agentId)!.machineOwnerId })
     const secret = run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }, alice).result.projectId as string
-    const task = run({ type: 'conversation.create', projectId: secret, title: 'Task', brief: 'Do it.', checks: [] }, alice).result.conversationId as string
+    const task = storedTask(state, { projectId: secret, title: 'Task', brief: 'Do it.', requesterId: 'alice' })
     const onAlice = add(task, 'on-alice', 'alice'), sibling = add(task, 'sibling', 'alice'), onBob = add(task, 'on-bob', 'bob')
     const target = (id: string) => state.agents.find(a => a.id === id)!
     // Bob himself reads nothing of Secret, so the agent his machine runs drives none of its agents on Alice's login.
@@ -103,7 +103,7 @@ describe('reading and typing in an agent terminal', () => {
     expect(run({ type: 'agent.screen', agentId: onBob }, hosted(onAlice)).terminal).toMatchObject({ machineOwnerId: 'bob' })
     // In a project Bob reads, his agent drives Alice's as he could.
     const open = run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' }, alice).result.projectId as string
-    const shared = run({ type: 'conversation.create', projectId: open, title: 'Task', brief: 'Do it.', checks: [] }, alice).result.conversationId as string
+    const shared = storedTask(state, { projectId: open, title: 'Task', brief: 'Do it.', requesterId: 'alice' })
     const herWorker = add(shared, 'her-worker', 'alice'), hisWorker = add(shared, 'his-worker', 'bob', bob)
     expect(run({ type: 'agent.input', agentId: herWorker, keys: ['Enter'] }, hosted(hisWorker)).terminal).toMatchObject({ machineOwnerId: 'alice' })
   })
@@ -126,7 +126,7 @@ describe('reading and typing in an agent terminal', () => {
       { contribution: { machineOwnerId: host, contributorId: host } }).result.agentId as string
     const hosted = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: state.agents.find(a => a.id === agentId)!.machineOwnerId })
     const created = run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }, alice).result
-    const task = run({ type: 'conversation.create', projectId: created.projectId as string, title: 'Task', brief: 'Do it.', checks: [] }, alice).result.conversationId as string
+    const task = storedTask(state, { projectId: created.projectId as string, title: 'Task', brief: 'Do it.', requesterId: 'alice' })
     const worker = add(task, 'worker', 'alice'), helper = add(task, 'helper', 'bob')
     const coordinator = add(created.conversationId as string, 'pm', 'bob', true)
     expect(run({ type: 'agent.input', agentId: worker, keys: ['Enter'] }, hosted(coordinator)).terminal).toMatchObject({ machineOwnerId: 'alice' })
@@ -249,7 +249,7 @@ describe('terminal alerts', () => {
 
   it('delivers to the worker\'s project Lead, not the group\'s Lead, and through the Lead chat when the Lead is not in the group', () => {
     const s = swarm()
-    const bare = s.run({ type: 'conversation.create', title: 'Bare', brief: 'No Lead here.', checks: [] }).result.conversationId as string
+    const bare = storedTask(s.state, { title: 'Bare', brief: 'No Lead here.', requesterId: 'owner' })
     const room = s.state.conversations.find(c => c.id === bare)!
     room.leadId = null
     room.agentIds = room.agentIds.filter(id => id !== s.lead)

@@ -9,6 +9,8 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { takeOutTeamMachinesOnce } from '../src/superTabs/migration/teamMachinesJob.js'
@@ -21,7 +23,8 @@ let store: SuperTabStore
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const person: AuthUser = { sub: '200000000000000000000002', email: 'person@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-const run = (tab: string, command: Command, user: AuthUser = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
+const run = (tab: string, command: Command | StoredCreate, user: AuthUser = owner) => command.type === 'conversation.create'
+  ? storeCreate(db, tab, command, user) : store.execute(user, tab, { operationId: randomUUID(), command })
 
 async function storedState(tab: string): Promise<SuperTabState> {
   return parts.reassemble(await db.$transaction(tx => parts.loadAll(tx, tab)))

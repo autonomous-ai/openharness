@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor } from '../model.js'
-import { storedAssignment, storedStatus } from '../storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from '../storedWork.test-support.js'
 import { touchesFor } from './touches.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -22,7 +22,7 @@ function swarm() {
     name: harnessId, configuration: config, lead }, owner, contribution).effects.result.agentId as string
   const lead = add('lead', 'lead', true)
   const group = (title: string) => {
-    const id = run({ type: 'conversation.create', title, brief: 'Do it', checks: [{ description: 'Done', independent: false }] }).effects.result.conversationId as string
+    const id = storedTask(state, { title, brief: 'Do it', checks: [{ description: 'Done' }], requesterId: 'owner' })
     const worker = add(`${title}-worker`, id)
     storedAssignment(state, id, worker, 1000)
     return { id, worker }
@@ -59,10 +59,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     const f = swarm()
     const invited = f.run({ type: 'invite.create', email: 'peer@example.com', role: 'collaborator', conversationId: 'lead' }).effects.result.inviteId as string
     f.run({ type: 'invite.accept', inviteId: invited }, { kind: 'person', userId: 'peer', email: 'peer@example.com' })
-    const opened = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'peer' },
-      f.agentActor(f.lead))
-    expect(has(opened.touches, 'member', 'peer')).toBe(true)
-    const id = opened.effects.result.conversationId as string
+    const { id } = f.group('R')
     const named = f.run({ type: 'conversation.requester', conversationId: id, personId: 'peer' }, f.agentActor(f.lead))
     expect(has(named.touches, 'member', 'peer')).toBe(true)
     expect(has(named.touches, 'group', 'lead')).toBe(true)

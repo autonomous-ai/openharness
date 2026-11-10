@@ -106,8 +106,8 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const { s, parts } = scene()
     const view = readerView(parts, peer, NOW, {})
     const worker = view.parts.agents.find(a => a.key === s.worker)!
-    for (const hidden of ['downNamed', 'downSince', 'limitedUntil', 'roleId']) expect(worker.data).not.toHaveProperty(hidden)
-    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, roleId: null, roleName: 'Engineer', kind: 'regular', chatId: null, myAgent: false, role: 'member', mainProjectId: null })
+    for (const hidden of ['downNamed', 'downSince', 'limitedUntil']) expect(worker.data).not.toHaveProperty(hidden)
+    expect(view.derived.agents[s.worker]).toEqual({ downSince: new Date(NOW - 5 * MINUTE).toISOString(), limitedUntil: null, workDecision: null, kind: 'regular', chatId: null, myAgent: false, role: 'member', mainProjectId: null })
     expect(Object.keys(view.derived.agents).sort()).toEqual([s.lead, s.worker].sort())
   })
 
@@ -204,16 +204,6 @@ describe('reader view over what the read cache holds', () => {
       expect(view.state).toBe(state)
       if (actor === peer) expect({ parts: view.parts, derived: view.derived }).toEqual({ parts: expected.parts, derived: expected.derived })
     }
-  })
-})
-
-describe('role names in the reader\'s view', () => {
-  it('gives every agent a role name, the PM\'s by what it is', () => {
-    const s = richSwarm()
-    s.edit(state => { state.agents.find(a => a.id === s.worker)!.roleName = 'Tester' })
-    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, {})
-    expect(view.derived.agents[s.lead]!.roleName).toBe('PM')
-    expect(view.derived.agents[s.worker]!.roleName).toBe('Tester')
   })
 })
 

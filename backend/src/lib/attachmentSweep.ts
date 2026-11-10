@@ -1,13 +1,12 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PrismaClient } from '@prisma/client'
-import { AVATAR_PURPOSE, EXPIRED_UPLOAD, PENDING_UPLOAD_PURPOSE, REMOVING_UPLOAD_PURPOSE, UNSENT_LIFE_MS, type AttachmentStore, type Attachments } from '../superTabs/attachments.js'
+import { EXPIRED_UPLOAD, PENDING_UPLOAD_PURPOSE, REMOVING_UPLOAD_PURPOSE, UNSENT_LIFE_MS, type Attachments } from '../superTabs/attachments.js'
 import { logger } from '../utils/logger.js'
 import { imageFacts, thumbKeyOf } from '../superTabs/thumbnails.js'
 
 /**
- * Removes Swarm uploads nobody used within a day (Diego, 10-30): chat files never sent and pictures never set, row and stored
- * file, so the bucket stops growing. A file a message, a proposal or an avatar uses is never touched. No picture can be uploaded
- * any more (2026-11-09): the pictures this still removes are the last that were.
+ * Removes Swarm uploads nobody used within a day (Diego, 10-30): chat files never sent, row and stored file, so the bucket stops
+ * growing. A file a message or a proposal uses is never touched.
  *
  * An upload is first taken with one conditional write: still unused, never proposed and still a day old, its `usedBy` becomes
  * [EXPIRED_UPLOAD]. Every use takes an upload only while `usedBy` is empty (superTabs/store.ts), so a send racing the sweep
@@ -68,13 +67,12 @@ export function failureCode(error: unknown): string {
 /** Removes up to [chunk] taken uploads, skipping those whose file failed earlier in this run. */
 async function remove(db: PrismaClient, attachments: Attachments, chunk: number, failedIds: Set<string>, log: Log): Promise<AttachmentSweepPass & { found: number }> {
   const found = await db.$runCommandRaw({ find: COLLECTION, filter: { usedBy: EXPIRED_UPLOAD, _id: { $nin: [...failedIds] } },
-    projection: { _id: 1, objectKey: 1, purpose: 1, image: 1 }, limit: chunk, singleBatch: true } as never) as Found<{ _id: string; objectKey: string; purpose?: string | null; image?: unknown }>
+    projection: { _id: 1, objectKey: 1, image: 1 }, limit: chunk, singleBatch: true } as never) as Found<{ _id: string; objectKey: string; image?: unknown }>
   const rows = found.cursor.firstBatch
   const gone: string[] = []
   for (const row of rows) {
-    const store: AttachmentStore | null = row.purpose === AVATAR_PURPOSE ? attachments.avatars ?? null : attachments.store
+    const store = attachments.store
     try {
-      if (!store) throw new Error('No avatar store is configured')
       await store.delete(row.objectKey)
       // A picture's thumbnail sits beside it and goes with it (superTabs/thumbnails.ts); one failing keeps the row for the next run.
       if (imageFacts(row.image)?.thumb) await store.delete(thumbKeyOf(row.objectKey))

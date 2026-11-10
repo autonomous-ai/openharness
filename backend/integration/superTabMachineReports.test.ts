@@ -13,10 +13,11 @@ import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import { localReportMemory, machineReportLine, RECORD_TTL_MS, type ReportMemory } from '../src/superTabs/machineReports.js'
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import type { MachineData } from '../src/superTabs/parts/index.js'
 import { poolRows } from './hostRows.test-support.js'
-import { storeAssignment } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate } from './storedWork.test-support.js'
 
 // Machine reports that change only the machine's reading skip the Swarm load (DB roadmap 2.5). A fresh loopback replica
 // set, created here; Redis is MemoryStamps and an in-process report memory. This suite never reads DATABASE_URL.
@@ -67,7 +68,8 @@ async function swarm(memory?: (now: () => number) => ReportMemory, shared?: { cl
   const store = (with_: ReportMemory = reports) => new SuperTabStore(db, () => clock.now, null, { reports: with_, swarmChanged: change => pushes.push(change) })
   const timed = store()
   const tab = (await timed.create(owner, randomUUID(), 'Reports', 'public')).id
-  const execute = (command: Command, user = owner) => timed.execute(user, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command | StoredCreate, user = owner) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, user) : timed.execute(user, tab, { operationId: randomUUID(), command })
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
+import { opensStored, storedCreate, type StoredCreate } from './steps.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
 import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
@@ -15,8 +15,8 @@ function setup() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
   let next = 0, messages: MessageDraft[] = []
-  const run = (command: Command | StepCommand, actor = owner, context: Partial<CommandContext> = {}) => {
-    if (opensStep(command)) return storedStep(state, command, actor).result
+  const run = (command: Command | StoredCreate, actor = owner, context: Partial<CommandContext> = {}) => {
+    if (opensStored(command)) return storedCreate(state, command, actor).result
     const effect = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000,
       contribution: { machineOwnerId: 'host', contributorId: actor.kind === 'person' ? actor.userId : 'owner' }, ...context })
     state = effect.state
@@ -382,7 +382,7 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
     // Every command marks: a Lead stored before the mark is marked by the next one.
     const lead = f.add('lead', 'pm', true)
     delete f.state.agents.find(a => a.id === lead)!.confidential
-    f.run({ type: 'conversation.create', title: 'Next', brief: '', checks: [] })
+    f.run({ type: 'tab.rename', name: 'Next' })
     expect(f.state.agents.find(a => a.id === lead)!.confidential).toBe(true)
   })
 })

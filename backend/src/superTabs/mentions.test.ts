@@ -4,6 +4,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
 import { createSuperTab, type Actor } from './model.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -28,7 +29,7 @@ function fixture() {
     configuration }).result.agentId as string
   const worker = run({ type: 'agent.add', conversationId: app.conversationId, harnessId: 'worker', machineId: 'machine', name: 'Worker', lead: false,
     configuration }).result.agentId as string
-  const group = run({ type: 'conversation.create', projectId: app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
+  const group = storedTask(state, { projectId: app.projectId as string, title: 'Copy', brief: '', requesterId: 'owner' })
   // A conversation only `peer` reads: their chat with their own agent.
   const pmChat = run({ type: 'agent.new', kind: 'regular', machineId: 'peer-mac', engine: 'claude', local: true }, peer,
     { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }).result.conversationId as string

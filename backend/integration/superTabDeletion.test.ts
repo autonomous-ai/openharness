@@ -11,6 +11,8 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SwarmChanged } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore, type Attachments } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { machineSwarms } from '../src/superTabs/swarmRows.js'
 import { SuperTabError } from '../src/superTabs/model.js'
@@ -61,7 +63,8 @@ function world(start = 1_800_000_000_000) {
 /** A Swarm with a member, a pending invitation, a message, a file, and a host's machine running its Product Manager and a worker. */
 async function swarm(w: ReturnType<typeof world>, name = 'Lampos') {
   const tab = (await w.store.create(owner, randomUUID(), name, 'public')).id
-  const execute = (command: Command, as = owner) => w.store.execute(as, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command | StoredCreate, as = owner) => command.type === 'conversation.create' ? storeCreate(db, tab, command, as)
+    : w.store.execute(as, tab, { operationId: randomUUID(), command })
   for (const u of [member, host]) {
     const invitation = await execute({ type: 'invite.create', email: u.email, role: 'collaborator', conversationId: 'lead' })
     await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, u)
@@ -238,7 +241,7 @@ describe('the purge', () => {
 
     const g = await swarm(w, 'Flaky')
     await g.execute({ type: 'swarm.delete', name: 'Flaky' })
-    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs', avatars: null, avatarPrefix: 'super-tabs' }
+    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs' }
     expect((await purgeDeletedSwarms(db, broken, w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS)).waiting).toBeGreaterThanOrEqual(1)
     expect(await db.superTabAttachment.count({ where: { tabId: g.tab } })).toBe(1)
     expect(await db.superTab.count({ where: { id: g.tab } })).toBe(1)
@@ -419,7 +422,7 @@ describe('the purge, everywhere', () => {
     w.clock.now += 1000
     await fresh.execute({ type: 'swarm.delete', name: 'Fresh' })
     const after = w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS
-    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs', avatars: null, avatarPrefix: 'super-tabs' }
+    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs' }
     // The stuck one fails first; afterwards, with room for one Swarm a pass, the fresh one is next, not the stuck one again.
     await db.superTabAttachment.deleteMany({ where: { tabId: fresh.tab } })
     await purgeDeletedSwarms(db, broken, after - 1000, 1)

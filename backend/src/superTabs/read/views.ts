@@ -10,9 +10,8 @@ import { availableSlots, slotCounter, type ContributedMachine } from '../machine
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
-import { roleNameOf } from '../roleNames.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
-import { personView, withAvatarView } from '../profile.js'
+import { personView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
 
@@ -67,8 +66,8 @@ export function agentView(agent: Agent): AgentView {
   // A main project goes in the derived row, to its project's readers only: a private one's id says the project exists. A
   // Member's mark names it too (members.ts; security review 2 of #3575), and is its host's alone (read/hostRows.ts sends the
   // agent as stored).
-  const { downNamed: _named, downSince: _since, limitedUntil: _limit, roleId: _role, mainProjectId: _main, member: _member, ...rest } = agent
-  return withAvatarView(rest) as AgentView
+  const { downNamed: _named, downSince: _since, limitedUntil: _limit, mainProjectId: _main, member: _member, ...rest } = agent
+  return rest
 }
 
 /** `state` is the parts already reassembled, when the caller has it (a read reassembles once). */
@@ -135,9 +134,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
       const stored = storedAgents.get(seen.id)!
       return [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,
         workDecision: seen.workDecision === 'awaiting' && stored.workDecision !== 'awaiting' ? 'awaiting' as const : null,
-        roleId: seen.roleId ?? null,
-        // Derived on every read: who leads a project, and its role set, live outside the agent's own part.
-        roleName: roleNameOf(state, stored),
         // What it is and where its person talks to it, for the left pane's "My agents" (agentKind.ts, task #4116).
         kind: agentKind(state, stored), chatId: agentChatId(state, stored, chat => canReadGroup(state, actor, chat)),
         // Whether it is in this reader's My agents, decided here so every client lists the same (task #4192).

@@ -11,12 +11,13 @@ import { SuperTabStore, type Polled, type SuperTabStoreHooks } from '../src/supe
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
 import { stableId } from '../src/superTabs/model.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
-import { storeAssignment, storeStatus } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate, storeStatus } from './storedWork.test-support.js'
 
 // A machine's reports and the delivery polls of its agents: what a Swarm's time checks still decide (a start that never runs), the
 // polls' costs, and what a report does to an agent closed or reopened on its machine. Swarm v4 loses no task and nudges no worker
@@ -54,7 +55,8 @@ async function swarm({ client = db, hooks, engines = ['codex'], lent = false }: 
   let now = 10_000_000
   const timed = new SuperTabStore(client, () => now, null, hooks)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', 'public')).id
-  const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+  const execute = (command: Command | StoredCreate, user = owner, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(client, tab, command, user, asAgentId) : timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
@@ -174,7 +176,7 @@ describe('a machine\'s report', () => {
   })
 })
 
-// A report never reads its projects' report progress (projectUpdates.ts): only commands and native events note reports.
+// A report never reads its projects' report progress.
 describe('machine reports and report progress', () => {
   it('reads no report progress and writes none, also when the worker\'s machine goes silent', async () => {
     const f = await swarm()
@@ -952,7 +954,7 @@ describe('a session reopened after its agent was removed', () => {
     await f.beat(f.clock.now)
     const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
     const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: idle } })
-    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object, roleName: 'Reviewer', ...over } } })
+    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object, role: 'reviewer', ...over } } })
     // A session listed stopped leaves once it has stayed so, by a machine that keeps reporting (closedAgents.ts STOPPED_REMOVE_MS).
     for (let seconds = 0; seconds < 35; seconds += 5) {
       f.clock.now += 5_000
@@ -974,7 +976,7 @@ describe('a session reopened after its agent was removed', () => {
     const f = await removed()
     await resume(f)
     const read = await state(f), back = read.agents.find(a => a.id === f.idle)!
-    expect(back).toMatchObject({ harnessId: f.harness.other, machineId: 'test-host', name: 'Idle one', roleName: 'Reviewer', configuration: config })
+    expect(back).toMatchObject({ harnessId: f.harness.other, machineId: 'test-host', name: 'Idle one', role: 'reviewer', configuration: config })
     expect(back.downSince).toBeUndefined()
     expect(read.conversations.find(c => c.id === f.group)!.agentIds).toContain(f.idle)
     expect((await machinePart(f, 'test-host')).removedSessions ?? []).toEqual([])

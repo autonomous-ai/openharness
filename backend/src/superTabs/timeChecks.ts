@@ -1,6 +1,6 @@
 // The Swarm's time checks run in the singleton worker every 30 s. Since Swarm v4 (anh Dee, 2026-11-09) they run only v4's
-// jobs (store.ts runTimeChecks): every agent gets its 1:1 chat with its person, and the stops the v3 rules asked for are
-// withdrawn once. No v3 rule runs on its own any more: no lost-work sweeps, stuck alerts, proposal cards or PM restarts.
+// job (store.ts runTimeChecks): every agent gets its 1:1 chat with its person, a PM the Swarm started included. No v3 rule runs
+// on its own any more: no lost-work sweeps, stuck alerts, proposal cards or PM restarts.
 import type { PrismaClient } from '@prisma/client'
 import { SWEEP_EVERY_MS } from './liveness.js'
 import type { SuperTabStore } from './store.js'

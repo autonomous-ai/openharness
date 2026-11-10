@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type SuperTabState } from './model.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
 const HEAD = 'abc1234def5678abc1234def5678abc1234def56'
@@ -37,8 +38,8 @@ function swarm() {
 /** A task in App that d asked for, built by the worker. */
 function fixture() {
   const f = swarm()
-  const task = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Fix the host', brief: 'The host restarts.',
-    checks: [{ description: 'Restarts', independent: true }], priority: 'P2', requesterId: 'd' } as Command, f.asAgent(f.pm)).conversationId as string
+  const task = storedTask(f.state, { projectId: f.app.projectId, title: 'Fix the host', brief: 'The host restarts.',
+    checks: [{ description: 'Restarts', independent: true }], requesterId: 'd', creatorId: f.pm })
   const group = (id = task) => f.state.conversations.find(c => c.id === id)!
   const post = (actor: Actor, text: string, id = task) => f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] } as Command, actor)
   return { run: f.run, app: f.app, pm: f.pm, worker: f.worker, add: f.add, asAgent: f.asAgent, task, group, post, get state() { return f.state } }

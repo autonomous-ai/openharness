@@ -8,7 +8,7 @@ import { REOPEN_OWNER_MS } from './handed.js'
 import { currentGroup } from './terminal.js'
 import { workHolds, startedHolds, endedHolds, tokenTask } from '../github/holds.js'
 import { stepsFixture } from './steps.test-support.js'
-import { storedAssignment, storedStatus } from './storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from './storedWork.test-support.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
 
@@ -16,7 +16,8 @@ const PR = 'https://github.com/acme/app/pull/7'
 function handedFixture() {
   const f = stepsFixture()
   storedStatus(f.state, f.task, 'review', `Ready for review: ${PR} at abc1234`)
-  const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [{ description: 'Signs out offline', independent: true }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
+  const next = storedTask(f.state, { title: 'Fix logout', brief: 'Sign out works offline.', checks: [{ description: 'Signs out offline', independent: true }],
+    requesterId: 'owner', creatorId: f.lead })
   // Not a spread: it would copy the fixture's `state` getter as a snapshot.
   return Object.assign(f, { next })
 }

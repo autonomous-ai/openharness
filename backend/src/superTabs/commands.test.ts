@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
+import { opensStored, storedCreate, type StoredCreate } from './steps.test-support.js'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
@@ -12,7 +12,7 @@ import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fix
 import { groupView } from './read/views.js'
 import { weekStart } from './leaderboard/week.js'
 import { lentIn, weekSpan } from './leaderboard/rolling.js'
-import { storedAssignment, storedStatus } from './storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
@@ -21,8 +21,8 @@ const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effor
 function fixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
-  const run = (command: Command | StepCommand, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    if (opensStep(command)) return storedStep(state, command, actor)
+  const run = (command: Command | StoredCreate, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+    if (opensStored(command)) return storedCreate(state, command, actor)
     const effects = applyCommand(state, actor, command, { now: 1000, operationId: `op-${++sequence}`, ...context })
     state = effects.state
     return effects
@@ -66,44 +66,6 @@ function placeOn(f: ReturnType<typeof fixture>, agentId: string, contributorId: 
   ownMachine(f, contributorId, machineId)
   f.state.agents.find(a => a.id === agentId)!.machineId = machineId
 }
-
-describe('five-part tasks', () => {
-  const task = { goal: 'Save edits', changes: 'Persist the draft', constraints: 'No dependencies', owns: ['backend/src/superTabs'] }
-  const brief = 'Goal:\nSave edits\n\nChanges:\nPersist the draft\n\nConstraints:\nNo dependencies\n\nOwns:\n- backend/src/superTabs'
-  const checks = [{ description: 'Reconnect preserves edits', independent: false }]
-
-  it('creates a structured task with a trimmed compatibility brief', () => {
-    const f = fixture()
-    const create = commandSchema.parse({ type: 'conversation.create', title: 'Drafts', task: { ...task, goal: ' Save edits ', owns: [' backend/src/superTabs '] }, checks })
-    f.run(create)
-    expect(f.state.conversations[1]).toMatchObject({ task, brief })
-  })
-
-  it('renders a review plan under "Review:" and refuses an empty, too long or third-review plan', () => {
-    const f = fixture()
-    const review = { focus: ' Check revoked access first. ', reviews: 2 }
-    const group = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Drafts', task: { ...task, review }, checks })).result.conversationId as string
-    expect(f.state.conversations.find(c => c.id === group)).toMatchObject({ task: { ...task, review: { focus: 'Check revoked access first.', reviews: 2 } },
-      brief: `${brief}\n\nReview:\nCheck revoked access first.\nTwo independent reviews, each by a different Reviewer.` })
-    for (const bad of [{}, { focus: '' }, { focus: 'x'.repeat(2001) }, { reviews: 3 }, { reviews: 0 }, { focus: 'x', reviewers: 2 }]) {
-      expect([bad, commandSchema.safeParse({ type: 'conversation.create', title: 'Drafts', task: { ...task, review: bad }, checks }).success]).toEqual([bad, false])
-    }
-    expect(commandSchema.safeParse({ type: 'conversation.create', title: 'Drafts', task: { ...task, review: { focus: 'x'.repeat(2000) } }, checks }).success).toBe(true)
-  })
-
-  it('bounds task strings and requires every part, or a brief', () => {
-    const base = { type: 'conversation.create', title: 'Drafts' }
-    for (const invalid of [null, {}, { ...task, goal: ' ' }, { ...task, changes: '' }, { ...task, constraints: '' },
-      { ...task, goal: 'x'.repeat(8001) }, { ...task, changes: 'x'.repeat(8001) }, { ...task, constraints: 'x'.repeat(8001) },
-      { ...task, owns: [] }, { ...task, owns: [' '] }, { ...task, owns: Array(41).fill('path') }, { ...task, owns: ['x'.repeat(4097)] },
-      { ...task, extra: 'unexpected' }]) {
-      expect(commandSchema.safeParse({ ...base, brief: 'legacy', task: invalid, checks }).success).toBe(false)
-    }
-    expect(commandSchema.safeParse({ ...base, task: { ...task, owns: Array(40).fill('path') }, checks }).success).toBe(true)
-    expect(commandSchema.safeParse({ ...base, task: { ...task, owns: Array(40).fill('x'.repeat(4096)) }, checks }).success).toBe(false)
-    expect(commandSchema.safeParse({ ...base, checks }).success).toBe(false)
-  })
-})
 
 describe('person removal notices', () => {
   it('tells each remaining Lead who removed an agent and its open task', () => {
@@ -707,7 +669,7 @@ describe('Super Tab collaboration policy', () => {
     const f = fixture()
     f.run({ type: 'tab.pause', paused: true })
     const before = JSON.stringify(f.state)
-    expect(() => f.group()).toThrow('paused')
+    expect(() => f.run({ type: 'project.create', name: 'More', visibility: 'public', brief: '' })).toThrow('paused')
     expect(JSON.stringify(f.state)).toBe(before)
     expect(f.run({ type: 'message.send', conversationId: 'lead', text: 'Let’s reconsider.', replyTo: null, recipientIds: [] }).messages).toHaveLength(1)
   })
@@ -984,20 +946,6 @@ describe('what a start may run', () => {
       .toBeUndefined()
     // The requirement stays on the task, as information.
     expect(f.state.conversations.find(c => c.id === group)!.task!.requires).toEqual(requires)
-  })
-
-  it('starts with no role default', () => {
-    const f = routed()
-    // An older client's custom set with defaults per role: no command fills them now.
-    Object.assign(f.state.projects![0]!, { skillSet: 'custom', roles: [
-      { id: 'pm', name: 'PM', kind: 'lead', version: 'v1', defaults: { engine: 'claude', model: 'sonnet', effort: 'high' } },
-      { id: 'dev', name: 'Engineer', kind: 'builder', version: 'v1', defaults: { engine: 'claude', model: 'sonnet', effort: 'high' } }] })
-    const { model: _model, effort: _effort, ...unnamed } = request({ roleId: 'dev', conversationId: f.group() })
-    f.run({ type: 'agent.start', request: unnamed }, owner, { contribution: f.contribution })
-    expect(f.state.starts!.at(-1)!.request).not.toHaveProperty('model')
-    expect(f.state.starts!.at(-1)!.request).not.toHaveProperty('effort')
-    // The coordinator's first start keeps the built-in default, whatever the old set said: leadStart.test 'takes the built-in
-    // default whatever an older custom set said'.
   })
 })
 
@@ -1300,7 +1248,7 @@ describe('any agent of the project', () => {
   it('keeps settings and who coordinates to the coordinator and people', () => {
     const { f, engineer, E } = project(), group = f.group()
     for (const command of [{ type: 'tab.rename', name: 'Renamed' }, { type: 'tab.pause', paused: true },
-      { type: 'project.report', projectId: 'lead', throughRevision: 0, text: 'Progress.' },
+      { type: 'project.report', projectId: 'lead', text: 'Progress.' },
       { type: 'conversation.agent', conversationId: group, agentId: engineer, present: true, lead: true }] as Command[]) {
       expect(() => f.run(command, E)).toThrow(coordinatorRequired)
     }
@@ -1618,7 +1566,6 @@ describe('any agent of the project', () => {
     const commands: Array<[Command, Partial<CommandContext>]> = [
       [{ type: 'agent.start', request } as Command, { contribution: f.contribution }],
       [{ type: 'agent.input', agentId: f.worker, keys: ['Enter'] }, {}],
-      [{ type: 'conversation.create', projectId: 'lead', title: 'Mine', brief: 'Do it.', checks: [{ description: 'Done.', independent: false }] }, {}],
     ]
     const before = JSON.stringify(f.state)
     for (const [command, context] of commands) {
@@ -1657,14 +1604,14 @@ describe('any agent of the project', () => {
   })
 })
 
-// An older client's role kind (builder or reviewer) is stored for older readers and decides nothing; its custom role or
-// kind becomes the agent's role name (project instructions, phase 4, decision 2).
+// An older client's role kind (builder or reviewer) is stored for older readers and decides nothing (project instructions,
+// phase 4, decision 2).
 describe('role kinds decide nothing', () => {
   const contribution = { machineOwnerId: 'owner', contributorId: 'owner' }
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const request = (group: string, extra: Record<string, unknown> = {}) => ({ conversationId: group, machineId: 'host', engine: 'claude', name: 'Reviewer',
     cwd: '/repo', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }, ...extra })
-  /** An agent a person starts into [group], as an older client does with its kind (`role`) or custom role (`roleId`). */
+  /** An agent a person starts into [group], as an older client does with its kind (`role`). */
   function started(f: ReturnType<typeof fixture>, group: string, extra: Record<string, unknown> = { role: 'reviewer' }, harnessId = 'native-reviewer') {
     const startId = f.run({ type: 'agent.start', request: request(group, extra) } as Command, owner, { contribution }).result.startId as string
     return f.run({ type: 'agent.started', startId, harnessId, configuration: config }, owner, { contribution }).result.agentId as string
@@ -1793,14 +1740,6 @@ describe('an agent joining a task by a post or by opening it', () => {
     expect(members(other)).toContain(mine)
   })
 
-  it('checks the team access of an agent that opens a task, which it would be in', () => {
-    const { f, mate, mine } = teammate()
-    const create = { type: 'conversation.create', title: 'Fix it', brief: 'Fix it.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' } as Command
-    const groups = f.state.conversations.length
-    expect(() => f.run(create, as(mate))).toThrow(refused)
-    expect(f.state.conversations).toHaveLength(groups)
-    expect(f.run(create, as(mine)).result.conversationId).toEqual(expect.any(String))
-  })
 })
 
 describe('Reviewer role', () => {
@@ -1907,26 +1846,12 @@ describe('a task that requires a machine or a device', () => {
   const task = { goal: 'Check the round device', changes: 'None', constraints: 'On the Mac it is plugged into', owns: ['devices'] }
   const checks = [{ description: 'It answers.', independent: false }]
   /** A new task requiring [requires], by [actor]: its id. */
-  const requiring = (f: ReturnType<typeof routed>, requires: Record<string, unknown>, actor: Actor = owner) =>
-    f.run({ type: 'conversation.create', title: 'Device check', task: { ...task, requires }, checks } as Command, actor).result.conversationId as string
+  const requiring = (f: ReturnType<typeof routed>, requires: { machines?: string[]; devices?: string[] }) =>
+    storedTask(f.state, { title: 'Device check', task: { ...task, requires }, checks, requesterId: 'owner' })
   const startOn = (f: ReturnType<typeof routed>, conversationId: string, machineId: string, actor: Actor, devices: string[] = []) => f.run({ type: 'agent.start', request: { conversationId, machineId,
     engine: 'claude', model: 'opus', effort: 'high', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices, quotaRequired: false } } } as Command, actor, { contribution: f.contribution })
 
-  it('keeps the requirement on the task, without naming the machine in the brief', () => {
-    const f = routed()
-    const id = requiring(f, { machines: ['machine'], devices: ['/dev/cu.usbmodem1'] })
-    const at = f.state.conversations.find(c => c.id === id)!
-    expect(at.task!.requires).toEqual({ machines: ['machine'], devices: ['/dev/cu.usbmodem1'] })
-    expect(at.brief).not.toContain('machine')
-  })
-  it('takes only machines of the Swarm the setter can see, and at least one machine or device', () => {
-    const f = routed()
-    expect(() => requiring(f, { machines: ['nowhere'] })).toThrow('Name a machine of this Swarm')
-    expect(() => requiring(f, {})).toThrow()
-    expect(() => requiring(f, { machines: [] })).toThrow()
-    expect(() => requiring(f, { devices: ['dev/relative'] })).toThrow()
-  })
   // A requirement is information (project instructions, phase 4): nothing refuses a start elsewhere ('what a start may run >
   // ignores a task's machine and device requirement').
   it('refuses no agent\'s start on another machine or without the device, and warns no person', () => {
@@ -1978,7 +1903,7 @@ it('marks every row the system writes in the owner\'s name, so a Lead cannot quo
   const rows: { text: string; source?: unknown }[] = []
   const run = (command: Command, context: Partial<CommandContext> = {}) => { const effects = f.run(command, owner, context); rows.push(...effects.messages); return effects }
   f.add('lead', 'owner', 'lead', true)
-  const group = run({ type: 'conversation.create', title: 'Drafts', brief: 'Save drafts.', checks: [{ description: 'Saved.', independent: false }] }).result.conversationId as string
+  const group = f.group()
   const worker = f.add('worker', 'owner', group)
   storedAssignment(f.state, group, worker, 1000)
   storedStatus(f.state, group, 'blocked', 'Waiting.')
@@ -2672,47 +2597,8 @@ describe('other projects\' work for Leads', () => {
     expect(visibleState(f.state, owner)).not.toHaveProperty('otherProjectsWork')
   })
 
-  it('tells each Lead once, in its own project chat and to it alone, when a task\'s owned code overlaps another project\'s active task', () => {
-    const { f, lead, project, work } = swarm()
-    const docs = project('Docs', 'public')
-    const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
-    const name = (id: string) => f.state.agents.find(a => a.id === id)!.displayName
-    const overlaps = (effects: ReturnType<typeof f.run>) => effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')
-    const created = f.run({ type: 'conversation.create', title: 'Agents filter', task: task([' ./desktop/lib/super_tabs/roster.dart ', 'cli']), checks, priority: 'P2', requesterId: 'owner' }, as(lead))
-    const group = created.result.conversationId as string
-    const text = `"Agents filter" (Pilot, ${name(lead)}) and "Roster" (Docs, ${name(docs.lead)}) both change desktop/lib/super_tabs/roster.dart.`
-    // The acting Lead created the overlap and is not told again; the other project's Lead hears it in its own project chat.
-    expect(overlaps(created)).toEqual([expect.objectContaining({ conversationId: docs.conversationId, author: expect.objectContaining({ id: docs.lead }),
-      recipients: [docs.lead], text, source: { kind: 'overlap', conversationIds: [group, roster.group] } })])
-    // The two Leads' to settle (Ken, 2026-10-29): people in the project chat do not read it.
-    expect(agentOnly(overlaps(created)[0]!.source, overlaps(created)[0]!.recipients)).toBe(true)
-    expect(f.state.conversations.some(c => c.kind === 'leads')).toBe(false)
-    expect(visibleState(f.state, owner)).not.toHaveProperty('overlapAlerts')
-  })
 
-  it('tells both Leads, each in its own project chat, when a person makes the overlap', () => {
-    const { f, lead, project, work } = swarm()
-    const docs = project('Docs', 'public')
-    const roster = work(docs.projectId, 'Roster', ['desktop/lib/super_tabs'])
-    const effects = f.run({ type: 'conversation.create', title: 'Agents filter', task: task(['desktop/lib']), checks })
-    expect(effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')
-      .map(m => [m.conversationId, m.recipients]).sort()).toEqual([['lead', [lead]], [docs.conversationId, [docs.lead]]].sort())
-    expect(roster.group).toBeTruthy()
-  })
 
-  it('stays silent within one project, for owned code that is not a path, and for private projects', () => {
-    const { f, project, work } = swarm()
-    const secret = project('Secret', 'private'), docs = project('Docs', 'public')
-    work('lead', 'Own', ['desktop/lib'])
-    work(secret.projectId, 'Hidden', ['desktop/lib'])
-    work(docs.projectId, 'Phrase', ['The Desktop roster'])
-    for (const owns of [['desktop/lib/super_tabs'], ['The Desktop roster']]) {
-      const effects = f.run({ type: 'conversation.create', title: 'More', task: task(owns), checks })
-      expect(effects.messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')).toEqual([])
-    }
-    expect(f.run({ type: 'conversation.create', projectId: secret.projectId, title: 'Secret too', task: task(['desktop/lib']), checks })
-      .messages.filter(m => (m.source as { kind?: string } | undefined)?.kind === 'overlap')).toEqual([])
-  })
 })
 
 describe('the Local models add-on', () => {
@@ -2896,18 +2782,6 @@ describe('credentials in Swarm chat', () => {
     expect(sent.result).toEqual({ messageId: sent.messages[0]!.id })
   })
 
-  it('removes credentials from task words before they reach the state or a row', () => {
-    const f = fixture()
-    f.add('lead', 'owner', 'lead', true)
-    const created = f.run({ type: 'conversation.create', title: 'Deploy', checks: [{ description: `Login works with ${github}`, independent: false }],
-      task: { goal: 'Deploy', changes: `Use ${jwt} to call the API`, constraints: 'None', owns: ['backend'] } })
-    expect(created.result.credentialNotice).toBe(notice)
-    const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
-    expect(group.task!.changes).toBe(`Use ${CREDENTIAL_MARKER} to call the API`)
-    expect(group.brief).toContain(`Use ${CREDENTIAL_MARKER} to call the API`)
-    expect(group.checks[0]!.description).toBe(`Login works with ${CREDENTIAL_MARKER}`)
-    expect(JSON.stringify(f.state)).not.toMatch(new RegExp(`${github}|${jwt.replaceAll('.', '\\.')}`))
-  })
 
   it('removes a credential from an older message when a person resends it', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
@@ -2919,11 +2793,11 @@ describe('credentials in Swarm chat', () => {
 
   it('finds the words of every kind of command, nested and in lists', () => {
     const removed: CredentialKind[] = []
-    const start = withoutCredentials({ type: 'agent.start', request: { name: `Builder ${github}`, roleName: `Writer ${jwt}` } } as Command, removed)
-    expect(start).toMatchObject({ request: { name: `Builder ${CREDENTIAL_MARKER}`, roleName: `Writer ${CREDENTIAL_MARKER}` } })
-    const owns = withoutCredentials({ type: 'conversation.create', title: 't', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src', github] } } as Command, removed)
-    expect(owns).toMatchObject({ task: { owns: ['src', CREDENTIAL_MARKER] } })
-    expect(removed).toEqual(['github', 'jwt', 'github'])
+    const start = withoutCredentials({ type: 'agent.start', request: { name: `Builder ${github}` } } as Command, removed)
+    expect(start).toMatchObject({ request: { name: `Builder ${CREDENTIAL_MARKER}` } })
+    const added = withoutCredentials({ type: 'agent.add', name: 'Builder', initialMessage: `Use ${jwt}` } as Command, removed)
+    expect(added).toMatchObject({ initialMessage: `Use ${CREDENTIAL_MARKER}` })
+    expect(removed).toEqual(['github', 'jwt'])
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
@@ -2953,9 +2827,9 @@ describe('credentials in every command', () => {
 
   it.each([
     ['agent.new', 'name'], ['agent.new', 'projectName'],
-    ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
+    ['agent.add', 'initialMessage'], ['agent.start', 'request.name'],
     ['swarm.delete', 'name'],
-    ['conversation.create', 'task.requires.access[]'], ['agent.screenResult', 'error'],
+    ['agent.screenResult', 'error'],
   ])('removes a credential from %s %s', (type, path) => {
     const removed: CredentialKind[] = []
     expect(at(withoutCredentials(holding(type, path, `see ${github}`), removed), path)).toBe(`see ${CREDENTIAL_MARKER}`)
@@ -2981,10 +2855,8 @@ describe('credentials in every command', () => {
     ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl', 'github.relay repository', 'github.relay login',
       'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
       'agent.start request.requirements.devices[]', 'lead.start branchRef', 'lead.start repositoryUrl',
-      'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl',
-      'conversation.create task.requires.devices[]']],
-    ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
-      'project.closeTab tabOperation']],
+      'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl']],
+    ['An id, an account key, a time or a time zone', ['agent.rebind profileId', 'project.closeTab tabOperation']],
     ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
   ]
 
@@ -3024,7 +2896,7 @@ describe('credentials in every command', () => {
     const exempt = NOT_WORDS.flatMap(([, fields]) => fields)
     const covered = new Set([...Object.entries(WORDS).flatMap(([type, paths]) => paths!.map(path => `${type} ${path}`)), ...exempt])
     const all = strings()
-    expect(all.length).toBeGreaterThan(100)
+    expect(all.length).toBeGreaterThan(80)
     expect(all.filter(field => !covered.has(field))).toEqual([])
     // Nothing listed is stale or listed twice.
     expect([...covered].filter(field => !all.includes(field))).toEqual([])
@@ -3235,16 +3107,6 @@ describe('archiving unfinished work', () => {
     const t = task('done')
     expect(archive(t).messages).toEqual([])
     expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(true)
-  })
-})
-
-// Checks are information (project instructions, phase 4): who passes one is the project's workflow, and Done is the agent's
-// word. The server records every verdict and refuses none for who gave it.
-describe('checks are information', () => {
-  it('creates a task with no checks', () => {
-    const f = routed()
-    const group = f.run({ type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [] }, owner).result.conversationId as string
-    expect(f.state.conversations.find(c => c.id === group)!.checks).toEqual([])
   })
 })
 
@@ -4050,49 +3912,6 @@ describe('lead.switch', () => {
   })
 })
 
-// A task's priority, P0-P3 (task #3117): a hotfix for a broken release must not wait behind ordinary work.
-describe('a task\'s priority (conversation.create)', () => {
-  function prioritized() {
-    const f = routed()
-    const task = (id: string) => f.state.conversations.find(g => g.id === id)!
-    // An agent's task says its check, priority and who asked (taskContract.ts); a step carries no priority, a person's defaults.
-    const create = (fields: Record<string, unknown> = {}, actor: Actor = f.leadActor) =>
-      f.run(commandSchema.parse({ type: 'conversation.create', title: 'Sign-in broken', brief: 'Fix it.',
-        checks: [{ description: 'Done', independent: false }], ...actor.kind === 'agent' && !fields.reviewOf ? { priority: 'P2', requesterId: 'owner' } : {}, ...fields }), actor)
-    return { f, task, create }
-  }
-
-  it('takes the PM\'s priority when it creates a task', () => {
-    const { task, create } = prioritized()
-    const created = create({ priority: 'P0' })
-    expect(created.result).toMatchObject({ priority: 'P0' })
-    expect(created.result.warnings ?? []).not.toContainEqual(expect.stringContaining('No priority given'))
-    expect(task(created.result.conversationId as string).priority).toBe('P0')
-    expect(groupView(task(created.result.conversationId as string), new Set())).toMatchObject({ priority: 'P0' })
-  })
-
-  it('gives a task created without one P2, and the reply says so', () => {
-    const { task, create } = prioritized()
-    const created = create({}, owner)
-    expect(task(created.result.conversationId as string).priority).toBe('P2')
-    expect(created.result).toMatchObject({ priority: 'P2',
-      warnings: expect.arrayContaining(['No priority given: this task is P2. Give P0-P3 when you create a task.']) })
-  })
-
-  it('lets only the PM or a person create a P0, while any agent may open a P1-P3 task', () => {
-    const { f, task, create } = prioritized()
-    expect(() => create({ priority: 'P0' }, f.workerActor)).toThrow(expect.objectContaining({ code: 'PRIORITY_P0', status: 403 }))
-    expect(task(create({ priority: 'P1' }, f.workerActor).result.conversationId as string).priority).toBe('P1')
-    expect(task(create({ priority: 'P0' }, owner).result.conversationId as string).priority).toBe('P0')
-  })
-
-  it('takes only P0 to P3', () => {
-    const parse = (priority: unknown) => commandSchema.safeParse({ type: 'conversation.create', title: 'T', brief: 'B', checks: [], priority }).success
-    for (const priority of ['P0', 'P1', 'P2', 'P3']) expect(parse(priority)).toBe(true)
-    for (const priority of ['P4', 'p0', 'high', 'urgent', 0, null]) expect(parse(priority), String(priority)).toBe(false)
-  })
-})
-
 describe('agent.rename (renaming a harness renames its agent, task #2912)', () => {
   const rename = (agentId: string, name: string): Command => ({ type: 'agent.rename', agentId, name })
   const shownTo = (f: ReturnType<typeof fixture>, reader: Actor, agentId: string) =>
@@ -4105,7 +3924,7 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
     expect(shownTo(f, peer, agentId)).toBe('Darren\'s PM')
     // A later command does not hand it a generated name again.
-    f.run({ type: 'conversation.create', title: 'Later', brief: 'Anything.', checks: [] })
+    f.run({ type: 'tab.rename', name: 'Later' })
     expect(shownTo(f, owner, agentId)).toBe('Darren\'s PM')
   })
 
@@ -4205,7 +4024,7 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     const named = (name: string, harnessId: string) => {
       const id = f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId, name, configuration: config, lead: false },
         owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
-      f.run({ type: 'conversation.create', title: `After ${harnessId}`, brief: 'Anything.', checks: [] })
+      f.run({ type: 'tab.rename', name: `After ${harnessId}` })
       return f.state.agents.find(a => a.id === id)!.displayName
     }
     for (const [i, name] of ['System', 'Everyone', '[Approve](https://ev.il)', 'minh nguyen', 'peer@example.com', 'quinn', 'Lead\u2800'].entries()) {

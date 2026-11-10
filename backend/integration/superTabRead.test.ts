@@ -23,7 +23,7 @@ import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
-import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -840,7 +840,7 @@ describe('what a read costs the database (group 3b)', () => {
   }
   /** Sixty more conversations with long briefs, as a busy Swarm's history makes them (about half a megabyte). */
   const bulky = (s: ReturnType<typeof swarm>) => {
-    for (let i = 0; i < 60; i++) s.run({ type: 'conversation.create', title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}`, checks: [] })
+    for (let i = 0; i < 60; i++) storedTask(s.state, { title: `Old work ${i}`, brief: `${'Long brief text. '.repeat(470)}${i}` })
   }
 
   it('counts none of the reads an earlier test left running', async () => {
@@ -1207,9 +1207,9 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
       expect(changes.derived.agents[s.more.member].workDecision).toBe('awaiting')
     })
 
-    /** A reply's derived values without what differs by design: a first load sends every read mark (and avatar link), a
+    /** A reply's derived values without what differs by design: a first load sends every read mark, a
      *  change read only the marks moved since its cursor. */
-    const derivedOf = ({ readMarks: _marks, threadMarks: _threads, avatars: _avatars, ...rest }: Record<string, unknown>) => rest
+    const derivedOf = ({ readMarks: _marks, threadMarks: _threads, ...rest }: Record<string, unknown>) => rest
     /** The agent's part as prod still holds some (6 of 66 live agents, 10-30): no stored project (projects.ts agentProjectId). */
     async function withoutProject(tabId: string, agentId: string) {
       await swarmTransaction(db, async tx => {

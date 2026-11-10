@@ -44,8 +44,6 @@ export const HOURLY_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 export const PENDING_UPLOAD_LIFE_MS = UPLOAD_LINK_MS + 3_600_000
 /** The form route's own refusal, seen only by a client from before upload links. */
 export const FORM_TOO_LARGE_MESSAGE = 'Update Harness to send files over 10 MB. Files can be up to 256 MB.'
-/** The `purpose` of an avatar upload (schema.prisma SuperTabAttachment): never sendable as a chat file. */
-export const AVATAR_PURPOSE = 'avatar'
 /** How long an upload may wait to be sent. */
 export const UNSENT_LIFE_MS = 24 * 3_600_000
 /** `usedBy` of an upload the expiry sweep took (lib/attachmentSweep.ts): its file is being removed and nothing may use it.
@@ -105,14 +103,7 @@ export interface AttachmentStore {
   /** Removes the object. One that is already gone counts as removed. */
   delete(objectKey: string): Promise<void>
 }
-/** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
-export interface AvatarStore extends AttachmentStore {}
-/** `avatars`: where avatars are kept and how they are linked (AvatarStore); without it, avatar uploads are refused and presets
- *  still work. `avatarPrefix`: the folder avatar keys start with, and the only one a link is signed for (avatarLinks.ts);
- *  `prefix` when unset. */
-export interface Attachments { store: AttachmentStore; prefix: string; publicBase: string; avatars?: AvatarStore | null; avatarPrefix?: string }
-/** Avatars' folder in the attachments bucket, when they have no bucket of their own. */
-export const SHARED_AVATAR_PREFIX = 'avatars'
+export interface Attachments { store: AttachmentStore; prefix: string; publicBase: string }
 export const trimPrefix = (prefix: string) => prefix.replace(/^\/+|\/+$/g, '')
 
 /** The key carries 128 random bits, so no one finds a file by guessing; the name segment is for people. */
@@ -242,8 +233,7 @@ async function downloaded(stream: Readable, signal?: AbortSignal): Promise<Buffe
 
 export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
   private bucket: Promise<import('@google-cloud/storage').Bucket> | null = null
-  constructor(private readonly name: string, private readonly account: ServiceAccount | null = null,
-    private readonly cacheControl = CHAT_CACHE_CONTROL) {}
+  constructor(private readonly name: string, private readonly account: ServiceAccount | null = null) {}
   // Loaded on first use, so a backend without a bucket never loads the client.
   protected files() {
     this.bucket ??= import('@google-cloud/storage').then(({ Storage }) => new Storage(this.account ?? undefined).bucket(this.name))
@@ -253,12 +243,12 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
     const { contentType, contentDisposition } = served(file.name, file.mime)
     // One request, not a resumable session: a failed or refused stream aborts it and no object is written.
     const sink = (await this.files()).file(objectKey).createWriteStream({ resumable: false, contentType,
-      metadata: { contentDisposition, cacheControl: this.cacheControl } })
+      metadata: { contentDisposition, cacheControl: CHAT_CACHE_CONTROL } })
     return capped(body, cap, sink)
   }
   /** A V4 signed PUT: the signature covers every header below, so storage refuses a request that drops or changes one. */
   async uploadLink(objectKey: string, file: { name: string }, size: number, expiresAt: number): Promise<UploadLink> {
-    const { 'content-type': contentType, ...extensionHeaders } = linkHeaders(file.name, size, this.cacheControl)
+    const { 'content-type': contentType, ...extensionHeaders } = linkHeaders(file.name, size, CHAT_CACHE_CONTROL)
     const [url] = await (await this.files()).file(objectKey).getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType, extensionHeaders })
     return { url, headers: { 'content-type': contentType!, ...extensionHeaders } }
   }
@@ -281,33 +271,20 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
     await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
   }
   /** A V4 signed GET, on Cloud Storage's own host. Signed with the service account key when one is set, else through the
-   *  cloud's signing API, a network call: fileLinks.ts and avatarLinks.ts reuse each link through its window. */
+   *  cloud's signing API, a network call: fileLinks.ts reuses each link through its window. */
   async signedUrl(objectKey: string, expiresAt: number) {
     const [url] = await (await this.files()).file(objectKey).getSignedUrl({ version: 'v4', action: 'read', expires: expiresAt })
     return url
   }
 }
 
-/** Avatars in a bucket of their own, which grants nobody read access: each read hands out signed links (avatarLinks.ts). */
-export class GcsAvatarStore extends GcsAttachmentStore implements AvatarStore {
-  constructor(name: string, account: ServiceAccount | null = null) { super(name, account, 'private, max-age=3600') }
-}
-
-/** Avatars in the attachments bucket's avatar folder (prod, Ken 2026-10-28 option B1), linked as chat files are: by signed
- *  links, so a removed member's copied link stops opening and nothing breaks once the bucket is no longer public. */
-export class SharedAvatarStore implements AvatarStore {
-  constructor(readonly store: AttachmentStore) {}
-  put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) { return this.store.put(objectKey, file, body, cap) }
-  signedUrl(objectKey: string, expiresAt: number) { return this.store.signedUrl(objectKey, expiresAt) }
-  delete(objectKey: string) { return this.store.delete(objectKey) }
-}
-
 export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
   readonly objects = new Map<string, { bytes: Buffer; contentType: string; contentDisposition: string; cacheControl?: string }>()
   private readonly linkSecret = randomBytes(32)
   private readonly readSecret = randomBytes(32)
-  /** [readBase]: where its signed read links point, as Cloud Storage's own host for a real bucket. */
-  constructor(private readonly now: () => number = Date.now, private readonly readBase = 'https://storage.memory.test') {}
+  /** Where its signed read links point, as Cloud Storage's own host for a real bucket. */
+  private readonly readBase = 'https://storage.memory.test'
+  constructor(private readonly now: () => number = Date.now) {}
   private readSignature(objectKey: string, expiresAt: number) {
     return createHmac('sha256', this.readSecret).update(`${objectKey}\n${expiresAt}`).digest('hex')
   }
@@ -361,13 +338,8 @@ export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
   async delete(objectKey: string) { this.objects.delete(objectKey) }
 }
 
-/** Avatars for tests and the local rig: links carry their expiry and an HMAC of it, and `open` honours both as the bucket would. */
-export class MemoryAvatarStore extends MemoryAttachmentStore implements AvatarStore {
-  constructor(base: string) { super(Date.now, base) }
-}
-
 export function attachmentsFromEnv(env: { NODE_ENV: string; SUPER_TAB_ATTACHMENTS_BUCKET: string; SUPER_TAB_ATTACHMENTS_CREDENTIALS: string;
-  SUPER_TAB_ATTACHMENTS_PREFIX: string; SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: string; SUPER_TAB_AVATARS_BUCKET: string }): Attachments | null {
+  SUPER_TAB_ATTACHMENTS_PREFIX: string; SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: string }): Attachments | null {
   // Stored messages name their files by an address on this base (fileLinks.ts reads the object's key from it): in production
   // only HTTPS, as every link once handed out was. A local or test run may use a plain loopback address.
   if (env.NODE_ENV === 'production' && new URL(env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE).protocol !== 'https:') {
@@ -376,16 +348,6 @@ export function attachmentsFromEnv(env: { NODE_ENV: string; SUPER_TAB_ATTACHMENT
   // Read even without a bucket, so a broken key fails the deploy that set it rather than the one that adds the bucket.
   const account = serviceAccountFrom(env.SUPER_TAB_ATTACHMENTS_CREDENTIALS)
   if (!env.SUPER_TAB_ATTACHMENTS_BUCKET) return null
-  const base = { store: new GcsAttachmentStore(env.SUPER_TAB_ATTACHMENTS_BUCKET, account), prefix: env.SUPER_TAB_ATTACHMENTS_PREFIX,
+  return { store: new GcsAttachmentStore(env.SUPER_TAB_ATTACHMENTS_BUCKET, account), prefix: env.SUPER_TAB_ATTACHMENTS_PREFIX,
     publicBase: env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE }
-  // A bucket of their own wins: nobody reads it without a signed link.
-  if (env.SUPER_TAB_AVATARS_BUCKET) return { ...base, avatars: new GcsAvatarStore(env.SUPER_TAB_AVATARS_BUCKET, account), avatarPrefix: trimPrefix(base.prefix) }
-  // Prod has only the attachments bucket (Ken, 2026-10-28, option B1): avatars live there in their own folder and are linked
-  // as chat files are, by signed links (docs/swarms.md). Chat files never go in the avatar folder, and avatar links are made
-  // for that folder alone.
-  const chat = trimPrefix(base.prefix)
-  if (chat === SHARED_AVATAR_PREFIX || chat.startsWith(`${SHARED_AVATAR_PREFIX}/`)) {
-    throw new Error(`SUPER_TAB_ATTACHMENTS_PREFIX must not be ${SHARED_AVATAR_PREFIX}/ or inside it while avatars share the attachments bucket. Pick another prefix, or set SUPER_TAB_AVATARS_BUCKET.`)
-  }
-  return { ...base, avatars: new SharedAvatarStore(base.store), avatarPrefix: SHARED_AVATAR_PREFIX }
 }

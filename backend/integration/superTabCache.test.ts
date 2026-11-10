@@ -194,21 +194,19 @@ describe('reads through the cache', () => {
   })
 
   it('shows a commit on one process to the next read on another (stale after commit, two pods)', async () => {
-    const { tabId } = await privateScene()
+    const { tabId, web } = await privateScene()
     const a = pod(), b = pod()
     const before = await b.reads.firstLoad(people.owner, tabId)
-    const { result } = await a.store.execute(people.owner, tabId, { operationId: `create-${randomUUID()}`,
-      command: { type: 'conversation.create', title: 'Made on A', brief: '', checks: [] } })
-    const created = result.conversationId as string
-    expect(groupKeys(await b.reads.firstLoad(people.owner, tabId))).toContain(created)
+    const send = (on: typeof a, text: string) => on.store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
+      command: { type: 'message.send', conversationId: web, text, replyTo: null, recipientIds: [] } })
+    await send(a, 'from A')
     const changes = await b.reads.changes(people.owner, tabId, before.cursor)
     expect('reload' in changes && changes.reload).toBe(false)
-    expect(groupKeys(changes as { groups: Array<{ key: string }> })).toContain(created)
+    expect(groupKeys(changes as { groups: Array<{ key: string }> })).toContain(web)
     // And the other way: a message on B's Swarm, read on A.
-    await b.store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
-      command: { type: 'message.send', conversationId: created, text: 'from B', replyTo: null, recipientIds: [] } })
-    const messages = await a.store.messages(people.owner, tabId, created, {})
-    expect(messages.messages.map(m => m.text)).toEqual(['from B'])
+    await send(b, 'from B')
+    const messages = await a.store.messages(people.owner, tabId, web, {})
+    expect(messages.messages.map(m => m.text).slice(-2)).toEqual(['from A', 'from B'])
   })
 
   it('shows a removal on one process to the removed person\'s next read on another: from a project, then the Swarm', async () => {
@@ -260,7 +258,7 @@ describe('reads through the cache', () => {
     await reads.firstLoad(people.owner, tabId)
     stamps.down = true
     const { result } = await store.execute(people.owner, tabId, { operationId: `create-${randomUUID()}`,
-      command: { type: 'conversation.create', title: 'Redis down', brief: '', checks: [] } })
+      command: { type: 'project.create', name: 'Redis down', visibility: 'public', brief: '' } })
     const read = await partReads(() => reads.firstLoad(people.owner, tabId))
     expect(groupKeys(read.value)).toContain(result.conversationId)
     expect(read.reads).toBeGreaterThan(0)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { bindPullRequestCards } from './cards.js'
 import { agentOnly, appendPullRequestUrls, createSuperTab, visibleState, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'dee@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
@@ -24,8 +25,7 @@ function fixture() {
     name, configuration: config, lead }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   const lead = add('River', 'lead', true)
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
-  const create = () => run({ type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.',
-    checks: [{ description: 'Tests pass', independent: false }] } as Command)
+  const create = () => storedTask(state, { title: 'Avatars', brief: 'Add avatars.', checks: [{ description: 'Tests pass' }], requesterId: 'owner' })
   const post = (conversationId: string, text: string, actor: Actor = owner, extra: Record<string, unknown> = {}, context: Partial<CommandContext> = {}) =>
     run({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [], ...extra } as Command, actor, context).messages.at(-1)!
   const group = (id: string) => state.conversations.find(c => c.id === id)!
@@ -33,16 +33,9 @@ function fixture() {
 }
 
 describe('live cards', () => {
-  it('makes the brief its task card', () => {
-    const f = fixture()
-    const created = f.create()
-    const id = created.result.conversationId as string
-    expect(f.group(id).cards).toMatchObject({ task: created.messages[0]!.id })
-  })
-
   it('makes the first message linking a pull request its card, and later links of it plain messages', () => {
     const f = fixture()
-    const id = f.create().result.conversationId as string
+    const id = f.create()
     const builder = f.add('Kai', id)
     const first = f.post(id, `Opened ${PR}`, f.as(builder))
     f.post(id, `CI is running on ${PR}`, f.as(builder))
@@ -52,7 +45,7 @@ describe('live cards', () => {
 
   it('never makes a thread reply or an agent-only notice a card', () => {
     const f = fixture()
-    const id = f.create().result.conversationId as string
+    const id = f.create()
     const builder = f.add('Kai', id)
     const root = f.post(id, 'Starting.', f.as(builder))
     f.post(id, `Opened ${PR}`, f.as(builder), { replyTo: root.id },
@@ -72,7 +65,7 @@ describe('live cards', () => {
 
   it('shows a card only to readers of its own conversation', () => {
     const f = fixture()
-    const id = f.create().result.conversationId as string
+    const id = f.create()
     const peer: Actor = { kind: 'person', userId: 'peer', email: 'ivy@example.com' }
     f.state.people.push({ id: 'peer', email: peer.email, role: 'collaborator', generation: 'first' })
     f.post(id, `Opened ${PR}`)

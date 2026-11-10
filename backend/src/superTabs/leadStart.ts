@@ -45,7 +45,7 @@ export function leadEffort<T extends { engine: string; model?: string; effort?: 
   }
   if (!request.model || request.effort) return request
   const defaults = BUILT_IN_ROLE_DEFAULTS.lead
-  const own = defaults?.engine === request.engine && defaults.model && family(defaults.model) === family(request.model) ? defaults.effort : undefined
+  const own = defaults.engine === request.engine && defaults.model && family(defaults.model) === family(request.model) ? defaults.effort : undefined
   return { ...request, effort: own ?? LEAD_EFFORT }
 }
 

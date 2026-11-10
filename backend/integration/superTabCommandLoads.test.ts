@@ -9,6 +9,8 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import { logger } from '../src/utils/logger.js'
 import type { Conversation } from '../src/superTabs/model.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
@@ -45,7 +47,8 @@ afterAll(async () => {
 async function swarm(dormant = 0, awake = 0) {
   const store = new SuperTabStore(db)
   const tab = (await store.create(owner, randomUUID(), 'Loads', 'public')).id
-  const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
+  const execute = (command: Command | StoredCreate, asAgentId?: string) => command.type === 'conversation.create'
+    ? storeCreate(db, tab, command, owner, asAgentId) : store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
   await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 8 })
   const harness = { lead: randomUUID(), worker: randomUUID() }
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: harness.lead, name: 'Lead', configuration: config, lead: true })).result.agentId)
@@ -87,7 +90,7 @@ describe('a refused command in the log', () => {
     const { execute, tab } = await swarm()
     const said = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     try {
-      await execute({ type: 'conversation.create', title: secret, brief: secret, checks: [] })
+      await execute({ type: 'tab.rename', name: secret })
       expect(said.mock.calls.filter(([line]) => line === REFUSED)).toEqual([])
       await expect(execute({ type: 'conversation.rename', conversationId: secret, title: secret })).rejects.toMatchObject({ code: 'NOT_FOUND' })
       // And whose (#2675): its Swarm, no agent, and no declared client; never its words.
