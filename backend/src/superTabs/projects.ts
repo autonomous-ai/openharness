@@ -9,7 +9,7 @@ export type SkillMode = 'default' | 'orchestration'
 export type SkillSet = SkillMode | 'custom'
 export const SKILL_SET_NAMES: Record<SkillSet, string> = { default: 'Default', orchestration: 'Harness orchestration', custom: 'Custom' }
 export type RoleKind = 'lead' | 'builder' | 'reviewer'
-/** A role of a project's custom set as the tab state keeps it. Its text lives outside the state (store.ts roleText), so a
+/** A role of a project's custom set as the tab state keeps it. Its text lives outside the state (SuperTabRoleText), so a
  *  roster or tab read never carries up to 20 x 64 KB of skill text; `version` names the text. */
 export interface ProjectRole { id: string; name: string; kind: RoleKind; version: string; defaults?: RoleDefaults }
 /** What an agent of a role starts on when its start names no model: an engine, and on it a model and effort. */

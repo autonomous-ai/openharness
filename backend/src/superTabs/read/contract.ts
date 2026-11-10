@@ -25,7 +25,7 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
+  | 'environment' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
   | 'autoJoin'> & {
   /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
   projects?: Array<import('../projects.js').SwarmProject & {

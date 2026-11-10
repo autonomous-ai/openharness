@@ -478,8 +478,6 @@ export interface SuperTabState {
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
   environment: string
-  /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
-  routingPolicy?: import('./routingPolicy.js').RoutingOverride
   /** The owner's routing rules (rules.ts); absent until the first is set. */
   rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */

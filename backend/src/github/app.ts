@@ -24,8 +24,6 @@ export const GRANTED_TOKEN_PERMISSIONS = { workflows: 'write', issues: 'write' }
  *  token only (github/repositoryCreate.ts), so a token minted from the app's key can never create, delete or transfer a
  *  repository, nor widen which repositories the installation covers. */
 export const NEVER_ON_INSTALLATION_TOKENS = ['administration', 'repository_creation', 'installation_repositories'] as const
-/** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
-export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 
 /** A refusal with the code clients act on; `details` adds fields beside it, such as the install link. */

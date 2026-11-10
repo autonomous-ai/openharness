@@ -37,7 +37,7 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'removedMachines', 'autoJoin'] as const
+  'rules', 'paused', 'invitations', 'localModels', 'removedMachines', 'autoJoin'] as const
 
 export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, data: T): LivePart<T> =>
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })

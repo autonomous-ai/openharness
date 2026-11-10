@@ -10,7 +10,6 @@ import { agentOnly, agentRole, createSuperTab, visibleState, type Actor, type Ag
 import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
 import { modelMatches } from './rules.js'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
 import { groupView } from './read/views.js'
@@ -3364,15 +3363,6 @@ describe('the Local models add-on', () => {
     const effects = f.run({ type: 'agent.start', request: start(grid, { conversationId: task }), routeDecisionId: 'd1' }, actor, { ...grant, ...decision })
     expect(effects.routeDecisions).toEqual([expect.objectContaining({ op: 'final', final: expect.objectContaining({ gridModel: 'qwen3-30b', gridName: grid }) })])
     expect(effects.messages.some(m => m.source?.kind === 'route-override')).toBe(false)
-  })
-
-  it('reads the policy\'s local quality, low by default, from policies saved before the add-on', () => {
-    const builtIn = DEFAULT_ROUTING_POLICY.localModels!.models
-    expect(effectivePolicy(null, null).policy.localModels).toEqual({ quality: 1, enabled: true, models: builtIn })
-    const saved = { ...DEFAULT_ROUTING_POLICY } as Record<string, unknown>
-    delete saved.localModels
-    expect(effectivePolicy(saved, null).policy.localModels).toEqual({ quality: 1, enabled: true, models: builtIn })
-    expect(effectivePolicy(saved, { localModels: { quality: 2, enabled: true } }).policy.localModels).toEqual({ quality: 2, enabled: true, models: builtIn })
   })
 })
 
