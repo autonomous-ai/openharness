@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --panel: #f3f3f1; --ink: #1d1d1b; --muted: #6b6b66; --line: #e2e2de;
+    --accent: #2f6fdb; --hover: #e9e9e5; --chosen: #dde6f7; --warn: #b4540a; --code: #efefec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17181b; --panel: #1e1f23; --ink: #e9e9e6; --muted: #9a9a95; --line: #2c2d32;
+      --accent: #78a6ff; --hover: #26272c; --chosen: #263248; --warn: #f0a35b; --code: #24252a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17181b; --panel: #1e1f23; --ink: #e9e9e6; --muted: #9a9a95; --line: #2c2d32;
+    --accent: #78a6ff; --hover: #26272c; --chosen: #263248; --warn: #f0a35b; --code: #24252a;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #app { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; height: 100%; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+  .head { display: flex; align-items: center; gap: 2px; padding: 6px 8px 2px 0; }
+  .head .crumbs { flex: 1; min-width: 0; }
+  button.tool { border: 0; padding: 4px; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--muted); }
+  button.tool:hover { color: var(--ink); }
+  button.tool svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  ul.files li.naming { cursor: default; }
+  ul.files li.naming input { flex: 1; min-width: 0; padding: 1px 6px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg); outline: 0; }
+  .crumbs { padding: 10px 14px 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .twisty { width: 10px; flex: none; color: var(--muted); font-size: 11px; }
+  .tools { display: flex; gap: 6px; padding: 4px 12px 8px; }
+  .tools input { flex: 1; min-width: 0; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  ul.files { list-style: none; margin: 0; padding: 0 6px 12px; overflow: auto; flex: 1; }
+  ul.files li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  ul.files li:hover { background: var(--hover); }
+  ul.files li.chosen { background: var(--chosen); }
+  ul.files li .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  ul.files li .meta { color: var(--muted); font-size: 12px; }
+  .icon { width: 18px; text-align: center; flex: none; }
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  header.bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); min-height: 44px; }
+  header.bar .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  header.bar .state { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  header.bar .state.dirty { color: var(--warn); }
+  .notice { padding: 8px 14px; background: var(--chosen); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .view { flex: 1; overflow: auto; min-height: 0; }
+  .empty { color: var(--muted); padding: 48px 24px; text-align: center; }
+  textarea.editor { width: 100%; height: 100%; border: 0; outline: 0; resize: none; padding: 16px 20px; background: var(--bg);
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
+  pre.plain { margin: 0; padding: 16px 20px; white-space: pre-wrap; word-break: break-word; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .markdown { max-width: 860px; padding: 20px 28px 48px; }
+  .markdown h1, .markdown h2 { border-bottom: 1px solid var(--line); padding-bottom: .2em; }
+  .markdown code { background: var(--code); padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+  .markdown pre { background: var(--code); padding: 12px 14px; border-radius: 8px; overflow: auto; }
+  .markdown pre code { background: none; padding: 0; }
+  .markdown blockquote { margin: 0; padding: 0 14px; border-left: 3px solid var(--line); color: var(--muted); }
+  .markdown img { max-width: 100%; }
+  .markdown table { border-collapse: collapse; }
+  .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 10px; }
+  .markdown a { color: var(--accent); }
+  .picture { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 16px; }
+  .picture img { max-width: 100%; max-height: calc(100vh - 80px); object-fit: contain; background: repeating-conic-gradient(var(--hover) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+  iframe.pdf { width: 100%; height: 100%; border: 0; display: block; }
+  .menu { display: none; }
+  @media (max-width: 640px) {
+    #app { grid-template-columns: 1fr; }
+    aside { display: none; }
+    #app.browsing aside { display: flex; }
+    #app.browsing main { display: none; }
+    .menu { display: inline-block; }
+  }
+</style>
+</head>
+<body>
+<div id="app" class="browsing">
+  <aside>
+    <div class="head">
+      <nav class="crumbs" id="crumbs"></nav>
+      <button class="tool" id="new-file" title="New file" aria-label="New file"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 11v6M9 14h6"/></svg></button>
+      <button class="tool" id="new-folder" title="New folder" aria-label="New folder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/></svg></button>
+      <button class="tool" id="refresh" title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+      <button class="tool" id="collapse" title="Collapse folders" aria-label="Collapse folders"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12h8"/></svg></button>
+    </div>
+    <div class="tools">
+      <input id="filter" placeholder="Filter" aria-label="Filter files">
+    </div>
+    <ul class="files" id="files"></ul>
+  </aside>
+  <main>
+    <header class="bar">
+      <button class="menu" id="menu" title="Files">☰</button>
+      <span class="title" id="title">No file open</span>
+      <span class="state" id="state"></span>
+      <button id="mode" hidden>Edit</button>
+      <button id="save" class="primary" hidden disabled>Save</button>
+    </header>
+    <div class="notice" id="notice" hidden></div>
+    <div class="view" id="view"><div class="empty">Pick a file on the left. Markdown and text open for reading and editing; pictures and PDFs open to look at.</div></div>
+  </main>
+</div>
+<script>
+'use strict';
+const TOKEN = '__FILES_TOKEN__';
+const $ = (id) => document.getElementById(id);
+const state = { dir: '', entries: [], file: null };
+
+async function api(path, params = {}, init = {}) {
+  const url = new URL(path, location.href);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await fetch(url, { ...init, headers: { 'x-files-token': TOKEN, ...(init.headers || {}) } });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body };
+}
+const rawUrl = (path) => `raw?path=${encodeURIComponent(path)}&t=${TOKEN}`;
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ICONS = { folder: '📁', markdown: '📝', text: '📄', image: '🖼️', pdf: '📕', other: '📦' };
+const size = (n) => n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+// ---- the folder tree: each folder's entries read when it is first opened, kept until it changes ----
+state.children = new Map();
+state.open = new Set(['']);
+async function load(dir) {
+  const { ok, body } = await api('api/list', { path: dir });
+  if (!ok) { state.children.delete(dir); return false; }
+  state.children.set(body.dir, body.entries);
+  if (body.dir === '') state.rootName = body.name;
+  return true;
+}
+async function toggle(dir) {
+  state.dir = dir;
+  if (state.open.has(dir) && dir !== '') state.open.delete(dir);
+  else { state.open.add(dir); if (!state.children.has(dir) && !(await load(dir))) return showNotice('Could not open that folder.'); }
+  drawFiles();
+}
+/** Open every folder down to [path] (a file's or a folder's), reading those not read yet. */
+async function reveal(path) {
+  const parts = path.split('/').slice(0, -1);
+  for (let i = 0; i <= parts.length; i++) {
+    const dir = parts.slice(0, i).join('/');
+    state.open.add(dir);
+    if (!state.children.has(dir)) await load(dir);
+  }
+  state.dir = parts.join('/');
+}
+async function refreshTree() {
+  for (const dir of [...state.children.keys()]) {
+    if (!state.open.has(dir) && dir !== '') { state.children.delete(dir); continue; }
+    await load(dir);
+  }
+  drawFiles();
+}
+function drawCrumbs() {
+  const crumbs = $('crumbs');
+  crumbs.textContent = state.rootName || 'Folder';
+  crumbs.title = 'The folder this harness works in';
+}
+function drawFiles() {
+  drawCrumbs();
+  const list = $('files');
+  const filter = $('filter').value.trim().toLowerCase();
+  list.textContent = '';
+  const walk = (dir, depth) => {
+    if (state.naming && state.naming.dir === dir) list.append(namingRow(depth));
+    for (const entry of state.children.get(dir) || []) {
+      const matches = !filter || entry.name.toLowerCase().includes(filter);
+      if (entry.dir) {
+        // A folder shows while filtering when it, or something already read inside it, matches; its row goes
+        // above the rows drawn for what is inside it.
+        const before = list.childElementCount;
+        if (state.open.has(entry.path) || filter) walk(entry.path, depth + 1);
+        if (matches || list.childElementCount > before) list.insertBefore(row(entry, depth), list.children[before] || null);
+      } else if (matches) list.append(row(entry, depth));
+    }
+  };
+  walk('', 0);
+  if (!list.childElementCount) { const li = document.createElement('li'); li.innerHTML = '<span class="name" style="color:var(--muted)">Nothing here</span>'; list.append(li); }
+}
+function row(entry, depth) {
+  const li = document.createElement('li');
+  const open = entry.dir && state.open.has(entry.path);
+  if ((state.file && state.file.path === entry.path && !entry.dir) || (entry.dir && state.dir === entry.path && !state.file)) li.className = 'chosen';
+  li.style.paddingLeft = `${8 + depth * 16}px`;
+  li.innerHTML = `<span class="twisty">${entry.dir ? (open ? '▾' : '▸') : ''}</span><span class="icon">${entry.dir ? (open ? '📂' : '📁') : ICONS[entry.kind] || ICONS.other}</span><span class="name"></span><span class="meta"></span>`;
+  li.querySelector('.name').textContent = entry.name;
+  li.querySelector('.meta').textContent = entry.dir ? '' : size(entry.size);
+  li.title = entry.path;
+  li.onclick = () => entry.dir ? toggle(entry.path) : openFile(entry.path);
+  return li;
+}
+/** The row where a new file's or folder's name is typed, at the top of the folder it goes in. */
+function namingRow(depth) {
+  const li = document.createElement('li');
+  li.className = 'naming';
+  li.style.paddingLeft = `${8 + depth * 16}px`;
+  const folder = state.naming.kind === 'folder';
+  li.innerHTML = `<span class="twisty"></span><span class="icon">${folder ? '📁' : '📝'}</span>`;
+  const input = document.createElement('input');
+  input.placeholder = folder ? 'Folder name' : 'name.md or name.txt';
+  input.setAttribute('aria-label', input.placeholder);
+  let done = false;
+  const finish = async (make) => {
+    if (done) return;
+    done = true;
+    const naming = state.naming;
+    state.naming = null;
+    const name = input.value.trim();
+    if (make && name) await create(naming, name); else drawFiles();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  };
+  input.onblur = () => finish(true);
+  li.append(input);
+  setTimeout(() => input.focus(), 0);
+  return li;
+}
+async function startNaming(kind) {
+  const dir = state.dir || '';
+  state.open.add(dir);
+  if (!state.children.has(dir)) await load(dir);
+  state.naming = { kind, dir };
+  $('filter').value = '';
+  drawFiles();
+}
+async function create({ kind, dir }, name) {
+  if (/[\\/]/.test(name) || name.startsWith('.')) {
+    drawFiles();
+    return showNotice('A name has no slashes and does not start with a dot.');
+  }
+  let file = name;
+  if (kind === 'file' && !/\.[^.]+$/.test(file)) file += '.md';
+  const path = (dir ? dir + '/' : '') + file;
+  const { ok, body } = kind === 'folder'
+    ? await api('api/folder', { path }, { method: 'POST' })
+    : await api('api/text', { path }, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: '', version: null }) });
+  await load(dir);
+  if (!ok) { drawFiles(); return showNotice(body.error || `Could not make ${file}.`); }
+  if (kind === 'folder') { state.dir = path; state.open.add(path); await load(path); drawFiles(); return; }
+  await openFile(path);
+  if (state.file && state.file.kind === 'markdown') { state.file.mode = 'edit'; drawFile(); }
+}
+async function openDir(dir) {
+  if (dir) await reveal(`${dir}/x`); else { state.dir = ''; if (!state.children.has('')) await load(''); }
+  drawFiles();
+}
+
+// ---- a file ----
+function kindOf(path) {
+  const ext = (path.match(/\.[^./]+$/) || [''])[0].toLowerCase();
+  if (['.md', '.markdown'].includes(ext)) return 'markdown';
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif'].includes(ext)) return 'image';
+  if (ext === '.pdf') return 'pdf';
+  const dir = path.split('/').slice(0, -1).join('/');
+  return ((state.children.get(dir) || []).find((e) => e.path === path) || {}).kind || 'text';
+}
+async function openFile(path, { keepMode = false, discard = false } = {}) {
+  // The pane's webview shows no browser dialogs, so unsaved changes are asked about in the page.
+  if (state.file && state.file.dirty && state.file.path !== path && !discard) {
+    const from = state.file.path;
+    return showNotice(`${from} has unsaved changes.`, [
+      ['Save', async () => { await save(); if (!state.file.dirty) openFile(path); }],
+      ['Discard', () => openFile(path, { discard: true })],
+      ['Keep editing', hideNotice]]);
+  }
+  const kind = kindOf(path);
+  const mode = keepMode && state.file && state.file.path === path ? state.file.mode : 'view';
+  state.file = { path, kind, mode, dirty: false, text: null, version: null };
+  state.dir = path.split('/').slice(0, -1).join('/');
+  hideNotice();
+  document.getElementById('app').classList.remove('browsing');
+  $('title').textContent = path;
+  history.replaceState(null, '', `?file=${encodeURIComponent(path)}`);
+  if (kind === 'markdown' || kind === 'text') {
+    const { ok, status, body } = await api('api/text', { path });
+    if (!ok) {
+      state.file.kind = status === 413 || status === 415 ? 'other' : kind;
+      if (!ok && status === 404) return showView(`<div class="empty">${escapeHtml(body.error || 'No such file.')}</div>`);
+    } else {
+      state.file.text = body.text;
+      state.file.version = body.version;
+    }
+  }
+  drawFile();
+  drawFiles();
+}
+function drawFile() {
+  const f = state.file;
+  const editable = f.kind === 'markdown' || f.kind === 'text';
+  $('mode').hidden = f.kind !== 'markdown';
+  $('mode').textContent = f.mode === 'edit' ? 'Preview' : 'Edit';
+  $('save').hidden = !editable || (f.kind === 'markdown' && f.mode !== 'edit');
+  $('save').disabled = !f.dirty;
+  drawState();
+  if (f.kind === 'image') return showView(`<div class="picture"><img alt="" src="${rawUrl(f.path)}"></div>`);
+  if (f.kind === 'pdf') return showView(`<iframe class="pdf" title="PDF" src="${rawUrl(f.path)}"></iframe>`);
+  if (!editable) return showView(`<div class="empty">This kind of file is not shown here. Ask the agent about it.</div>`);
+  if (f.kind === 'markdown' && f.mode !== 'edit') return showView(`<article class="markdown">${markdown(f.text)}</article>`);
+  const area = document.createElement('textarea');
+  area.className = 'editor';
+  area.spellcheck = f.kind === 'markdown';
+  area.value = f.text;
+  area.oninput = () => { f.text = area.value; if (!f.dirty) { f.dirty = true; $('save').disabled = false; drawState(); } };
+  $('view').textContent = '';
+  $('view').append(area);
+  area.focus();
+}
+function drawState() {
+  const f = state.file;
+  const el = $('state');
+  el.className = 'state' + (f && f.dirty ? ' dirty' : '');
+  el.textContent = !f ? '' : f.dirty ? 'Unsaved' : f.saved ? 'Saved' : '';
+}
+function showView(html) { $('view').innerHTML = html; }
+async function save(force = false) {
+  const f = state.file;
+  if (!f || !f.dirty) return;
+  const { ok, status, body } = await api('api/text', { path: f.path }, {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: f.text, version: force ? body409Version(f) : f.version }),
+  });
+  if (ok) { f.version = body.version; f.dirty = false; f.saved = true; $('save').disabled = true; drawState(); hideNotice(); return; }
+  if (status === 409) {
+    f.remoteVersion = body.version;
+    return showNotice('This file changed on the computer since you opened it.', [
+      ['Keep mine', () => save(true)], ['Load theirs', () => { f.dirty = false; openFile(f.path, { keepMode: true }); }]]);
+  }
+  showNotice(body.error || 'Could not save.');
+}
+function body409Version(f) { return f.remoteVersion === undefined ? f.version : f.remoteVersion; }
+function showNotice(text, actions = []) {
+  const n = $('notice');
+  n.textContent = '';
+  const span = document.createElement('span');
+  span.textContent = text;
+  n.append(span);
+  for (const [label, run] of actions) { const b = document.createElement('button'); b.textContent = label; b.onclick = run; n.append(b); }
+  n.hidden = false;
+}
+function hideNotice() { $('notice').hidden = true; }
+
+// ---- Markdown: escaped first, then a small set of marks; links and pictures inside the folder load from it ----
+function resolveLocal(src) {
+  if (/^(https?:|mailto:|data:image\/)/i.test(src)) return src;
+  if (/^[a-z]+:/i.test(src) || src.startsWith('//')) return '#';
+  const base = state.file ? state.file.path.split('/').slice(0, -1) : [];
+  const parts = src.startsWith('/') ? [] : base;
+  for (const part of src.replace(/^\//, '').split('#')[0].split('/')) {
+    if (part === '..') parts.pop(); else if (part && part !== '.') parts.push(decodeURIComponent(part));
+  }
+  return { local: parts.join('/') };
+}
+function inline(text) {
+  let s = escapeHtml(text);
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (_, alt, src) => {
+    const r = resolveLocal(src.replace(/&amp;/g, '&'));
+    const url = typeof r === 'string' ? r : rawUrl(r.local);
+    return `<img alt="${alt}" src="${escapeHtml(url)}">`;
+  });
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_, label, href) => {
+    const r = resolveLocal(href.replace(/&amp;/g, '&'));
+    return typeof r === 'string'
+      ? `<a href="${escapeHtml(r)}" target="_blank" rel="noopener">${label}</a>`
+      : `<a href="#" data-open="${escapeHtml(r.local)}">${label}</a>`;
+  });
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+}
+function markdown(src) {
+  const lines = src.replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^\s*(```|~~~)/);
+    if (fence) {
+      const code = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith(fence[1])) code.push(lines[i++]);
+      i++;
+      out.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) { out.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
+    if (/^\s*>/.test(line)) {
+      const quote = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ''));
+      out.push(`<blockquote>${markdown(quote.join('\n'))}</blockquote>`);
+      continue;
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+      const ordered = /^\s*\d/.test(line);
+      const items = [];
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
+        let item = lines[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, '');
+        const task = item.match(/^\[( |x|X)\]\s+/);
+        if (task) item = `<input type="checkbox" disabled${task[1] === ' ' ? '' : ' checked'}> ` + inline(item.slice(task[0].length));
+        else item = inline(item);
+        items.push(`<li>${item}</li>`);
+      }
+      out.push(ordered ? `<ol>${items.join('')}</ol>` : `<ul>${items.join('')}</ul>`);
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
+      const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => inline(c.trim()));
+      const head = cells(line);
+      i += 2;
+      const body = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(cells(lines[i++]));
+      out.push(`<table><thead><tr>${head.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      continue;
+    }
+    if (!line.trim()) { i++; continue; }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*```|\s*~~~|\s*>|\s*([-*+]|\d+[.)])\s+)/.test(lines[i])) para.push(lines[i++]);
+    out.push(`<p>${inline(para.join('\n')).replace(/\n/g, '<br>')}</p>`);
+  }
+  return out.join('\n');
+}
+
+// ---- wiring ----
+$('filter').oninput = drawFiles;
+$('new-file').onclick = () => startNaming('file');
+$('new-folder').onclick = () => startNaming('folder');
+$('refresh').onclick = refreshTree;
+$('collapse').onclick = () => { state.open = new Set(['']); drawFiles(); };
+$('menu').onclick = () => document.getElementById('app').classList.add('browsing');
+$('save').onclick = () => save();
+$('mode').onclick = () => { const f = state.file; f.mode = f.mode === 'edit' ? 'view' : 'edit'; drawFile(); };
+$('view').addEventListener('click', (e) => {
+  const link = e.target.closest('a[data-open]');
+  if (link) { e.preventDefault(); openFile(link.dataset.open); }
+});
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
+});
+window.addEventListener('beforeunload', (e) => { if (state.file && state.file.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+let refresh;
+const events = new EventSource(`events?t=${TOKEN}`);
+events.addEventListener('change', (e) => {
+  const { path } = JSON.parse(e.data || '{}');
+  clearTimeout(refresh);
+  refresh = setTimeout(async () => {
+    await refreshTree();
+    const f = state.file;
+    if (!f || (path && path !== f.path)) return;
+    if (f.kind === 'image' || f.kind === 'pdf') return drawFile();
+    if (f.kind !== 'markdown' && f.kind !== 'text') return;
+    const { ok, body } = await api('api/text', { path: f.path });
+    if (!ok || body.version === f.version) return;
+    if (f.dirty) return showNotice('This file changed on the computer while you were editing.', [
+      ['Keep mine', () => { f.remoteVersion = body.version; save(true); }], ['Load theirs', () => { f.dirty = false; openFile(f.path, { keepMode: true }); }]]);
+    f.text = body.text; f.version = body.version; drawFile();
+  }, 250);
+});
+
+(async () => {
+  const wanted = new URLSearchParams(location.search).get('file');
+  await load('');
+  if (wanted) { await reveal(wanted); await openFile(wanted); } else drawFiles();
+})();
+</script>
+</body>
+</html>
