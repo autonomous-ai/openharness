@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { opensStep, storedStep } from './steps.test-support.js'
+import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
@@ -28,7 +28,7 @@ const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effor
 function fixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
-  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+  const run = (command: Command | StepCommand, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
     if (opensStep(command)) return storedStep(state, command, actor)
     const effects = applyCommand(state, actor, command, { now: 1000, operationId: `op-${++sequence}`, ...context })
     state = effects.state
@@ -487,19 +487,6 @@ describe('Super Tab collaboration policy', () => {
       expect(both).toContain(other)
       expect(both).not.toContain(engineer)
       expect(send(f, as(engineer), build, [engineer], true).recipients).toEqual([engineer])
-    })
-
-    // Phase 1's deferred minors (project instructions, phase 4, task 10).
-    it('reacts only where the agent already is', () => {
-      const f = fixture()
-      f.add('lead', 'owner', 'lead', true)
-      const build = f.group(), engineer = f.add('engineer', 'owner', build), other = f.group()
-      const before = [...f.state.conversations.find(c => c.id === other)!.agentIds]
-      const react = (conversationId: string) => f.run({ type: 'message.react', conversationId, messageId: 'm1', emoji: 'tada', on: true },
-        as(engineer), { reaction: { messageId: 'm1' } })
-      expect(() => react(other)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-      expect(f.state.conversations.find(c => c.id === other)!.agentIds).toEqual(before)
-      expect(react(build).settles).toEqual({ messageId: 'm1', agentId: engineer })
     })
 
     it('keeps a person\'s message from adding agents', () => {
@@ -1942,9 +1929,6 @@ describe('any agent of the project', () => {
       const refusals: Array<[string, string]> = [[outsider, 'NOT_FOUND'], [stopping, 'FORBIDDEN']]
       for (const [agentId, code] of refusals) {
         expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
-        expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId),
-          { reaction: { messageId: 'm1' } }))
-          .toThrow(expect.objectContaining({ code }))
       }
       // Adding one by hand is refused as before (#2207).
       for (const actor of [f.leadActor, owner, actorOf(engineer)]) {
@@ -1965,18 +1949,6 @@ describe('any agent of the project', () => {
       done.task.archived = true
       f.run(post('One more thing.'), actorOf(done.agentId))
       expect(chat().agentIds).toContain(done.agentId)
-    })
-
-    // River, 2026-11-04 (#2924): an agent with work in the project acknowledges there with a reaction, with no other right.
-    it('lets it react there without joining', () => {
-      const { f, engineer, reviewer, chat } = working()
-      const asked = f.run(post('Can someone check the login bug?')).messages[0]!
-      const members = [...chat().agentIds]
-      for (const agentId of [engineer, reviewer]) {
-        expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId),
-          { reaction: { messageId: asked.id } }).settles).toEqual({ messageId: asked.id, agentId })
-      }
-      expect(chat().agentIds).toEqual(members)
     })
 
     // River, 2026-11-04 (#2924): a person answering an agent's line in main, in its thread or right below it, reaches that agent
@@ -3710,16 +3682,6 @@ describe('Lead mentions', () => {
     expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
   })
 
-  // Tags were held while a task had no worker, in the tag lists Swarm v4 removed (2026-11-10): an older CLI still asks, and the post
-  // goes out with its tags as any other.
-  it('takes an older CLI\'s held tag as a plain post with its tags', () => {
-    const { f, lead } = swarm(), group = f.group()
-    const held = (mentions: string[]): Command => ({ ...send(group, mentions), mentionsIfNoWorker: true } as Command)
-    expect(f.run(held(['peer']), as(lead)).messages[0]).toMatchObject({ mentions: ['peer'] })
-    expect(f.run(held([]), as(lead)).messages[0]).not.toHaveProperty('mentions')
-    expect(commandSchema.safeParse({ ...send(group, ['peer']), mentionsIfNoWorker: false }).success).toBe(false)
-  })
-
   it('tags at most five people', () => {
     expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e'])).success).toBe(true)
     expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e', 'f'])).success).toBe(false)
@@ -3830,7 +3792,7 @@ describe('credentials in every command', () => {
     ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
     ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'],
     ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
-    ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'], ['conversation.create', 'step'],
+    ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'],
     ['conversation.create', 'task.requires.access[]'], ['route.record', 'decision.context.missing[]'], ['agent.screenResult', 'error'],
   ])('removes a credential from %s %s', (type, path) => {
     const removed: CredentialKind[] = []

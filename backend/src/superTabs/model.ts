@@ -6,7 +6,7 @@ import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { personView, withAvatarView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
-import { downSince, expireRemovals, RETIRED_MACHINE_FIELDS, startPreparing } from './machines.js'
+import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
 import { processOf, projectColumns } from './process.js'
@@ -371,7 +371,7 @@ export interface Conversation {
    *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** Counts edits and deletes here (messageEdits.ts), so readers read an older message again. Named for the reactions it
-   *  first counted, which are gone (reactions.ts). */
+   *  first counted, which are gone. */
   reactionSeq?: number
   /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
    *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
@@ -700,8 +700,6 @@ export interface CommandEffects {
   result: Record<string, unknown>
   /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
   messageEdit?: { messageId: string; text: string }
-  /** An agent's reaction settles that agent's own deliveries of the message it reacted to, as an answer does (reactions.ts; the store closes the rows). */
-  settles?: { messageId: string; agentId: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
   /** Deliveries of messages already stored. `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
@@ -914,8 +912,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   else delete visible.removedMachines
   // Rows by day and project that only the leaderboard read uses, and it takes them from the Swarm itself.
   for (const pool of visible.machines ?? []) delete pool.lentDays
-  // What Swarm v4 retired on a machine (RETIRED_MACHINE_FIELDS) stays stored until the contribution is saved again, and no reader gets it.
-  for (const pool of visible.machines ?? []) for (const field of RETIRED_MACHINE_FIELDS) delete (pool as unknown as Record<string, unknown>)[field]
   // The removed Leads conversation reaches nobody (leadsRemoved), its id included.
   visible.conversations = visible.conversations.filter(c => !isLeads(c))
   delete visible.leadsConversationId
@@ -929,11 +925,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     if (since) target.downSince = since
     delete target.downNamed
     if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
-  }
-  for (const pool of visible.machines ?? []) {
-    // A Team daemon's privacy check, stored by an older release, can name paths on its Mac: shown to nobody until the Team
-    // machines carrying it are taken out (migration/teamMachinesJob.ts); goes with that job, 2026-12-10.
-    if (pool.observation) delete (pool.observation as { privacy?: unknown }).privacy
   }
   // A machine's accounts (labels, percent left) are for those who may switch a PM running there: its owner, and the owners of
   // projects whose PM runs on it. Agents and everyone else read the machine without them.
@@ -949,8 +940,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
   delete visible.machineCleanups
   delete visible.parkedConversations
-  // The project-chat post limits stored before Swarm v4 (read/views.ts Unwritten) are bookkeeping no reader gets.
-  for (const group of visible.conversations as Array<Conversation & { chatLimits?: unknown }>) { delete group.chatLimits; delete group.talkedAt }
+  for (const group of visible.conversations) delete group.talkedAt
   numberConversations(visible)
   delete visible.retiredConversationNumber
   delete visible.groupCounter
@@ -961,12 +951,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
-    // loaded, by nobody. It is the coordinator's own lines alone: a card saved before they were its own (#3593) held the task
-    // lines the server no longer writes (Swarm v4, 2026-11-10), and is not shown. What the PM owed is its host's alone
-    // (projects.ts SwarmProject.owed).
-    visible.projects = visible.projects.map(({ owed: _owed, status, ...p }) => {
+    // loaded, by nobody.
+    visible.projects = visible.projects.map(({ status, ...p }) => {
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
-      return chat && canReadGroup(state, actor, chat) && status?.own ? { ...p, status } : p
+      return chat && canReadGroup(state, actor, chat) && status ? { ...p, status } : p
     })
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))

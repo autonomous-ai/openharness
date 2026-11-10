@@ -14,7 +14,6 @@ import type { Command } from '../src/superTabs/commands.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import { NOT_AVAILABLE, superTabRoutes } from '../src/routes/superTabs.js'
-import { RETIRED_READS, RETIRED_WRITES } from '../src/superTabs/retired.js'
 
 // The person routes through the real store and read service (Huy, 10-30, the follow-up of #2306): a Swarm, chat, project,
 // decision, file or link the caller cannot reach gets one answer, whether it is missing, refused, revoked or in another
@@ -163,14 +162,7 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Compare against actual registration, so adding a route requires a real refusal test.
-    // The retired full-state read always asks every client to update, the retired reads and their writes answer none (retired.ts), the
-    // retired terminal recording answers ok and ignored and the retired picture upload refuses in words, each without reading a Swarm:
-    // they are tried alike for everyone in the tests below (and the upload's in superTabProfile.test.ts).
-    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', ...Object.keys(RETIRED_READS).map(url => `GET ${url}`),
-      ...Object.keys(RETIRED_WRITES).map(url => `POST ${url}`), 'POST /api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder',
-      'GET /api/super-tabs/:tabId/conversations/:conversationId/catch-up',
-      'POST /api/super-tabs/:tabId/native',
-      'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/avatars'])).toEqual(registeredPersonRoutes)
+    expect(new Set(real.map(c => c.route))).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
       // Approving needs the server's GitHub App, which this server has not: it says so to everyone, before any Swarm is read.
@@ -219,76 +211,6 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       expect(got.status, call.url).toBe(404)
       expect(got.body, call.url).toBe(NOT_AVAILABLE_BODY)
       expect(JSON.parse(got.body).error.message).not.toMatch(about)
-    }
-  })
-
-  it('asks every legacy full-state reader to update without revealing whether the Swarm exists', async () => {
-    const f = await swarm()
-    for (const as of [owner, member, outsider, removed]) {
-      const real = await app.inject({ url: `/api/super-tabs/${f.tab}`, headers: { 'x-user': as.sub } })
-      const missing = await app.inject({ url: `/api/super-tabs/${MISSING}`, headers: { 'x-user': as.sub } })
-      expect(real.statusCode).toBe(426)
-      expect(real.json().error.code).toBe('UPDATE_REQUIRED')
-      expect({ status: real.statusCode, body: real.body }).toEqual({ status: missing.statusCode, body: missing.body })
-    }
-  })
-
-  // The scorecard is gone with Swarm v4: an older Desktop's Scorecard tab still reads it, and gets no days, whoever asks and
-  // whatever Swarm or project it names, even one that is missing, so the answer says nothing of any of them.
-  it('answers the retired scorecard read with no days, alike to everyone, naming nothing of the Swarm', async () => {
-    const f = await swarm()
-    const read = (tab: string, project: string, as: AuthUser) => app.inject({ url: `/api/super-tabs/${tab}/scorecard?projectId=${project}&scope=all`, headers: { 'x-user': as.sub } })
-    for (const as of [owner, member, outsider, removed]) {
-      for (const [tab, project] of [[f.tab, 'lead'], [f.tab, f.privateProject], [MISSING, 'lead']] as const) {
-        const res = await read(tab, project, as)
-        expect({ status: res.statusCode, body: res.body }, `${as.email} ${tab} ${project}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { days: [] } }) })
-      }
-    }
-  })
-
-  // Decisions, tags, Activity, reminders, followed threads, the inbox, catch-up and proposals are gone with Swarm v4: an older Desktop, phone or
-  // host still reads and marks them, and gets the same answer whoever asks and whatever Swarm it names, even a missing one, so the
-  // answer says nothing of any of them.
-  it('answers the retired reads and writes alike to everyone, naming nothing of the Swarm', async () => {
-    const f = await swarm()
-    const url = (path: string, tab: string) => path.replace(':tabId', tab).replace(':conversationId', 'lead').replace(':threadId', MISSING).replace(':messageId', MISSING)
-    for (const as of [owner, member, outsider, removed]) {
-      for (const tab of [f.tab, MISSING]) {
-        for (const [path, data] of Object.entries(RETIRED_READS)) {
-          const res = await app.inject({ url: url(path, tab), headers: { 'x-user': as.sub } })
-          expect({ status: res.statusCode, body: res.body }, `${as.email} ${path}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data }) })
-        }
-        for (const [path, data] of Object.entries(RETIRED_WRITES)) {
-          const res = await app.inject({ method: 'POST', url: url(path, tab), headers: { 'x-user': as.sub }, payload: {} })
-          expect({ status: res.statusCode, body: res.body }, `${as.email} ${path}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data }) })
-        }
-        const caughtUp = await app.inject({ url: `/api/super-tabs/${tab}/conversations/lead/catch-up?after=7`, headers: { 'x-user': as.sub } })
-        expect(caughtUp.json().data).toMatchObject({ after: 7, through: 7, unread: 0 })
-        const reminder = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/conversations/lead/messages/${MISSING}/reminder`,
-          headers: { 'x-user': as.sub }, payload: { at: new Date(Date.now() + 60_000).toISOString() } })
-        expect({ status: reminder.statusCode, code: reminder.json().error.code }).toEqual({ status: 410, code: 'REMINDERS_RETIRED' })
-      }
-    }
-  })
-
-  // Terminal recording is gone with Swarm v4: an older Desktop opens a terminal's context, and an older host reads it and records into
-  // it. Each is answered ok and ignored, whoever asks and whatever Swarm it names, even a missing one, so the answer says nothing of any.
-  it('answers the retired terminal recording ok and ignored, alike to everyone, naming nothing of the Swarm', async () => {
-    const f = await swarm()
-    const observation = { turnId: 'turn-1', kind: 'prompt', previousEventId: null, text: 'hello', truncated: false, interrupted: false }
-    const ask = (as: AuthUser, tab: string, method: 'GET' | 'POST', path: string, payload?: object) =>
-      app.inject({ method, url: `/api/super-tabs/${tab}/native${path}`, headers: { 'x-user': as.sub }, payload: payload as never })
-    for (const as of [owner, member, outsider, removed]) {
-      for (const tab of [f.tab, MISSING]) {
-        const label = `${as.email} ${tab}`
-        const opened = await ask(as, tab, 'POST', '', { operationId: randomUUID(), conversationId: 'lead', agentId: MISSING })
-        expect({ status: opened.statusCode, body: opened.body }, label).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { ok: true, ignored: true } }) })
-        const read = await ask(as, tab, 'GET', `/${MISSING}`)
-        expect({ status: read.statusCode, body: read.body }, label).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { ok: true, ignored: true } }) })
-        const recorded = await ask(as, tab, 'POST', `/${MISSING}`, observation)
-        expect(recorded.statusCode, label).toBe(200)
-        expect(recorded.json().data, label).toMatchObject({ ok: true, ignored: true, eventId: expect.stringMatching(/^[0-9a-f]{24}$/) })
-      }
     }
   })
 

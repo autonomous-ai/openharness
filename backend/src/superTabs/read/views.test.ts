@@ -222,65 +222,6 @@ describe('instructions in the reader\'s view (project instructions, phase 2)', (
     expect(readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, {}).parts.head.data.projects![0]!.coordinatorName)
       .toBe('Lead engineer')
   })
-  // The release list of the release watch Swarm v4 removed is still stored on old projects and tasks: no reader gets it. Nothing would
-  // ever clear a task's `releasing`, so an older app would show it waiting for a release forever.
-  it('sends projects without their release list, and tasks without what they waited for', () => {
-    const { s } = scene()
-    s.edit(state => {
-      Object.assign(state.projects![0]!, { releases: { pending: [{ groupId: 'g', url: 'https://github.com/o/r/pull/1', mergedAt: NOW }], nextAt: { backend: NOW } } })
-      Object.assign(state.conversations.find(c => c.id === 'lead')!, { releasing: ['desktop'] })
-    })
-    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, {})
-    expect(view.parts.head.data.projects!.every(p => !('releases' in p))).toBe(true)
-    expect(view.parts.groups.find(g => g.key === 'lead')!.data).not.toHaveProperty('releasing')
-    expect(view.derived).not.toHaveProperty('releaseTimes')
-  })
-  // Swarm v3's schedule and process note are still stored on old projects: no reader gets them.
-  it('sends projects without the schedule and process note an old project still stores', () => {
-    const { s } = scene()
-    s.edit(state => { Object.assign(state.projects![0]!, { schedule: { lastSlot: 1, wakeId: 'wake' }, processNote: { told: 'note', confirmed: 'note' } }) })
-    const head = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), owner, NOW, {}).parts.head
-    expect(head.data.projects!.every(p => !('schedule' in p) && !('processNote' in p))).toBe(true)
-  })
-})
-
-// Swarm v4 keeps no pulse (2026-11-10): a task is the project's GitHub issue. A project chat stored before it may still hold its
-// last pulse, the asks the PM owed and a task's status line: a reader gets none of them, and no pulse is derived.
-describe('a pulse stored before Swarm v4', () => {
-  it('is read by nobody: the read derives none, and the chat sends neither it nor its owed asks', () => {
-    const { s } = scene()
-    s.edit(state => {
-      Object.assign(state.conversations.find(c => c.id === 'lead')!, {
-        owed: [{ id: 'ask', personId: peer.userId, at: NOW - MINUTE, thread: 'ask' }],
-        pulse: { pmId: null, asks: { count: 1, oldestAt: NOW - MINUTE, personId: peer.userId, list: [] }, working: { count: 0, crew: 0, agentIds: [] },
-          nextUp: { count: 0, conversationIds: [] }, lost: { count: 0, since: null, conversationIds: [] }, held: { count: 0, withoutReason: 0, list: [] },
-          idleSince: null, redAt: { asks: NOW, idle: null, lost: null, held: null }, limits: { askMinutes: 5, idleMinutes: 10, lostMinutes: 10 } },
-        statusLine: { text: 'Fix login: building', since: NOW - MINUTE } })
-    })
-    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    for (const actor of [owner, peer]) {
-      const view = readerView(parts, actor, NOW, {})
-      expect(view.derived).not.toHaveProperty('pulse')
-      const chat = view.parts.groups.find(g => g.key === 'lead')!.data
-      for (const field of ['owed', 'pulse', 'statusLine']) expect(chat, field).not.toHaveProperty(field)
-    }
-  })
-})
-
-// Swarm v4 writes no pull request check state, head, event, step listing or check verdict (2026-11-10). A group stored before
-// still holds them: a reader is sent none, so no card shows a state frozen at the release.
-describe('what a group stored before Swarm v4 still holds', () => {
-  it('sends no pull request watch fields, step listing or check verdicts', () => {
-    const group = { id: 'g1', title: 'Fix', leadId: null, agentIds: [], archived: false, brief: '', assignment: null, lastMessageSequence: 0,
-      checks: [{ id: 'c1', description: 'Works', independent: false, evidence: 'Looks right', passedBy: 'agent:a', verdicts: [{ by: 'agent:a', passed: true }] }],
-      pullRequestUrls: ['https://github.com/o/r/pull/1'], pullRequestChecks: { 'https://github.com/o/r/pull/1': 'red' },
-      pullRequestHeads: { 'https://github.com/o/r/pull/1': { head: 'abc', patch: null, at: 1 } }, pullRequestEvents: { 'https://github.com/o/r/pull/1': ['ci-red:abc'] },
-      stepIds: ['s1'], waitingWindowsStep: { pulls: [] }, openedBy: 'server' } as unknown as Conversation
-    const view = groupView(group, new Set()) as unknown as Record<string, unknown>
-    for (const field of ['pullRequestChecks', 'pullRequestHeads', 'pullRequestEvents', 'stepIds', 'waitingWindowsStep', 'openedBy']) expect(view, field).not.toHaveProperty(field)
-    expect(view.checks).toEqual([{ id: 'c1', description: 'Works', independent: false, evidence: 'Looks right', passedBy: 'agent:a' }])
-    expect(view.pullRequestUrls).toEqual(['https://github.com/o/r/pull/1'])
-  })
 })
 
 // Swarm v4 hands out no tasks (2026-11-10): a task's lane is not worked out.

@@ -129,12 +129,6 @@ interface ReadMeta {
 /** GET /api/super-tabs/:tabId/parts[?asAgentId=] */
 export interface FirstLoad extends ReadMeta {
   tabId: string
-  /** A person's Tasks feed, always empty since Swarm v4 (retired.ts NO_PERSONAL_TASKS); absent for agent readers. */
-  personalTasks?: typeof import('../retired.js').NO_PERSONAL_TASKS
-  /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App; never now. */
-  githubApp?: true
-  /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
-  steps?: true
   head: LivePart<HeadView>
   members: LivePart<MemberView>[]
   agents: LivePart<AgentView>[]
@@ -162,8 +156,6 @@ export interface MachineReading { key: string; version: number; receivedAt: numb
 /** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
 export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
-  /** As a first load's: the empty Tasks feed. */
-  personalTasks?: typeof import('../retired.js').NO_PERSONAL_TASKS
   reload: false
   head: LivePart<HeadView> | null
   members: PartChange<MemberView>[]
@@ -215,7 +207,7 @@ export interface MessagePage<M = Record<string, unknown>> {
   messages: M[]
   next: MessagePageCursor | null
   /** Moves when a message here is edited or deleted (messageEdits.ts): read the page shown again. Named for the reactions it
-   *  first counted. Each message still carries `reactions`, always empty since 2026-11-09 (reactions.ts), for apps from before. */
+   *  first counted, which are gone. */
   reactionSeq: number
 }
 
@@ -305,14 +297,10 @@ export interface HostPool {
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
   removedHarnessIds?: string[]
-  /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App, for a host to ask for a start's token; never now. */
-  githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
 }
 
-/** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */
-export const UPDATE_REQUIRED = { code: 'UPDATE_REQUIRED', status: 426, message: 'Update Harness to keep using this Swarm.' } as const
 /** HTTP 503 on the new routes while a Swarm is still on the old format; clients retry. */
 export const SWARM_MIGRATING = { code: 'SWARM_MIGRATING', status: 503, message: 'This Swarm is being upgraded. Try again in a moment.' } as const
 

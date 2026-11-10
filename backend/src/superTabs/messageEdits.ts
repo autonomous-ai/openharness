@@ -5,7 +5,7 @@ import { fail, type Actor } from './model.js'
 export const DELETED_TEXT = 'This message was deleted.'
 
 /** The message `message.edit` or `message.delete` names, found by the store in that conversation and readable by the actor
- *  (store.ts messageChangeTarget, the checks reactionTarget makes). Absent when it is not there or the actor may not see it. */
+ *  (store.ts messageChangeTarget). Absent when it is not there or the actor may not see it. */
 export interface MessageChangeTarget {
   messageId: string
   author: { kind: string; id: string }
@@ -36,7 +36,7 @@ function changeable(actor: Actor, messageId: string, target: MessageChangeTarget
 }
 
 /** `message.edit`: the author's new text replaces the old; no earlier text is kept. Empty only for a message with files.
- *  A change bumps the group, so every reader's next read takes the page again (reactions.ts). */
+ *  A change bumps the group, so every reader's next read takes the page again. */
 export function editMessage(group: { reactionSeq?: number }, actor: Actor, messageId: string, text: string,
   target: MessageChangeTarget | undefined): boolean {
   const found = changeable(actor, messageId, target, 'edit')

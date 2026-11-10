@@ -296,7 +296,7 @@ describe('a conversation\'s page of messages', () => {
   it('returns each message as Prisma reads it', async () => {
     const page = await store.messages(maker, tabId, conversationId, { before: 10, beforeId: `${tabId}-m10c` })
     const prisma = await db.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: page.messages.map(m => m.id) } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }] })
-    expect(page.messages.map(({ reactions: _r, deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
+    expect(page.messages.map(({ deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
     expect(page.messages.find(m => m.text === 'm05')).toMatchObject({ source: { kind: 'route', p: 0.75 }, attachments: [{ size: 2048 }], alsoInChat: true })
   })
 })

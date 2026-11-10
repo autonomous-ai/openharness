@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { opensStep, storedStep } from './steps.test-support.js'
+import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { SEED_RULES, type MachineRule, type ProjectRules } from './policy.js'
@@ -20,7 +20,7 @@ const contribution = { machineOwnerId: 'host-owner', contributorId: 'owner' }
 function swarm() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
-  const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+  const run = (command: Command | StepCommand, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
     if (opensStep(command)) return storedStep(state, command, actor)
     const effects = applyCommand(state, actor, commandSchema.parse(command), { now: BACK, operationId: `op-${++sequence}`, contribution,
       projectRules: { revision: 1, rules: RECORD }, ...context })
