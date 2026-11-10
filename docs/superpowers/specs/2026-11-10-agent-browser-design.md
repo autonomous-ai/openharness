@@ -776,11 +776,41 @@ Saving a change that needs it restarts the browser; the login stays.
      `podman exec -i harness-browser-<agentId> socat STDIO TCP:127.0.0.1:5900`: one exec per open viewer, at most 4
      per browser.
    - The stream exists only while a panel is open. Closing the panel, or losing the connection, ends the exec.
-   - The page asks for Tight encoding at quality 6 and compression 2. The spike measured what that costs while a page
-    scrolls without stopping (Wikipedia, 201 images): about 2.6 MB/s at 1920x1080, 1.0-1.2 MB/s at 1280x720, 350 KB/s
-    at 1280x720 capped at 10 frames a second, 200 KB/s capped at 5; 1-9 KB/s at rest. Text stayed sharp in all of
-    them. The relay's terminal budget is about 140 KB/s per stream, so the stream design (quality, frame cap and the
-    relay budget per route) is redone with these numbers before Phase 3 is built.
+   - **Stream profiles by route** *(call; draft, two numbers wait for the second spike)*. The first spike measured,
+     while a page scrolls without stopping (Wikipedia, 201 images), Tight encoding:
+
+     | Screen, quality/compression, frame cap | Mean | Peak |
+     |---|---|---|
+     | 1920x1080, q6/c2, none | 2.6 MB/s | 7 MB/s |
+     | 1920x1080, q3/c6, none | 2.1 MB/s | 4.7 MB/s |
+     | 1280x720, q3/c6, none | 1.0 MB/s | 3.9 MB/s |
+     | 1280x720, q3/c6, 10 fps | 350 KB/s | 780 KB/s |
+     | 1280x720, q3/c6, 5 fps | 200 KB/s | 330 KB/s |
+     | any, at rest | 1-9 KB/s | 20 KB/s |
+
+     Text stayed sharp in all of them; only photos lost detail. The frame cap cuts bytes far more than quality or
+     size does. The screen size is the container's (a setting) and cannot differ per viewer, so a route changes only
+     quality and frame rate:
+
+     | Route | Quality/compression | Frame cap |
+     |---|---|---|
+     | `direct` | q6/c2 | 15 fps |
+     | `turn` | q3/c6 | 5 fps |
+     | `relay` | q3/c6 | 5 fps |
+
+     - **The daemon on the agent's machine enforces the profile**, not the page: clients never decide it. It reads the
+       RFB messages the viewer sends (they have fixed shapes), replaces the quality and compression levels in
+       `SetEncodings` with the route's, and holds each `FramebufferUpdateRequest` until the route's frame interval has
+       passed since the last one. Keys, pointer and clipboard pass at once.
+     - **The relay budget** for browser bytes is per machine: the `relay` profile at 1920x1080 for two viewers
+       scrolling at once (`<spike 2: bytes per second of 1920x1080 q3/c6 at 5 fps>` × 2). Pacing shares it between the
+       machine's relayed streams. At rest a viewer costs 1-9 KB/s. The PR reports relay bytes per open minute, scrolling
+       and at rest, and the project's PM agrees the budget before the stream ships.
+     - **The bridge** must carry the `direct` profile: `<spike 2: bytes per second through the JavaScript channel on
+       macOS>`. If it cannot, the `direct` cap drops to what it carries.
+     - Still to measure on a built stream (Task 20's bench, before the PR is ready): terminal echo p95 against the
+       credit window with a browser stream open, on each route. If no window keeps the echo within 50 ms, browser
+       bytes get their own P2P data channel and relay socket.
 
 ### The spike (before anything else is built)
 
