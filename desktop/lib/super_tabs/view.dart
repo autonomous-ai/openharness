@@ -45,7 +45,6 @@ import 'personal_lead_card.dart';
 import 'personal_projects.dart';
 import 'private_project_lock.dart';
 import 'pull_request_facts.dart';
-import 'pull_requests.dart';
 import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
 import 'composer_files.dart';
 import 'composer_newline.dart';
@@ -198,7 +197,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// composes in it.
   late final _composerWrites = SuperTabComposerWrites(_composer);
   final _focus = FocusNode(debugLabel: 'Swarm message');
-  final _pullRequestsFocus = FocusNode(debugLabel: 'Project pull requests');
   final _scroll = <String, SuperTabChatScroll>{};
   final _latest = <String, int>{};
   final _following = <String, bool>{};
@@ -212,7 +210,6 @@ class _SuperTabViewState extends State<SuperTabView>
   int _scrollRequest = 0;
   bool _jumpingToEnd = false;
   bool _sidebarOpen = false;
-  bool _showPullRequests = false;
 
   /// Opens the chat of an agent chosen in My agents in the middle: the Board closes and the chat takes its place.
   void _openAgentChat(String id) {
@@ -220,7 +217,7 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     setState(() {
       _page = null;
-      _showManage = _showPullRequests = false;
+      _showManage = false;
     });
     c.select(id);
     _closeSidebar();
@@ -229,7 +226,6 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Opens the terminal of an agent chosen in My agents that has no chat to open (task #4220), as Members opens one.
   void _openAgentTerminal(SuperTabAgent agent) {
     setState(() {
-      _showPullRequests = false;
       _showManage = false;
       _page = null;
     });
@@ -711,7 +707,6 @@ class _SuperTabViewState extends State<SuperTabView>
         c.accessRevoked ||
         _devicesVisible ||
         _terminalsVisible ||
-        _showPullRequests ||
         _page != null ||
         _showManage) {
       return false;
@@ -995,7 +990,6 @@ class _SuperTabViewState extends State<SuperTabView>
       setState(() {
         _page = null;
         _showManage = false;
-        _showPullRequests = false;
       });
       unawaited(c.select(group.id));
       return true;
@@ -1163,7 +1157,6 @@ class _SuperTabViewState extends State<SuperTabView>
     _mentionIndex.dispose();
     _dismissedMention.dispose();
     _focus.dispose();
-    _pullRequestsFocus.dispose();
     for (final scroll in _scroll.values) {
       scroll.dispose();
     }
@@ -1488,11 +1481,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _closeSidebar() {
     setState(() => _sidebarOpen = false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted &&
-          !_sidebarOpen &&
-          !_devicesVisible &&
-          !_terminalsVisible &&
-          !_showPullRequests) {
+      if (mounted && !_sidebarOpen && !_devicesVisible && !_terminalsVisible) {
         _focus.requestFocus();
       }
     });
@@ -1934,7 +1923,6 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _page = null;
       _showManage = false;
-      _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
     _closeSidebar();
@@ -1950,7 +1938,6 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _page = null;
       _showManage = false;
-      _showPullRequests = false;
     });
     if (request.kind == 'chat') _openConversation(request.id);
   }
@@ -1963,7 +1950,6 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _page = page;
       _showManage = false;
-      _showPullRequests = false;
     });
     widget.onCloseTerminal?.call();
   }
@@ -1981,7 +1967,6 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_pageShown case final page?) return SuperTabPlace.page(page);
     if (_manageOpen ||
         _terminalsVisible ||
-        _showPullRequests ||
         c.snapshot?.conversation(c.selectedId) == null) {
       return null;
     }
@@ -2032,7 +2017,6 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _showManage = true;
       _page = null;
-      _showPullRequests = false;
       if (_manageTab == SuperTabManageTab.devices && !_hasDevices) {
         _manageTab = SuperTabManageTab.machines;
       }
@@ -2062,7 +2046,6 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _page = null;
       _showManage = false;
-      _showPullRequests = false;
     });
     c.select(conversationId);
     return true;
@@ -2140,7 +2123,6 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _page = null;
       _showManage = false;
-      _showPullRequests = false;
       _back = null;
       _target = messageId;
       _openedAtMessage = id;
@@ -2560,7 +2542,6 @@ class _SuperTabViewState extends State<SuperTabView>
   void _showMessage(String id, SuperTabMessage message) {
     widget.onCloseTerminal?.call();
     setState(() {
-      _showPullRequests = false;
       _target = message.id;
       // Stop following the end: the question is what to see.
       _scrollRequest++;
@@ -2628,15 +2609,12 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   void _openGroup(String id) {
-    setState(() => _showPullRequests = false);
     c.select(id);
     c.selectTerminal(id, null);
   }
 
   void _openAgent(SuperTabAgent agent) {
-    setState(() {
-      _showPullRequests = false;
-    });
+    setState(() {});
     widget.onOpenTerminal(agent);
   }
 
@@ -2645,8 +2623,6 @@ class _SuperTabViewState extends State<SuperTabView>
       FocusManager.instance.primaryFocus?.unfocus();
       final app = widget.app, paneId = widget.app?.focusedPaneId;
       if (app != null && paneId != null) app.focusPane(paneId, reveal: true);
-    } else if (_showPullRequests) {
-      _pullRequestsFocus.requestFocus();
     } else {
       _focus.requestFocus();
     }
@@ -3248,18 +3224,8 @@ class _SuperTabViewState extends State<SuperTabView>
   /// reader may open (a read-only viewer's terminal reads are refused).
   VoidCallback? _openTerminals(SuperTabConversation group) =>
       _terminalCount(group) > 0 && c.canWrite
-      ? () {
-          setState(() => _showPullRequests = false);
-          widget.onOpenGroupTerminals?.call();
-        }
+      ? () => widget.onOpenGroupTerminals?.call()
       : null;
-
-  void _openPullRequests() {
-    widget.onCloseTerminal?.call();
-    setState(() {
-      _showPullRequests = true;
-    });
-  }
 
   /// On a phone, the view ⋮ opened in place of the chat, which the bar has no
   /// icon to mark as selected; null while the chat is the view.
@@ -3267,8 +3233,6 @@ class _SuperTabViewState extends State<SuperTabView>
       ? null
       : _terminalsVisible
       ? 'Group terminals'
-      : _showPullRequests
-      ? 'Pull requests'
       : null;
 
   /// The line under the header's title: on a phone the open view, then the
@@ -3476,7 +3440,7 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
           if (group != null && !_devicesVisible && !_listViewHoldsThePane) ...[
-            if (!_terminalsVisible && !_showPullRequests) ...[
+            if (!_terminalsVisible) ...[
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -3493,7 +3457,7 @@ class _SuperTabViewState extends State<SuperTabView>
             ],
             // A project's chat is where its header rests: the button back
             // to it shows only from another view (Quiet Swarm, screen 1).
-            if (!restsOnChat || _terminalsVisible || _showPullRequests)
+            if (!restsOnChat || _terminalsVisible)
               fingerTarget(
                 enabled: _phone,
                 AppIconButton(
@@ -3501,12 +3465,11 @@ class _SuperTabViewState extends State<SuperTabView>
                   icon: AppIcons.messageSquare,
                   size: AppIcons.inlineSize,
                   tooltip: 'Chat',
-                  selected: !_terminalsVisible && !_showPullRequests,
-                  color: !_terminalsVisible && !_showPullRequests
+                  selected: !_terminalsVisible,
+                  color: !_terminalsVisible
                       ? DesktopChrome.foreground
                       : DesktopChrome.muted,
                   onPressed: () {
-                    setState(() => _showPullRequests = false);
                     widget.onCloseTerminal?.call();
                     _readVisibleTailAfterFrame();
                     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3530,21 +3493,6 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ],
             if (!isProject) ...[
-              if (!_menuNamesViews && !oneBuddy) ...[
-                const SizedBox(width: 4),
-                AppIconButton(
-                  key: const ValueKey('super-pull-requests'),
-                  focusNode: _pullRequestsFocus,
-                  icon: AppIcons.gitPullRequest,
-                  size: AppIcons.inlineSize,
-                  tooltip: 'Pull requests',
-                  selected: !_terminalsVisible && _showPullRequests,
-                  color: !_terminalsVisible && _showPullRequests
-                      ? DesktopChrome.foreground
-                      : DesktopChrome.muted,
-                  onPressed: _openPullRequests,
-                ),
-              ],
               fingerTarget(
                 enabled: _phone,
                 _options(group, views: _menuNamesViews),
@@ -3733,7 +3681,6 @@ class _SuperTabViewState extends State<SuperTabView>
             'Group terminals (${_terminalCount(group)})',
             _openTerminals(group),
           ),
-          item('Pull requests', _openPullRequests),
           const AppMenuDivider(),
         ],
         if (_isBuddyChat(group)) ...[
@@ -4064,7 +4011,6 @@ class _SuperTabViewState extends State<SuperTabView>
       references: _references,
       onOpenGroup: (id) {
         setState(() {
-          _showPullRequests = false;
           // From a page, the chat comes forward: changing only the chat
           // behind the page left the link looking dead (#3751).
           _page = null;
@@ -5436,15 +5382,13 @@ class _SuperTabViewState extends State<SuperTabView>
       final pagesIndex = _devicesVisible
           ? 1
           : _manageVisible
-          ? 4
-          : _notificationsVisible
           ? 3
+          : _notificationsVisible
+          ? 2
           : c.snapshot?.projects.isEmpty == true
           ? 0
           : _terminalsVisible && !chatBeside
           ? 1
-          : _showPullRequests
-          ? 2
           : 0;
       final view = Focus(
         canRequestFocus: false,
@@ -5542,13 +5486,6 @@ class _SuperTabViewState extends State<SuperTabView>
                           chatBeside
                               ? const SizedBox.shrink()
                               : terminal ?? const SizedBox.shrink(),
-                          _showPullRequests
-                              ? SuperTabPullRequests(
-                                  controller: c,
-                                  app: widget.app,
-                                  visible: !_terminalsVisible,
-                                )
-                              : const SizedBox.shrink(),
                           switch (_pageShown) {
                             SwarmPage.leaderboard =>
                               SuperTabWeeklyLeaderboardPage(controller: c),

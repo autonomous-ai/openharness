@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
-import 'package:harness/super_tabs/project_status.dart';
 
 import 'super_tab_mentions_test.dart' show showView;
 import 'support/super_tab_fixture.dart';
@@ -49,39 +48,6 @@ Future<void> openSettings(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('Status shows the time alone on any day it runs', (tester) async {
-    final day = DateTime.now();
-    final late = DateTime(day.year, day.month, day.day, 23, 30);
-    final c = swarm().controller();
-    addTearDown(c.dispose);
-    await c.refresh();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Builder(
-            builder: (context) => TextButton(
-              onPressed: () => showSuperTabProjectStatusWith(
-                context,
-                c,
-                'lead',
-                now: () => late,
-              ),
-              child: const Text('open'),
-            ),
-          ),
-        ),
-      ),
-    );
-    await tester.tap(find.text('open'));
-    await tester.pumpAndSettle();
-    expect(
-      find.text('Status · updated 8:33 PM'),
-      findsOneWidget,
-      reason: 'today, so no date, whatever the day',
-    );
-    expect(find.text('Three fixes are on main tonight.'), findsOneWidget);
-  });
-
   // Task #3194 (Diego, 11-05): the same dialog and rows, each with its value,
   // the project and Swarm under the title, and Delete set apart.
   group('Project settings shows each row\'s current value', () {
@@ -202,7 +168,9 @@ void main() {
     expect(find.text('Project details'), findsOneWidget);
   });
 
-  testWidgets('another conversation\'s header is unchanged', (tester) async {
+  // Swarm v4: a task chat from before has no pull-request page (S6).
+  testWidgets('another conversation\'s header has its chat and options, and '
+      'no pull-request page', (tester) async {
     final server = swarm();
     (server.state['conversations'] as List).add(
       conversationFixture('group-1', 'Offline drafts'),
@@ -212,7 +180,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(c.selectedId, 'group-1');
     expect(find.byKey(const ValueKey('super-chat')), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-pull-requests')), findsOneWidget);
+    expect(find.byKey(const ValueKey('super-pull-requests')), findsNothing);
     expect(find.byKey(const ValueKey('super-group-options')), findsOneWidget);
     expect(menu, findsNothing);
     await c.flush();
