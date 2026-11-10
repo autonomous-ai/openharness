@@ -151,6 +151,12 @@ void main() {
         await tester.pump(const Duration(milliseconds: 20));
       }
     }
+    // The person is in the api's channel: the Swarm's own chat, open by default, stays listed while it is open.
+    if (c.snapshot!.projects.where((p) => p.name == 'api').firstOrNull
+        case final api?) {
+      c.select(api.leadConversationId);
+      await tester.pump(const Duration(milliseconds: 20));
+    }
     return (f: f, c: c, gh: gh);
   }
 
@@ -409,6 +415,32 @@ void main() {
         await tester.pump(const Duration(milliseconds: 20));
       }
       expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'the Swarm\'s own first project stays in reach: listed while its chat is open, and while it has something unread',
+    (tester) async {
+      final (:f, :c, gh: _) = await open(tester);
+      Future<void> redraw() async {
+        f.app.notifyListeners();
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+      }
+
+      c.select('lead');
+      await redraw();
+      expect(listed(c), contains('Personal'));
+      c.select(leadOf(c, 'web'));
+      await redraw();
+      expect(listed(c), isNot(contains('Personal')));
+      // An agent of Your Team posts in it.
+      f.connection.server.append('free: Notes', conversationId: 'lead');
+      await tester.runAsync(c.refresh);
+      await redraw();
+      expect(listed(c), contains('Personal'));
       await close(tester, f, c);
     },
   );

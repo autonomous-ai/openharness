@@ -271,13 +271,20 @@ class PersonalProjects extends ChangeNotifier {
   /// empty for it.
   Set<String> hiddenIn(SuperTabController c) {
     if (!eligible(c)) return const {};
+    final snapshot = c.snapshot!;
+    // The Swarm's own first project while it names no repository (anh Dee via the lead, 2026-11-10: projects are repos
+    // only). Nothing of it is deleted, and it is listed once it has one.
+    final first = switch (snapshot.projectById(kFirstProjectId)) {
+      final project? when project.repository == null => project.id,
+      _ => null,
+    };
     final known = _known[c.accountId]?[c.tabId];
     if (known == null || known.isEmpty || _unresolvedPanes(app)) {
-      return const {};
+      return {?first};
     }
     final shown = {for (final repo in _repos(c)) ?known[repo]};
-    final snapshot = c.snapshot!;
     return {
+      ?first,
       for (final id in known.values)
         if (id != null &&
             !shown.contains(id) &&
@@ -287,16 +294,10 @@ class PersonalProjects extends ChangeNotifier {
   }
 
   /// The projects of [c] the list never shows, even while open: v3's tab projects, whether or not their close is through
-  /// ([_closeTabs]), and the Swarm's own first project while it names no repository (anh Dee via the lead, 2026-11-10:
-  /// projects are repos only). Nothing of them is deleted here, and the first project is listed once it has one.
+  /// ([_closeTabs]).
   Set<String> unlistedIn(SuperTabController c) {
     if (!eligible(c)) return const {};
-    return {
-      ...?_tabs[c.accountId]?[c.tabId]?.values,
-      if (c.snapshot!.projectById(kFirstProjectId) case final first?
-          when first.repository == null)
-        first.id,
-    };
+    return {...?_tabs[c.accountId]?[c.tabId]?.values};
   }
 
   /// A pane of the person's on a machine that has not listed its agents yet.

@@ -636,13 +636,7 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading, {
     required Widget? switcher,
   }) {
-    // What Projects can list: its empty state shows when there is none.
-    final unlisted = superTabUnlistedProjects(controller, app: app);
-    final projects = [
-      for (final project
-          in snapshot?.listedProjects ?? const <SuperTabProject>[])
-        if (!unlisted.contains(project.id)) project,
-    ];
+    final channels = _channels(snapshot, reading);
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
@@ -657,10 +651,16 @@ class ProjectSidebar extends StatelessWidget {
         addKey: const ValueKey('project-sidebar-projects-add'),
       ),
       if (controller.projectsGroupOpen)
-        if (snapshot != null && projects.isEmpty)
+        // Its empty state when it lists none at all; the unread filter's own empty list is no empty Swarm.
+        if (snapshot != null &&
+            superTabListedProjects(
+              controller,
+              app: app,
+              paneCovered: _paneCovered,
+            ).isEmpty)
           _noProjects()
         else
-          for (final (_, channel) in _channels(snapshot, reading)) channel,
+          for (final (_, channel) in channels) channel,
       const SizedBox(height: grid.AppDesktop.groupGap),
       ..._yourMachines(),
       ..._humans(snapshot),
@@ -1003,21 +1003,9 @@ class ProjectSidebar extends StatelessWidget {
       controller.unreadShown(group) ||
       (attention?.mentionsIn(group.id) ?? 0) > 0;
 
-  /// A Personal project whose panes are all closed (personal_projects.dart
-  /// `hidden`, task #3042), unless its chat is the one open now, as the
-  /// unread filter keeps it.
-  /// [hidden] is worked out once per draw (`superTabHiddenProjects`).
-  bool _paneless(
-    SuperTabProject project,
-    SuperTabConversation chat,
-    Set<String> hidden,
-  ) =>
-      (_paneCovered || controller.selectedId != chat.id) &&
-      hidden.contains(project.id);
-
   /// Every project with its workgroups, by name from A to Z. The round dial
   /// swipes projects in this order (cli superTabs/cards.ts `leadsOf`); a
-  /// Personal project whose panes are all closed leaves this list but stays
+  /// Personal project this list leaves out ([superTabListedProjects]) stays
   /// on the dial (task #3042: the brief is the project list).
   List<(String, Widget)> _channels(
     SuperTabSnapshot? snapshot,
@@ -1034,26 +1022,23 @@ class ProjectSidebar extends StatelessWidget {
       ),
   ];
 
-  /// The projects Projects lists, each with a chat, in its order. An archived one is not listed (a v3 tab's project that
-  /// had messages: personal_projects.dart).
+  /// The projects Projects lists ([superTabListedProjects]), each with a chat, in its order, less what the unread filter
+  /// leaves out.
   Iterable<_ProjectReading> _listed(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
-  ) {
-    final hidden = superTabHiddenProjects(controller, app: app);
-    final unlisted = superTabUnlistedProjects(controller, app: app);
-    return [
-      for (final project in ([
-        ...?snapshot?.listedProjects,
-      ]..sort(_compareProjects)))
+  ) => [
+    if (snapshot != null)
+      for (final project in superTabListedProjects(
+        controller,
+        app: app,
+        paneCovered: _paneCovered,
+      ))
         if (reading.of(project) case final read
             when read.lead != null &&
-                (!controller.unreadOnly || _hasUnread(read)) &&
-                !unlisted.contains(project.id) &&
-                !_paneless(project, read.lead!, hidden))
+                (!controller.unreadOnly || _hasUnread(read)))
           read,
-    ];
-  }
+  ];
 
   // The sidebar's ink scope (#3006): a theme's own sidebar ink reaches the
   // shared rows drawn in it.
@@ -1071,13 +1056,7 @@ class ProjectSidebar extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
-    // What Projects can list: its empty state shows when there is none.
-    final unlisted = superTabUnlistedProjects(controller, app: app);
-    final projects = [
-      for (final project
-          in snapshot?.listedProjects ?? const <SuperTabProject>[])
-        if (!unlisted.contains(project.id)) project,
-    ];
+    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
@@ -1363,8 +1342,8 @@ int _compareProjects(SuperTabProject a, SuperTabProject b) {
 /// under Projects), each project's chat from A to Z, then the reader's
 /// project Buddy chats. Tasks are in each project's Tasks view, not here
 /// (task #2569). The round dial swipes projects in this A to Z order too (cli
-/// superTabs/cards.ts `leadsOf`), less the Personal projects this list hides
-/// (task #3042).
+/// superTabs/cards.ts `leadsOf`), but keeps the Personal projects this list
+/// leaves out (task #3042).
 List<String> superTabSidebarOrder(
   SuperTabController controller, {
   AppNotifier? app,
@@ -1372,38 +1351,48 @@ List<String> superTabSidebarOrder(
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
   final projects = [...snapshot.listedProjects]..sort(_compareProjects);
-  final hidden = superTabHiddenProjects(controller, app: app);
-  final unlisted = superTabUnlistedProjects(controller, app: app);
   return [
     if (controller.oneBuddy)
       if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
           case final chat?)
         chat.id,
-    for (final project in projects)
-      if (snapshot.conversation(project.leadConversationId) != null &&
-          !unlisted.contains(project.id) &&
-          (controller.selectedId == project.leadConversationId ||
-              !hidden.contains(project.id)))
+    for (final project in superTabListedProjects(controller, app: app))
+      if (snapshot.conversation(project.leadConversationId) != null)
         project.leadConversationId,
     for (final project in projects)
       if (controller.buddyChat(project.id) case final chat?) chat.id,
   ];
 }
 
-/// The projects the list leaves out: Personal projects of the person's whose
-/// panes are all closed (personal_projects.dart, task #3042), worked out in
-/// one pass. None without the app, which holds the panes.
-Set<String> superTabHiddenProjects(
+/// The projects a list of them offers, from A to Z: the Swarm's, less an archived one, and in the person's own Personal
+/// Swarm (personal_projects.dart, worked out once a call) less v3's tab projects and those it hides: a project whose
+/// panes are all closed (task #3042) and the Swarm's first project while it names no repository. A hidden one stays while
+/// its chat is open, unless something covers the chat ([paneCovered]), and while that chat has something unread. None
+/// left out without the app, which holds the panes.
+List<SuperTabProject> superTabListedProjects(
   SuperTabController controller, {
   AppNotifier? app,
-}) => app == null ? const {} : PersonalProjects.of(app).hiddenIn(controller);
+  bool paneCovered = false,
+}) {
+  final snapshot = controller.snapshot;
+  if (snapshot == null) return const [];
+  final personal = app == null ? null : PersonalProjects.of(app);
+  final closing = personal?.unlistedIn(controller) ?? const <String>{};
+  final hidden = personal?.hiddenIn(controller) ?? const <String>{};
+  bool kept(SuperTabProject project) {
+    if (closing.contains(project.id)) return false;
+    if (!hidden.contains(project.id)) return true;
+    final chat = snapshot.conversation(project.leadConversationId);
+    return chat != null &&
+        ((!paneCovered && controller.selectedId == chat.id) ||
+            controller.unreadShown(chat));
+  }
 
-/// The projects the list never shows, even while open: in the person's Personal Swarm, v3's tab projects and the Swarm's
-/// first project while it names no repository (personal_projects.dart). None without the app.
-Set<String> superTabUnlistedProjects(
-  SuperTabController controller, {
-  AppNotifier? app,
-}) => app == null ? const {} : PersonalProjects.of(app).unlistedIn(controller);
+  return [
+    for (final project in [...snapshot.listedProjects]..sort(_compareProjects))
+      if (kept(project)) project,
+  ];
+}
 
 /// An agent's one quiet detail in the Desktop's My agents (task #4466): "offline", else the project a Lead [leads].
 String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>

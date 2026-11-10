@@ -1373,7 +1373,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// they read, sending to no PM, or one project, whose PM it alone sends to.
   /// A quiet menu beside New session, shown while it is on.
   Widget _chatSessionProject(bool writable) {
-    final projects = c.snapshot?.listedProjects ?? const <SuperTabProject>[];
+    final projects = superTabListedProjects(c, app: widget.app);
     final chosen = projects
         .where((p) => p.id == _chosenSessionProject())
         .firstOrNull;

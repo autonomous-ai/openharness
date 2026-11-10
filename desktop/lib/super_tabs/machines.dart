@@ -376,8 +376,6 @@ Future<bool> _sendContribution(
   required bool memory,
   required bool Function() alive,
   bool teamAccountOnly = false,
-  bool ifMissing = false,
-  bool unlessRemoved = false,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -406,8 +404,6 @@ Future<bool> _sendContribution(
     // Its Agents setting, so a count is a limit only when its owner chose one.
     'agents': memory ? 'memory' : 'atMost',
     if (teamAccountOnly) 'teamAccountOnly': true,
-    if (ifMissing) 'ifMissing': true,
-    if (unlessRemoved) 'unlessRemoved': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -435,8 +431,6 @@ Future<String?> contributeComputer(
   required String setupId,
   required bool Function() alive,
   bool teamAccountOnly = false,
-  bool ifMissing = false,
-  bool unlessRemoved = false,
   Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
@@ -469,8 +463,6 @@ Future<String?> contributeComputer(
     memory: true,
     alive: alive,
     teamAccountOnly: teamAccountOnly,
-    ifMissing: ifMissing,
-    unlessRemoved: unlessRemoved,
   );
   return added ? machineId : null;
 }
