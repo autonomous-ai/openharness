@@ -1,5 +1,8 @@
-/** Real native launch path, with private tmux, throwaway homes and fake engines. */
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+/**
+ * Swarm v4 (anh Dee, 2026-11-08): a Swarm agent starts as plain Claude Code or Codex, told only the team's basics (a PM the
+ * PM's part too), never a skill file. Real native launch path, with private tmux, throwaway homes and fake engines.
+ */
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -8,7 +11,10 @@ import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 let daemon: IsolatedDaemon | undefined, client: LocalClient | undefined
 afterEach(async () => { client?.close(); await daemon?.close(); client = undefined; daemon = undefined })
 
-it('attaches and restores only the selected Swarm skill for both engines, without native-home skill writes', async () => {
+/** What a launch tells a Swarm agent: the team's basics, and a PM its own part (lib/swarmSkills.ts swarmBasics). */
+const BASICS = 'You are a Swarm agent', PM_PART = 'You are your project\'s PM.'
+
+it('starts a Swarm agent of either engine with the team\'s basics alone, and tells it again at a restart, writing no skill file', async () => {
   const d = await IsolatedDaemon.create({ env: { ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential' } })
   daemon = d
   writeFileSync(join(d.engineConfig.codexHome, 'models_cache.json'), readFileSync(join(CLI_ROOT, 'src/lib/__fixtures__/codex-home-0.160/models_cache.json')))
@@ -29,8 +35,9 @@ it('attaches and restores only the selected Swarm skill for both engines, withou
     const row = await until('engine to receive its skill pointer', () => launches().slice(before).find(row => row.engine === engine) ?? null, 30_000)
     const args = row.args.join(' ')
     expect(row.args).toContain(engine === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox')
-    expect(args).toContain(`swarm-${role}/SKILL.md`)
-    expect(args).not.toContain(`swarm-${role === 'lead' ? 'dev' : 'lead'}/SKILL.md`)
+    expect(args).toContain(BASICS)
+    expect(args.includes(PM_PART), `${engine} ${role}`).toBe(role === 'lead')
+    expect(args).not.toContain('SKILL.md')
     const registry = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Array<Record<string, any>>
     const saved = registry.find(row => row.agentId === created.agent.id)!
     expect(saved.permissionMode).toBe('full')
@@ -47,13 +54,13 @@ it('attaches and restores only the selected Swarm skill for both engines, withou
   const before = launches().length
   const answer = await c.request('agent_restart', { agentId: restarted.id }, 90_000)
   expect(answer.error, JSON.stringify(answer)).toBeUndefined()
-  const row = await until('restart to retain the Lead skill', () => launches().slice(before).find(row => row.engine === restarted.engine) ?? null, 30_000)
-  expect(row.args.join(' ')).toContain('swarm-lead/SKILL.md')
-  expect(readdirSync(join(cwd, '.harness', 'runtime'))).toHaveLength(4)
+  const row = await until('restart to tell the PM its part again', () => launches().slice(before).find(row => row.engine === restarted.engine) ?? null, 30_000)
+  expect(row.args.join(' ')).toContain(PM_PART)
+  expect(existsSync(join(cwd, '.harness', 'runtime'))).toBe(false)
   expect(readFileSync(join(cwd, 'AGENTS.md'), 'utf8')).toBe('Shared project rules\n')
   const registry = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Array<Record<string, any>>
   for (const original of originals) expect(registry.find(row => row.agentId === original.id)?.swarmSkill).toEqual({ role: original.role, key: original.pointer })
-  // Only the project runtime carries these skills, including when engines use their own native homes.
+  // Nothing of the Swarm's is written in the engines' own homes either.
   for (const home of [d.engineConfig.codexHome, join(d.root, 'home', '.claude')]) {
     const files = readdirSync(home, { recursive: true }).map(String)
     expect(files.some(file => file.includes('swarm-lead') || file.includes('swarm-dev'))).toBe(false)

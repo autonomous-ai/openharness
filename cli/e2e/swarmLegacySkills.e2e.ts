@@ -1,5 +1,6 @@
-/** Old sessions adopt skills only through current Swarm membership, on their execution machine. */
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+/** Old sessions adopt their Swarm role only through current Swarm membership, on their execution machine; in Swarm v4 the role
+ *  tells them the team's basics (a PM its own part too), never a skill file. */
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -12,7 +13,10 @@ const ME: FakeMachine = { machineId: 'c9'.repeat(16), computerId: 'legacy-sw-tes
 let daemon: IsolatedDaemon | undefined, relay: FakeBackend | undefined, client: LocalClient | undefined
 afterEach(async () => { client?.close(); await daemon?.close(); await relay?.close(); client = undefined; daemon = undefined; relay = undefined })
 
-it('old Lead and worker restarts and stopped resume gain only their skill; personal and removed sessions gain none', async () => {
+/** What a launch tells a Swarm agent (lib/swarmSkills.ts swarmBasics). */
+const BASICS = 'You are a Swarm agent', PM_PART = 'You are your project\'s PM.'
+
+it('old Lead and worker restarts and stopped resume gain only their role; personal and removed sessions gain none', async () => {
   const b = await FakeBackend.start(); relay = b; b.addMachine(ME)
   const d = await IsolatedDaemon.create({ env: { BACKEND_WS_URL: b.wsUrl, WEB_URL: b.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
     ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential' } }); daemon = d
@@ -54,11 +58,14 @@ it('old Lead and worker restarts and stopped resume gain only their skill; perso
     expect(reply.error, JSON.stringify(reply)).toBeUndefined()
     expect(saved(ids[name]!).permissionMode).toBe(modes[name])
     const launch = await until('restarted engine argv', () => argv().slice(before).find(row => row.engine === engine) ?? null, 30_000)
+    const args = launch.args.join(' ')
+    expect(args).not.toContain('SKILL.md')
     if (role) {
-      expect(launch.args.join(' ')).toContain(`swarm-${role}/SKILL.md`)
+      expect(args).toContain(BASICS)
+      expect(args.includes(PM_PART), name).toBe(role === 'lead')
       expect(saved(ids[name]!).swarmSkill).toEqual({ role: role === 'lead' ? 'coordinator' : 'agent', key: ids[name], mode: 'orchestration' })
     } else {
-      expect(launch.args.join(' ')).not.toContain('/swarm/skills/')
+      expect(args).not.toContain(BASICS)
       expect(saved(ids[name]!).swarmSkill).toBeUndefined()
     }
   }
@@ -67,11 +74,11 @@ it('old Lead and worker restarts and stopped resume gain only their skill; perso
   const resumed = await c.request('agent_resume', { agentId: ids.resumed }, 90_000)
   expect(resumed.error, JSON.stringify(resumed)).toBeUndefined()
   const launch = await until('resumed worker argv', () => argv().slice(before).find(row => row.engine === 'claude') ?? null, 30_000)
-  expect(launch.args.join(' ')).toContain('swarm-dev/SKILL.md')
+  expect(launch.args.join(' ')).toContain(BASICS)
+  expect(launch.args.join(' ')).not.toContain(PM_PART)
   expect(saved(ids.resumed!).swarmSkill).toEqual({ role: 'agent', key: ids.resumed, mode: 'orchestration' })
-  expect(readFileSync(join(cwd, '.harness', '.gitignore'), 'utf8')).toContain('runtime/')
   expect(readFileSync(join(cwd, 'AGENTS.md'), 'utf8')).toBe('Project rules stay here\n')
-  expect(readdirSync(join(cwd, '.harness', 'runtime'))).toHaveLength(3)
+  expect(existsSync(join(cwd, '.harness', 'runtime'))).toBe(false)
   for (const home of [d.engineConfig.codexHome, join(d.root, 'home', '.claude')]) {
     expect(readdirSync(home, { recursive: true }).map(String).some(file => file.includes('swarm-lead') || file.includes('swarm-dev'))).toBe(false)
   }
