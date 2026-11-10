@@ -16,5 +16,5 @@ export function createHandoffDependencies(wiring: HandoffWiring, directory: stri
       publish.selected(engine, id, options.codexHome, path)
       return path
     },
-  }), ...(deadlineMs === undefined ? {} : { deadlineMs }) }
+  }), deadlineMs }
 }

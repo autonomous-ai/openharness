@@ -87,7 +87,7 @@ async function setup(rows = [row], found = true) {
     databaseHistory: () => undefined, findLiveSession: async () => found ? ({ sessionId: ID, transcriptPath: path }) : null,
     processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => path, validTranscriptPath,
   }, join(root, 'ADAPTER_DATA_DIR'), LOADED_MS)
-  Object.assign(deps, LIMITS)
+  Object.assign(deps, { gitTimeoutMs: LOADED_MS, discoverMs: LOADED_MS })
   return { current, saved, deps, prepare: () => prepareAgentHandoff(deps, { agentId: row.agentId, targetEngine: 'claude', changeId: CHANGE }) }
 }
 
