@@ -119,12 +119,12 @@ describe('a refused command from an agent, in the log (#2675)', () => {
 })
 
 describe('a command naming the coordinator', () => {
-  it('agent.alert reads none of its 1,000 dormant groups, and its row still lands', async () => {
+  // Swarm v4 writes no row for an alert: it marks the agent alone.
+  it('agent.alert reads none of its 1,000 dormant groups, and marks the agent', async () => {
     const f = await swarm(1000)
     const read = await groupsRead(() => f.execute({ type: 'agent.alert', agentId: f.lead, alert: 'prompt', active: true }, f.lead))
     expect(read).toBeLessThan(FEW)
-    const row = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'terminal-alert')
-    expect(row?.conversationId).toBe('lead')
+    expect((await f.store.load(db as never, owner, f.tab)).state.agents.find(a => a.id === f.lead)?.alerting).toEqual(['prompt'])
   })
 
   it('agent.rebind reads none of them', async () => {
@@ -184,15 +184,6 @@ describe('a command in a Swarm with many awake conversations (#3146)', () => {
 })
 
 describe('what still reads an agent\'s dormant groups', () => {
-  it('a worker\'s alert finds its only group, asleep', async () => {
-    const f = await swarm()
-    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })
-    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, data: { ...part.data as object, dormant: true } } })
-    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'prompt', active: true }, f.worker)
-    const row = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'terminal-alert')
-    expect(row?.conversationId).toBe(f.group)
-  })
-
   it('removing a worker takes it out of a dormant group too', async () => {
     const f = await swarm()
     const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })

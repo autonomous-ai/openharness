@@ -2937,12 +2937,11 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(JSON.stringify([history, receipts, await store.read(owner, tab)])).not.toContain('fixture-secret')
   })
 
-  it('logs typed input in the agent group and hands the host the text and keys', async () => {
+  it('hands the host the text and keys, and writes no row', async () => {
     const { tab, worker, group, harnessId, claim } = await terminalFixture()
     const requestId = (await run(tab, { type: 'agent.input', agentId: worker, text: '/model', keys: ['Enter'] })).result.requestId as string
     expect(await claim()).toEqual([{ tabId: tab, agentId: worker, harnessId, request: { id: requestId, kind: 'input', text: '/model', keys: ['Enter'] } }])
-    const rows = (await store.messages(owner, tab, group, {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'terminal-input')
-    expect(rows.map(m => [m.text, m.recipientIds])).toEqual([[expect.stringMatching(/^owner typed `\/model` \+ Enter in .+'s terminal$/), []]])
+    expect((await store.messages(owner, tab, group, {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'terminal-input')).toEqual([])
     await run(tab, { type: 'agent.inputResult', requestId, ok: true }, host, worker)
     expect(await store.terminalResult(owner, tab, requestId)).toEqual({ requestId, ok: true })
   })

@@ -1,10 +1,8 @@
 import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
-import { activeWork, occupiesAgent, actorKey, agent, author, conversation, fail, isLeads, stableId, SuperTabError, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
-  type SuperTabState } from './model.js'
+import { actorKey, agent, author, conversation, fail, stableId, SuperTabError, type Actor, type Agent, type MessageDraft, type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
-import { agentProjectId, isAgentChat, NO_PROJECT, isConfidential, ledProject, ownSession, projectAgent, projectOf, readAgent } from './projects.js'
-import { redactCredentials } from './credentials.js'
+import { agentProjectId, NO_PROJECT, isConfidential, ledProject, ownSession, projectAgent, projectOf, readAgent } from './projects.js'
 
 /** Any agent of an agent's project, or a person with write access, reads and types in its terminal through the host of its
  * machine (spec/2026-10-23-lead-sees-agent-terminal.md; project instructions, phase 4).
@@ -70,37 +68,17 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, else
   }
 }
 
-/** The group a terminal row belongs in: the agent's active work, else its newest open project group as a member (never the
- *  Swarm-wide Leads conversation), else its project's Lead chat. */
-export function currentGroup(state: SuperTabState, target: Agent): Conversation {
-  // The task in its hands first: an Engineer that handed a task over and took the next one is at work on that one (#3399).
-  return state.conversations.find(c => occupiesAgent(c) && c.assignment!.agentId === target.id)
-    ?? state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
-    ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
-    // A Regular agent between tasks is in its own chat (agent.new, task #4116).
-    ?? (target.regular ? state.conversations.find(c => isAgentChat(c) && c.agentIds.includes(target.id)) : undefined)
-    ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
-}
-
 const nameOf = (target: Agent) => target.displayName ?? target.name
 
-export function terminalRequest(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
-  command: { type: 'agent.screen' | 'agent.input'; agentId: string; scrollback?: number; text?: string; keys?: string[] }, elsewhere = false) {
+/** A read of or keys typed into an agent's terminal, for its host to carry out. Swarm v4 writes no chat row for either. */
+export function terminalRequest(state: SuperTabState, actor: Actor, id: string, now: number,
+  command: { type: 'agent.screen' | 'agent.input'; agentId: string; scrollback?: number; text?: string; keys?: string[] }, elsewhere = false): TerminalEffect {
   const target = agent(state, command.agentId)
   mayDrive(state, actor, target, elsewhere, command.type === 'agent.screen' ? 'screen' : 'input')
   if (downSince(state, target, now)) fail('HOST_OFFLINE', `${nameOf(target)}’s terminal is not running or its machine is offline.`)
   const { type: _type, agentId: _agentId, ...detail } = command
-  const effect: TerminalEffect = { op: 'request', id, kind: command.type === 'agent.screen' ? 'screen' : 'input', agentId: target.id,
+  return { op: 'request', id, kind: command.type === 'agent.screen' ? 'screen' : 'input', agentId: target.id,
     machineId: target.machineId, machineOwnerId: target.machineOwnerId, harnessId: target.harnessId, requesterKey: actorKey(actor), ...detail }
-  if (command.type === 'agent.screen') return { effect, message: null, removed: [] }
-  // The host types the exact text; the group's row never shows a credential in it, even one the cut at 200 would split.
-  const typed = redactCredentials(command.text ?? '')
-  const text = command.text && `\`${typed.text.length > 200 ? `${typed.text.slice(0, 199)}…` : typed.text}\``
-  const shown = [text, ...command.keys ?? []].filter(Boolean).join(' + ')
-  const who = sender.displayName ?? (sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name)
-  const message: MessageDraft = { id, conversationId: currentGroup(state, target).id, author: sender, replyTo: null, recipients: [],
-    text: `${who} typed ${shown} in ${nameOf(target)}'s terminal`, source: { kind: 'terminal-input', agentId: target.id, requestId: id } }
-  return { effect, message, removed: typed.removed }
 }
 
 /** Only the host of the agent's current terminal answers, once, a request it claimed. */
@@ -117,10 +95,10 @@ export function terminalResult(state: SuperTabState, actor: Actor, request: Term
     error: command.ok ? null : command.error! }
 }
 
-/** One row per episode: a repeated observation adds nothing, and `active: false` ends the episode. No screen text goes in the row.
- * It is delivered to the agent's project Lead, in the agent's group when the Lead is there, else by a second row in the Lead's chat. */
-export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
-  command: { agentId: string; alert: 'prompt' | 'limit' | 'model'; active: boolean; resetAt?: string }): MessageDraft[] {
+/** One mark per episode: a repeated observation changes nothing, and `active: false` ends the episode. Swarm v4 writes no chat
+ *  row: its person's own Desktop says the agent waits on them. A usage limit marks the agent until its reset time, or an hour. */
+export function terminalAlert(state: SuperTabState, actor: Actor, now: number,
+  command: { agentId: string; alert: 'prompt' | 'limit' | 'model'; active: boolean; resetAt?: string }): void {
   const target = agent(state, command.agentId)
   if (actor.kind !== 'agent' || actor.agentId !== target.id) fail('HOST_REQUIRED', 'Only the host of this agent’s terminal reports its alerts.', 403)
   const alerting = target.alerting ?? []
@@ -128,26 +106,14 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
     target.alerting = alerting.filter(a => a !== command.alert)
     // The notice is gone: so is the mark, whatever time it named (task #2321: River stayed "limited" after its notice went).
     if (command.alert === 'limit') target.limitedUntil = null
-    return []
+    return
   }
-  if (alerting.includes(command.alert)) return []
+  if (alerting.includes(command.alert)) return
   target.alerting = [...alerting, command.alert]
-  const group = currentGroup(state, target)
-  let text = `${nameOf(target)} is waiting at a prompt in its terminal.`
-  const source: Record<string, unknown> = { kind: 'terminal-alert', agentId: target.id, alert: command.alert }
   if (command.alert === 'limit') {
     const reset = command.resetAt && Date.parse(command.resetAt) > now ? Date.parse(command.resetAt) : now + LIMIT_FALLBACK_MS
-    target.limitedUntil = source.limitedUntil = new Date(reset).toISOString()
-    // The PM's line has no time: Desktop shows `limitedUntil` in the reader's local time, next to the line.
-    if (ledProject(state, target.id)) {
-      text = `${nameOf(target)} hit a usage limit.`
-      source.lead = true
-    } else text = `${nameOf(target)} hit a usage limit. Routing skips it until ${target.limitedUntil.slice(11, 16)} UTC.`
+    target.limitedUntil = new Date(reset).toISOString()
   }
-  // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
-  // hour while its Lead waited on it).
-  if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing.`
-  return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
 }
 
 /** The project Lead of an agent, unless the agent is that Lead. */

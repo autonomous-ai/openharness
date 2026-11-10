@@ -832,11 +832,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   switch (command.type) {
     case 'agent.screen':
     case 'agent.input': {
-      const { effect, message, removed: typed } = terminalRequest(state, actor, sender, operationId, context.now, command, context.confidentialSession)
-      effects.terminal = effect
+      effects.terminal = terminalRequest(state, actor, operationId, context.now, command, context.confidentialSession)
       result.requestId = operationId
-      if (message) effects.messages.push(message)
-      removed.push(...typed)
       break
     }
     case 'agent.screenResult':
@@ -844,7 +841,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       effects.terminal = terminalResult(state, actor, context.terminalRequest, command)
       break
     case 'agent.alert': {
-      effects.messages.push(...terminalAlert(state, actor, sender, operationId, context.now, command))
+      terminalAlert(state, actor, context.now, command)
       // A usage limit or a model that keeps failing loses its task at once (liveness.ts); a waiting prompt does not.
       if (command.alert !== 'prompt' && command.active) {
         effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))

@@ -560,10 +560,10 @@ export const NOTICE_READERS = {
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
   'machine-removed': 'people',
-  // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
+  // #2177's ruling: a failed start stays the people's to see.
   // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
   switch: 'people',
-  'start-timeout': 'people', 'terminal-alert': 'people', 'terminal-input': 'people',
+  'start-timeout': 'people',
 } as const satisfies Record<string, 'people' | 'recipients' | 'agent'>
 const readersOf = (kind: unknown): 'people' | 'recipients' | 'agent' =>
   typeof kind === 'string' && Object.hasOwn(NOTICE_READERS, kind) ? NOTICE_READERS[kind as keyof typeof NOTICE_READERS] : 'people'

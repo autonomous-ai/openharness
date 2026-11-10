@@ -3124,7 +3124,7 @@ describe('notices of failed work', () => {
   it('states what happened, never the next step', () => {
     const texts: string[] = []
     const keep = (effects: { messages: Array<{ text: string }> }) => { texts.push(...effects.messages.map(m => m.text)); return effects }
-    // A lost task, with and without a reset time, and a model alert.
+    // A lost task, with and without a reset time, and after a model alert.
     keep(alerted('limit'))
     keep(alerted('limit', new Date(3_600_000).toISOString()))
     keep(alerted('model'))
@@ -3145,7 +3145,7 @@ describe('notices of failed work', () => {
       owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, abandonedStartIds: ['s1'] }))
     expect(texts.length).toBeGreaterThanOrEqual(7)
     for (const text of texts) expect(text).not.toMatch(NEXT_STEP)
-    expect(texts).toEqual(expect.arrayContaining([expect.stringContaining('lost its task'), expect.stringContaining('can\'t get answers from its model'),
+    expect(texts).toEqual(expect.arrayContaining([expect.stringContaining('lost its task'),
       expect.stringContaining('removed "worker" from the Swarm. Its task "Offline editing" has no agent now.'),
       expect.stringContaining('removed Studio from the Swarm'), 'Builder never started and will not start now.']))
   })

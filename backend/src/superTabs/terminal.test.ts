@@ -148,40 +148,24 @@ describe('reading and typing in an agent terminal', () => {
     expect(s.run({ type: 'agent.input', agentId: s.lead, keys: ['Enter'] }, hostOwner).terminal).toMatchObject({ requesterKey: 'person:host-owner' })
   })
 
-  it('logs typed input as a terminal-input row in the agent\'s current group, delivered to nobody', () => {
-    const s = swarm()
-    storedAssignment(s.state, s.group, s.worker, 1_000_000)
-    const effects = s.run({ type: 'agent.input', agentId: s.worker, text: 'y'.repeat(250), keys: ['Enter'] }, as(s.lead))
-    expect(effects.terminal).toMatchObject({ op: 'request', kind: 'input', text: 'y'.repeat(250), keys: ['Enter'] })
-    expect(effects.messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [],
-      text: `${name(s, s.lead)} typed \`${'y'.repeat(199)}…\` + Enter in ${name(s, s.worker)}'s terminal`,
-      source: { kind: 'terminal-input', agentId: s.worker, requestId: effects.result.requestId } })])
-  })
-
-  it('types a credential as given but never shows it in the group\'s row, even where the row is cut', () => {
+  // Swarm v4: the chats hold what agents say, not what was typed where. Desktop drew these rows until it hid them (2026-11-11).
+  it('types the input as given, a credential too, and writes no row anywhere', () => {
     const s = swarm()
     storedAssignment(s.state, s.group, s.worker, 1_000_000)
     // Assembled at run time from obviously fake parts.
     const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
-    const text = `${'x'.repeat(150)} gh auth login --with-token ${token} and more words after it`
-    const effects = s.run({ type: 'agent.input', agentId: s.worker, text, keys: ['Enter'] }, as(s.lead))
-    expect(effects.terminal).toMatchObject({ op: 'request', kind: 'input', text })
-    expect(effects.messages).toHaveLength(1)
-    expect(effects.messages[0]!.text).not.toContain(token.slice(0, 12))
-    // Cut at 200 first, the row would have kept the token's first 21 characters.
-    const shown = `${'x'.repeat(150)} gh auth login --with-token [credential removed] and more words after it`.slice(0, 199)
-    expect(effects.messages[0]!.text).toBe(`${name(s, s.lead)} typed \`${shown}…\` + Enter in ${name(s, s.worker)}'s terminal`)
-    expect(effects.result.credentialNotice).toBe('Removed a credential (GitHub token) before saving. Revoke or rotate it.')
+    const effects = s.run({ type: 'agent.input', agentId: s.worker, text: `gh auth login --with-token ${token}`, keys: ['Enter'] }, as(s.lead))
+    expect(effects.terminal).toMatchObject({ op: 'request', kind: 'input', text: `gh auth login --with-token ${token}`, keys: ['Enter'] })
+    expect(effects.messages).toEqual([])
   })
 
-  it('logs input to the Lead in the project\'s Lead conversation', () => {
+  it('lets only the person whose machine runs the Lead type in it', () => {
     const s = swarm()
     // Only the person whose machine runs the Lead may type in it (final review, Critical 1).
     const machineOwner: Actor = { kind: 'person', userId: 'host-owner', email: 'host@example.com' }
     const invited = s.run({ type: 'invite.create', email: 'host@example.com', role: 'collaborator', conversationId: 'lead' })
     s.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, machineOwner)
-    expect(s.run({ type: 'agent.input', agentId: s.lead, keys: ['Esc', '2'] }, machineOwner).messages[0])
-      .toMatchObject({ conversationId: 'lead', text: `host typed Esc + 2 in ${name(s, s.lead)}'s terminal` })
+    expect(s.run({ type: 'agent.input', agentId: s.lead, keys: ['Esc', '2'] }, machineOwner).terminal).toMatchObject({ kind: 'input', keys: ['Esc', '2'] })
     expect(() => s.run({ type: 'agent.input', agentId: s.lead, keys: ['Esc'] })).toThrow('Only the person whose machine runs this agent')
   })
 
@@ -236,58 +220,30 @@ describe('answering a terminal request', () => {
 })
 
 describe('terminal alerts', () => {
-  it('posts one row per episode to the agent\'s group and delivers it to the Lead', () => {
+  // Swarm v4: an alert marks the agent (its person's own Desktop says "Waiting on you"); no row goes in any chat.
+  it('marks each episode once and writes no row', () => {
     const s = swarm()
     storedAssignment(s.state, s.group, s.worker, 1_000_000)
     const prompt: Command = { type: 'agent.alert', agentId: s.worker, alert: 'prompt', active: true }
-    expect(s.run(prompt, as(s.worker)).messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [s.lead],
-      text: `${name(s, s.worker)} is waiting at a prompt in its terminal.`, source: { kind: 'terminal-alert', agentId: s.worker, alert: 'prompt' } })])
+    const worker = () => s.state.agents.find(a => a.id === s.worker)!
     expect(s.run(prompt, as(s.worker)).messages).toEqual([])
+    expect(worker().alerting).toEqual(['prompt'])
     s.run({ ...prompt, active: false } as Command, as(s.worker))
-    expect(s.run(prompt, as(s.worker)).messages).toHaveLength(1)
-  })
-
-  it('delivers to the worker\'s project Lead, not the group\'s Lead, and through the Lead chat when the Lead is not in the group', () => {
-    const s = swarm()
-    const bare = storedTask(s.state, { title: 'Bare', brief: 'No Lead here.', requesterId: 'owner' })
-    const room = s.state.conversations.find(c => c.id === bare)!
-    room.leadId = null
-    room.agentIds = room.agentIds.filter(id => id !== s.lead)
-    const other = s.run({ type: 'agent.add', conversationId: bare, machineId: 'host', harnessId: 'other-worker', name: 'other-worker', configuration: config, lead: false },
-      owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
-    const rows = s.run({ type: 'agent.alert', agentId: other, alert: 'prompt', active: true }, as(other)).messages
-    expect(rows.map(r => [r.conversationId, r.recipients])).toEqual([[bare, []], ['lead', [s.lead]]])
-    s.state.conversations.find(c => c.id === s.group)!.leadId = other
-    expect(s.run({ type: 'agent.alert', agentId: s.worker, alert: 'prompt', active: true }, as(s.worker)).messages
-      .map(r => [r.conversationId, r.recipients])).toEqual([[s.group, [s.lead]]])
+    expect(worker().alerting).toEqual([])
+    expect(s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: true }, as(s.worker)).messages.filter(m => m.source?.kind === 'terminal-alert'))
+      .toEqual([])
+    expect(worker().alerting).toEqual(['model'])
   })
 
   it('marks a limited agent until its reset time, or an hour, and shows null once it passed', () => {
     const s = swarm()
     const reset = new Date(1_000_000 + 600_000).toISOString()
-    const effects = s.run({ type: 'agent.alert', agentId: s.worker, alert: 'limit', active: true, resetAt: reset }, as(s.worker))
-    expect(effects.messages[0]).toMatchObject({ text: `${name(s, s.worker)} hit a usage limit. Routing skips it until 00:26 UTC.`,
-      source: { kind: 'terminal-alert', agentId: s.worker, alert: 'limit', limitedUntil: reset } })
+    s.run({ type: 'agent.alert', agentId: s.worker, alert: 'limit', active: true, resetAt: reset }, as(s.worker))
     expect(s.state.agents.find(a => a.id === s.worker)!.limitedUntil).toBe(reset)
     expect(visibleState(s.state, owner, 1_000_000).agents.find(a => a.id === s.worker)!.limitedUntil).toBe(reset)
     expect(visibleState(s.state, owner, 1_600_000).agents.find(a => a.id === s.worker)!.limitedUntil).toBeNull()
-    const lead = s.run({ type: 'agent.alert', agentId: s.lead, alert: 'limit', active: true }, as(s.lead))
+    s.run({ type: 'agent.alert', agentId: s.lead, alert: 'limit', active: true }, as(s.lead))
     expect(s.state.agents.find(a => a.id === s.lead)!.limitedUntil).toBe(new Date(1_000_000 + 3_600_000).toISOString())
-    expect(lead.messages[0]).toMatchObject({ conversationId: 'lead', recipients: [] })
-    // The PM's line names it with no time (Desktop shows `limitedUntil` in local time); a worker's row keeps the UTC time.
-    expect(lead.messages[0]).toMatchObject({ text: `${name(s, s.lead)} hit a usage limit.`, source: { lead: true, limitedUntil: expect.any(String) } })
-    expect(effects.messages[0].source).not.toHaveProperty('lead')
-  })
-
-  it('tells the Lead when an agent cannot get answers from its model, once per episode', () => {
-    const s = swarm()
-    const on = () => s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: true }, as(s.worker)).messages
-    expect(on()[0]).toMatchObject({ recipients: [s.lead], source: { kind: 'terminal-alert', agentId: s.worker, alert: 'model' },
-      text: `${name(s, s.worker)} can't get answers from its model: its requests keep failing.` })
-    expect(on()).toEqual([])
-    expect(s.state.agents.find(a => a.id === s.worker)!.limitedUntil).toBeUndefined()
-    s.run({ type: 'agent.alert', agentId: s.worker, alert: 'model', active: false }, as(s.worker))
-    expect(on()).toHaveLength(1)
   })
 
   it('takes alerts only from the agent\'s own host', () => {

@@ -76,7 +76,7 @@ describe('the notices the Swarm writes into a chat', () => {
   const written = writtenKinds()
 
   it('finds the notices it is known to write, so a change in how they are written cannot empty this check', () => {
-    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'work-lost', 'terminal-alert']))
+    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'work-lost', 'start-timeout']))
   })
 
   it('classifies every kind it writes, and only those', () => {
@@ -88,7 +88,6 @@ describe('the notices the Swarm writes into a chat', () => {
 
   it('shows people a notice of theirs, and one for an agent only while it reaches none', () => {
     expect(agentOnly({ kind: 'system' }, ['lead'])).toBe(false)
-    expect(agentOnly({ kind: 'terminal-alert' }, ['lead'])).toBe(false)
     expect(agentOnly({ kind: 'start-timeout' }, ['lead'])).toBe(false)
     for (const kind of ['work-lost', 'pair-loop']) {
       expect(agentOnly({ kind }, ['lead'])).toBe(true)
