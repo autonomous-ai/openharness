@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, GitHubMerge, ledProjects, recordedAuthors, verdicts } from './githubMerge.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
@@ -505,8 +505,9 @@ describe('the rule\'s parts', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
       comment('Kai, 14:00: TWO READS for this one')], '', { writers: [], opener: '', team: new Set() })
-    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno', ownLogin: false },
-      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false } })
+    const at = '2026-11-09T12:00:00Z'
+    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno', ownLogin: false, at },
+      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false, at }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false, at } })
     expect(twoReads).toBe(true)
   })
 
@@ -551,7 +552,9 @@ describe('the rule\'s parts', () => {
 describe('the merger counts the agent the backend recorded for a verdict', () => {
   function recordedSetup(names: Record<string, string>) {
     const github = fakeGitHub()
-    const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+    // Pip builds and Đức Anh reads; Juno is the PM.
+    const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+      { id: 'anh', name: 'Đức Anh', label: 'builder:đức-anh', machineId: 'mac', engine: 'codex' }], machines: [] }
     const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
     const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
     const log = vi.fn()
@@ -656,5 +659,15 @@ describe('the merger counts the agent the backend recorded for a verdict', () =>
     await settle(down)
     expect(down.merges()).toHaveLength(1)
     expect(down.log.mock.calls.filter(call => String(call[0]).includes('AUTHORS_UNREAD'))).toHaveLength(1)
+  })
+})
+
+describe('who the backend recorded for a project\'s comments', () => {
+  it('asks as the project\'s PM, for the repository and the ids in the backend\'s form, and reads each name', async () => {
+    const ask = vi.fn(async (_path: string) => ({ authors: { 'issue:501': { agentId: 'a1', name: 'Đức Anh' }, 'issue:502': { agentId: 'a2' } } }))
+    const authors = await recordedAuthors(ask)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, ['issue:501', 'issue:502', 'issue:503'])
+    expect(ask).toHaveBeenCalledExactlyOnceWith('/api/super-tabs/tab/github-comments?repository=acme%2Fapp&ids=issue%3A501,issue%3A502,issue%3A503&asAgentId=juno')
+    expect(authors).toEqual({ 'issue:501': { name: 'Đức Anh' }, 'issue:502': { name: '' } })
+    expect(await recordedAuthors(async () => null)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, ['issue:1'])).toEqual({})
   })
 })

@@ -21,7 +21,7 @@ import { ShippingReporter } from './shipping.js'
 import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
 import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
-import { GitHubMerge, ledProjects, type LedProject } from './githubMerge.js'
+import { GitHubMerge, ledProjects, recordedAuthors, type LedProject } from './githubMerge.js'
 import { crewOf } from './assign/crew.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { buddyArchived, buddyStatus, isBuddyIn, isSwarmBuddyIn, projectNamed, type BuddyStatusDeps } from './buddyStatus.js'
@@ -190,15 +190,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // The crew of a project its PM leads, as the PM reads the Swarm.
   const crewOfProject = (held: () => SwarmSources) => async (project: LedProject) =>
     crewOf((await held().reads.read(project.tabId, project.pmAgentId)).state, project)
-  // Who the backend recorded as the writer of each of a project's verdict comments, read as the project's PM (githubVerdict.ts
-  // records them; backend superTabs/githubComments.ts answers at most 100 ids).
-  const authorsOf = (api: CoreApi) => async (project: LedProject, ids: string[]) => {
-    const answer = object(await backend(api, 'GET', `/api/super-tabs/${project.tabId}/github-comments?repository=${encodeURIComponent(project.repo)}`
-      + `&ids=${ids.map(encodeURIComponent).join(',')}&asAgentId=${project.pmAgentId}`))
-    return Object.fromEntries(Object.entries(object(answer.authors)).map(([id, author]) => [id, { name: String(object(author).name ?? '') }]))
-  }
   const merges = (options.githubMerge ?? ((api, held) => new GitHubMerge({ projects: led(api, held), crew: crewOfProject(held), get: github.get,
-    send: github.send, authors: authorsOf(api) })))(core, sources)
+    send: github.send, authors: recordedAuthors(path => backend(api, 'GET', path)) })))(core, sources)
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     get: github.get, send: github.send })))(core, sources)
