@@ -3715,12 +3715,27 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The reader's notification setting for [id] (backend chatSettings.ts):
-  /// the one being sent, else the server's, else Mentions only.
-  SuperTabNotify notifyOf(String id) =>
-      _notifySending[id] ??
-      _notifyKept[id]?.$1 ??
-      snapshot?.chatSettings[id] ??
-      SuperTabNotify.mentions;
+  /// the one being sent, else the server's, else Mentions only. A project's
+  /// mute holds only where it can be undone ([projectMuteKept]).
+  SuperTabNotify notifyOf(String id) {
+    final level =
+        _notifySending[id] ??
+        _notifyKept[id]?.$1 ??
+        snapshot?.chatSettings[id] ??
+        SuperTabNotify.mentions;
+    if (level == SuperTabNotify.muted &&
+        !projectMuteKept &&
+        snapshot?.isProjectLead(id) == true) {
+      return SuperTabNotify.mentions;
+    }
+    return level;
+  }
+
+  /// Whether a project's mute holds: in the v3 layout (the browser), whose
+  /// project menu has Notifications. Swarm v4 has none, so a project muted
+  /// before could never be unmuted there: its tags and notices show, as
+  /// Mentions only, and what the server keeps stays as it is (U1, 2026-11-10).
+  bool projectMuteKept = true;
 
   /// Settings sent and not yet seen back in a read, newest choice per chat.
   final _notifySending = <String, SuperTabNotify>{};
