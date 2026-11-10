@@ -9,19 +9,17 @@ const group = (state: SuperTabState, id: string) => state.conversations.find(c =
 const finish = (c: Conversation, status: 'done' | 'cancelled' | 'stopped') => { c.assignment = { ...c.assignment!, status } }
 
 describe('migration normalize (design 6.1.2 step 2)', () => {
-  it('persists what reads derive today: display names, numbers, rule projects, agent projects', () => {
+  it('persists what reads derive today: display names, numbers, agent projects', () => {
     const s = richSwarm()
     const legacy = structuredClone(s.state)
     delete legacy.agents[1]!.displayName
     delete legacy.agents[1]!.projectId
     delete group(legacy, s.done).number
     legacy.retiredConversationNumber = 10
-    legacy.rules = [{ id: 'r', rule: { kind: 'preferEngine', taskKind: 'ui', engine: 'codex' }, text: 'Codex for UI.', askedBy: 'someone', askedIn: null } as never]
     const state = normalize(legacy, { now: NOW, lastActivity: new Map() })
     expect(state.agents[1]!.displayName).toBe(s.state.agents[1]!.displayName)
     expect(state.agents[1]!.projectId).toBe('lead')
     expect(group(state, s.done).number).toBe(11)
-    expect(state.rules![0]!.projectId).toBe('lead')
   })
 
   it('leaves an agent without a project alone in a Swarm from before projects', () => {

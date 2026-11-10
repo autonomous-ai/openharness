@@ -291,6 +291,17 @@ describe('reads through the cache', () => {
     await vi.waitFor(async () => expect(groupKeys(await reads.firstLoad(people.owner, tabId))).toContain(result.conversationId), { timeout: 5_000 })
   })
 
+  // Task #2596: a project's GitHub access reads through the cache, as every read does.
+  it('reads a project\'s GitHub access with no part read at a stamp that did not move, as a direct read answers', async () => {
+    const { tabId } = await privateScene()
+    const { store } = pod()
+    const read = (by: SuperTabStore) => by.projectRepository(people.owner, tabId, 'lead')
+    await read(store)
+    const again = await partReads(() => read(store))
+    expect(again.reads).toBe(0)
+    expect(again.value).toEqual(await read(pod({ cache: null }).store))
+  })
+
   it('reads directly with the read cache switched off', async () => {
     const { tabId } = await privateScene()
     const { reads } = pod({ cache: null })

@@ -10,7 +10,7 @@ import { waitsNow } from '../leaderboard/record.js'
  * changes that part makes one of the two retry against the other's result.
  */
 export function touchesFor(command: Command, actor: Actor, before: SuperTabState, effects: Pick<CommandEffects, 'state' | 'messages'>,
-  context: Pick<CommandContext, 'delivery' | 'routeDecision'> = {}): Touch[] {
+  context: Pick<CommandContext, 'delivery'> = {}): Touch[] {
   const touches: Touch[] = []
   const group = (key: string | undefined) => { if (key) touches.push({ kind: 'group', key }) }
   const agent = (key: string | undefined) => { if (key && before.agents.some(a => a.id === key)) touches.push({ kind: 'agent', key }) }
@@ -58,12 +58,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
     case 'project.answers': case 'project.about':
       leadCheck(command.projectId)
-      break
-    // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
-    // project delete and a tab's close write, so a first save never lands on a project being deleted (security review 2 of
-    // #3929). The Lead check above is part of the same touch.
-    case 'rules.set':
-      group(leadGroupOf(command.projectId))
       break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
@@ -136,21 +130,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
         agent(context.delivery.agentId)
         group(context.delivery.conversationId)
       }
-      break
-    case 'route.record': {
-      head()
-      const pick = command.decision.candidates.find(c => c.id === command.decision.pick)
-      if (pick?.kind === 'member') agent(pick.agentId)
-      break
-    }
-    case 'route.override': {
-      const chosen = context.routeDecision?.record.candidates.find(c => c.id === command.candidateId)
-      if (chosen?.kind === 'member') agent(chosen.agentId)
-      group(context.routeDecision?.conversationId)
-      break
-    }
-    case 'route.modelResult':
-      group(context.routeDecision?.conversationId)
       break
     case 'agent.screen': case 'agent.input':
       leadCheck(agentProject(command.agentId))

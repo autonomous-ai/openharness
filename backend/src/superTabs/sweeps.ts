@@ -8,7 +8,6 @@ import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
 import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
-import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
 import { sweepChatSettings } from './chatSettings.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
@@ -166,7 +165,7 @@ export async function chatSettings(db: PrismaClient, now: number) {
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
-    tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
+    tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), threadMarks: await threadMarks(db, now),
     chatSettings: await chatSettings(db, now) }
 }
 

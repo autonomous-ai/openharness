@@ -86,7 +86,6 @@ export const GROUP_FIELDS = {
     'requesterId',
     'reviewStamp',
     'step',
-    'stepUp',
     'stuck',
     'talkedAt',
   ],

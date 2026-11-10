@@ -111,7 +111,19 @@ describe('what Swarm v1-v3 had, over HTTP', () => {
       { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: '# Mine', summary: 'Mine' },
       { type: 'note.add', projectId: 'lead', text: 'Ship on Fridays', askedBy: 'u1' }, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
       { type: 'project.skills', projectId: 'lead', mode: 'default' }, { type: 'project.role.remove', projectId: 'lead', roleId: 'review' },
-      { type: 'project.coordinatorName', projectId: 'lead', name: 'Boss' }, { type: 'tab.routingPolicy', policy: null }, { type: 'tab.tidy', enabled: true }]) {
+      { type: 'project.coordinatorName', projectId: 'lead', name: 'Boss' }, { type: 'tab.routingPolicy', policy: null }, { type: 'tab.tidy', enabled: true },
+      { type: 'route.record', conversationId: 'task-1', decision: { assessment: { difficulty: 'low', risk: 'low', why: 'Small' },
+        candidates: [{ id: 'c1', kind: 'new', machineId: 'm1', engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 3, title: 'Opus', label: 'Opus high' }],
+        excluded: [], floor: 1, notes: false, via: 'instructions', p: null, belowFloor: false, why: 'Small' } },
+      { type: 'route.override', decisionId: 'd1', candidateId: 'c1', reason: 'Faster' },
+      { type: 'route.modelResult', decisionId: 'd1', startId: 's1', model: 'opus', effort: 'high' },
+      { type: 'rules.set', projectId: 'lead', baseRevision: 0, summary: 'Pace', rules: { releaseWindow: { start: '09:00', end: '18:00', timeZone: 'UTC' },
+        releasePace: { backendEveryMinutes: 120, appsAfterVisibleBatch: true, backendPause: null }, reviews: { defaultReads: 1, rows: [], test: [], untested: [] },
+        mergeTrain: { enabled: false, everyMinutes: 10 }, caps: [], paths: [], crew: [], lanes: [],
+        dispatch: { everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 } } },
+      ...[{ routeDecisionId: 'd1' }, { overrideReason: 'Faster' }].map(route => ({ type: 'agent.start', ...route, request: { conversationId: 'task-1',
+        machineId: 'm1', engine: 'claude', name: 'Builder', cwd: '/work', worktree: false,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 50, tools: [], devices: [], quotaRequired: false } } }))]) {
       for (const asAgentId of [undefined, 'agent-1']) {
         const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
         expect(res.statusCode, JSON.stringify(command)).toBe(400)
@@ -132,7 +144,10 @@ describe('what Swarm v1-v3 had, over HTTP', () => {
       ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder'], ['POST', '/api/super-tabs/:tabId/avatars'],
       ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions'],
       ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/roles/:roleId'],
-      ['GET', '/api/super-tabs/routing-policy'], ['POST', '/api/super-tabs/routing-policy']]
+      ['GET', '/api/super-tabs/routing-policy'], ['POST', '/api/super-tabs/routing-policy'], ['GET', '/api/super-tabs/:tabId/costs'],
+      ['GET', '/api/super-tabs/:tabId/route-decisions'], ['GET', '/api/super-tabs/:tabId/route-decisions/:decisionId'],
+      ['GET', '/api/super-tabs/:tabId/conversations/:conversationId/attempts'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/rules'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/machine-rules']]
     for (const [method, url] of gone) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
   })
 })

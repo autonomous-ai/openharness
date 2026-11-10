@@ -6,10 +6,6 @@
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, finishWorker, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 
-/** A step's name: the one it was opened with, else its title (a linked group opened without one). */
-export const stepName = (group: Pick<Conversation, 'step' | 'title'>): string => group.step ?? group.title
-
-
 /** The steps of task [taskId], in creation order. */
 export const stepsOf = (state: SuperTabState, taskId: string): Conversation[] =>
   state.conversations.filter(c => c.reviewOf === taskId)

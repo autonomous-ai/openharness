@@ -63,7 +63,6 @@ const conversation: Required<Conversation> = {
   reviewOf: 'r',
   reviewStamp: { assignmentId: 'w', handoff: 1 },
   step: 'Review',
-  stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
   stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },

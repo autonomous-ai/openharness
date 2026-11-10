@@ -2,14 +2,13 @@ import { createHash } from 'node:crypto'
 import { githubRepository } from '../github/repository.js'
 import { cloneData } from './cloneData.js'
 import { autoJoinOn } from './autoJoinDomain.js'
-import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { personView, withAvatarView } from './profile.js'
 import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { processOf, projectColumns } from './process.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 type Role = 'owner' | 'collaborator' | 'viewer'
 
@@ -94,9 +93,6 @@ export interface Agent {
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
    *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
   gridModel?: string
-  /** Its start named no model, so it runs its engine's own: rated by the policy's `default` row for life (rules.ts
-   *  agentTarget). Kept here for the same reason as [gridModel]: a command never sees the finished start (live bug 10-29). */
-  launchedDefault?: true
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -180,7 +176,6 @@ export interface AgentStartRequest {
 export interface AgentStart {
   poolGeneration?: string
   poolSettled?: boolean
-  routeDecisionId?: string
   id: string
   creationId: string
   actorKey: string
@@ -379,12 +374,8 @@ export interface Conversation {
   released?: { at: number; tags: string[] }
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
-  /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
-   *  piece 4; before project instructions also by the server's step up). Nothing is cancelled: the route reads it to leave the
-   *  grid out of the next attempt, route records carry it for the costs report, and the leaderboard reads it. */
-  stepUp?: StepUp
-  /** The last route, start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
-  leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+  /** The last start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
+  leadAction?: { kind: 'assign' | 'start' | 'post'; at: number }
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
@@ -396,11 +387,6 @@ export interface Conversation {
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
 }
-/** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
- *  the next one's brief; the failed start that caused it, if one did. */
-export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string
-  /** A route record carries it already (commands.ts route.record): later routes of the task do not, so it counts once. */
-  recorded?: true }
 /** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
  *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
  *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes
@@ -473,8 +459,6 @@ export interface SuperTabState {
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
   ownerId: string
   environment: string
-  /** The owner's routing rules (rules.ts); absent until the first is set. */
-  rules?: import('./rules.js').SwarmRule[]
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   /** People who left or were removed, whom auto-join never adds again (autoJoin.ts); visibleState always removes it. */
@@ -568,7 +552,7 @@ export interface MessageDraft {
   /** Explicit answer in main chat, without a thread. */
   answers?: string
   recipients: string[]
-  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by commands. */
+  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by its routing, removed 2026-11-11. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
@@ -676,7 +660,6 @@ export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
   cancelledAgents: string[]
-  routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
   /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
   messageEdit?: { messageId: string; text: string }
@@ -684,11 +667,6 @@ export interface CommandEffects {
   terminal?: import('./terminal.js').TerminalEffect
   /** Deliveries of messages already stored. `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
-  /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
-   *  attempt row as a builder's own done does. */
-  closedAssignment?: { assignmentId: string; outcome: 'done' | 'cancelled' }
-  /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */
-  projectRules?: import('./policy.js').RulesWrite
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {
@@ -920,8 +898,6 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.retiredConversationNumber
   delete visible.groupCounter
   delete visible.sequenceBase
-  placeRules(visible)
-  if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
@@ -944,7 +920,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.closedHarnessIds) pool.observation.closedHarnessIds = pool.observation.closedHarnessIds.filter(id => harnesses.has(id))
       if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
-      // Each attempt's tokens are read through the cost summary (costs/read.ts), never from the machine's raw counts.
+      // A reading stored before its tokens were ignored (machines.ts harnessTokens) still holds them: never a reader's. Goes once
+      // every machine has reported since, on or after 2026-12-11.
       delete pool.observation.harnessTokens
       // What the server refused this machine's host is for the sweep alone (liveness.ts failRefusedStarts), never a reader.
       delete pool.observation.refusedStarts

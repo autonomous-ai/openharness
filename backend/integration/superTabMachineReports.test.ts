@@ -166,6 +166,20 @@ describe('a reading-only heartbeat (DB 2.5)', () => {
     expect(viaFast.pushes).toMatchObject([{ parts: ['machine'] }])
   })
 
+  // Today's CLI sends each running session's token counts on every report (cli superTabs/machines.ts tokensOf): taken, so no
+  // report is refused for them, and kept by neither path.
+  it('takes a session\'s token counts and stores none of them, in full or fast', async () => {
+    const f = await swarm()
+    const harnessTokens = { [f.harness.worker]: { 'claude-opus-5-5': { input: 10, output: 1, cacheRead: 0, cacheWrite: 0 } } }
+    const stored = async () => ((await f.part()).data as unknown as MachineData).contribution!.observation!
+    expect(await pathOf(() => f.beat({ harnessTokens }))).toBe('full')
+    expect(await stored()).toMatchObject({ receivedAt: f.clock.now })
+    expect(await stored()).not.toHaveProperty('harnessTokens')
+    f.clock.now += BEAT
+    expect((await settle(f, { harnessTokens })).at(-1)).toBe('fast')
+    expect(await stored()).not.toHaveProperty('harnessTokens')
+  })
+
   it('reads only the machine part among the Swarm\'s parts, writes it once, and moves only the machine stamp', async () => {
     const f = await swarm()
     await settle(f)
