@@ -1207,7 +1207,6 @@ class SwarmSearchController extends ChangeNotifier {
     _agentProfiles.clear();
     _filter();
     notifyListeners();
-    if (app.isSwarmBuddy(machineId, agentId)) return;
     for (final engine in const ['claude', 'codex']) {
       app.agentProfiles(machineId, engine).then((profiles) {
         if (agentSelectionMachineId != machineId || profiles.isEmpty) return;
@@ -1220,7 +1219,6 @@ class SwarmSearchController extends ChangeNotifier {
 
   bool canSelectAgent(String engine) =>
       agentSelection != null &&
-      !app.isSwarmBuddy(agentSelectionMachineId!, agentSelection!.id) &&
       app.stateOf(agentSelectionMachineId!)?.machine.isShared == false &&
       app
           .agentSwitchEngines(agentSelectionMachineId!, agentSelection!)
@@ -1983,9 +1981,6 @@ class SwarmSearchController extends ChangeNotifier {
               : a.label.compareTo(b.label),
         );
       final current = agentSelection;
-      final isBuddy =
-          current != null &&
-          app.isSwarmBuddy(agentSelectionMachineId!, current.id);
       // The agent's account id: its folder's, or the engine's default.
       final currentHome = current?.engine == 'claude'
           ? current?.claudeHome
@@ -2016,8 +2011,6 @@ class SwarmSearchController extends ChangeNotifier {
               : base,
           detail: current == null
               ? 'Focus a harness to change its agent'
-              : isBuddy
-              ? buddyKeepsItsEngine
               : !canSelectAgent(engine.id)
               ? 'Not supported by this harness'
               : several && profile!.percentLeft != null

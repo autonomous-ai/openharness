@@ -19,7 +19,6 @@ void main() {
     bool manageSelected = false,
   }) async {
     final server = ConversationServer();
-    server.state['swarmBuddy'] = true;
     server.state['projects'] = [projectFixture('lead', 'openharness', 'lead')];
     final c = server.controller();
     await c.refresh();
