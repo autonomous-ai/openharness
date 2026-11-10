@@ -272,6 +272,52 @@ describe('avatars in the attachments bucket', () => {
   })
 })
 
+// anh Dee, 2026-11-10: with no editor left, a person's name in a Swarm follows their account's (personNames.ts nameFromAccount).
+describe('a name that follows the account', () => {
+  const nameOf = async (tab: string, key: string) =>
+    ((await read(tab, peer)).body.data.members as Array<{ key: string; data: Record<string, unknown> }>).find(m => m.key === key)!.data
+  const rename = (user: AuthUser, name: string | null) => db.user.update({ where: { id: user.sub }, data: { name } })
+
+  it('shows the account name once the account is renamed, in every Swarm the person is in, and never the name chosen before', async () => {
+    const [one, two] = [await swarm(), await swarm()]
+    // A name chosen in one of them before, as `member.name` left it.
+    const row = await db.swarmMember.findUniqueOrThrow({ where: { tabId_key: { tabId: one, key: owner.sub } } })
+    await db.swarmMember.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(), data: { ...row.data as object, name: 'Ken (ops)' } } })
+    await rename(owner, 'Ken Tran')
+    expect(await store.accountRenamed(owner)).toEqual({ changed: 2, failed: 0 })
+    for (const tab of [one, two]) {
+      const member = await nameOf(tab, owner.sub)
+      expect(member.name, tab).toBe('Ken Tran')
+      expect(member, tab).not.toHaveProperty('chosenName')
+    }
+    // Asked again with nothing new, it writes nothing.
+    expect(await store.accountRenamed(owner)).toEqual({ changed: 0, failed: 0 })
+    await rename(owner, null)
+  })
+
+  it('takes the account name when the person joins, and when they create a Swarm', async () => {
+    await rename(peer, 'Peer Person')
+    await rename(owner, 'Owner Person')
+    try {
+      const tab = await swarm()
+      expect((await nameOf(tab, peer.sub)).name).toBe('Peer Person')
+      expect((await nameOf(tab, owner.sub)).name).toBe('Owner Person')
+    } finally {
+      await rename(peer, null)
+      await rename(owner, null)
+    }
+  })
+
+  it('brings every person of a Swarm to their account name in one pass, the one-time job\'s', async () => {
+    const tab = await swarm()
+    await rename(peer, 'Peer Again')
+    expect(await store.followAccountNames(tab)).toBe(1)
+    expect((await nameOf(tab, peer.sub)).name).toBe('Peer Again')
+    expect(await store.followAccountNames(tab)).toBe(0)
+    await rename(peer, null)
+  })
+})
+
 describe('reactions', () => {
   const post = async (tab: string, text = 'Shipped the fix') =>
     (await run(tab, { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId as string

@@ -46,6 +46,17 @@ describe('what readers get of a person', () => {
     expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 
+  // Their name follows their account (personNames.ts nameFromAccount): the one they chose before is kept and read by nobody.
+  it('leaves out the name a person chose before their name followed their account', () => {
+    const f = fixture()
+    f.invite()
+    Object.assign(f.member('owner')!, { name: 'Ken Tran', chosenName: 'Ken (ops)', nameFollowsAccount: true })
+    const seen = visibleState(f.state, peer).people.find(p => p.id === 'owner')!
+    expect(seen.name).toBe('Ken Tran')
+    expect(seen).not.toHaveProperty('chosenName')
+    expect(seen).not.toHaveProperty('nameFollowsAccount')
+  })
+
   it('copies nobody who has neither stored, as a read always gave them', () => {
     const plain = { id: 'a', email: 'a@example.com', role: 'owner' as const, generation: 'g', avatar: undefined }
     expect(personView(plain)).toBe(plain)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor } from './model.js'
+import { createSuperTab, visibleState, type Actor, type Author, type Person } from './model.js'
 import { split } from './parts/shape.js'
 import { readerView } from './read/views.js'
 import { actorName } from './activity.js'
@@ -114,10 +114,10 @@ describe('the name a person set', () => {
 // commands and pull request bodies until a machine's privacy hook stopped their sessions. An agent reads names instead.
 // anh Dee, 2026-11-10: with no editor left, a person's name in a Swarm follows their account's.
 describe('a name that follows the account', () => {
-  const someone = () => ({ id: 'p1', email: 'minh@example.com', role: 'collaborator' as const, generation: 'g' })
+  const someone = (): Person => ({ id: 'p1', email: 'minh@example.com', role: 'collaborator', generation: 'g' })
 
   it('takes the account name, keeps a name chosen here before out of sight, and keeps it only once', () => {
-    const chose = { ...someone(), name: 'Minh (design)' }
+    const chose: Person = { ...someone(), name: 'Minh (design)' }
     expect(nameFromAccount(chose, ' Minh Nguyen ')).toBe(true)
     expect(chose).toMatchObject({ name: 'Minh Nguyen', chosenName: 'Minh (design)', nameFollowsAccount: true })
     expect(nameFromAccount(chose, 'Minh Tran')).toBe(true)
@@ -130,7 +130,7 @@ describe('a name that follows the account', () => {
     expect(nameFromAccount(plain, null)).toBe(true)
     expect(plain).toEqual({ ...someone(), nameFollowsAccount: true })
     expect(nameFromAccount(plain, '  ')).toBe(false)
-    const named = { ...someone(), name: 'Minh' }
+    const named: Person = { ...someone(), name: 'Minh' }
     nameFromAccount(named, null)
     expect(named).not.toHaveProperty('name')
     expect(named.chosenName).toBe('Minh')
@@ -142,7 +142,8 @@ describe('a name that follows the account', () => {
     nameFromAccount(stored, 'Dee Ho')
     expect(f.shown('peer')).toBe('Dee Ho')
     expect(writtenNameOf(f.state, 'peer')).toBe('Dee Ho')
-    expect(authorForAgent(f.state, { kind: 'person', id: 'peer' }, lazyUsernames(f.state)).displayName).toBe('Dee Ho')
+    const author: Author = { kind: 'person', id: 'peer', name: 'dee@autonomous.ai', membershipGeneration: 'g' }
+    expect(authorForAgent(f.state, author, lazyUsernames(f.state)).displayName).toBe('Dee Ho')
   })
 
   it('takes the account name when an invitation is accepted', () => {
