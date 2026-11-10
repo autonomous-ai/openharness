@@ -313,10 +313,8 @@ void main() {
           find.byKey(const ValueKey('swarm-author-line-1')),
           findsOneWidget,
         );
-        expect(
-          find.byKey(const ValueKey('swarm-reaction-line-1-heart')),
-          findsOneWidget,
-        );
+        // A reaction an older server still sends shows nowhere.
+        expect(find.text('❤️'), findsNothing);
         expect(find.text('1 reply'), findsOneWidget);
         if (openWith == 'Reply') {
           await tester.tap(find.text('Offline drafts'));

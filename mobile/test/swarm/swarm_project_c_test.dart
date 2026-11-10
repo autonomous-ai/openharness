@@ -2054,55 +2054,21 @@ void main() {
       expect(find.bySemanticsLabel(RegExp('Copy')), findsWidgets);
     });
 
-    testWidgets('reactions 👀 ✅ 🚀, each a finger to tap, the add-reaction '
-        'chip after them, and a pick from it is sent', (tester) async {
+    // Reactions are gone (anh Dee, 2026-11-09): the agents' 👀 ✅ 🚀 an
+    // older server still sends show nowhere, and nothing offers one.
+    testWidgets('no reactions under a message, and no add-reaction chip', (
+      tester,
+    ) async {
       final fake = talk();
       await pump(tester, fake, page);
 
-      for (final (emoji, count) in [('eyes', 2), ('check', 1), ('rocket', 1)]) {
-        final chip = key('swarm-reaction-m4-$emoji');
-        expect(chip, findsOneWidget, reason: emoji);
-        final size = tester.getSize(chip);
-        expect(
-          size.height,
-          greaterThanOrEqualTo(minTouchTarget),
-          reason: emoji,
-        );
-        expect(size.width, greaterThanOrEqualTo(minTouchTarget), reason: emoji);
-        expect(
-          inside('swarm-reaction-m4-$emoji', find.text('$count')),
-          findsOneWidget,
-        );
+      for (final emoji in ['eyes', 'check', 'rocket']) {
+        expect(key('swarm-reaction-m4-$emoji'), findsNothing, reason: emoji);
       }
-      expect(find.text('👍'), findsNothing);
-      final add = key('swarm-add-reaction-m4');
-      expect(add, findsOneWidget);
-      expect(tester.getSize(add).height, greaterThanOrEqualTo(minTouchTarget));
-      expect(tester.getSize(add).width, greaterThanOrEqualTo(minTouchTarget));
-      expect(tester.getSemantics(add).label, 'Add reaction');
-      expect(
-        tester.getTopLeft(add).dx,
-        greaterThan(tester.getTopLeft(key('swarm-reaction-m4-rocket')).dx),
-        reason: 'after the counts',
-      );
-      expect(
-        key('swarm-add-reaction-m1'),
-        findsNothing,
-        reason: 'only where there are reactions',
-      );
-
-      await tester.tap(add);
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-react-tada'));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands.where((c) => c['type'] == 'message.react').single, {
-        'type': 'message.react',
-        'conversationId': leadChat,
-        'messageId': 'm4',
-        'emoji': 'tada',
-        'on': true,
-      });
+      expect(key('swarm-add-reaction-m4'), findsNothing);
+      expect(find.text('👀'), findsNothing);
+      expect(find.text('🚀'), findsNothing);
+      expect(fake.commands.where((c) => c['type'] == 'message.react'), isEmpty);
     });
 
     testWidgets("a root's replies in one row, which opens its thread", (

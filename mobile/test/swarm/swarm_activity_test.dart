@@ -11,8 +11,8 @@ import 'swarm_activity_fixture.dart';
 import 'swarm_fixture.dart';
 
 /// Activity, in place of Needs you (Tony's prototype C3): what the Swarms ask
-/// of the person under Needs you and @, the threads they are in and the
-/// reactions to what they wrote, each filter counted, and a row the person
+/// of the person under Needs you and @ and the threads they are in, each
+/// filter counted, and a row the person
 /// acted on kept as handled.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -165,7 +165,7 @@ void main() {
     );
   });
 
-  group('Threads and Reactions', () {
+  group('Threads', () {
     const page = activityPage;
 
     test('reads nothing until Activity is on screen, then each project chat '
@@ -254,30 +254,24 @@ void main() {
       expect(activity.count(SwarmActivityFilter.threads), 0);
     });
 
-    test(
-      "others' reactions to the person's own messages, never their own",
-      () async {
-        final store = MemoryKeyValueStore()
-          // Not this phone's first Activity: nothing is taken as seen.
-          ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
-        final fake = backend(page: page);
-        final session = await start(fake, store: store);
-        final activity = session.activity..watch();
-        await settle();
+    // Reactions are gone (anh Dee, 2026-11-09): one an older server still
+    // sends on the person's own message lists nothing.
+    test('lists no reaction, even on the person\'s own message', () async {
+      final store = MemoryKeyValueStore()
+        ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
+      final fake = backend(page: page);
+      final session = await start(fake, store: store);
+      final activity = session.activity..watch();
+      await settle();
 
-        final rows = activity.items(SwarmActivityFilter.reactions);
-        expect([for (final r in rows) r.key], ['reaction:$tab:mine-2']);
-        final reaction = rows.single as SwarmActivityReaction;
-        expect(
-          [for (final r in reaction.reactions) (r.emoji.glyph, r.by.length)],
-          [('✅', 1)],
-        );
-        expect(activity.count(SwarmActivityFilter.reactions), 1);
-      },
-    );
+      expect(
+        swarmActivityAll(activity).map((item) => item.key),
+        everyElement(isNot(startsWith('reaction:'))),
+      );
+    });
 
-    test('handled threads and reactions stay handled on this phone, until '
-        'something new comes', () async {
+    test('handled threads stay handled on this phone, until something new '
+        'comes', () async {
       final store = MemoryKeyValueStore()
         ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
       var next = page();
@@ -287,43 +281,17 @@ void main() {
       await settle();
 
       activity.replied(activity.items(SwarmActivityFilter.threads).first);
-      activity.replied(activity.items(SwarmActivityFilter.reactions).single);
       await settle();
       expect(activity.count(SwarmActivityFilter.threads), 0);
-      expect(activity.count(SwarmActivityFilter.reactions), 0);
 
       // Another phone session, the same marks.
       final again = await start(fake, store: store);
       again.activity.watch();
       await settle();
       expect(again.activity.count(SwarmActivityFilter.threads), 0);
-      expect(again.activity.count(SwarmActivityFilter.reactions), 0);
 
-      // A new reply and a new reaction: news again.
-      next = {
-        ...page(),
-        'messages': [
-          for (final m in page()['messages'] as List)
-            if ((m as Map)['id'] == 'mine-2')
-              message(
-                'mine-2',
-                5,
-                mine: true,
-                reactions: [
-                  {
-                    'emoji': 'check',
-                    'by': [
-                      {'kind': 'agent', 'id': 'agent-lead'},
-                      {'kind': 'agent', 'id': 'agent-builder'},
-                    ],
-                  },
-                ],
-              )
-            else
-              m,
-        ],
-        'threads': [thread('root-1', last: 14)],
-      };
+      // A new reply: news again.
+      next = {...page(), 'threads': [thread('root-1', last: 14)]};
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
         derived: {'decisionsWaiting': 1, 'mentionsWaiting': 1},
@@ -345,18 +313,6 @@ void main() {
       await again.inbox.refresh();
       await settle();
       expect(again.activity.count(SwarmActivityFilter.threads), 1);
-      expect(again.activity.count(SwarmActivityFilter.reactions), 1);
-    });
-
-    test("this phone's first Activity takes the reactions already there as "
-        'seen', () async {
-      final fake = backend(page: page);
-      final session = await start(fake);
-      final activity = session.activity..watch();
-      await settle();
-
-      expect(activity.items(SwarmActivityFilter.reactions), hasLength(1));
-      expect(activity.count(SwarmActivityFilter.reactions), 0);
     });
 
     test('a Swarm that leaves the list takes its marks, and what was read of '
@@ -806,7 +762,7 @@ void main() {
     ];
 
     test('what needs the person first, as Needs you lists it; then tags, '
-        'replies and reactions, newest first, those with no time last; each '
+        'replies, newest first, those with no time last; each '
         'row once', () async {
       final session = await start(backend(page: activityPage));
       final activity = session.activity;
@@ -817,7 +773,7 @@ void main() {
         for (final filter in SwarmActivityFilter.values)
           if (filter != SwarmActivityFilter.needsYou) ...activity.items(filter),
       ];
-      expect(others, isNotEmpty, reason: 'tags, threads, reactions read');
+      expect(others, isNotEmpty, reason: 'tags and threads read');
 
       final rows = swarmActivityAll(activity);
 
