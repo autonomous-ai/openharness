@@ -26,7 +26,6 @@ import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
-import { markFeedIds } from './superTabs/read/feedIds.js'
 import { startTimeChecks } from './superTabs/timeChecks.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
@@ -60,10 +59,6 @@ async function start(): Promise<void> {
   // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
   await migrateUserPresencePerMachine()
   const schema = await releaseSchema()
-  // Likewise the Tasks feed's column (read/feedIds.ts): a person's older tasks show once it is set.
-  await markFeedIds(prisma).then(count => logger.info('[swarm] Tasks feed ids set on older conversations', { count }), error =>
-    logger.error('[swarm] Tasks feed ids not set on older conversations: their tasks stay out of people\'s Tasks feeds until the next worker start sets them',
-      { error: error instanceof Error ? error.message : String(error) }))
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
   // so those indexes survive. Copying first would leave the unique index build to fail silently.
   await migrateMachineRename()

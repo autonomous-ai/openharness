@@ -23,6 +23,11 @@ export const RETIRED_COMMANDS = [
   // Task records and the crew dispatch (2026-11-10): a task is the project's GitHub issue, and an agent works on what its person asks.
   'work.assign', 'work.status', 'work.cancel', 'work.define', 'work.queue', 'work.priority', 'work.pause', 'work.resume', 'work.lane',
   'member.start', 'member.helper',
+  // A task's pull request taken off it (2026-11-10): a task is the project's GitHub issue, which links its own.
+  'conversation.unlink',
+  // The Board way of working and task approval (2026-11-10): an older Desktop's Board settings, Accept and Decline, and its PM's
+  // suggestion.
+  'project.process', 'project.boardMode', 'project.canChat', 'project.decider', 'member.approvalMode', 'task.suggest', 'task.approve', 'task.reject',
   // Proposals (2026-11-10): a person asks an agent in their 1:1 chat, and a task is the project's GitHub issue.
   'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close', 'buddy.propose',
 ] as const
@@ -38,6 +43,7 @@ export const opensRetiredStep = (command: { type?: unknown; reviewOf?: unknown; 
   command?.type === 'conversation.create' && (command.reviewOf !== undefined || command.step !== undefined)
 
 const TASKS_RETIRED = { code: 'TASKS_RETIRED', status: 410, message: 'Tasks are GitHub issues now.' }
+const BOARD_RETIRED = { code: 'BOARD_RETIRED', status: 410, message: 'Board settings can’t be changed any more.' }
 
 /** A proposal a person sends or answers in an older Desktop: refused in these words, which it shows where it was typed. */
 const PROPOSALS_RETIRED = { code: 'PROPOSALS_RETIRED', status: 410, message: 'Proposals are gone. Ask an agent in its chat.' }
@@ -47,8 +53,12 @@ const PROPOSALS_RETIRED = { code: 'PROPOSALS_RETIRED', status: 410, message: 'Pr
  *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
 export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; status: number; message: string }>> = {
   'work.check': { code: 'CHECKS_RETIRED', status: 410, message: 'Checks can’t be recorded any more.' },
-  // An older Desktop's Next up, priority and pause on a task: its tasks are the project's GitHub issues now.
+  // An older Desktop's Next up, priority and pause on a task, its Accept and Decline and its approval mode: its tasks are the
+  // project's GitHub issues now.
   'work.queue': TASKS_RETIRED, 'work.priority': TASKS_RETIRED, 'work.pause': TASKS_RETIRED,
+  'task.approve': TASKS_RETIRED, 'task.reject': TASKS_RETIRED, 'member.approvalMode': TASKS_RETIRED,
+  // An older Desktop's Board settings: it takes an ok answer for a setting saved.
+  'project.process': BOARD_RETIRED, 'project.boardMode': BOARD_RETIRED, 'project.canChat': BOARD_RETIRED, 'project.decider': BOARD_RETIRED,
   // An older Desktop's proposal from the Board, and its answer to a PM's question on one.
   'proposal.create': PROPOSALS_RETIRED,
   'proposal.answer': PROPOSALS_RETIRED,
@@ -57,6 +67,10 @@ export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; s
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or
  *  logged, and the route's body limit bounds it as it does every command. */
 export const retiredCommandSchemas = RETIRED_COMMANDS.map(type => z.object({ type: z.literal(type) }))
+
+/** A person's Tasks feed as it reads empty: reset, so a Desktop that restored the rows it saved drops them. Sent in place of the
+ *  feed on a person's first load and change polls, and as the feed's own read; goes with the reads below, not before 2026-12-10. */
+export const NO_PERSONAL_TASKS = { approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null } as const
 
 /** Reads of Swarm v1-v3 that an older Desktop, phone or host still makes, each with the empty answer it takes as "nothing here".
  *  As a retired command's, one constant answer for everyone, whatever Swarm and query it names: nothing is read, so nothing is
@@ -72,6 +86,8 @@ export const RETIRED_READS: Readonly<Record<string, object>> = {
   '/api/super-tabs/:tabId/reminders': { due: [], next: null },
   '/api/super-tabs/:tabId/threads': { unread: [], read: [], more: false },
   '/api/super-tabs/:tabId/inbox': { threads: [], latest: [], more: false },
+  // Personal tasks (2026-11-10): an older Desktop's and phone's own tasks, now the project's GitHub issues.
+  '/api/super-tabs/:tabId/personal-tasks': NO_PERSONAL_TASKS,
   // Proposals (2026-11-10): an older Desktop's Proposals in its Tasks view.
   '/api/super-tabs/:tabId/proposals': { proposals: [] },
 }

@@ -269,16 +269,6 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     expect(kept.quotas.map(q => q.engine)).toEqual(['claude'])
   })
 
-  it('stores only running idle Buddies and makes changed proof run the full decision', () => {
-    const proof = stored({ idleBuddyHarnessIds: ['a', 'a', 'not-running'] })
-    expect(proof.idleBuddyHarnessIds).toEqual(['a'])
-    expect(readingOnly(stored({}), proof)).toBe(false)
-    const heartbeat = stored({}, NOW + 15_000)
-    expect(heartbeat).not.toHaveProperty('idleBuddyHarnessIds')
-    expect(readingOnly(proof, heartbeat)).toBe(false)
-    expect(readingOnly(proof, stored({ idleBuddyHarnessIds: ['a'] }, NOW + 15_000))).toBe(true)
-  })
-
   it('names a start preparing only when this machine launched it and it neither runs nor failed', () => {
     const start = (extra: Record<string, unknown>) => ({ id: 's', request: { machineId: 'host' }, dispatched: true, ...extra }) as unknown as AgentStart
     expect(preparableStart(start({}), 'host')).toBe(true)

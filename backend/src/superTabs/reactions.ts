@@ -3,8 +3,8 @@ import { z } from 'zod'
 /**
  * Reactions are gone from Swarm v4 (anh Dee, 2026-11-09): nothing stores, counts or shows one, and the server adds none of its
  * own. `message.react` stays for what it means to an agent: its reaction acknowledges a message without a post (an
- * acknowledgement-only post is refused, acknowledgements.ts), so it settles that agent's delivery of the message and, from the
- * project's PM, the ask it owes (pulse.ts); today's CLI sends none, older ones do. A person's reaction is answered as a retired
+ * acknowledgement-only post is refused, acknowledgements.ts), so it settles that agent's delivery of the message; today's CLI
+ * sends none, older ones do. A person's reaction is answered as a retired
  * command (retired.ts), counted by client. Message reads say `reactions: []` for apps from before, and the rows stored before
  * are read by nothing; they go with the Swarm or when their message is deleted. The person's answer, the empty `reactions` and
  * the delete's reaction cleanup go 30 days after the release that carries this, not before 2026-12-09.
