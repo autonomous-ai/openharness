@@ -23,7 +23,7 @@ void main() {
     if (shots != null) await loadPreviewFonts();
   });
 
-  const buddy = {
+  const river = {
     'kind': 'agent',
     'id': 'pm',
     'name': 'Lead',
@@ -35,7 +35,7 @@ void main() {
   SuperTabMessage message(
     int n,
     DateTime at, {
-    Map<String, Object> author = buddy,
+    Map<String, Object> author = river,
     String text = 'An update.',
     String? thread,
     bool alsoInChat = false,
@@ -248,7 +248,7 @@ void main() {
   });
 
   group('on screen', () {
-    /// Huy's case: three Buddy messages in two minutes, a report and a
+    /// Huy's case: three of River's messages in two minutes, a report and a
     /// question among them, then a reply thread on the first.
     Future<ConversationServer> show(WidgetTester tester) async {
       await tester.binding.setSurfaceSize(const Size(1400, 900));
@@ -296,13 +296,13 @@ void main() {
         }
       }
 
-      say('Taken. Building it now.', buddy, const Duration(minutes: 30));
+      say('Taken. Building it now.', river, const Duration(minutes: 30));
       say(
         'Report:\n- tests pass\n- screenshots attached',
-        buddy,
+        river,
         const Duration(minutes: 29),
       );
-      say('Shall I merge it?', buddy, const Duration(minutes: 28));
+      say('Shall I merge it?', river, const Duration(minutes: 28));
       say('First', ken, const Duration(minutes: 27), thread: 'message-1');
       say('Second', ken, const Duration(minutes: 26), thread: 'message-1');
       say('Later', ken, const Duration(minutes: 10), thread: 'message-1');

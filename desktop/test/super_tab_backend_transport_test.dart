@@ -142,7 +142,7 @@ void main() {
       'operationId': 'op-1',
       'command': {
         'type': 'message.send',
-        'conversationId': 'buddy',
+        'conversationId': 'agent-chat',
         'text': 'hi',
       },
     };
@@ -612,7 +612,7 @@ void main() {
       expect(c.notifyOf('offline'), SuperTabNotify.muted);
       backend.requests.clear();
       expect(
-        await c.setNotify('someone-else-buddy', SuperTabNotify.all),
+        await c.setNotify('someone-elses-chat', SuperTabNotify.all),
         isFalse,
       );
       expect(backend.requests, isEmpty);

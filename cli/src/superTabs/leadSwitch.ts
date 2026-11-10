@@ -23,7 +23,7 @@ import { existsSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSyn
 import { join } from 'node:path'
 import { handoffHash } from '../lib/handoffAuthority.js'
 import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from '../lib/secureState.js'
-import { mayBeBuddy, mayBeLead as retainedLead } from './retention.js'
+import { mayBeLead as retainedLead } from './retention.js'
 import { identifier, object } from './wire.js'
 
 /** How soon after its owner prepared the switch its close must come (Desktop closes at once after preparing). */
@@ -32,8 +32,7 @@ export const SWITCH_ARM_MS = 2 * 60_000
 export const SWITCH_HOLD_MS = 3 * 60_000
 /** How long, from its stop, the host waits for the Swarm to take in a new session that runs (agent.rebind, every 5 s). */
 export const SWITCH_ADOPT_MS = 10 * 60_000
-/** Keep failed Buddy switches recoverable, and fence late starts, for this bounded window. */
-export const SWITCH_RECOVERY_MS = 30 * 60_000
+
 /** Ended records go after a day; each Product Manager has at most one. */
 const KEEP_MS = 24 * 60 * 60_000
 const CHANGE_ID = /^[0-9a-f]{32}$/
@@ -41,7 +40,7 @@ const MAX_RECEIPT_BYTES = 20 * 1024 * 1024
 /** The switches this process let through, so none is let through twice; the oldest are forgotten past this many. */
 const MAX_USED = 256
 
-export interface LeadSwitch { version: 1; agentId: string; changeId: string; targetEngine: string; at: number; recovered?: true }
+export interface LeadSwitch { version: 1; agentId: string; changeId: string; targetEngine: string; at: number }
 
 const folder = (dataDir: string) => join(dataDir, 'super-tabs', 'lead-switch')
 const fileOf = (dataDir: string, agentId: string) => join(folder(dataDir), `${createHash('sha256').update(agentId).digest('hex')}.json`)
@@ -61,7 +60,7 @@ export function leadSwitchOf(dataDir: string, agentId: string): LeadSwitch | nul
   try {
     const row = object(JSON.parse(readPrivateStateFile(file, 4_096)))
     if (row.version !== 1 || row.agentId !== agentId || typeof row.changeId !== 'string' || !CHANGE_ID.test(row.changeId)
-      || (row.recovered !== undefined && row.recovered !== true) || !identifier(row.targetEngine) || typeof row.at !== 'number' || !Number.isFinite(row.at)) return null
+      || !identifier(row.targetEngine) || typeof row.at !== 'number' || !Number.isFinite(row.at)) return null
     return row as unknown as LeadSwitch
   } catch { return null }
 }
@@ -101,13 +100,6 @@ function write(dataDir: string, row: LeadSwitch, now: number): void {
   } finally { if (existsSync(temporary)) unlinkSync(temporary) }
 }
 
-/** A successful Buddy rollback is durable: a later Stop Harness must never be mistaken for a failed launch. */
-export function leadSwitchRecovered(dataDir: string, agentId: string, changeId: string): void {
-  const row = leadSwitchOf(dataDir, agentId)
-  if (!row || row.changeId !== changeId || row.recovered) return
-  write(dataDir, { ...row, recovered: true }, Date.now())
-}
-
 /** Another switch of [agentId] than [changeId] is running, its close under way or its new session awaited: refused. */
 export function leadSwitching(dataDir: string, agentId: string, changeId: string, now = Date.now()): boolean {
   const pass = passes.get(agentId)
@@ -120,16 +112,6 @@ export function leadSwitching(dataDir: string, agentId: string, changeId: string
  *  agent) or none: refused for a Product Manager unless it is that switch's close, which then gets the pass for its one stop. */
 export function leadCloseProtected(dataDir: string, agentId: string, changeId?: string, now = Date.now()): boolean {
   if (!retainedLead(dataDir, agentId)) return false
-  return switchCloseProtected(dataDir, agentId, changeId, now)
-}
-
-/** A Buddy's close gets the same one-use handoff permit; Stop Harness keeps its ordinary behavior. */
-export function buddyCloseProtected(dataDir: string, agentId: string, changeId?: string, now = Date.now()): boolean {
-  if (!mayBeBuddy(dataDir, agentId, now)) return false
-  return switchCloseProtected(dataDir, agentId, changeId, now)
-}
-
-function switchCloseProtected(dataDir: string, agentId: string, changeId: string | undefined, now: number): boolean {
   if (!changeId || !CHANGE_ID.test(changeId)) return true
   const key = `${agentId}:${changeId}`
   if (issued.has(key) || passes.has(agentId) || switchWithin(leadSwitchOf(dataDir, agentId), now)) return true

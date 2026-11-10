@@ -67,7 +67,7 @@ void main() {
     expect(doc.notes[0].expiresAt, DateTime.utc(2026, 11, 6, 1));
     expect(doc.notes[1].expiresAt, isNull);
     expect(doc.notes[0].at, DateTime.utc(2026, 10, 30, 1));
-    final buddy = SuperTabInstructions.fromJson({
+    final fresh = SuperTabInstructions.fromJson({
       'projectId': 'p1',
       'revision': 1,
       'text': 'x',
@@ -75,8 +75,8 @@ void main() {
       'coordinatorName': 'Product Manager',
       'notesRevision': 0,
     });
-    expect(buddy.notes, isEmpty);
-    expect(buddy.hash, isNull);
+    expect(fresh.notes, isEmpty);
+    expect(fresh.hash, isNull);
 
     final revisions = [
       for (final (kind, n) in [('person', 3), ('agent', 2), ('system', 1)])

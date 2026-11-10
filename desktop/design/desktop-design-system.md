@@ -408,10 +408,13 @@ leaderboard) share four rules.
 Goal: every element in a Swarm looks like it came from one hand, Apple-quality
 and never random (anh Dee, 2026-11-07, task #4461). Each element below has one
 implementation; a screen uses it and never draws its own. The gallery
-(`test/swarm_elements_gallery_test.dart`) draws every one in light and dark
-against `test/goldens/swarm-elements-{light,dark}.png`, holding each element
-to its own area: a face or ring may barely differ, an icon or letter a
-quarter of its box, and nothing else outside the words more than 38 pixels.
+(`test/swarm_elements_gallery_test.dart`) draws every one in light and dark,
+each section against its own images,
+`test/goldens/swarm-elements/<section>-{light,dark}.png`, so a pull request
+that changes one element changes only its section's images. It holds each
+element to its own area: a face or ring may barely differ, an icon or letter a
+quarter of its box, and nothing else outside the words more than 38 pixels
+of its section's image.
 
 Seven rules hold the whole Swarm screen to minimal, clear and quiet, with less
 on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
@@ -806,7 +809,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
 - **Blue.** Blue is for the main action and for your own bubbles, nothing
   else.
 - **Adding or changing one.** A new or changed element updates this section
-  and the gallery, with its images, in the same pull request.
+  and the gallery, with its section's images, in the same pull request.
 
 ## Swarm left pane
 
@@ -850,7 +853,7 @@ Top to bottom:
 | Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded, except that Your Machines opens by itself while a computer is off, so why an agent is silent is in sight; the reader's choice is kept and then stands. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Team fold | `ProjectSidebar.teamShown` (`super_tabs/project_sidebar.dart`) | Your Team shows at most 8 rows, so Projects stays in sight with forty agents (tester Q1, 2026-11-10: 880x560). The 8 are the rows with something new, then those on a task, then the rest, each in its place in the list; the open agent's row always shows. Under them, a quiet row with `chevronDown`, `N more`, opens every row; then `chevronUp`, `Show fewer`, folds them again. The reader's choice is kept (`agentsAllShown`). |
 | Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail (`Mac laptop · offline` while that computer is). Nothing is sent for it until its person clicks it: the click makes it an agent as Attach does (its own 1:1 chat opens, its terminal shows beside the chat) and the row is then the agent's. The row says `joining` while that goes on and waits, one join at a time; a refusal is said in a line at the foot and the next click finishes the join; a row of a computer that is off does nothing. |
-| Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). |
+| Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). The Swarm's own first project (Personal) is not listed while it names no repository, except while its chat is open or has something unread; nothing of it is deleted. |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
