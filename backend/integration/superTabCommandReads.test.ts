@@ -94,12 +94,11 @@ const measured = (entries: ProfileEntry[]) => {
 const BUDGET = {
   'conversation.create': { queries: 24, kb: 36 },
   'post': { queries: 20, kb: 34 },
-  'react': { queries: 22, kb: 34 },
 } as const
 
 describe('what a common command reads in a prod-sized Swarm (task #4368)', () => {
   let s: Awaited<ReturnType<typeof swarm>>
-  let worker: string, conversationId = '', messageId = ''
+  let worker: string, conversationId = ''
   const seen: Record<string, ReturnType<typeof measured>> = {}
   const measure = async (name: keyof typeof BUDGET, run: () => Promise<unknown>) => {
     seen[name] = measured(await profiled(db, run))
@@ -127,12 +126,8 @@ describe('what a common command reads in a prod-sized Swarm (task #4368)', () =>
   it('a post', async () => {
     // The agent posts in the task it is in.
     await s.execute({ type: 'conversation.agent', conversationId, agentId: worker, present: true, lead: false })
-    await measure('post', async () => { messageId = String((await s.execute({ type: 'message.send', conversationId, text: 'hello', replyTo: null, recipientIds: [] } as Command, worker)).result.messageId) })
+    await measure('post', () => s.execute({ type: 'message.send', conversationId, text: 'hello', replyTo: null, recipientIds: [] } as Command, worker))
     within('post')
-  })
-  it('a reaction', async () => {
-    await measure('react', () => s.execute({ type: 'message.react', conversationId, messageId, emoji: 'eyes', on: true } as Command))
-    within('react')
   })
 })
 

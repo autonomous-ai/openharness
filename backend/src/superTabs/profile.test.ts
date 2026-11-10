@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
-import { split } from './parts/shape.js'
 import { personView } from './profile.js'
-import { readerView } from './read/views.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -27,25 +25,6 @@ function fixture() {
 }
 
 describe('what readers get of a person', () => {
-  // Swarms from before v4 hold a status and a time zone that nothing sets any more and no app draws (2026-11-09): a status with
-  // no end would haunt an older app for ever, so readers get neither, though they stay stored.
-  it('leaves out the status and time zone a person stored, keeps their avatar, and reads the same for a member part', () => {
-    const f = fixture()
-    f.invite()
-    Object.assign(f.member('owner')!, { status: { text: 'Out', emoji: '🌴', until: null }, timeZone: 'Asia/Ho_Chi_Minh',
-      avatar: { kind: 'preset', key: 'fox' } })
-    const seen = visibleState(f.state, peer).people.find(p => p.id === 'owner')!
-    expect(seen).not.toHaveProperty('status')
-    expect(seen).not.toHaveProperty('timeZone')
-    expect(seen.avatar).toEqual({ kind: 'preset', key: 'fox' })
-    const part = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, {}).parts.members.find(m => m.key === 'owner')!
-    expect(part.data).not.toHaveProperty('status')
-    expect(part.data).not.toHaveProperty('timeZone')
-    expect(part.data.avatar).toEqual({ kind: 'preset', key: 'fox' })
-    expect(f.member('owner')).toHaveProperty('status')
-    expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-  })
-
   // Their name follows their account (personNames.ts nameFromAccount): the one they chose before is kept and read by nobody.
   it('leaves out the name a person chose before their name followed their account', () => {
     const f = fixture()
@@ -62,8 +41,6 @@ describe('what readers get of a person', () => {
     expect(personView(plain)).toBe(plain)
     const picture = { ...plain, avatar: { kind: 'preset' as const, key: 'owl' as const } }
     expect(personView(picture)).toEqual(picture)
-    const stored: typeof plain & { status?: unknown; timeZone?: unknown } = { ...plain, status: { text: 'Out' }, timeZone: 'UTC' }
-    expect(personView(stored)).toEqual(plain)
   })
 })
 
@@ -95,27 +72,4 @@ describe('avatars', () => {
     expect(() => visibleState(f.state, stranger)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 
-  // Nothing sets a picture any more (2026-11-09); an older app that picks one is told so where it picked it.
-  it('refuses a new picture in words, a person\'s or an agent\'s, built in or uploaded, and changes nothing', () => {
-    const f = withPictures()
-    const refused = expect.objectContaining({ code: 'AVATARS_RETIRED', status: 410, message: 'Pictures can’t be changed any more.' })
-    expect(() => f.run({ type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } })).toThrow(refused)
-    expect(() => f.run({ type: 'member.avatar', avatar: { kind: 'upload', id: 'u1' } })).toThrow(refused)
-    expect(() => f.run({ type: 'agent.avatar', agentId: f.worker, avatar: { kind: 'preset', key: 'cat' } }, peer)).toThrow(refused)
-    expect(f.member('owner')!.avatar).toEqual(upload)
-    expect(f.avatarOf(f.worker)).toEqual({ kind: 'preset', key: 'owl' })
-  })
-
-  // So nobody keeps a photo of themselves they want gone (review of #3712).
-  it('still clears a picture: a person\'s own, an agent\'s by its contributor or an agent of its project, and nobody else\'s', () => {
-    const f = withPictures()
-    f.run({ type: 'member.avatar', avatar: null })
-    expect(f.member('owner')!.avatar).toBeUndefined()
-    expect(() => f.run({ type: 'agent.avatar', agentId: f.lead, avatar: null }, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    f.run({ type: 'agent.avatar', agentId: f.worker, avatar: null }, peer)
-    expect(f.avatarOf(f.worker)).toBeUndefined()
-    f.run({ type: 'agent.avatar', agentId: f.lead, avatar: null }, f.as(f.worker))
-    expect(f.avatarOf(f.lead)).toBeUndefined()
-    expect(() => f.run({ type: 'member.avatar', avatar: null }, f.as(f.worker))).toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
-  })
 })

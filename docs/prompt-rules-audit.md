@@ -383,7 +383,7 @@ out "Product direction" because it holds facts and targets, not rules.
 | Answer in the message's own thread, never a main line below it | Talking (Dee 11-06) | new | Refuse `--answers` (an answer right below, in the main chat) to a person's message in a project chat, and require `--reply-to`. Today `answers.ts` and `chatLimits.ts` still accept "right below it". |
 | Pickup, follow-ups and the result go in the ask's thread | Talking (Dee 11-06) | code | `chatLimits.ts` `CHAT_MAIN_LIMIT` (at most 2 main posts per ask), `CHAT_ASK_CLOSED`. |
 | Reply in the message's language | Talking (Dee 11-04) | judgment | Mixed-language messages; also clashes with Dee's 11-06 "English to me". |
-| React instead of posting an acknowledgement | Talking (Dee 11-04) | code | `ACK_ONLY` (`acknowledgements.ts`); `reactions.ts` 👀 ✅ 🚀. |
+| Post no acknowledgement | Talking (Dee 11-04) | code | `ACK_ONLY` (`acknowledgements.ts`). Reactions are gone (2026-11-09). |
 | 👀 when work is taken, ✅ when it ships | Talking (Dee 11-04) | new | The server reacts 👀 when a task opens from a person's message and ✅ when its merge is in a verified release (`releaseWatch.ts`). |
 | Answer a status question first, from whoever knows | Talking (Dee 11-04) | judgment | Who knows. |
 | Spawned tasks named in the answer's thread, not as separate rows | Talking (Dee 11-04) | building | #4538, one card per ask. |

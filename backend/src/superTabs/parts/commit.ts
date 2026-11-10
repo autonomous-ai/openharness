@@ -163,7 +163,7 @@ const withoutReading = (data: unknown) => {
 
 /** What a reading moves all the time, measured on production (2026-11-04: of 128 parts moved in 40 s, `resources` in all of them): a
  *  client that asks gets a line for these, and reads them on demand (read/changes.ts, read/service.ts machineReadings). */
-const VOLATILE_READING = ['receivedAt', 'resources', 'quotas', 'quotaReasons', 'profiles', 'privacy', 'harnessProgress', 'harnessTokens', 'harnessUncommitted'] as const
+const VOLATILE_READING = ['receivedAt', 'resources', 'quotas', 'quotaReasons', 'profiles', 'harnessProgress', 'harnessTokens', 'harnessUncommitted'] as const
 const steadyPart = (data: unknown) => {
   const machine = data as MachineData | undefined
   const observation = machine?.contribution?.observation

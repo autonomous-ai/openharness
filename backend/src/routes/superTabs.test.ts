@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHash } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { Prisma, type PrismaClient } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 
 // Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
 // stores, as routes/control.test.ts does, so the real authentication runs.
@@ -48,10 +47,6 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { REFUSED_TO_PEOPLE, RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
-import { counted, OLD_PAYLOADS } from '../superTabs/retired.test-support.js'
-import { SuperTabStore } from '../superTabs/store.js'
-import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
@@ -92,51 +87,9 @@ describe('Super Tab route failures', () => {
   })
 })
 
-// An older app, host or agent still sends a command v4 dropped (superTabs/retired.ts): the route accepts it, and the real
-// store answers it as ignored without a read or a write.
-describe('a command Swarm v4 no longer has, over HTTP', () => {
-  let app: FastifyInstance
-  const queries: Query[] = []
-  beforeEach(async () => {
-    queries.length = 0
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    await app.register(superTabRoutes, { store: new SuperTabStore(recordingDb(queries) as PrismaClient), github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-  const send = (command: object, asAgentId?: string) => app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', headers: { 'x-harness-client': 'desktop/1.2.3' },
-    payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
-
-  it.each(RETIRED_COMMANDS)('answers %s ok and ignored, as an agent too, counts the client it declares and touches no data', async type => {
-    const before = await counted(type, 'desktop')
-    for (const asAgentId of [undefined, 'agent-1']) {
-      const res = await send({ type, ...OLD_PAYLOADS[type] }, asAgentId)
-      // A person's that an older app would take as saved is refused in words it shows (REFUSED_TO_PEOPLE); an agent's is ignored.
-      const refused = asAgentId ? undefined : REFUSED_TO_PEOPLE[type]
-      expect({ status: res.statusCode, body: res.json() }).toEqual(refused
-        ? { status: refused.status, body: expect.objectContaining({ success: false, error: expect.objectContaining({ code: refused.code, message: refused.message }) }) }
-        : { status: 200, body: { success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } } })
-    }
-    expect(await counted(type, 'desktop')).toBe(before + 2)
-    expect(queries).toEqual([])
-  })
-
-  it('still refuses a type no version had, and a host\'s start route that names no start', async () => {
-    expect((await send({ type: 'project.nonsense', projectId: 'lead' })).statusCode).toBe(400)
-    const host = await app.inject({ method: 'POST', url: '/api/super-tabs/hosts/m1/starts/tab-1/s1',
-      payload: { operationId: 'op-1', command: { type: 'project.digest', ...OLD_PAYLOADS['project.digest'] } } })
-    expect(host.statusCode).toBe(403)
-    expect(queries).toEqual([])
-  })
-})
-
-// Terminal recording is gone with Swarm v4, but an older Desktop still opens a terminal's context and an older host still reads it and
-// records into it. Each is answered ok and ignored, to everyone, and nothing is read. A host drops an observation once it is
-// acknowledged by the id it makes of it (cli superTabs/native.ts eventId): so that one carries the same id, and a journal from before
-// drains instead of being sent again for ever.
-describe('the retired terminal recording', () => {
+// Swarm v4 is built from scratch (anh Dee, 2026-11-10): what v1-v3 had is gone, with no answer kept for their clients. An old
+// command is refused as one no version had, before the store is reached, and an old read or write is no route at all.
+describe('what Swarm v1-v3 had, over HTTP', () => {
   let app: FastifyInstance
   beforeEach(async () => {
     app = Fastify()
@@ -147,154 +100,33 @@ describe('the retired terminal recording', () => {
     await app.ready()
   })
   afterEach(async () => { await app.close() })
-  /** The id the CLI's recorder makes of an observation (cli superTabs/native.ts eventId). */
-  const recorderId = (contextId: string, turnId: string, kind: string) =>
-    createHash('sha256').update(JSON.stringify(['native-event', contextId, turnId, kind])).digest('hex').slice(0, 24)
-  const observation = (kind: string) => ({ turnId: 'turn-1', kind, previousEventId: null, text: 'hi', truncated: false, interrupted: false })
 
-  it('answers the open and the read ok and ignored, whatever the Swarm, and reads nothing', async () => {
-    for (const tab of ['tab-1', 'tab-2']) {
-      const opened = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/native`, payload: { operationId: 'op-1', conversationId: 'lead', agentId: 'agent-1' } })
-      expect(opened.statusCode).toBe(200)
-      expect(opened.json()).toEqual({ success: true, data: { ok: true, ignored: true } })
-      const read = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/native/ctx-1` })
-      expect(read.statusCode).toBe(200)
-      expect(read.json()).toEqual({ success: true, data: { ok: true, ignored: true } })
+  it('refuses its commands as unknown, an agent\'s too', async () => {
+    for (const command of [{ type: 'work.assign', conversationId: 'task-1', agentId: 'agent-2' }, { type: 'decision.answer', decisionId: 'd1', choice: 1 },
+      { type: 'proposal.create', projectId: 'lead', title: 'Sync' }, { type: 'message.react', conversationId: 'c', messageId: 'm', emoji: 'eyes', on: true },
+      { type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: 'task-1', checks: [] },
+      { type: 'conversation.create', title: 'Fix', brief: 'Fix it.', checks: [], requestMessageId: 'm1' },
+      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], handoff: 'm1' },
+      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], mentionsIfNoWorker: true }]) {
+      for (const asAgentId of [undefined, 'agent-1']) {
+        const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
+        expect(res.statusCode, JSON.stringify(command)).toBe(400)
+      }
     }
   })
 
-  it.each(['prompt', 'answer', 'gap'])('acknowledges a %s by the id its host makes of it', async kind => {
-    const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload: observation(kind) })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ success: true, data: { ok: true, ignored: true, eventId: recorderId('ctx-1', 'turn-1', kind) } })
-  })
-
-  it('still refuses an observation that names no turn or no kind', async () => {
-    for (const payload of [{ kind: 'prompt' }, { turnId: 'turn-1' }, { turnId: 'turn-1', kind: 'typed' }]) {
-      expect((await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload })).statusCode, JSON.stringify(payload)).toBe(400)
-    }
-  })
-})
-
-// The scorecard is gone with Swarm v4, and an older Desktop's Scorecard tab still reads it: it gets no days, whoever asks and
-// whichever Swarm it names, and nothing is read. integration/superTabNotAvailable.test.ts tries it against the real store.
-describe('the retired scorecard read', () => {
-  let app: FastifyInstance
-  beforeEach(async () => {
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    // A store, reads and host reads that fail on any call: the answer must not touch them.
-    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-
-  it('answers no days, with the query an older Desktop sends or none, and reads nothing', async () => {
-    for (const url of ['/api/super-tabs/tab-1/scorecard?projectId=lead', '/api/super-tabs/tab-1/scorecard?projectId=lead&scope=all', '/api/super-tabs/tab-2/scorecard']) {
-      const res = await app.inject({ method: 'GET', url })
-      expect(res.statusCode, url).toBe(200)
-      expect(res.json(), url).toEqual({ success: true, data: { days: [] } })
-    }
-  })
-})
-
-// Decisions, tags, Activity, reminders, followed threads, the inbox and catch-up are gone with Swarm v4 (anh Dee, 2026-11-10): an agent
-// reaches its person in their 1:1 chat. An older Desktop, phone or host still reads them: each gets its empty answer, whoever asks,
-// whichever Swarm and query it names, and nothing is read.
-describe('the retired reads', () => {
-  let app: FastifyInstance
-  beforeEach(async () => {
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    // A store, reads and host reads that fail on any call: the answer must not touch them.
-    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-
-  // Tags, Activity, reminders, followed threads, the inbox and catch-up go too (S11): each answers its empty answer.
-  it('answers an older client\'s tags, Activity, reminders, threads, inbox and catch-up reads with none, and reads nothing', async () => {
-    const none = { total: 0, items: [] }
-    for (const [url, data] of [
-      ['/api/super-tabs/tab-1/mentions?state=waiting', { mentions: [] }], ['/api/super-tabs/tab-2/mentions?state=earlier', { mentions: [] }],
-      ['/api/super-tabs/tab-1/activity', { items: [], more: false }], ['/api/super-tabs/tab-1/reminders', { due: [], next: null }],
-      ['/api/super-tabs/tab-1/threads?read=50', { unread: [], read: [], more: false }], ['/api/super-tabs/tab-1/inbox', { threads: [], latest: [], more: false }],
-      // Catch-up's span ends where it started, at the mark it was sent: never behind it.
-      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=4', { after: 4, through: 4, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
-        needsYou: none }],
-      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=x', { after: 0, through: 0, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
-        needsYou: none }],
-    ] as const) {
-      const res = await app.inject({ method: 'GET', url })
-      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data } })
-    }
-  })
-
-  it('answers an older client\'s Activity read mark, thread follow and cleared reminder as done, refuses a new reminder in words, and reads nothing', async () => {
-    for (const [url, payload, data] of [
-      ['/api/super-tabs/tab-1/activity/read', { through: '2026-11-01T00:00:00.000Z' }, { marked: 0 }],
-      ['/api/super-tabs/tab-1/conversations/c1/threads/m1/follow', { follow: true }, { follow: null }],
-      ['/api/super-tabs/tab-1/conversations/c1/messages/m1/reminder', { at: null }, { cleared: false }],
-    ] as const) {
-      const res = await app.inject({ method: 'POST', url, payload })
-      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data } })
-    }
-    const set = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/conversations/c1/messages/m1/reminder', payload: { at: '2026-11-11T09:00:00.000Z' } })
-    expect({ status: set.statusCode, body: set.json() }).toEqual({ status: 410,
-      body: { success: false, error: { code: 'REMINDERS_RETIRED', message: 'Reminders are gone. Nothing was set.' } } })
-  })
-
-  // Personal tasks (2026-11-10): an older Desktop's and phone's own tasks are the project's GitHub issues now.
-  it('answers an older client\'s personal tasks read with none, a page or not, and reads nothing', async () => {
-    for (const url of ['/api/super-tabs/tab-1/personal-tasks', '/api/super-tabs/tab-2/personal-tasks?before=c2VlbjoxMjM']) {
-      const res = await app.inject({ method: 'GET', url })
-      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200,
-        body: { success: true, data: { approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null } } })
-    }
-  })
-
-  // Proposals go too (S9): an older Desktop's Tasks view reads a project's.
-  it('answers an older client\'s proposals read with none, with each query it sent, and reads nothing', async () => {
-    for (const url of ['/api/super-tabs/tab-1/proposals?projectId=app', '/api/super-tabs/tab-2/proposals?projectId=lead', '/api/super-tabs/tab-1/proposals']) {
-      const res = await app.inject({ method: 'GET', url })
-      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data: { proposals: [] } } })
-    }
-  })
-
-  it('answers an older client\'s decisions read with none, with each query it sent, and reads nothing', async () => {
-    for (const url of ['/api/super-tabs/tab-1/decisions?state=open', '/api/super-tabs/tab-1/decisions?state=answered&asAgentId=agent-1',
-      '/api/super-tabs/tab-2/decisions?state=settled', '/api/super-tabs/tab-2/decisions']) {
-      const res = await app.inject({ method: 'GET', url })
-      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data: { more: false, decisions: [] } } })
-    }
-  })
-})
-
-// No picture is set any more (2026-11-09), but an older Desktop or phone still uploads one before it sends the retired `member.avatar`
-// or `agent.avatar`. Whoever asks, for whichever Swarm, the upload is refused in words, nothing is read and nothing is kept.
-// integration/superTabProfile.test.ts tries it against the real store.
-describe('the retired picture upload', () => {
-  let app: FastifyInstance
-  beforeEach(async () => {
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    // A store, reads and host reads that fail on any call: the answer must not touch them.
-    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-
-  it('refuses the form an older app sends, whatever the Swarm, agent or picture, and reads nothing', async () => {
-    const boundary = 'avatar-boundary'
-    const form = (bytes: string) => `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="me.png"\r\nContent-Type: image/png\r\n\r\n${bytes}\r\n--${boundary}--\r\n`
-    for (const [url, bytes] of [['/api/super-tabs/tab-1/avatars', '\x89PNG'], ['/api/super-tabs/tab-2/avatars?asAgentId=agent-1', 'x'.repeat(1536 * 1024)]]) {
-      const res = await app.inject({ method: 'POST', url, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, payload: form(bytes) })
-      expect(res.statusCode, url).toBe(410)
-      expect(res.json(), url).toEqual({ success: false, error: { code: 'AVATARS_RETIRED', message: 'Pictures can’t be changed any more.' } })
-    }
+  it('serves none of its reads and writes', () => {
+    const gone: Array<['GET' | 'POST', string]> = [
+      ['GET', '/api/super-tabs'], ['GET', '/api/super-tabs/:tabId'], ['GET', '/api/super-tabs/hosts/:machineId'],
+      ['GET', '/api/super-tabs/hosts/:machineId/pools'], ['GET', '/api/super-tabs/hosts/:machineId/assignments'],
+      ['POST', '/api/super-tabs/:tabId/native'], ['GET', '/api/super-tabs/:tabId/native/:contextId'], ['POST', '/api/super-tabs/:tabId/native/:contextId'],
+      ['GET', '/api/super-tabs/:tabId/scorecard'], ['GET', '/api/super-tabs/:tabId/decisions'], ['GET', '/api/super-tabs/:tabId/mentions'],
+      ['GET', '/api/super-tabs/:tabId/activity'], ['GET', '/api/super-tabs/:tabId/reminders'], ['GET', '/api/super-tabs/:tabId/threads'],
+      ['GET', '/api/super-tabs/:tabId/inbox'], ['GET', '/api/super-tabs/:tabId/personal-tasks'], ['GET', '/api/super-tabs/:tabId/proposals'],
+      ['GET', '/api/super-tabs/:tabId/conversations/:conversationId/catch-up'], ['POST', '/api/super-tabs/:tabId/activity/read'],
+      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow'],
+      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder'], ['POST', '/api/super-tabs/:tabId/avatars']]
+    for (const [method, url] of gone) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
   })
 })
 

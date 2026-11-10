@@ -1,6 +1,6 @@
 /**
  * Work a Swarm from before Swarm v4 still stores: a task's assignment and its agent's last status. v4 no longer assigns work or
- * takes a status (work.assign and work.status answer as retired, 2026-11-10), but the readers, sweeps and Pro dial that still
+ * takes a status (2026-11-10), but the readers, sweeps and Pro dial that still
  * read stored tasks are tested on what those commands left behind.
  */
 import { LEASE_MS } from './liveness.js'

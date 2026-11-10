@@ -43,26 +43,13 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
 
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
- *  leaderboard's (the leaderboard read sums it), except when it shipped. The `releasing` list of the release watch Swarm v4
- *  removed is still stored on old tasks and never sent: nothing would ever clear it, so an older app would show them waiting. */
-/** What a group stored before Swarm v4 that nothing writes now (2026-11-10): its pull requests' heads, events and check states as
- *  the PR watch read them, and its steps' listings; on a project chat, its pulse, the asks its PM owed, its answers and its post
- *  limits; on a task, its line on the status card. Left stored and never sent, so no reader shows a state frozen at the release; they go with the old Swarm
- *  data's one-time drop (migration/dropCollections.ts), on the owner's go. */
-type Unwritten = { releasing?: unknown; pullRequestHeads?: unknown; pullRequestEvents?: unknown; pullRequestChecks?: unknown; stepIds?: unknown
-  waitingLinuxStep?: unknown; waitingWindowsStep?: unknown; openedBy?: unknown; owed?: unknown; pulse?: unknown; statusLine?: unknown
-  answered?: unknown; chatLimits?: unknown }
-
+ *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, releasing: _releasing,
-    pullRequestHeads: _heads, pullRequestEvents: _events, pullRequestChecks: _checks, stepIds: _steps, waitingLinuxStep: _linux, waitingWindowsStep: _windows, openedBy: _opened,
-    dormant, audience, ...rest }: Conversation & Unwritten = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, talkedAt: _talkedAt, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   const readers = audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)
-  // A check's verdicts, from before Swarm v4, which records none: its stored evidence and who passed it say what a reader shows.
-  const checks = rest.checks.map(({ verdicts: _verdicts, ...check }: Conversation['checks'][number] & { verdicts?: unknown }) => check)
-  const view: GroupView = { ...rest, checks, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
+  const view: GroupView = { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
     ...(held ? { held } : {}), ...readers }
   return view
 }
@@ -93,9 +80,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The progress
-  // is the server's bookkeeping: no reader shows it. v3's note of what the PM owed (projects.ts SwarmProject.owed) may name a message in someone's private chat.
-  // Swarm v3's `schedule`, `processNote` and release list (`releases`) are still stored on old projects: no reader gets them (the stored copies can go from 2026-12-09).
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, schedule: _schedule, processNote: _note, ...project }: NonNullable<typeof head.projects>[number] & { schedule?: unknown; processNote?: unknown; releases?: unknown }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
+  // is the server's bookkeeping: no reader shows it.
+  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
   return {

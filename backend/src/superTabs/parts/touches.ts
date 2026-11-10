@@ -50,9 +50,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
-    case 'agent.avatar':
-      leadCheck(agentProject(command.agentId))
-      break
     // A new agent's free name is picked against every name in the Swarm (agentRename.ts newAgentName, review of #3560).
     case 'agent.new':
       head()
@@ -93,7 +90,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       member(command.personId ?? undefined)
       break
     case 'message.send': {
-      if (command.handoff) leadCheck(projectOfGroup(command.conversationId)?.id)
       // Every start a post makes counts its machine's slots.
       const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
       if (start) {

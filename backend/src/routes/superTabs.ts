@@ -14,7 +14,7 @@ import { operationSchema } from '../superTabs/commands.js'
 import { PERIODS } from '../superTabs/leaderboard/rolling.js'
 import { boardQuery, reportBody } from '../superTabs/shipping/contract.js'
 import { Shipping } from '../superTabs/shipping/service.js'
-import { fail, stableId, SuperTabError } from '../superTabs/model.js'
+import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { redisPollMemory } from '../superTabs/pollMemory.js'
 import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
@@ -36,8 +36,6 @@ import { SwarmReads } from '../superTabs/read/service.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { COMMENT_KINDS, MAX_COMMENT_IDS } from '../superTabs/githubComments.js'
 import { HostReads } from '../superTabs/read/host.js'
-import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
-import { PICTURES_RETIRED, REMINDERS_RETIRED, RETIRED_READS, RETIRED_WRITES, retiredCatchUp } from '../superTabs/retired.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { markNothingNew } from '../lib/routeLatency.js'
@@ -73,9 +71,7 @@ const uploadLinkBody = z.object({ conversationId: id, name: z.string().max(1000)
 const emptyBody = z.object({}).strict().optional()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
-// `mentions=1` asked an older Desktop's tag counts, which Swarm v4 has none of (2026-11-10): taken and answered with none. It goes
-// with the retired reads (superTabs/retired.ts), not before 2026-12-09.
-const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
+const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 // `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
 const changesQuery = agentQuery.extend({ cursor, machines: z.literal('light').optional(),
@@ -90,9 +86,6 @@ const etag = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)
 const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().optional(),
   held: z.record(id, etag).refine(held => Object.keys(held).length <= 500, 'At most 500 Swarms.').optional() }).strict()
 const startParams = tabParams.extend({ startId: id })
-const nativeParams = tabParams.extend({ contextId: id })
-/** What a retired terminal recording needs of an older host's observation: the two words its id is made of. */
-const nativeObservation = z.object({ turnId: id, kind: z.enum(['prompt', 'answer', 'gap']) })
 const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
@@ -165,14 +158,9 @@ const NO_APP = () => new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harne
  * answer, whether it is missing, refused, revoked or in another project, so the answer never says
  * which. The server log keeps the specific reason. Role refusals inside a Swarm the caller reads (read-only,
  * owner-only) keep their own words: they tell nothing the caller cannot already see. Hosts read 403 and 404 alike as
- * access lost (cli superTabs/machines.ts, swarmReads.ts).
+ * access lost (cli superTabs/machines.ts, swarmReads.ts). This is that answer: 404 with the code every client already reads as
+ * gone (Desktop and the phone: FORBIDDEN or NOT_FOUND; the CLI: 403 or 404).
  */
-const NOT_AVAILABLE_EXEMPT_ROUTES: ReadonlyMap<string, string> = new Map([
-  // This retired endpoint never reads a Swarm: all callers must upgrade from full-state reads.
-  ['GET /api/super-tabs/:tabId', 'Always returns UPDATE_REQUIRED without looking up the Swarm.'],
-])
-/** The one answer on those routes for anything the caller cannot reach. 404 with the code every client already
- *  reads as gone (Desktop and the phone: FORBIDDEN or NOT_FOUND; the CLI: 403 or 404). */
 export const NOT_AVAILABLE = { code: 'NOT_FOUND', message: 'This is not available to you. It may have been removed, or your access changed.', status: 404 } as const
 const UNREACHABLE_CODES: ReadonlySet<string> = new Set(['NOT_FOUND', 'JOIN_UNAVAILABLE'])
 const unreachable = (error: SuperTabError) => error.unreachable || UNREACHABLE_CODES.has(error.code)
@@ -204,8 +192,7 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
     if (error instanceof GitHubAppError) return sendError(reply, error.message, error.code, error.status, error.details)
     const { request } = reply
     if (error instanceof SuperTabError && unreachable(error)
-      && /^\/api\/super-tabs\/:tabId(?:\/|$)/.test(request.routeOptions.url ?? '')
-      && !NOT_AVAILABLE_EXEMPT_ROUTES.has(`${request.method} ${request.routeOptions.url}`)) {
+      && /^\/api\/super-tabs\/:tabId(?:\/|$)/.test(request.routeOptions.url ?? '')) {
       logger.warn('Swarm not available to the caller', { code: error.code, statusCode: error.status, reason: error.message,
         path: request.url, method: request.method })
       return sendError(reply, NOT_AVAILABLE.message, NOT_AVAILABLE.code, NOT_AVAILABLE.status)
@@ -218,8 +205,6 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
  *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
-/** Full-state reads of clients from before Swarms were stored by parts (design 4.11): every old client reads one of them
- *  before or right after any action, so it meets this at once. */
 /**
  * The body limit of the routes hosts and agents call every second or every turn (roadmap 2.8), in place of Fastify's 1 MiB:
  * a body is parsed whole on the event loop before its schema is checked. Each route's largest valid body, from its schema's
@@ -228,7 +213,6 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
  * schema's limits reaches 700 KB.
  */
 export const HOT_BODY_LIMIT = 128 * 1024
-const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
@@ -319,9 +303,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     logger.warn('[github] access change not recorded', { tabId, error: String(error) })
   })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
-  app.get('/api/super-tabs/hosts/:machineId/pools', updateRequired)
-  // Replaces the three host reads above and below: every Swarm of the machine with `full=1` (at start and at least every
-  // 60 s), else only those with a change that concerns it since the cursor (design 4.10).
+  // Every Swarm of the machine with `full=1` (at start and at least every 60 s), else only those with a change that concerns it
+  // since the cursor (design 4.10).
   app.get<{ Params: z.infer<typeof hostParams>; Querystring: z.infer<typeof hostChangesQuery> }>('/api/super-tabs/hosts/:machineId/changes',
     { preHandler: [validateParams(hostParams), validateQuery(hostChangesQuery)] },
     (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, { cursor: req.query.cursor, full: req.query.full === '1' })))
@@ -520,24 +503,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof machineParams>; Body: z.infer<typeof machineObservationSchema> }>('/api/super-tabs/:tabId/machines/:machineId',
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
-  // Terminal recording is gone with Swarm v4, but an older Desktop still opens a terminal's context and an older host still reads and
-  // records into it: each is answered ok and ignored, to everyone, naming no Swarm. An older Desktop's open then gets no context (it
-  // says it could not prepare terminal sharing) and an older host's read finds no terminal (its prepare fails), so nothing new is
-  // recorded. A host drops an observation once it is acknowledged by the id it makes of it (cli superTabs/native.ts eventId), so
-  // that one is answered with it: without it, a journal from before would send the same observation again, for ever.
-  const recordingGone = (_req: unknown, reply: FastifyReply) => sendSuccess(reply, { ok: true, ignored: true })
-  app.post('/api/super-tabs/:tabId/native', { bodyLimit: HOT_BODY_LIMIT, preHandler: validateParams(tabParams) }, recordingGone)
-  app.get('/api/super-tabs/:tabId/native/:contextId', { preHandler: validateParams(nativeParams) }, recordingGone)
-  app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeObservation> }>('/api/super-tabs/:tabId/native/:contextId',
-    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(nativeParams), validateBody(nativeObservation)] },
-    (req, reply) => sendSuccess(reply, { ok: true, ignored: true, eventId: stableId('native-event', req.params.contextId, req.body.turnId, req.body.kind) }))
   app.get('/api/super-tabs/routing-policy', (req, reply) => respond(reply, () => store.accountPolicy(req.user!)))
   app.post<{ Body: z.infer<typeof savePolicy> }>('/api/super-tabs/routing-policy', { preHandler: validateBody(savePolicy) },
     (req, reply) => respond(reply, () => store.saveAccountPolicy(req.user!, req.body.revision, req.body.policy)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/routing-policy',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.tabPolicy(req.user!, req.params.tabId, req.query.asAgentId)))
-  app.get('/api/super-tabs', updateRequired)
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
     (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
@@ -558,15 +529,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof joinSwarmSchema> }>('/api/super-tabs/:tabId/join',
     { preHandler: [validateParams(tabParams), validateBody(joinSwarmSchema)] },
     (req, reply) => respond(reply, () => store.join(req.user!, req.params.tabId, req.body)))
-  app.get('/api/super-tabs/hosts/:machineId', updateRequired)
   app.post<{ Params: z.infer<typeof hostParams> }>('/api/super-tabs/hosts/:machineId/terminal', { preHandler: validateParams(hostParams) },
     (req, reply) => respond(reply, noting(req, () => store.hostTerminal(req.user!, req.params.machineId), picked => !picked.length)))
   // Long-polls about 20 seconds; a request still waiting then answers `pending` and is read again.
   app.get<{ Params: z.infer<typeof terminalParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/terminal/:requestId',
     { preHandler: [validateParams(terminalParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.terminalResult(req.user!, req.params.tabId, req.params.requestId, req.query.asAgentId, 20_000)))
-  app.get('/api/super-tabs/hosts/:machineId/assignments', updateRequired)
-  app.get('/api/super-tabs/:tabId', updateRequired)
   // The read API by parts (design section 4, superTabs/read/contract.ts).
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/parts',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
@@ -584,16 +552,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof projectListQuery> }>('/api/super-tabs/:tabId/project-list',
     { preHandler: [validateParams(tabParams), validateQuery(projectListQuery)] },
     (req, reply) => respond(reply, () => store.projectList(req.user!, req.params.tabId, req.query.invitedTo)))
-  // Reads Swarm v4 removed, which an older client still makes (superTabs/retired.ts): each answers its empty answer to everyone, with
-  // whatever query it sent, and names no Swarm, as `updateRequired` does for the retired full-state reads.
-  for (const [url, empty] of Object.entries(RETIRED_READS)) app.get(url, (_req, reply) => sendSuccess(reply, empty))
-  for (const [url, done] of Object.entries(RETIRED_WRITES)) app.post(url, (_req, reply) => sendSuccess(reply, done))
-  app.get<{ Querystring: { after?: unknown } }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
-    (req, reply) => sendSuccess(reply, retiredCatchUp(req.query.after)))
-  // An older Desktop's Remind me: clearing one answers that none was cleared; setting one is refused in words, which the app shows
-  // where it was set, rather than answered as if a reminder were kept (superTabs/retired.ts REMINDERS_RETIRED).
-  app.post<{ Body: { at?: unknown } }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder', (req, reply) =>
-    req.body?.at === null ? sendSuccess(reply, { cleared: false }) : sendError(reply, REMINDERS_RETIRED.message, REMINDERS_RETIRED.code, REMINDERS_RETIRED.status))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
@@ -690,14 +648,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof voiceParams>; Querystring: z.infer<typeof voiceQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/:attachmentId/voice',
     { bodyLimit: 1024, preHandler: [validateParams(voiceParams), validateQuery(voiceQuery), validateBody(emptyBody)] },
     (req, reply) => respond(reply, () => store.readVoice(req.user!, req.params.tabId, req.params.attachmentId, req.query.lang ?? 'en', req.query.asAgentId)))
-  // An older app uploads a picture here before it sets it with `member.avatar` or `agent.avatar` (superTabs/retired.ts
-  // PICTURES_RETIRED). Like `updateRequired`, one answer for everyone that reads no Swarm. The form is read to its end and thrown
-  // away first, up to the 1 MB a picture was allowed and a little more: a refusal sent while the daemon still streams the upload
-  // in (cli hookServer.ts) could reach the person as a broken connection instead of these words.
-  await app.register(async scope => {
-    scope.addContentTypeParser('multipart/form-data', { parseAs: 'buffer', bodyLimit: 2 * 1024 * 1024 }, (_req, _body, done) => done(null))
-    scope.post('/api/super-tabs/:tabId/avatars', (_req, reply) => sendError(reply, PICTURES_RETIRED.message, PICTURES_RETIRED.code, PICTURES_RETIRED.status))
-  })
   app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
     { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))
