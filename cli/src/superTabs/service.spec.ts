@@ -162,6 +162,16 @@ it('gives the host a new feed after a reconnect, one that has not heard the serv
   expect(feeds[1]!.pushing).toBe(false)
   service.port.stop()
 })
+// The leaderboard's daemon half (superTabs/shipping.ts) runs while the host does: no host, no Swarm agents here to read for.
+it('starts the leaderboard\'s reporter with the host and stops it with the service', async () => {
+  const shipping = { start: vi.fn(), stop: vi.fn() }
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, shipping: () => shipping })
+  expect(shipping.start).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(shipping.start).toHaveBeenCalledOnce()
+  service.port.disconnected()
+  expect(shipping.stop).toHaveBeenCalledOnce()
+})
 it('limits the owner proxy to Super Tab endpoints and preserves backend failures', async () => {
   const t = setup()
   for (const path of ['/api/auth/me', '/api/super-tabs/../auth/me', '/api/super-tabs%2F..', 'https://elsewhere.invalid', '/api/super-tabs#other']) {
