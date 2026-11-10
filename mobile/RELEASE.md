@@ -153,9 +153,11 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.12 (82)` | 2026-11-05 | TestFlight. Push notifications (APNs) and fewer repeated question notices. Signed without its entitlements, so it has no push and no setup hotspot: use 83. Built from `feat/mobile-ios-android` at `0c47f4f8` |
 | `1.0.12 (83)` | 2026-11-05 | TestFlight. The same code as 82, the first build signed with its entitlements: `aps-environment` (production) and the setup hotspot. 80 to 82 went up without them because the archive is unsigned and the export signs only what the app carries; `release-ios.sh` now signs them onto the archived app and checks the exported app before it uploads. Built from `feat/mobile-ios-android` at `0c47f4f8` |
 | `1.0.12 (84)` | 2026-11-06 | TestFlight, uploaded from another Mac with `--build-number=84` (#3303). Whether it carries its entitlements was not checked. Built from `main` at `b8b8c8ea` |
+| `1.0.12 (85)` | 2026-11-06 | TestFlight. The same code as `main` at `34a48cda`, for a teammate whose setup hotspot failed; its entitlements checked before upload. Built from `feat/mobile-ios-android` at `97143336` |
+| `1.0.12 (86)` | 2026-11-10 | TestFlight. Phone notices ring only when a person must act or someone writes to you (#3306, #3609); with Swarm on, Set up Intern 3 joins a Swarm, installs and signs in Claude Code and starts the Buddy, and iOS tries the setup hotspot for 20 s (#3149); a tap answers Codex's update prompt (#3608). Its entitlements checked before upload. Built from `feat/mobile-ios-android` at `09c0dd81` |
 
-`pubspec.yaml` is at `1.0.12+85` with #3303, the next build number. Build 84 (1.0.12) is the last TestFlight build and
-79 the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is at `1.0.12+87`, the next build number. Build 86 (1.0.12) is the last TestFlight build and
+the last Play build (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 to 1.0.10 are approved and 1.0.11 is submitted or approved, so new builds go up as 1.0.12 until it is submitted or approved too. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -393,3 +395,4 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `75` (1.0.12) | 2026-10-30 | Built, same code as iOS 1.0.12 (75); to be uploaded by hand |
 | `78` (1.0.12) | 2026-11-02 | Built, same code as iOS 1.0.12 (78); to be uploaded by hand |
 | `79` (1.0.12) | 2026-11-03 | Built, same code as iOS 1.0.12 (79), from `e8620dbe`; to be uploaded by hand |
+| `86` (1.0.12) | 2026-11-10 | Built, same code as iOS 1.0.12 (86), from `09c0dd81`; to be uploaded by hand |
