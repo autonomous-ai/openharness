@@ -346,11 +346,23 @@ class SwarmReader extends ChangeNotifier {
 
   /// The reader's notification setting for chat [id] (backend
   /// chatSettings.ts): the one being sent, else the one the server kept and
-  /// no read has carried yet, else the last read's, else Mentions only.
-  SwarmNotify notifyOf(String id) =>
-      _notifySending[id] ??
-      _notifyKept[id]?.$1 ??
-      SwarmNotify.parse(snapshot?.chatSettings[id]);
+  /// no read has carried yet, else the last read's, else Mentions only. A
+  /// project's channel muted before reads as Mentions only: Swarm v4 has no
+  /// way to unmute it, and the server pushes its tags (lead, 2026-11-10); what
+  /// the server keeps stays as it is.
+  SwarmNotify notifyOf(String id) {
+    final level =
+        _notifySending[id] ??
+        _notifyKept[id]?.$1 ??
+        SwarmNotify.parse(snapshot?.chatSettings[id]);
+    return level == SwarmNotify.muted && cannotMute(id)
+        ? SwarmNotify.mentions
+        : level;
+  }
+
+  /// Whether chat [id] can no longer be muted: a project's channel
+  /// ([notifyOf]).
+  bool cannotMute(String id) => snapshot?.isProjectLead(id) ?? false;
 
   /// Settings sent and not yet answered: the newest choice per chat, with
   /// its number.
