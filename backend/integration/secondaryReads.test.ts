@@ -165,16 +165,6 @@ describe('reads that must see the latest write', () => {
 })
 
 describe('reports', () => {
-  it('costs read their decisions on the secondary and who may read them on the primary', async () => {
-    const s = stores()
-    const { tab } = await fixture(s.store)
-    s.clear()
-    const summary = await s.store.costSummary(owner, tab, 7)
-    expect(summary).toMatchObject({ days: 7, truncated: false })
-    expect(models(s.secondary)).toEqual(['SuperTabRouteDecision'])
-    expect(s.primary.some(o => o.model === 'SuperTabRouteDecision')).toBe(false)
-  })
-
   it('the leaderboard reads its people\'s names on the secondary', async () => {
     const s = stores()
     const { tab } = await fixture(s.store)

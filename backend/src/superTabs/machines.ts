@@ -120,8 +120,8 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
    *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
   harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
-  /** Each running Swarm agent's token counts by model, as its session totals (costs/tokens.ts). An attempt's tokens are the
-   *  difference between its start and its end (routeDecisions.ts). Absent from hosts before it, whose attempts record none. */
+  /** Each running Swarm agent's token counts by model (costs/tokens.ts), which today's CLI sends on every report: taken and
+   *  ignored until a CLI without it ships, as refusing it would refuse every report. Never stored. */
   harnessTokens: z.record(z.string().max(160), tokensByModelSchema).refine(v => Object.keys(v).length <= MAX_HARNESSES).optional(),
   /** Whether each running Swarm session's folder has uncommitted changes (git status), for those its host could read.
    *  Only a session reported clean is ever stopped for being idle (tidy.ts). Absent from hosts before it. */
@@ -176,16 +176,15 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
   start.request.machineId === machineId && !start.harnessId && !start.error
 
 /**
- * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
- * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, and the contributed engines' quotas.
+ * What a report stores of [observation] on [pool]: progress of running sessions only (leases read it), the preparing starts
+ * [preparable] allows, the refused starts [refusable] allows, and the contributed engines' quotas.
  * A full report and a reading-only one (DB 2.5) store the same.
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
-  const { harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, ...reading } = observation
+  const { harnessProgress, harnessTokens: _ignored, preparingStartIds, refusedStarts, profiles, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
-  const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
   const preparing = preparingStartIds?.filter(opts.preparable)
   // None unless the caller can tell which starts this machine may name (refusableStart).
   const refused = refusedStarts?.filter(r => opts.refusable?.(r.startId) ?? false)
@@ -194,7 +193,7 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
     // Each engine's default account alone: a PM runs on no other (pmAccount.ts), whatever a CLI of the last 30 days reports.
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine) && p.id === defaultProfileId(pool.machineId, p.engine)) } : {}),
     ...(progress ? { harnessProgress: progress } : {}),
-    ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
+    ...(preparing ? { preparingStartIds: preparing } : {}),
     ...(refused?.length ? { refusedStarts: refused } : {}) }
 }
 

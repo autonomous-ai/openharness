@@ -5,7 +5,7 @@
  */
 import { activeWork, awaitingWorkers, isLeads, numberConversations, parkLaterConversations, workerIndex, type Conversation, type SuperTabState } from '../model.js'
 import { assignAgentDisplayNames } from '../agentNames.js'
-import { agentProjectId, placeRules, projectsOf } from '../projects.js'
+import { agentProjectId, projectsOf } from '../projects.js'
 import { DORMANT_AFTER_MS, type ProgressData } from '../parts/index.js'
 
 /** Report progress as a row from before parts keeps it, in tab revisions. */
@@ -26,7 +26,6 @@ export function normalize(original: SuperTabState, { now, lastActivity }: { now:
   const state = structuredClone(original)
   parkLaterConversations(state)
   numberConversations(state)
-  placeRules(state)
   assignAgentDisplayNames(state.agents)
   if (state.projects) for (const agent of state.agents) agent.projectId ??= agentProjectId(state, agent)
   // One index for every project (model.ts workerIndex): the loop sets only workDecision, which the index does not hold.

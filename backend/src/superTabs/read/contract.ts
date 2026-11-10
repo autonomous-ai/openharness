@@ -21,11 +21,11 @@ export interface DormantStub { key: string; version: number; changedAt: number; 
 export type PartChange<T> = LivePart<T> | Tombstone
 export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 
-/** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
+/** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects and
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
+  | 'environment' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
   | 'autoJoin'> & {
   /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
   projects?: Array<import('../projects.js').SwarmProject & {
