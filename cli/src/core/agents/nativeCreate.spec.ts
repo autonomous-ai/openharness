@@ -24,8 +24,8 @@ beforeEach(() => {
   writeFileSync(join(process.env.CODEX_HOME!, 'config.toml'), 'model_provider = "openai"\n')
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.resetModules(); spawn.mockReset()
-  // Six parallel runs at load 12-16 (2026-11-10): these fixtures sit ten folders deep (vitest.tmpdir.ts), so a Codex preparation
-  // here makes 44 fsyncs where ~/.codex makes 20, and took up to 6.4 s, past the product's 5 s; ~/.codex's depth took 2.4-3.1 s.
+  // These fixtures sit eleven folders deep (vitest.tmpdir.ts), so a Codex preparation here makes 48 fsyncs where ~/.codex makes 20.
+  // In six parallel runs at load 12-16 (2026-11-10), ten deep, its 44 took up to 6.4 s, past the product's 5 s; ~/.codex's took 2.4-3.1 s.
   // Mocked after the reset, so each test still gets its own copy of the module: vi.mock's would outlive it.
   vi.doMock('../../engines/kit/nativeHookFiles.js', async original => {
     const actual = await original<typeof import('../../engines/kit/nativeHookFiles.js')>()
