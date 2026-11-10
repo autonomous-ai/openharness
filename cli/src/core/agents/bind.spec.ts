@@ -991,6 +991,47 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     }
   })
 
+  it.each([new Error('reader unavailable'), 'reader unavailable'])('a stream that cannot attach once the state clears is logged, and the state still goes', async (error) => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let shown = screen('screen-no-gateway-attached')
+    const run = setup({ capturePane: vi.fn(async () => shown), attachSession: vi.fn(async () => { throw error }) })
+    const row = pane({ sessionId: 'agent:main:plain' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    shown = screen('screen-no-gateway-reconnected')
+    await run.binding.bindObservedAgent(tui())
+    expect(row).not.toHaveProperty('identityHold')
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] a1 transcript attachment is unavailable: reader unavailable'))
+  })
+
+  it('a state the registry no longer holds is not announced cleared again', async () => {
+    // The pass read its row before another pass cleared the same state.
+    const run = setup({ capturePane: vi.fn(async () => screen('screen-no-gateway-reconnected')) })
+    const row = pane({ sessionId: 'agent:main:plain' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue({ ...row, identityHold: 'OpenClaw Gateway is not running. Start it with openclaw gateway.' })
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.registry.setIdentityHold).toHaveBeenCalledWith('a1', undefined)
+    expect(run.deps.announceSession).not.toHaveBeenCalled()
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+  })
+
+  it('a pane not bound yet clears its state with no stream to attach, then binds by its footer', async () => {
+    let shown = screen('screen-no-gateway-attached')
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    const row = pane()
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
+    shown = screen('screen-no-gateway-reconnected')
+    await run.binding.bindObservedAgent(tui())
+    expect(row).not.toHaveProperty('identityHold')
+    expect(run.deps.attachSession).not.toHaveBeenCalled()
+    expect(vi.mocked(run.deps.registry.register).mock.calls[0][0]).toMatchObject({ sessionId: 'agent:main:plain', source: 'openclaw-footer' })
+  })
+
   it('an overlay that hides the footer keeps the no-Gateway state until a footer shows again', async () => {
     // Autocomplete draws its list under the composer, so the footer is not the last thing on screen for a pass.
     const noGateway = screen('screen-no-gateway-attached')

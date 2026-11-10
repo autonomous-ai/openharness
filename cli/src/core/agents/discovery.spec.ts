@@ -190,6 +190,18 @@ describe('discovery', () => {
       expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalled()
     })
 
+    it('never takes an `openclaw` process for OpenClaw while its screen cannot be read', async () => {
+      const capture = vi.fn(async () => { throw new Error('pane host gone') })
+      const run = setup({ terminals: { backendFor: vi.fn(() => ({ paneState, capture }) as unknown as TerminalBackend) } })
+      // Its pane's backend failed the read, or it shows in no pane at all.
+      for (const openclaw of [seen({ engine: 'openclaw', args: 'openclaw' }), seen({ engine: 'openclaw', args: 'openclaw', runtimes: [] })]) {
+        await run.handlers.onDiscovered(openclaw)
+      }
+      expect(capture).toHaveBeenCalledOnce()
+      expect(run.deps.registry.openProcessAgent).not.toHaveBeenCalled()
+      expect(run.deps.bindObservedAgent).not.toHaveBeenCalled()
+    })
+
     it('adopts the engine someone typed into a terminal, and announces it', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()

@@ -22,6 +22,11 @@ import { createLastTurnReader } from './lastTurn.js'
 import { createSessionNormalizers } from './normalizers.js'
 
 vi.mock('../../lib/deletedSessions.js', () => ({ isRecentlyDeleted: () => false }))
+// A test may run the reader on a Node with no `node:sqlite`; the stores are built with the real one first.
+vi.mock('../../lib/sqliteBuiltin.js', async (real) => {
+  const actual = await real<typeof import('../../lib/sqliteBuiltin.js')>()
+  return { ...actual, builtinSqlite: vi.fn(actual.builtinSqlite) }
+})
 
 const FIXTURES = join(import.meta.dirname, '../../engines/openclaw/__fixtures__')
 const fixture = (name: string): string => readFileSync(join(FIXTURES, `${name}.sql`), 'utf8')
@@ -35,6 +40,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.useRealTimers()
+  vi.mocked(builtinSqlite).mockReset()
   closeSqliteHandles()
   for (const db of open.splice(0)) db.close()
   rmSync(dir, { recursive: true, force: true })
@@ -77,7 +83,7 @@ function attachTo(db: string, row: RegisteredSession, emit: AttachDeps['emit']) 
     ingestConfig: vi.fn(async () => false), ingestPane: vi.fn(() => false), capturePane: vi.fn(async () => null),
   }
   const normalizers = createSessionNormalizers()
-  const opened = vi.fn(async (_key: string, _pane: { pid: number }) => db)
+  const opened = vi.fn(async (_key: string, _pane: { pid: number }): Promise<string | null> => db)
   const setIdentityHold = vi.fn((_id: string, reason?: string) => {
     if (row.identityHold === reason) return false
     if (reason) row.identityHold = reason
@@ -130,6 +136,11 @@ describe('an OpenClaw pane, through the core', () => {
     await run.attach.attachSession(row)
     expect(row.identityHold).toBe('This OpenClaw version is not supported yet.')
     expect(run.announceSession).toHaveBeenCalledWith(row)
+    // Another schema change that still lacks the column: the same state, not said again.
+    db.exec('CREATE TABLE unrelated (id INTEGER)')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(row.identityHold).toBe('This OpenClaw version is not supported yet.')
+    expect(run.announceSession).toHaveBeenCalledOnce()
     db.exec('ALTER TABLE session_nodes RENAME COLUMN label_renamed TO label')
     await vi.advanceTimersByTimeAsync(1_000)
     expect(row).not.toHaveProperty('identityHold')
@@ -157,6 +168,76 @@ describe('an OpenClaw pane, through the core', () => {
     expect(row.identityHold).toBe(other)
     expect(run.announceSession).toHaveBeenCalledTimes(1)
     run.normalizers.forget('agent:main:plain')
+  })
+
+  it('a Harness whose Node cannot read the store says so on the agent', async () => {
+    const { path } = store('plain')
+    vi.mocked(builtinSqlite).mockReturnValue(null)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const row = pane('agent:main:plain')
+    const run = attachTo(path, row, () => {})
+    await run.attach.attachSession(row)
+    expect(row.identityHold).toBe('This Harness needs Node 24 to read OpenClaw.')
+    expect(run.announceSession).toHaveBeenCalledWith(row)
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[openclaw\] \S+ This Harness needs Node 24 to read OpenClaw\.$/))
+    run.normalizers.forget('agent:main:plain')
+  })
+
+  it('a reader left on a key the agent moved off says nothing on the agent', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store('plain')
+    const row = pane('agent:main:plain')
+    const run = attachTo(path, row, () => {})
+    await run.attach.attachSession(row)
+    // `/new` moved the pane to another key; the old key's store then stops being readable.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    row.sessionId = 'agent:main:tui-next'
+    db.exec('ALTER TABLE session_nodes RENAME COLUMN status TO status_renamed')
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[openclaw\] \S+ This OpenClaw version is not supported yet\.$/))
+    expect(row).not.toHaveProperty('identityHold')
+    expect(run.announceSession).not.toHaveBeenCalled()
+    run.normalizers.forget('agent:main:plain')
+  })
+
+  it('a key that names no OpenClaw agent, on a pane with no process, is not read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const row = { ...pane('not-a-key'), processIdentity: undefined } as unknown as RegisteredSession
+    const run = attachTo(join(dir, 'unused.sqlite'), row, () => {})
+    run.opened.mockResolvedValueOnce(null)
+    expect(await run.attach.attachSession(row)).toBe(true)
+    expect(run.opened).toHaveBeenCalledWith('not-a-key', { pid: 0 })
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[openclaw\] \S+ not an OpenClaw session key · not read$/))
+    expect(run.normalizers.openclawReaders.has('not-a-key')).toBe(false)
+  })
+
+  it('an attach whose pane changed while its store was being found reads nothing', async () => {
+    const { path } = store('plain')
+    const row = pane('agent:main:plain')
+    const run = attachTo(path, row, () => {})
+    let found!: (db: string) => void
+    run.opened.mockReturnValueOnce(new Promise((resolve) => { found = resolve }))
+    const attached = run.attach.attachSession(row)
+    await vi.waitFor(() => expect(run.opened).toHaveBeenCalled())
+    row.cwd = '/work/elsewhere'
+    found(path)
+    expect(await attached).toBe(false)
+    expect(run.normalizers.openclawReaders.has('agent:main:plain')).toBe(false)
+  })
+
+  it('stopping the pollers stops an openclaw reader: a run written after is not read', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store('tool')
+    const writeRun = holdBack(db, 'agent:main:tool')
+    const events: LiveEvent[] = []
+    const row = pane('agent:main:tool')
+    const run = attachTo(path, row, (_sessionId, batch) => { events.push(...batch) })
+    await run.attach.attachSession(row)
+    run.normalizers.stopPollers()
+    writeRun()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(events).toEqual([])
+    run.normalizers.forget('agent:main:tool')
   })
 
   it('a run that timed out with no row of its own is told to the person, and its turn ends', async () => {
@@ -223,5 +304,18 @@ describe('an OpenClaw pane, through the core', () => {
     expect(opened).toHaveBeenCalledWith('agent:main:reset', { pid: 7714 })
     const lastTurn = createLastTurnReader({ bySession: () => row, readerFor: () => undefined, dbs, hermesDb: async () => '/db/hermes.db' })
     expect(await lastTurn('agent:main:reset')).toEqual({ userMessage: 'Reply with exactly: after', assistantText: 'after' })
+  })
+
+  it('history and last turn of a key with no store, on a pane with no process, are empty', async () => {
+    const row = { ...pane('not-a-key'), processIdentity: undefined } as unknown as RegisteredSession
+    const opened = vi.fn(async () => null)
+    const dbs = { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }
+    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: () => [], pages: new TranscriptPager(),
+      readerFor: () => undefined, dbs, hermesDb: async () => '/db/hermes.db' })
+    // Nothing but the end of the history.
+    expect((await history.sessionGet({ sessionId: 'not-a-key' })).events).toEqual([{ type: 'done', payload: { result: 'success' } }])
+    const lastTurn = createLastTurnReader({ bySession: () => row, readerFor: () => undefined, dbs, hermesDb: async () => '/db/hermes.db' })
+    expect(await lastTurn('not-a-key')).toBeNull()
+    expect(opened).toHaveBeenCalledWith('not-a-key', { pid: 0 })
   })
 })

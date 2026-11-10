@@ -350,7 +350,7 @@ export function createBinding({
       followRegistered(bound.entry, bound)
       console.log(`[discovery] ${moved ? `${sid(agent.agentId)} openclaw session moved ${sid(agent.sessionId)} → ` : 'bound openclaw session '}${sid(key)} via ${observed.primaryRuntimeKey}`)
       // Where its store is once this TUI is gone (a `--profile` TUI's is not the default): read while it runs.
-      const stateDir = await openclawStateDir(observed.processIdentity.pid).catch(() => null)
+      const stateDir = await openclawStateDir(observed.processIdentity.pid)
       if (stateDir) registry.setOpenclawStateDir(bound.entry.agentId, stateDir)
       return
     }
