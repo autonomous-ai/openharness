@@ -28,7 +28,7 @@ describe('the cloud agents\' doors', () => {
 })
 
 describe('the Super Tab service\'s door', () => {
-  it('answers a Buddy session\'s turn through the real process path, to the Super Tab service alone', async () => {
+  it('answers an agent\'s turn through the real process path, to the Super Tab service alone', async () => {
     const activity = vi.fn(async () => ({ harness: 'working' as const }))
     const core = fakeCore({ agents: { activity } } as never)
     const both = new Set(['superTabs', 'cloud'])

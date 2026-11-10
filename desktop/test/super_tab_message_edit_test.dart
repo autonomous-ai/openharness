@@ -20,7 +20,7 @@ import 'support/super_tab_fixture.dart';
 /// deleted." and one without replies goes.
 void main() {
   setUpAll(() async {
-    if (Platform.environment['BUDDY_DELETE_SHOTS'] == null) return;
+    if (Platform.environment['MESSAGE_DELETE_SHOTS'] == null) return;
     final sf = ByteData.sublistView(
       await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
     );
@@ -150,21 +150,14 @@ void main() {
     );
   });
 
-  for (final source in [
-    {'kind': 'task-line', 'personId': 'owner'},
-    {'kind': 'system'},
-  ]) {
-    testWidgets('a source that does not authorize owner deletion: $source', (
-      tester,
-    ) async {
-      final server = ConversationServer.chat()..append('Please fix the menu');
-      server.messages.single['source'] = source;
-      await show(tester, server);
-      await openMore(tester, 'message-1');
-      expect(find.text('Delete message'), findsNothing);
-      expect(find.text('Edit message'), findsNothing);
-    });
-  }
+  testWidgets('a system message offers neither', (tester) async {
+    final server = ConversationServer.chat()..append('Please fix the menu');
+    server.messages.single['source'] = {'kind': 'system'};
+    await show(tester, server);
+    await openMore(tester, 'message-1');
+    expect(find.text('Delete message'), findsNothing);
+    expect(find.text('Edit message'), findsNothing);
+  });
 
   testWidgets('an agent’s and another person’s message offer neither', (
     tester,

@@ -10,7 +10,7 @@ import 'package:harness/super_tabs/view.dart';
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
-/// The sidebar's rows: a Buddy chat click highlights only that row; a
+/// The sidebar's rows: an agent's chat click highlights only that row; a
 /// project's row opens its chat, every click, and lists no tasks (task
 /// #2569: they are in the project's Tasks view); in Manage, a machine click
 /// expands it, and its details are in the right-click menu.

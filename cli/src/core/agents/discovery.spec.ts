@@ -151,7 +151,7 @@ describe('discovery', () => {
       expect(run.deps.registry.setBypassPermission).not.toHaveBeenCalled()
     })
 
-    it('reads a Buddy launched in full mode back as full, never as an older Buddy\'s mode (task #2832)', () => {
+    it('reads an engine launched in full mode back as full (task #2832)', () => {
       expect(permissionModeFromArgv('codex', 'codex --dangerously-bypass-approvals-and-sandbox -c tui.fullscreen_transcript=false')).toBe('full')
       expect(permissionModeFromArgv('claude', 'claude --dangerously-skip-permissions')).toBe('full')
       expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')

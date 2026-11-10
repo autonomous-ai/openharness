@@ -48,8 +48,11 @@ import 'support/swarm_v4_data.dart';
 import 'support/super_tab_fixture.dart';
 
 /// The Swarm elements gallery (desktop-design-system.md, Swarm elements): every
-/// element drawn in light and dark against its checked-in image. A new or
-/// changed element updates the doc and this gallery in the same pull request.
+/// element drawn in light and dark, each section against its own checked-in
+/// image, `test/goldens/swarm-elements/<section>-<light|dark>.png`, so a pull
+/// request that changes one element changes only its section's two images. A
+/// new or changed element updates the doc and this gallery in the same pull
+/// request.
 ///
 /// Update the images with
 /// `flutter test --no-pub --update-goldens test/swarm_elements_gallery_test.dart`
@@ -79,18 +82,50 @@ void main() {
   tearDownAll(() => goldenFileComparator = previous);
 
   for (final brightness in Brightness.values) {
-    testWidgets('every Swarm element matches its image in ${brightness.name}', (
-      tester,
-    ) async {
-      final bars = await _show(tester, brightness);
-      (goldenFileComparator as _NearlyComparator).parts = _parts(tester);
-      await expectLater(
-        find.byKey(_Gallery.boundary),
-        matchesGoldenFile('goldens/swarm-elements-${brightness.name}.png'),
-      );
-      await _close(tester, bars);
-    });
+    testWidgets(
+      'every Swarm element matches its section\'s image in ${brightness.name}',
+      (tester) async {
+        final bars = await _show(tester, brightness);
+        final sections = _sections();
+        expect(sections, isNotEmpty);
+        final parts = _parts(tester);
+        // Every section is compared, so one run names every image that moved.
+        final problems = <String>[];
+        for (final id in sections) {
+          final section = find.byKey(_Gallery.section(id));
+          (goldenFileComparator as _NearlyComparator).parts = _within(
+            parts,
+            tester.getRect(section),
+          );
+          try {
+            await expectLater(
+              section,
+              matchesGoldenFile(_image(id, brightness)),
+            );
+          } on TestFailure catch (e) {
+            problems.add(e.message ?? id);
+          }
+        }
+        await _close(tester, bars);
+        expect(problems, isEmpty);
+      },
+    );
   }
+
+  // A renamed or removed section would leave its old images behind, compared by nothing.
+  testWidgets('the images are exactly the sections\' images', (tester) async {
+    final bars = await _show(tester, Brightness.light);
+    final images = {
+      for (final f in Directory('test/goldens/swarm-elements').listSync())
+        if (f.path.endsWith('.png'))
+          'goldens/swarm-elements/${f.uri.pathSegments.last}',
+    };
+    expect(images, {
+      for (final id in _sections())
+        for (final brightness in Brightness.values) _image(id, brightness),
+    });
+    await _close(tester, bars);
+  });
 
   // Task #4645 (anh Dee 22:25): every row's right-side detail ends at one edge, in every section of the left pane, and
   // the + on a heading ends there too.
@@ -125,29 +160,40 @@ void main() {
 
   // Review of task #4461: a whole-image tolerance let a changed element pass. Ellis has Kai's colour with another
   // tilt: only its eyes and smile move.
-  testWidgets('one changed face fails the gallery', (tester) async {
+  testWidgets('one changed face fails its section', (tester) async {
     final bars = await _show(
       tester,
       Brightness.light,
       faces: ['Ellis', ..._faces.skip(1)],
     );
-    final boundary = tester.renderObject<RenderRepaintBoundary>(
-      find.byKey(_Gallery.boundary),
-    );
+    final section = find.byKey(_Gallery.section('faces'));
+    final boundary = tester.renderObject<RenderRepaintBoundary>(section);
     final problem = await tester.runAsync(() async {
       final image = await boundary.toImage();
       final png = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       return galleryDifference(
         png!.buffer.asUint8List(),
-        File('test/goldens/swarm-elements-light.png').readAsBytesSync(),
-        _parts(tester),
+        File('test/${_image('faces', Brightness.light)}').readAsBytesSync(),
+        _within(_parts(tester), tester.getRect(section)),
       );
     });
     expect(problem, contains('agent face Ellis'));
     await _close(tester, bars);
   });
 }
+
+/// The gallery's sections on screen, in order.
+List<String> _sections() => [
+  for (final e in find.byType(RepaintBoundary).evaluate())
+    if (e.widget.key case ValueKey<String>(:final value)
+        when value.startsWith(_Gallery.sectionPrefix))
+      value.substring(_Gallery.sectionPrefix.length),
+];
+
+/// A section's image in [brightness], relative to the test folder.
+String _image(String id, Brightness brightness) =>
+    'goldens/swarm-elements/$id-${brightness.name}.png';
 
 Future<List<SuperTabController>> _show(
   WidgetTester tester,
@@ -185,7 +231,9 @@ Future<List<SuperTabController>> _show(
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 4353);
+  // Taller than the gallery needs: each section is its own image, so the page's height is in none of them, and a
+  // section that grows needs no new height.
+  tester.view.physicalSize = const Size(760, 5000);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -195,7 +243,6 @@ Future<List<SuperTabController>> _show(
       home: MediaQuery(
         data: const MediaQueryData(disableAnimations: true),
         child: _Gallery(
-          brightness,
           faces: faces,
           // The task board reads its project from a Swarm.
           swarm: c,
@@ -235,28 +282,42 @@ const _art = .01;
 const _glyph = .25;
 
 /// Everything else but words (fills, pills, borders, where each element sits)
-/// is drawn alike on every host: at most 0.01% of the image (38 pixels) may
-/// differ, under the smallest Lead ring's 80, so a lost element fails too. Words
-/// are left out: macOS and Linux smooth their edges too differently to compare
-/// by pixel (14,638 pixels on one image), and their copy is tested where they
-/// are written.
-const _rest = .0001;
+/// is drawn alike on every host: at most 38 pixels of a section's image may
+/// differ, under the smallest Lead ring's 80, so a lost element fails too.
+/// Words are left out: macOS and Linux smooth their edges too differently to
+/// compare by pixel (14,638 pixels on one image), and their copy is tested
+/// where they are written.
+const _rest = 38;
+
+typedef _Parts = ({List<GalleryRegion> regions, List<Rect> words});
 
 /// Every element the gallery draws, each held to its own area, and its words,
 /// held to none.
-({List<GalleryRegion> regions, List<Rect> words}) _parts(WidgetTester tester) =>
-    (
-      regions: _regions(tester),
-      // A glyph's smoothed edge reaches a little past its box.
-      // Selectable text (the Instructions pane's files) draws its words through an editable, not a RichText.
-      words: [
-        for (final text in [
-          ...find.byType(RichText).evaluate(),
-          ...find.byType(EditableText).evaluate(),
-        ])
-          tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
-      ],
-    );
+_Parts _parts(WidgetTester tester) => (
+  regions: _regions(tester),
+  // A glyph's smoothed edge reaches a little past its box.
+  // Selectable text (the Instructions pane's files) draws its words through an editable, not a RichText.
+  words: [
+    for (final text in [
+      ...find.byType(RichText).evaluate(),
+      ...find.byType(EditableText).evaluate(),
+    ])
+      tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
+  ],
+);
+
+/// The [parts] inside [section], in its image's coordinates.
+_Parts _within(_Parts parts, Rect section) => (
+  regions: [
+    for (final r in parts.regions)
+      if (section.overlaps(r.rect))
+        (name: r.name, rect: r.rect.shift(-section.topLeft), limit: r.limit),
+  ],
+  words: [
+    for (final w in parts.words)
+      if (section.overlaps(w)) w.shift(-section.topLeft),
+  ],
+);
 
 List<GalleryRegion> _regions(WidgetTester tester) {
   final faces = find.byType(SuperTabAvatarFace);
@@ -335,9 +396,8 @@ Future<String?> galleryDifference(
     Rect.fromLTWH(0, 0, a.width.toDouble(), a.height.toDouble()),
     skip: parts.words,
   );
-  final limit = a.width * a.height * _rest;
-  return n > limit
-      ? 'the image outside its words: $n pixels differ (limit ${limit.floor()})'
+  return n > _rest
+      ? 'the image outside its words: $n pixels differ (limit $_rest)'
       : null;
 }
 
@@ -388,14 +448,12 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(
-    this.brightness, {
+  const _Gallery({
     required this.faces,
     required this.swarm,
     required this.instructions,
     required this.browserApp,
   });
-  final Brightness brightness;
 
   /// Where Browser settings reads Faye's.
   final AppNotifier browserApp;
@@ -408,7 +466,10 @@ class _Gallery extends StatelessWidget {
 
   /// How the Instructions pane asks Faye's computer.
   final SwarmInstructionsLink instructions;
-  static const boundary = ValueKey('swarm-elements-gallery');
+
+  /// Each section's boundary is keyed this prefix and its id, the name of its images.
+  static const sectionPrefix = 'swarm-elements/';
+  static ValueKey<String> section(String id) => ValueKey('$sectionPrefix$id');
 
   @override
   Widget build(BuildContext context) {
@@ -418,33 +479,46 @@ class _Gallery extends StatelessWidget {
       child: Text(text, style: Theme.of(context).textTheme.labelLarge),
     );
     Widget gap() => const SizedBox(width: 16);
-    return RepaintBoundary(
-      key: boundary,
-      child: Material(
-        color: Theme.of(context).colorScheme.surface,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Swarm elements / ${brightness.name}',
-                style: Theme.of(context).textTheme.titleMedium,
+    // Each section is its own image, with its own ground, so a pull request that changes one element changes only
+    // its section's images.
+    Widget section(String id, String text, List<Widget> children) =>
+        RepaintBoundary(
+          key: _Gallery.section(id),
+          child: ColoredBox(
+            color: Theme.of(context).colorScheme.surface,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [title(text), ...children],
               ),
-              title('Agent face: eight colours'),
-              Row(
-                children: [
-                  for (final name in faces) ...[
-                    SuperTabAvatar.agent(
-                      _agent(name),
-                      size: 40,
-                      engineBadge: false,
-                    ),
-                    gap(),
-                  ],
+            ),
+          ),
+        );
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          section('faces', 'Agent face: eight colours', [
+            Row(
+              children: [
+                for (final name in faces) ...[
+                  SuperTabAvatar.agent(
+                    _agent(name),
+                    size: 40,
+                    engineBadge: false,
+                  ),
+                  gap(),
                 ],
-              ),
-              title('Agent face, Lead ring and person at 20, 24, 30'),
+              ],
+            ),
+          ]),
+          section(
+            'avatar-sizes',
+            'Agent face, Lead ring and person at 20, 24, 30',
+            [
               Row(
                 children: [
                   for (final size in [20.0, 24.0, 30.0]) ...[
@@ -467,130 +541,134 @@ class _Gallery extends StatelessWidget {
                   ],
                 ],
               ),
-              title('Left pane rows'),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    key: _Gallery.leftPane,
-                    width: 280,
-                    child: Column(
-                      children: [
-                        // The v4 left pane (anh Dee 2026-11-08): your team by face and name, then projects.
-                        SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
-                        SuperTabQuietHeading(
-                          'Your Team',
-                          collapsed: false,
-                          onTap: () {},
-                          onAdd: () {},
-                          addTooltip: 'New agent',
-                        ),
-                        // A New agent going on after its form closed: first, greyed, until it runs; one that failed opens
-                        // its form again.
-                        const SwarmStartRow(name: 'Faye', project: false),
-                        SwarmStartRow(
-                          name: 'Ivy',
-                          project: false,
-                          failed: true,
-                          onOpen: () {},
-                        ),
-                        for (final (name, lead, unread, selected, state) in [
-                          ('River', true, false, false, null),
-                          ('Quinn', false, false, true, 'on #12'),
-                          ('Kai', false, true, false, 'free'),
-                          ('Wren', false, false, false, 'offline'),
-                          ('Moss', false, false, false, 'starting'),
-                        ])
-                          SuperTabQuietRow(
-                            leading: SuperTabAvatar.agent(
-                              _agent(
-                                name,
-                                kind: lead ? 'pm' : null,
-                                offline: state == 'offline',
-                              ),
-                              size: SuperTabQuietRow.faceSize,
-                              engineBadge: false,
-                              lead: lead,
+            ],
+          ),
+          section('left-pane', 'Left pane rows', [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  key: _Gallery.leftPane,
+                  width: 280,
+                  child: Column(
+                    children: [
+                      // The v4 left pane (anh Dee 2026-11-08): your team by face and name, then projects.
+                      SuperTabQuietHeading.org('autonomous.ai', onTap: () {}),
+                      SuperTabQuietHeading(
+                        'Your Team',
+                        collapsed: false,
+                        onTap: () {},
+                        onAdd: () {},
+                        addTooltip: 'New agent',
+                      ),
+                      // A New agent going on after its form closed: first, greyed, until it runs; one that failed opens
+                      // its form again.
+                      const SwarmStartRow(name: 'Faye', project: false),
+                      SwarmStartRow(
+                        name: 'Ivy',
+                        project: false,
+                        failed: true,
+                        onOpen: () {},
+                      ),
+                      for (final (name, lead, unread, selected, state) in [
+                        ('River', true, false, false, null),
+                        ('Quinn', false, false, true, 'on #12'),
+                        ('Kai', false, true, false, 'free'),
+                        ('Wren', false, false, false, 'offline'),
+                        ('Moss', false, false, false, 'starting'),
+                      ])
+                        SuperTabQuietRow(
+                          leading: SuperTabAvatar.agent(
+                            _agent(
+                              name,
+                              kind: lead ? 'pm' : null,
+                              offline: state == 'offline',
                             ),
-                            name: name,
-                            detail: state,
-                            selected: selected,
-                            unread: unread,
-                            onTap: () {},
-                          ),
-                        // Your Personal Swarm only: a pane you run that is not in the Swarm yet, with its computer.
-                        SuperTabQuietRow(
-                          leading: SuperTabAvatar(
-                            identity: 'agent:${swarmAgentId('m', 'docs')}',
-                            name: 'Docs bot',
                             size: SuperTabQuietRow.faceSize,
-                            face: true,
+                            engineBadge: false,
+                            lead: lead,
                           ),
+                          name: name,
+                          detail: state,
+                          selected: selected,
+                          unread: unread,
+                          onTap: () {},
+                        ),
+                      // Your Personal Swarm only: a pane you run that is not in the Swarm yet, with its computer.
+                      SuperTabQuietRow(
+                        leading: SuperTabAvatar(
+                          identity: 'agent:${swarmAgentId('m', 'docs')}',
                           name: 'Docs bot',
-                          detail: 'Mac Studio',
-                          onTap: () {},
+                          size: SuperTabQuietRow.faceSize,
+                          face: true,
                         ),
-                        // While a click joins it: it waits.
-                        SuperTabQuietRow(
-                          leading: SuperTabAvatar(
-                            identity: 'agent:${swarmAgentId('m', 'billing')}',
-                            name: 'Billing fix',
-                            size: SuperTabQuietRow.faceSize,
-                            face: true,
-                          ),
+                        name: 'Docs bot',
+                        detail: 'Mac Studio',
+                        onTap: () {},
+                      ),
+                      // While a click joins it: it waits.
+                      SuperTabQuietRow(
+                        leading: SuperTabAvatar(
+                          identity: 'agent:${swarmAgentId('m', 'billing')}',
                           name: 'Billing fix',
-                          detail: 'joining',
-                          onTap: null,
+                          size: SuperTabQuietRow.faceSize,
+                          face: true,
                         ),
-                        // Past the first eight: the rest, a click away.
-                        SuperTabFoldRow(hidden: 32, onTap: () {}),
-                        SuperTabQuietHeading(
-                          'Projects',
-                          collapsed: false,
-                          onTap: () {},
-                          onAdd: () {},
-                          addTooltip: 'New project',
+                        name: 'Billing fix',
+                        detail: 'joining',
+                        onTap: null,
+                      ),
+                      // Past the first eight: the rest, a click away.
+                      SuperTabFoldRow(hidden: 32, onTap: () {}),
+                      SuperTabQuietHeading(
+                        'Projects',
+                        collapsed: false,
+                        onTap: () {},
+                        onAdd: () {},
+                        addTooltip: 'New project',
+                      ),
+                      // A New project going on after its form closed, in place of its own row.
+                      const SwarmStartRow(name: 'docs-home', project: true),
+                      // Open by itself: a computer is off.
+                      SuperTabQuietHeading(
+                        'Your Machines',
+                        collapsed: false,
+                        onTap: () {},
+                      ),
+                      SuperTabQuietRow(
+                        leading: Icon(
+                          AppIcons.monitorOff,
+                          size: AppIcons.inlineSize,
+                          color: grid.SidebarInk.inkMuted,
                         ),
-                        // A New project going on after its form closed, in place of its own row.
-                        const SwarmStartRow(name: 'docs-home', project: true),
-                        // Open by itself: a computer is off.
-                        SuperTabQuietHeading(
-                          'Your Machines',
-                          collapsed: false,
-                          onTap: () {},
+                        name: 'Old Rig',
+                        detail: 'offline',
+                        onTap: () {},
+                      ),
+                      SuperTabQuietHeading(
+                        'Top Teams',
+                        collapsed: false,
+                        onTap: () {},
+                      ),
+                      SuperTabQuietRow(
+                        leading: SuperTabAvatar.person(
+                          _person,
+                          size: SuperTabQuietRow.faceSize,
                         ),
-                        SuperTabQuietRow(
-                          leading: Icon(
-                            AppIcons.monitorOff,
-                            size: AppIcons.inlineSize,
-                            color: grid.SidebarInk.inkMuted,
-                          ),
-                          name: 'Old Rig',
-                          detail: 'offline',
-                          onTap: () {},
-                        ),
-                        SuperTabQuietHeading(
-                          'Top Teams',
-                          collapsed: false,
-                          onTap: () {},
-                        ),
-                        SuperTabQuietRow(
-                          leading: SuperTabAvatar.person(
-                            _person,
-                            size: SuperTabQuietRow.faceSize,
-                          ),
-                          name: 'dee',
-                          detail: '120',
-                          onTap: () {},
-                        ),
-                      ],
-                    ),
+                        name: 'dee',
+                        detail: '120',
+                        onTap: () {},
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              title(
-                'Tasks: a board of the project\'s GitHub issues, read with gh; a card opens one',
-              ),
+                ),
+              ],
+            ),
+          ]),
+          section(
+            'tasks',
+            'Tasks: a board of the project\'s GitHub issues, read with gh; a card opens one',
+            [
               SizedBox(
                 width: 760,
                 height: 330,
@@ -604,10 +682,13 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              // Its pull requests, what ⑂ opens (anh Dee 2026-11-10): three columns by who acts next, as lampOS's train bot sorts them.
-              title(
-                'Pull requests: To read, To fix, Merging; a card opens its chat',
-              ),
+            ],
+          ),
+          // Its pull requests, what ⑂ opens (anh Dee 2026-11-10): three columns by who acts next, as lampOS's train bot sorts them.
+          section(
+            'pull-requests',
+            'Pull requests: To read, To fix, Merging; a card opens its chat',
+            [
               SizedBox(
                 width: 760,
                 height: 250,
@@ -622,61 +703,67 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title('Chat: bubbles, a time after a pause, cards'),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 400,
-                    child: Column(
-                      children: [
-                        _message(
-                          'River',
-                          'New Project is in the sidebar now.',
-                          agent: _agent('River'),
-                          joinsBelow: true,
-                        ),
-                        _message(
-                          'River',
-                          'Press it and name the project.',
-                          agent: _agent('River'),
-                          id: 'm-River-2',
-                          grouped: true,
-                        ),
-                        SwarmChatTime(DateTime.utc(2026, 11, 7, 9, 12)),
-                        _message('dee', 'Found it, thanks!', person: _person),
-                        // A post to a teammate reads "Quinn to Kai", and says when the one asked is off.
-                        _message(
-                          'Quinn',
-                          '@Kai can you read #12?',
-                          agent: _agent('Quinn'),
-                          id: 'm-Quinn-to',
-                          to: ['Kai'],
-                          note: 'Kai is offline',
-                        ),
-                      ],
-                    ),
+            ],
+          ),
+          section('chat', 'Chat: bubbles, a time after a pause, cards', [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 400,
+                  child: Column(
+                    children: [
+                      _message(
+                        'River',
+                        'New Project is in the sidebar now.',
+                        agent: _agent('River'),
+                        joinsBelow: true,
+                      ),
+                      _message(
+                        'River',
+                        'Press it and name the project.',
+                        agent: _agent('River'),
+                        id: 'm-River-2',
+                        grouped: true,
+                      ),
+                      SwarmChatTime(DateTime.utc(2026, 11, 7, 9, 12)),
+                      _message('dee', 'Found it, thanks!', person: _person),
+                      // A post to a teammate reads "Quinn to Kai", and says when the one asked is off.
+                      _message(
+                        'Quinn',
+                        '@Kai can you read #12?',
+                        agent: _agent('Quinn'),
+                        id: 'm-Quinn-to',
+                        to: ['Kai'],
+                        note: 'Kai is offline',
+                      ),
+                    ],
                   ),
-                  gap(),
-                  SizedBox(
-                    width: 300,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // What GitHub said to your agent (github_row.dart).
-                        const SwarmChatCard(
-                          icon: AppIcons.gitPullRequest,
-                          label: 'PR #4 · deehw',
-                          title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
-                          action: 'Read',
-                          details: SizedBox.shrink(),
-                        ),
-                      ],
-                    ),
+                ),
+                gap(),
+                SizedBox(
+                  width: 300,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // What GitHub said to your agent (github_row.dart).
+                      const SwarmChatCard(
+                        icon: AppIcons.gitPullRequest,
+                        label: 'PR #4 · deehw',
+                        title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
+                        action: 'Read',
+                        details: SizedBox.shrink(),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              title('Chat composer: the pill empty and typed, a thread box'),
+                ),
+              ],
+            ),
+          ]),
+          section(
+            'composer',
+            'Chat composer: the pill empty and typed, a thread box',
+            [
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -690,9 +777,17 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
-              title('Back to chat: where a pane took the chat\'s place'),
-              SizedBox(width: 280, child: SwarmBackToChat(onBack: () {})),
-              title('Info: what the app knows of an agent, beside its chat'),
+            ],
+          ),
+          section(
+            'back-to-chat',
+            'Back to chat: where a pane took the chat\'s place',
+            [SizedBox(width: 280, child: SwarmBackToChat(onBack: () {}))],
+          ),
+          section(
+            'info',
+            'Info: what the app knows of an agent, beside its chat',
+            [
               SizedBox(
                 width: 380,
                 height: 300,
@@ -704,9 +799,12 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title(
-                'Browser in New agent: off, on, this computer to set up, another computer to set up',
-              ),
+            ],
+          ),
+          section(
+            'browser-pill',
+            'Browser in New agent: off, on, this computer to set up, another computer to set up',
+            [
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -723,12 +821,18 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
-              title('Set up Browser'),
-              const SizedBox(
-                width: 500,
-                child: BrowserSetupPrompt(ownMachine: false),
-              ),
-              title('Browser settings: a proxy with a saved password'),
+            ],
+          ),
+          section('browser-setup', 'Set up Browser', [
+            const SizedBox(
+              width: 500,
+              child: BrowserSetupPrompt(ownMachine: false),
+            ),
+          ]),
+          section(
+            'browser-settings',
+            'Browser settings: a proxy with a saved password',
+            [
               SizedBox(
                 width: 420,
                 height: 420,
@@ -739,9 +843,12 @@ class _Gallery extends StatelessWidget {
                   onBack: () {},
                 ),
               ),
-              title(
-                'Browser in an agent\'s bar, closed and open; its panel setting up, and failed',
-              ),
+            ],
+          ),
+          section(
+            'browser-bar',
+            'Browser in an agent\'s bar, closed and open; its panel setting up, and failed',
+            [
               Row(
                 children: [
                   SizedBox(child: BrowserButton(open: false, onPressed: () {})),
@@ -769,29 +876,33 @@ class _Gallery extends StatelessWidget {
                   ],
                 ],
               ),
-              // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
-              // is not there.
-              title('Empty: a row'),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 280,
-                    child: SuperTabQuietRow(
-                      leading: SuperTabAvatar.agent(
-                        _agent('Ivy'),
-                        size: SuperTabQuietRow.faceSize,
-                        engineBadge: false,
-                      ),
-                      name: 'Ivy',
-                      onTap: () {},
+            ],
+          ),
+          // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
+          // is not there.
+          section('empty-row', 'Empty: a row', [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 280,
+                  child: SuperTabQuietRow(
+                    leading: SuperTabAvatar.agent(
+                      _agent('Ivy'),
+                      size: SuperTabQuietRow.faceSize,
+                      engineBadge: false,
                     ),
+                    name: 'Ivy',
+                    onTap: () {},
                   ),
-                ],
-              ),
-              title(
-                'Instructions: the agent\'s own file, then its folder\'s files, read only and folded',
-              ),
+                ),
+              ],
+            ),
+          ]),
+          section(
+            'instructions',
+            'Instructions: the agent\'s own file, then its folder\'s files, read only and folded',
+            [
               SizedBox(
                 width: 380,
                 height: 500,
@@ -802,15 +913,21 @@ class _Gallery extends StatelessWidget {
                   link: instructions,
                 ),
               ),
-              // The one empty pane that says why (anh Dee 2026-11-09): a blank channel read as broken.
-              title('Empty: a project\'s channel'),
-              const SizedBox(
-                width: 400,
-                height: 60,
-                child: SuperTabEmptyWords(superTabEmptyChannel),
-              ),
-              // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
-              title('GitHub card: what GitHub said to your agent'),
+            ],
+          ),
+          // The one empty pane that says why (anh Dee 2026-11-09): a blank channel read as broken.
+          section('empty-channel', 'Empty: a project\'s channel', [
+            const SizedBox(
+              width: 400,
+              height: 60,
+              child: SuperTabEmptyWords(superTabEmptyChannel),
+            ),
+          ]),
+          // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
+          section(
+            'github-card',
+            'GitHub card: what GitHub said to your agent',
+            [
               SizedBox(
                 width: 560,
                 child: _githubCard(
@@ -820,7 +937,7 @@ class _Gallery extends StatelessWidget {
               ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }

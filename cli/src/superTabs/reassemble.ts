@@ -24,8 +24,7 @@ function progressOf(stored: Json, projectId: unknown, leadConversationId: unknow
     .map(g => typeof g.lastMessageSequence === 'number' ? g.lastMessageSequence : 0)
   return { since: stored.since, dirtyRevision: Math.max(0, ...reported),
     summarizedRevision: highest(stored.summarizedFloor, stored.summarized), requestedRevision: highest(stored.requestedFloor, stored.requested),
-    ...(typeof stored.requestedAt === 'number' ? { requestedAt: stored.requestedAt } : {}),
-    ...(typeof stored.requestMessageId === 'string' ? { requestMessageId: stored.requestMessageId } : {}) }
+    ...(typeof stored.requestedAt === 'number' ? { requestedAt: stored.requestedAt } : {}) }
 }
 
 /** `visibleState`'s per-agent rules: down since the computed time or not down; a limit while it lasts (a part never holds

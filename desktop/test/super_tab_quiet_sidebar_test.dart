@@ -10,7 +10,7 @@ import 'swarm_state_test.dart' show createApp;
 
 /// The design's sidebar (docs/plans/2026-11-02-quiet-swarm-design.md, screen
 /// 1), as task #2996 changed it: the Swarm, Decisions, Mentions and Threads,
-/// Projects with its + and Buddy first under it, and Manage at the foot.
+/// Projects with its + under it, and Manage at the foot.
 void main() {
   Future<SuperTabController> show(
     WidgetTester tester, {

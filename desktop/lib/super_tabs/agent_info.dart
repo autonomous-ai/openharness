@@ -244,10 +244,8 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo>
     final snapshot = widget.controller.snapshot;
     // The model, the folder and what it is doing, in the words the rest of the app uses.
     final known = SuperTabAgentInfo(widget.controller, app, agent);
-    // An agent of a Mac's Team account runs on that Mac.
-    final place = snapshot?.placeOf(agent.machineId) ?? agent.machineId;
     final machine = app?.machines
-        .where((m) => m.machineId == place)
+        .where((m) => m.machineId == agent.machineId)
         .firstOrNull;
     final owner = snapshot?.people
         .where((p) => p.id == agent.contributorId)

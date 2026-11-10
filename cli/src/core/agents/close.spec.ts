@@ -51,12 +51,11 @@ describe('closing agents no window shows', () => {
     expect(close.changed).toBe(deps.announceSession)
   })
 
-  // Diego's Buddy, 10-30: the close service refuses a Buddy only if the guard the core is handed reaches it.
-  it('hands the close service the Lead and Buddy guards it was given', () => {
-    const leadProtected = (id: string) => id === 'lead', buddyProtected = (id: string) => id === 'buddy'
+  it('hands the close service the Lead guards it was given', () => {
+    const leadProtected = (id: string) => id === 'lead'
     const leadSwitching = (id: string) => id === 'lead', leadSwitchEnded = vi.fn()
-    const { close } = setup({ leadProtected, leadSwitching, leadSwitchEnded, buddyProtected })
-    expect([close.leadProtected?.('lead'), close.buddyProtected?.('buddy'), close.buddyProtected?.('lead')]).toEqual([true, true, false])
+    const { close } = setup({ leadProtected, leadSwitching, leadSwitchEnded })
+    expect([close.leadProtected?.('lead'), close.leadProtected?.('other')]).toEqual([true, false])
     expect(close.leadSwitching).toBe(leadSwitching)
     expect(close.leadSwitchEnded).toBe(leadSwitchEnded)
   })

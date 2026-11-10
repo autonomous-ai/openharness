@@ -34,7 +34,7 @@ final _start = find.byKey(const ValueKey('new-harness-field-start'));
 final _note = find.byKey(const ValueKey('new-harness-new-repository-note'));
 final _checkAgain = find.byKey(const ValueKey('new-harness-check-repository'));
 
-/// The Swarm starts the Product Manager on a teammate's Team account.
+/// The Swarm starts the Product Manager on a teammate's machine.
 const _diego = LeadMachine(
   id: 'diego-mac',
   name: 'Diego MacBook',
@@ -42,7 +42,6 @@ const _diego = LeadMachine(
   freeAgents: 3,
   own: false,
   native: false,
-  team: true,
 );
 
 /// What New Repository asked of the Swarm, and how it answers.

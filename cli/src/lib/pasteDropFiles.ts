@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { env } from '../config/env.js'
 
-/** Where they land; a Buddy's guard reads its own person's files there (lib/buddyGuard.ts). */
+/** Where they land. */
 export const PASTE_DROPS_DIR = join(env.ADAPTER_DATA_DIR, 'paste-drops')
 const RETENTION_MS = 24 * 60 * 60 * 1000
 
@@ -88,7 +88,7 @@ export async function writePasteDropStream(originalFilename: string, source: Asy
 }
 
 /** A copy of [source], a file in this folder, under its own name: each delivery of a file two agents were sent has its own,
- *  so one agent editing it never changes the other's (nor its Buddy guard's hash of it). A clone that takes no room where the
+ *  so one agent editing it never changes the other's. A clone that takes no room where the
  *  disk can (APFS, btrfs), a copy elsewhere. A failed copy leaves no file. */
 export async function copyPasteDropFile(source: string, originalFilename: string): Promise<string> {
   await ensureDir()

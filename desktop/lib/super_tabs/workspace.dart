@@ -12,7 +12,6 @@ import 'dialog_scope.dart';
 import 'github_issues.dart';
 import 'model.dart';
 import 'pane.dart';
-import 'personal_machines.dart';
 import 'personal_projects.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
@@ -490,7 +489,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) {
                   unawaited(PersonalProjects.of(app).sync(controller));
-                  unawaited(PersonalMachines.of(app).sync(controller));
                 }
               });
             }
