@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart' show stableId;
+import 'package:harness/super_tabs/new_agent.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
@@ -142,7 +144,7 @@ void main() {
             'role': person == 'owner' ? 'owner' : 'collaborator',
           },
       ]
-      ..['agents'] = [
+      ..['agents'] = <Map<String, dynamic>>[
         for (final (machine, harness, agentName) in joined)
           {
             'id': swarmAgentId(machine, harness),
@@ -223,6 +225,16 @@ void main() {
     f.app.notifyListeners();
     for (var i = 0; i < 4; i++) {
       await tester.pump(const Duration(milliseconds: 20));
+    }
+  }
+
+  /// A click's join goes to the Swarm and comes back, its chat opens: [wait] of time passes, a lost reply is tried again in it.
+  Future<void> joined(
+    WidgetTester tester, {
+    Duration wait = const Duration(seconds: 1),
+  }) async {
+    for (var i = 0; i < wait.inMilliseconds ~/ 50; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
     }
   }
 
@@ -312,12 +324,11 @@ void main() {
   );
 
   scene('a person works through their desk: panes come and go, a rename and a '
-      'sleeping computer show, and a click brings a pane forward', (
+      'sleeping computer show, and a click makes a pane an agent', (
     tester,
     f,
     c,
   ) async {
-    final laptop = f.app.swarms.firstWhere((t) => t.id == 'two').panes.first;
     expect(paneRows(), findsNWidgets(2));
 
     // They start another Claude Code session in their first tab: its row appears, by name.
@@ -372,11 +383,14 @@ void main() {
     await tester.pump();
     expect(paneRows(), findsNWidgets(2));
 
-    // A click on the laptop's session brings its tab forward with the pane focused.
+    // A click on the laptop's session makes it an agent of the Swarm: its chat opens, and the row is the agent's now.
     await tester.tap(key('super-pane-laptop-notes'));
-    await tester.pump();
-    expect(f.app.activeSwarmId, 'two');
-    expect(f.app.focusedPaneId, laptop.id);
+    await joined(tester);
+    expect(sent(f).where((type) => type == 'agent.new'), hasLength(1));
+    final join = f.connection.joins.single['command'] as Map;
+    expect(join, containsPair('machineId', 'laptop'));
+    expect(join, containsPair('harnessId', 'notes'));
+    expect(c.selectedId, join['conversationId']);
   });
 
   group('trying to break it', () {
@@ -395,7 +409,7 @@ void main() {
 
     scene(
       'forty panes: eight show, "N more" opens every row, the list scrolls to the last '
-      'and a click on it still brings its tab forward',
+      'and a click on it still makes that one an agent',
       (tester, f, c) async {
         expect(key('super-pane-m-p39'), findsNothing);
         // Atlas, already in the Swarm, and forty panes: eight of 41 show.
@@ -416,8 +430,12 @@ void main() {
         );
         expect(tester.takeException(), isNull);
         await tester.tap(key('super-pane-m-p39'));
-        await tester.pump();
-        expect(f.app.activeSwarmId, 'tab7');
+        await joined(tester);
+        expect(f.connection.joins, hasLength(1));
+        expect(
+          f.connection.joins.single['command'],
+          containsPair('harnessId', 'p39'),
+        );
       },
       desk: (f) {
         f.app.machineStates['m']!.agents = [
@@ -432,68 +450,30 @@ void main() {
       },
     );
 
-    scene('a session two tabs show comes forward in the one it was last focused in, '
-        'else the first', (tester, f, c) async {
-      final swarmTab = f.app.swarms.firstWhere((s) => s.isSuperTab).id;
-      final one = f.app.swarms.firstWhere((t) => t.id == 'one');
-      final two = f.app.swarms.firstWhere((t) => t.id == 'two');
-      final docsInTwo = two.panes.firstWhere((p) => p.agentId == 'docs');
-      two.focusedPaneId = docsInTwo.id;
-      await tester.tap(key('super-pane-m-docs'));
-      await tester.pump();
-      expect(f.app.activeSwarmId, 'two');
-      expect(f.app.focusedPaneId, docsInTwo.id);
-
-      // Focused in neither: the first tab that holds it.
-      one.focusedPaneId = null;
-      two.focusedPaneId = null;
-      f.app.selectSwarm(swarmTab);
-      await changed(tester, f);
-      await tester.tap(key('super-pane-m-docs'));
-      await tester.pump();
-      expect(f.app.activeSwarmId, 'one');
-      expect(
-        f.app.focusedPaneId,
-        one.panes.firstWhere((p) => p.agentId == 'docs').id,
-      );
-    });
-
-    scene(
-      'a click on a row whose pane closed since it was drawn does nothing',
-      (tester, f, c) async {
-        for (final tab in f.app.swarms.where((t) => !t.isSuperTab)) {
-          tab.panes.removeWhere((p) => p.agentId == 'docs');
-        }
-        // The list is not drawn again yet: the row is still there to click.
-        expect(key('super-pane-m-docs'), findsOneWidget);
-        final before = f.app.activeSwarmId;
-        await tester.tap(key('super-pane-m-docs'));
-        await tester.pump();
-        expect(tester.takeException(), isNull);
-        expect(f.app.activeSwarmId, before);
-        await changed(tester, f);
-        expect(key('super-pane-m-docs'), findsNothing);
-      },
-    );
-
     scene(
       'one session name on three computers: three rows, told apart by their '
-      'computers, each bringing its own tab forward',
+      'computers, each joining from its own',
       (tester, f, c) async {
         expect(paneRows(), findsNWidgets(3));
-        final swarmTab = f.app.swarms.firstWhere((s) => s.isSuperTab).id;
-        for (final (row, place, tab) in [
-          ('super-pane-laptop-a1', 'Mac laptop', 'lap'),
+        for (final (row, place, machine) in [
+          ('super-pane-laptop-a1', 'Mac laptop', 'laptop'),
           ('super-pane-studio-a1', 'Mac Studio', 'studio'),
         ]) {
           expect(inRow(row, find.text('Docs bot')), findsOneWidget);
           expect(inRow(row, find.text(place)), findsOneWidget);
           await tester.tap(key(row));
-          await tester.pump();
-          expect(f.app.activeSwarmId, tab);
-          f.app.selectSwarm(swarmTab);
-          await changed(tester, f);
+          await joined(tester);
+          expect(
+            f.connection.joins.last['command'],
+            containsPair('machineId', machine),
+          );
+          // The fake Swarm keeps one fixed agent id: it forgets this one before the next join.
+          (f.connection.server.state['agents'] as List).removeWhere(
+            (a) => a['id'] == 'lead-agent',
+          );
+          await c.refresh();
         }
+        expect(f.connection.joins, hasLength(2));
       },
       desk: (f) {
         f.app.machineStates['m']!.agents = [session('a1', 'Docs bot')];
@@ -618,6 +598,326 @@ void main() {
     personal: false,
   );
 
+  // A click on a pane's row makes it an agent of the Swarm as Attach does (new_agent.dart swarmAttachAgent): its 1:1 chat opens
+  // and its terminal shows beside it.
+  group('a click opens the agent', () {
+    int chatsMade(SuperTabLaunchFixture f) =>
+        (f.connection.server.state['conversations'] as List)
+            .where((g) => (g['id'] as String).startsWith('agent-chat-'))
+            .length;
+
+    scene(
+      'its chat opens with its terminal beside it, and the row is the agent\'s '
+      'now, with the face it had',
+      (tester, f, c) async {
+        await tester.tap(key('super-pane-m-docs'));
+        await joined(tester);
+        // As Attach joins one: a chat of its own, then the session in it, under the name it has.
+        final commands = [
+          for (final post in f.connection.server.posts)
+            post['command'] as Map<String, dynamic>,
+        ];
+        final made = commands.singleWhere((cmd) => cmd['type'] == 'agent.new');
+        expect(made['name'], 'Docs bot');
+        expect(made['engine'], 'claude');
+        expect(made['machineId'], 'm');
+        expect(made['local'], isTrue);
+        final join = f.connection.joins.single['command'] as Map;
+        expect(join['harnessId'], 'docs');
+        expect(join['machineId'], 'm');
+        expect(join['name'], 'Docs bot');
+        expect((join['configuration'] as Map)['engine'], 'claude');
+        // Its chat is open, and nothing else was sent.
+        expect(c.selectedId, join['conversationId']);
+        expect(sent(f).where((type) => type.startsWith('agent.')).toList(), [
+          'agent.new',
+          'agent.add',
+        ]);
+        // The id the Swarm gives it is the one its row's face was drawn from.
+        expect(
+          stableId(['${join['machineId']}', '${join['harnessId']}']),
+          swarmAgentId('m', 'docs'),
+        );
+        // The pane row is gone and the agent has its row.
+        expect(key('super-pane-m-docs'), findsNothing);
+        expect(key('super-agent-lead-agent'), findsOneWidget);
+        // Its terminal is beside the chat: the Swarm's own tab holds that session.
+        final swarmTab = f.app.swarms.firstWhere((tab) => tab.isSuperTab);
+        expect(swarmTab.panes.map((p) => p.agentId), contains('docs'));
+      },
+    );
+
+    scene(
+      'the row says joining while it does, and clicks meanwhile make nothing more; a '
+      'lost reply is asked again as the same operation',
+      (tester, f, c) async {
+        f.connection.loseJoin = true;
+        await tester.tap(key('super-pane-m-docs'));
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(
+          inRow('super-pane-m-docs', find.text('joining')),
+          findsOneWidget,
+        );
+        expect(
+          inRow('super-pane-m-docs', find.text('Test host')),
+          findsNothing,
+        );
+        // Two clicks in one frame, and another after it: still one chat.
+        await tester.tap(key('super-pane-m-docs'));
+        await tester.tap(key('super-pane-m-docs'));
+        await tester.pump(const Duration(milliseconds: 100));
+        await tester.tap(key('super-pane-m-docs'));
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(sent(f).where((type) => type == 'agent.new'), hasLength(1));
+        await joined(tester, wait: const Duration(seconds: 3));
+        // The reply was lost after the join committed: it was asked again, the same operation, and the Swarm has one agent.
+        expect(f.connection.joins, hasLength(2));
+        expect(
+          f.connection.joins[0]['operationId'],
+          f.connection.joins[1]['operationId'],
+        );
+        expect(
+          (f.connection.server.state['agents'] as List).where(
+            (agent) => agent['id'] == 'lead-agent',
+          ),
+          hasLength(1),
+        );
+        expect(chatsMade(f), 1);
+        expect(
+          c.selectedId,
+          f.connection.joins.last['command']['conversationId'],
+        );
+        expect(key('super-pane-m-docs'), findsNothing);
+      },
+    );
+
+    scene(
+      'a refusal is said, the row stays, and the next click finishes it without a second chat',
+      (tester, f, c) async {
+        f.connection.failJoin = const SuperTabFailure(
+          'ALREADY_SHARED',
+          'This native harness is already in the tab.',
+          statusCode: 400,
+        );
+        final before = c.selectedId;
+        await tester.tap(key('super-pane-m-docs'));
+        await joined(tester);
+        expect(
+          find.text('This native harness is already in the tab.'),
+          findsOneWidget,
+        );
+        // The row is as it was, and the chat shown is the one that was.
+        expect(
+          inRow('super-pane-m-docs', find.text('Test host')),
+          findsOneWidget,
+        );
+        expect(inRow('super-pane-m-docs', find.text('joining')), findsNothing);
+        expect(c.selectedId, before);
+        expect(chatsMade(f), 1);
+        // Again: the same operations, the chat made the first time.
+        await tester.tap(key('super-pane-m-docs'));
+        await joined(tester);
+        expect(f.connection.joins, hasLength(2));
+        expect(
+          f.connection.joins[0]['operationId'],
+          f.connection.joins[1]['operationId'],
+        );
+        expect(chatsMade(f), 1);
+        expect(
+          c.selectedId,
+          f.connection.joins.last['command']['conversationId'],
+        );
+        expect(key('super-agent-lead-agent'), findsOneWidget);
+      },
+    );
+
+    scene(
+      'a computer that goes off while it joins: the refusal is said, the row says offline '
+      'and does nothing until it is back, then the click finishes the join',
+      (tester, f, c) async {
+        f.connection.failJoin = const SuperTabFailure(
+          'HOST_REQUIRED',
+          'Choose your own computer.',
+          statusCode: 403,
+        );
+        await tester.tap(key('super-pane-laptop-notes'));
+        f.app.machineStates['laptop']!.nodeOnline = false;
+        await joined(tester);
+        expect(find.text('Choose your own computer.'), findsOneWidget);
+        await changed(tester, f);
+        expect(
+          inRow('super-pane-laptop-notes', find.text('Mac laptop · offline')),
+          findsOneWidget,
+        );
+        final sentBefore = sent(f).length;
+        await tester.tap(key('super-pane-laptop-notes'));
+        await joined(tester);
+        expect(
+          sent(f),
+          hasLength(sentBefore),
+          reason: 'an offline row does nothing',
+        );
+        // Back: the click makes the agent, in the chat the first click made.
+        f.app.machineStates['laptop']!.nodeOnline = true;
+        await changed(tester, f);
+        await tester.tap(key('super-pane-laptop-notes'));
+        await joined(tester);
+        expect(f.connection.joins, hasLength(2));
+        expect(chatsMade(f), 1);
+        expect(
+          c.selectedId,
+          f.connection.joins.last['command']['conversationId'],
+        );
+      },
+    );
+
+    scene('a row of a computer that is off does nothing', (tester, f, c) async {
+      f.app.machineStates['laptop']!.nodeOnline = false;
+      await changed(tester, f);
+      final before = (c.selectedId, sent(f).length);
+      await tester.tap(key('super-pane-laptop-notes'));
+      await joined(tester);
+      expect((c.selectedId, sent(f).length), before);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    scene(
+      'a session two tabs show joins once, and a name of emoji and one the person never '
+      'chose are told as the Swarm will know them',
+      (tester, f, c) async {
+        // docs is in both tabs: one row, one join.
+        await tester.tap(key('super-pane-m-docs'));
+        await joined(tester);
+        expect(f.connection.joins, hasLength(1));
+        expect(
+          f.connection.joins.single['command']['name'],
+          '🚀 Ship the release 🎉',
+        );
+        // A session still under its automatic name is named by the Swarm, not by the pane's placeholder.
+        (f.connection.server.state['agents'] as List).clear();
+        await c.refresh();
+        await tester.tap(key('super-pane-m-auto'));
+        await joined(tester);
+        final named = f.connection.joins.last['command']['name'] as String;
+        expect(named, isNot('harness-7'));
+        expect(named, isNotEmpty);
+        expect(tester.takeException(), isNull);
+      },
+      size: const Size(1024, 700),
+      desk: (f) {
+        f.app.machineStates['m']!.agents = [
+          session('docs', '🚀 Ship the release 🎉'),
+          session('auto', 'harness-7', chosen: false),
+        ];
+        deskTab(f.app, 'one', [pane('m', 'docs'), pane('m', 'auto')]);
+        deskTab(f.app, 'two', [pane('m', 'docs')]);
+      },
+      joined: const [],
+    );
+
+    scene(
+      'a session its person never named keeps the name it was given when its '
+      'join is tried again: one chat, the same request',
+      (tester, f, c) async {
+        // As the backend: an operation sent again with another request is refused.
+        f.connection.server.refuseReusedOperations = true;
+        f.connection.failJoin = const SuperTabFailure(
+          'HOST_REQUIRED',
+          'Choose your own computer.',
+          statusCode: 403,
+        );
+        await tester.tap(key('super-pane-m-auto'));
+        await joined(tester);
+        expect(find.text('Choose your own computer.'), findsOneWidget);
+        await tester.tap(key('super-pane-m-auto'));
+        await joined(tester);
+        expect(f.connection.joins, hasLength(2));
+        final names = {
+          for (final join in f.connection.joins) join['command']['name'],
+        };
+        expect(names, hasLength(1));
+        expect(names.single, isNot('harness-7'));
+        expect(chatsMade(f), 1);
+        expect(
+          c.selectedId,
+          f.connection.joins.last['command']['conversationId'],
+        );
+        expect(find.textContaining('operation'), findsNothing);
+      },
+      desk: (f) {
+        f.app.machineStates['m']!.agents = [
+          session('auto', 'harness-7', chosen: false),
+        ];
+        deskTab(f.app, 'one', [pane('m', 'auto')]);
+      },
+      joined: const [],
+    );
+
+    scene('a join refused, then tried from elsewhere after the view went (Attach\'s '
+        'picker), finishes the same one: one chat', (tester, f, c) async {
+      f.connection.failJoin = const SuperTabFailure(
+        'HOST_REQUIRED',
+        'Choose your own computer.',
+        statusCode: 403,
+      );
+      await tester.tap(key('super-pane-m-docs'));
+      await joined(tester);
+      // The person leaves this Swarm: the view goes.
+      await tester.pumpWidget(const SizedBox());
+      final docs = f.app.machineStates['m']!.agents.firstWhere(
+        (a) => a.id == 'docs',
+      );
+      final done = swarmAttachAgent(f.app, tabId, 'm', docs);
+      await joined(tester);
+      await done;
+      expect(f.connection.joins, hasLength(2));
+      expect(
+        f.connection.joins[0]['operationId'],
+        f.connection.joins[1]['operationId'],
+      );
+      expect(chatsMade(f), 1);
+    });
+
+    scene(
+      'two sessions never named, clicked one after the other, join under two names',
+      (tester, f, c) async {
+        await tester.tap(key('super-pane-m-a'));
+        await tester.tap(key('super-pane-m-b'));
+        await joined(tester);
+        final names = [
+          for (final join in f.connection.joins) join['command']['name'],
+        ];
+        expect(names, hasLength(2));
+        expect(names.toSet(), hasLength(2));
+      },
+      desk: (f) {
+        f.app.machineStates['m']!.agents = [
+          session('a', 'harness-1', chosen: false),
+          session('b', 'harness-2', chosen: false),
+        ];
+        deskTab(f.app, 'one', [pane('m', 'a'), pane('m', 'b')]);
+      },
+      joined: const [],
+    );
+
+    scene('in a narrow window the drawer closes and the chat shows', (
+      tester,
+      f,
+      c,
+    ) async {
+      await tester.tap(find.byTooltip('Conversations'));
+      await joined(tester, wait: const Duration(milliseconds: 300));
+      expect(find.byType(ProjectSidebar), findsOneWidget);
+      await tester.tap(key('super-pane-m-docs'));
+      await joined(tester);
+      expect(find.byType(ProjectSidebar), findsNothing);
+      expect(
+        c.selectedId,
+        f.connection.joins.single['command']['conversationId'],
+      );
+    }, size: const Size(700, 800));
+  });
+
   // Pictures for the pull request: Your Team at the three window sizes the Desktop is used at, in both themes. A narrow
   // window keeps the left pane in a drawer, so it is opened there.
   for (final (width, height) in [(1440, 900), (1024, 700), (700, 800)]) {
@@ -655,6 +955,23 @@ void main() {
             tester,
             _shots,
             'your-team-${width}x$height-${brightness.name}',
+          );
+          // A click: the row waits while the pane joins, then its chat is open with its terminal beside it.
+          final hold = f.connection.server.holdCommands = Completer<void>();
+          await tester.tap(key('super-pane-m-billing'));
+          await tester.pump(const Duration(milliseconds: 100));
+          await captureWindow(
+            tester,
+            _shots,
+            'your-team-joining-${width}x$height-${brightness.name}',
+          );
+          f.connection.server.holdCommands = null;
+          hold.complete();
+          await joined(tester, wait: const Duration(seconds: 2));
+          await captureWindow(
+            tester,
+            _shots,
+            'your-team-joined-${width}x$height-${brightness.name}',
           );
           await close(tester, f, c);
         },

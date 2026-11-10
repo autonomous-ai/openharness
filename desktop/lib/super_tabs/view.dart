@@ -24,7 +24,6 @@ import '../widgets/new_harness_paste.dart';
 import '../widgets/terminal_name_prompt.dart';
 import '../widgets/terminal_prompt.dart';
 import '../core/local_key_value_store.dart';
-import '../core/models.dart' show sameMachineId;
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -71,6 +70,7 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
+import 'new_agent.dart' show swarmAttachAgent;
 import 'agent_info.dart';
 import 'identity.dart' show SuperTabAvatar;
 import 'prompt_alerts.dart';
@@ -287,30 +287,57 @@ class _SuperTabViewState extends State<SuperTabView>
     _closeSidebar();
   }
 
-  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm: the tab they last had it focused in
-  /// (else the first that holds it) comes forward with the pane focused.
-  void _openPane(PersonalAgent row) {
+  /// The panes joining the Swarm now, by the id they get in it: a pane joins once at a time.
+  final _joining = <String>{};
+
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm (Swarm v4: every pane they run is an agent
+  /// there): it joins the Swarm as Attach joins one, its 1:1 chat opens, and its terminal shows beside the chat. A refusal is
+  /// said, and the next click finishes the join.
+  Future<void> _openPane(PersonalAgent row) async {
     final app = widget.app;
-    if (app == null) return;
-    final holders = [
-      for (final entry in ownPanes(app))
-        if (entry.pane.agentId == row.agent.id &&
-            sameMachineId(entry.pane.machineId, row.machineId))
-          entry,
-    ];
-    final held =
-        holders.where((e) => e.tab.focusedPaneId == e.pane.id).firstOrNull ??
-        holders.firstOrNull;
-    if (held == null) {
-      // Closed since the list was drawn, which the next draw shows.
-      appLog.info(
-        'super-tabs',
-        'A pane in Your Team was opened after it closed',
+    final controller = c;
+    if (app == null || _joining.contains(row.swarmId)) return;
+    // The app's: a refusal is said even when the person left this Swarm meanwhile.
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _joining.add(row.swarmId));
+    try {
+      final chat = await swarmAttachAgent(
+        app,
+        controller.tabId,
+        row.machineId,
+        row.agent,
       );
-      return;
+      if (!mounted || c != controller) return;
+      // The join opened its chat: what holds the middle steps aside for it.
+      c.leaveDevices();
+      setState(() {
+        _page = null;
+        _showManage = _showTasks = _showPullRequests = false;
+      });
+      _closeSidebar();
+      final snapshot = controller.snapshot;
+      final agentId = snapshot?.conversation(chat)?.agentIds.firstOrNull;
+      final agent = agentId == null ? null : snapshot?.agent(agentId);
+      if (agent != null) widget.onOpenTerminal(agent);
+    } catch (failure) {
+      appLog.warn(
+        'super-tabs',
+        'A pane could not join Your Team '
+            '(${failure is SuperTabFailure ? failure.code : failure.runtimeType})',
+      );
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            failure is SuperTabFailure
+                ? failure.message
+                : "Couldn't join. Try again.",
+          ),
+        ),
+      );
+    } finally {
+      _joining.remove(row.swarmId);
+      if (mounted) setState(() {});
     }
-    app.selectSwarm(held.tab.id);
-    app.focusPane(held.pane.id, reveal: true);
   }
 
   /// Keeps the Board of the project [group] belongs to in the middle, for a
@@ -2157,6 +2184,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onOpenAgentChat: _openAgentChat,
     onOpenAgentTerminal: _openAgentTerminal,
     onOpenPane: _openPane,
+    joining: _joining,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
     places: SuperTabPlaces.of(c),

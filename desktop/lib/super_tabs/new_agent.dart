@@ -132,13 +132,21 @@ HarnessLaunchIntegration swarmNewAgent(
   return integration;
 }
 
-/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"): an agent
-/// already running on one of its person's own computers joins their team as + New agent's does, with its own 1:1 chat,
-/// which opens. A stopped one is resumed first, in the same step (anh Dee 2026-11-10). It keeps its own name (anh Dee
-/// 2026-11-10, attaching juno and pip: "they got different name?") unless that name is automatic or the Swarm already
-/// uses or refuses it, when it gets one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and
-/// its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection lost is tried again
-/// as the same operation, which never adds it twice.
+/// A join begun on this Desktop and not finished: what it asks the Swarm for, kept so that trying it again is the same request
+/// under the same operation (the server answers an operation again only for the request it first had), so it never makes a
+/// second chat, from whichever view or picker it is tried. [step] is the chat's step: `chat`, or `chat-named` once the
+/// server refused the agent's own name. By Swarm and session; per app, at most [_joinsKept].
+typedef _Join = ({
+  String operation,
+  String step,
+  String name,
+  bool own,
+  String? model,
+  String? effort,
+});
+final _joins = Expando<Map<(String, String, String), _Join>>();
+const _joinsKept = 64;
+
 /// The server's refusals of a name (backend superTabs/agentRename.ts).
 const _nameRefusals = {
   'AGENT_NAME_TAKEN',
@@ -146,7 +154,15 @@ const _nameRefusals = {
   'INVALID_AGENT_NAME',
 };
 
-Future<void> swarmAttachAgent(
+/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), and a click on a
+/// pane's row in Your Team: an agent already running on one of its person's own computers joins their team as + New agent's
+/// does, with its own 1:1 chat, which opens; the chat's id is the answer. A stopped one is resumed first, in the same step
+/// (anh Dee 2026-11-10). It keeps its own name (anh Dee 2026-11-10, attaching juno and pip: "they got different name?")
+/// unless that name is automatic or the Swarm already uses or refuses it, or another join begun here holds it, when it gets
+/// one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and its daemon tells it the team's ways
+/// once it is in (cli superTabs/host.ts). A join the connection lost is tried again as the same operation, which never adds
+/// it twice; one that failed is finished by the next try ([_Join]).
+Future<String> swarmAttachAgent(
   AppNotifier app,
   String tabId,
   String machineId,
@@ -165,17 +181,34 @@ Future<void> swarmAttachAgent(
     final refused = await app.resumeStoppedSession(machineId, native.id);
     if (refused != null) throw SuperTabFailure('AGENT_UNAVAILABLE', refused);
   }
-  final creationId = superTabOperationId();
-  final snapshot = await app.superTabs.readSnapshot(tabId);
+  final joins = _joins[app] ??= {};
+  final key = (tabId, machineId, native.id);
   final taken = [
-    for (final agent in snapshot.agents) agent.displayName ?? agent.name,
+    for (final agent in (await app.superTabs.readSnapshot(tabId)).agents)
+      agent.displayName ?? agent.name,
+    for (final MapEntry(key: other, :value) in joins.entries)
+      if (other != key) value.name,
   ];
   final own = native.name.trim();
   final keepOwn =
       own.isNotEmpty &&
       !isAutomaticHarnessName(own) &&
       !taken.any((name) => name.toLowerCase() == own.toLowerCase());
-  var name = keepOwn ? own : freshAgentName(taken);
+  var join =
+      joins[key] ??
+      (
+        operation: superTabOperationId(),
+        step: 'chat',
+        name: keepOwn ? own : freshAgentName(taken),
+        own: keepOwn,
+        model: native.modelName,
+        effort: native.modelEffort,
+      );
+  if (!joins.containsKey(key)) {
+    joins[key] = join;
+    if (joins.length > _joinsKept) joins.remove(joins.keys.first);
+  }
+  final creationId = join.operation;
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -206,18 +239,25 @@ Future<void> swarmAttachAgent(
     'kind': 'regular',
     'machineId': machineId,
     'engine': engine,
-    'name': name,
+    'name': join.name,
     'local': true,
   });
   Map<String, dynamic> chat;
   try {
-    chat = await newChat('chat');
+    chat = await newChat(join.step);
   } on SuperTabFailure catch (failure) {
     // The server refuses names Desktop cannot see (a person's here, a reserved
     // word): its own name then gives way, as an automatic one does.
-    if (!keepOwn || !_nameRefusals.contains(failure.code)) rethrow;
-    name = freshAgentName([...taken, own]);
-    chat = await newChat('chat-named');
+    if (!join.own || !_nameRefusals.contains(failure.code)) rethrow;
+    join = joins[key] = (
+      operation: join.operation,
+      step: 'chat-named',
+      name: freshAgentName([...taken, join.name]),
+      own: false,
+      model: join.model,
+      effort: join.effort,
+    );
+    chat = await newChat(join.step);
   }
   final chatId = chat['conversationId'] as String;
   await run('join', {
@@ -225,16 +265,18 @@ Future<void> swarmAttachAgent(
     'conversationId': chatId,
     'machineId': machineId,
     'harnessId': native.id,
-    'name': name,
+    'name': join.name,
     'lead': false,
     'configuration': {
       'engine': engine,
-      'model': native.modelName,
-      'effort': native.modelEffort,
+      'model': join.model,
+      'effort': join.effort,
       'contextWindow': null,
       'engineVersion': null,
     },
   });
+  // It is in: a later try is a new join.
+  joins.remove(key);
   await app.wakeSuperTabHost(machineId);
   final controller = await app.superTabs.open(tabId);
   await controller.refresh();
@@ -243,4 +285,5 @@ Future<void> swarmAttachAgent(
     'super-tabs',
     'Agent attached in ${DateTime.now().difference(started).inMilliseconds} ms',
   );
+  return chatId;
 }

@@ -73,6 +73,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onAttachAgent,
     this.onOpenAgentChat,
     this.onOpenPane,
+    this.joining = const {},
     this.boardProjectId,
     this.onOpenAgentTerminal,
     this.leaderboard,
@@ -107,8 +108,12 @@ class ProjectSidebar extends StatelessWidget {
   /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
   final ValueChanged<String>? onOpenAgentChat;
 
-  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm; its row opens nothing without it.
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm, which makes it an agent of the Swarm; its
+  /// row opens nothing without it.
   final ValueChanged<PersonalAgent>? onOpenPane;
+
+  /// The panes ([PersonalAgent.swarmId]) joining the Swarm now: their rows say so and wait.
+  final Set<String> joining;
 
   /// The project whose Board holds the Desktop's middle, if one does. Its row is then the lit one, though the selected
   /// chat is the Buddy's on the right (task #4220).
@@ -927,19 +932,24 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// A pane of the person's own in their Personal Swarm, an agent of theirs that has not joined it: its face as it will be,
-  /// its name and its computer.
-  Widget _paneRow(PersonalAgent pane) => SuperTabQuietRow(
-    key: ValueKey('super-pane-${pane.machineId}-${pane.agent.id}'),
-    leading: SuperTabAvatar(
-      identity: 'agent:${pane.swarmId}',
+  /// its name and its computer. A click joins it, which needs its computer on and is done once at a time.
+  Widget _paneRow(PersonalAgent pane) {
+    final busy = joining.contains(pane.swarmId);
+    return SuperTabQuietRow(
+      key: ValueKey('super-pane-${pane.machineId}-${pane.agent.id}'),
+      leading: SuperTabAvatar(
+        identity: 'agent:${pane.swarmId}',
+        name: pane.name,
+        size: SuperTabQuietRow.faceSize,
+        face: true,
+      ),
       name: pane.name,
-      size: SuperTabQuietRow.faceSize,
-      face: true,
-    ),
-    name: pane.name,
-    detail: pane.place,
-    onTap: onOpenPane == null ? null : () => onOpenPane!(pane),
-  );
+      detail: busy ? 'joining' : pane.place,
+      onTap: busy || pane.machine.isOffline || onOpenPane == null
+          ? null
+          : () => onOpenPane!(pane),
+    );
+  }
 
   Widget _agentRow(
     SuperTabSnapshot snapshot,
