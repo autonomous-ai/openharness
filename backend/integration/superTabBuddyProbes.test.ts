@@ -12,10 +12,12 @@ import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { stableId } from '../src/superTabs/model.js'
+import { storeBuddy, storeProjectBuddy } from './storedBuddies.test-support.js'
 
 // Security review 1 of #2115: its two-person probes, kept as regressions. The three that showed a leak at db0379898
 // (routing history, archived tasks awaiting a report, sequence-only paging) now assert the fix; the rest are as written.
-// The summary half of the archived probe is cli/src/superTabs/buddyStatus.spec.ts: backend CI installs no CLI packages.
+// The summary half of the archived probe is cli/src/superTabs/buddyStatus.spec.ts: backend CI installs no CLI packages. Nothing
+// adds a Buddy since Swarm v4 (buddyConversion.ts): each probe reads Buddies as a v3 release stored them.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '300000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -50,7 +52,7 @@ async function closedPmChat(f: { store: SuperTabStore; tab: string }, conversati
   return conversationId
 }
 
-/** A Swarm whose PM runs on the owner's Mac, peer a member with their own Mac in the Machines list, and Buddies on. */
+/** A Swarm whose PM runs on the owner's Mac, peer a member with their own Mac in the Machines list. */
 async function swarm() {
   const store = new SuperTabStore(db, () => Date.now())
   const tab = (await store.create(owner, randomUUID(), 'Buddies', 'public')).id
@@ -64,31 +66,20 @@ async function swarm() {
   const generation = (await poolRows(store, peer, 'peer-mac')).find(p => p.tabId === tab)!.machine.generation
   await store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-  quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], capabilities: SWARM_BUDDY_HOST })
+  quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
   return { store, tab, execute, lead }
 }
-/** A host that runs the one Buddy of a Swarm and its sessions (machines.ts SWARM_BUDDY_CAPABILITY). */
-const SWARM_BUDDY_HOST = ['buddySessions', 'swarmBuddy']
 
-/** Launches start [startId] as peer-mac's host does; its agent's id. */
-async function launch(f: Awaited<ReturnType<typeof swarm>>, startId: string) {
-  const host = (command: Command) => f.execute(command, peer, undefined, 'peer-mac')
-  await host({ type: 'agent.startDispatch', startId })
-  const agentId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
-  await host({ type: 'agent.startSettled', startId, warning: null })
-  return agentId
+/** [user]'s one Buddy on [machineId] ([main], in [swarmChat]), and the Buddy of their older chat in the project 'lead' on the
+ *  same machine (spec: Older apps), as a per-project Buddy was before one Buddy per Swarm (Dee, 10-31). That one reads its
+ *  project alone. */
+async function buddies(f: Awaited<ReturnType<typeof swarm>>, user: AuthUser, machineId: string) {
+  const one = await storeBuddy(db, f.tab, { personId: user.sub, machineId, configuration: config })
+  const old = await storeProjectBuddy(db, f.tab, 'lead', { personId: user.sub, machineId, configuration: config })
+  return { chat: old.chat, agentId: old.agentId, swarmChat: one.chat, main: one.agentId }
 }
-
-/** peer's Buddy of the project chat 'lead', as a per-project Buddy was before one Buddy per Swarm (Dee, 10-31): their one Buddy
- *  ([main], in [swarmChat]), then their first message in their older chat there, which starts the Buddy of that chat on the one
- *  Buddy's machine (spec: Older apps). It reads that project alone; these probes are about it. */
-async function buddy(f: Awaited<ReturnType<typeof swarm>>) {
-  const added = await f.execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' }, peer)
-  const swarmChat = String(added.result.conversationId), main = await launch(f, String(added.result.startId))
-  const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
-  const sent = await f.execute({ type: 'message.send', conversationId: chat, text: 'Hello', replyTo: null, recipientIds: [] }, peer)
-  return { chat, agentId: await launch(f, String(sent.result.startId)), swarmChat, main }
-}
+/** peer's Buddy of the project chat 'lead', on their Mac: these probes are about it. */
+const buddy = (f: Awaited<ReturnType<typeof swarm>>) => buddies(f, peer, 'peer-mac')
 
 
 describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', () => {
@@ -127,12 +118,8 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
     const web:any=(await f.execute({type:'project.create',name:'Other project',visibility:'public',brief:''})).result
     const other=String((await f.execute({type:'conversation.create',projectId:web.projectId,title:'Other project task',brief:'',checks:[]})).result.conversationId)
     const {agentId}=await buddy(f)
-    await f.execute({type:'machine.contribute',machineId:'owner-mac',name:'Owner Mac',cwd:'/owner/repo',scope:'swarm',engines:['claude'],maxAgents:2})
-    const gen=(await poolRows(f.store,owner,'owner-mac')).find(p=>p.tabId===f.tab)!.machine.generation
-    await f.store.observeMachine(owner,f.tab,'owner-mac',{generation:gen,resources:{cpuPercent:10,memoryTotalBytes:32e9,memoryUsedBytes:4e9,diskFreeBytes:120e9,diskTotalBytes:500e9,projectDiskFreeBytes:120e9,deviceType:'Laptop',chip:'Fixture',os:'macOS',gpuPercent:null},quotas:[],tools:{},runningHarnessIds:[],stoppedHarnessIds:[],capabilities:SWARM_BUDDY_HOST})
     // The owner's one Buddy chat, and their older chat in this project.
-    const ownerBuddyChat=String((await f.execute({type:'buddy.create',machineId:'owner-mac',engine:'claude'})).result.conversationId)
-    const ownerOldChat=String((await f.execute({type:'buddy.chat',projectId:'lead'})).result.conversationId)
+    const {swarmChat:ownerBuddyChat,chat:ownerOldChat}=await buddies(f,owner,'owner-mac')
     const leads=stableId(f.tab,'leads')
     const reads=new SwarmReads(f.store)
     for(const id of [privateChat,ownerBuddyChat,ownerOldChat,leads,web.conversationId,other,'invented-group-id']){
@@ -232,15 +219,8 @@ describe('a Buddy and threads', () => {
 
   it('reads no thread in another person\'s Buddy chat', async () => {
     const f = await swarm(), { agentId } = await buddy(f)
-    // The owner's own Buddy, on their own Swarm machine, opens their Buddy chat.
-    await f.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 })
-    const gen = (await poolRows(f.store, owner, 'owner-mac')).find(p => p.tabId === f.tab)!.machine.generation
-    await f.store.observeMachine(owner, f.tab, 'owner-mac', { generation: gen, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
-      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], capabilities: SWARM_BUDDY_HOST })
-    // Their one Buddy chat, and their older chat in this project.
-    const ownersChat = String((await f.execute({ type: 'buddy.create', machineId: 'owner-mac', engine: 'claude' })).result.conversationId)
-    const ownersOldChat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' })).result.conversationId)
+    // The owner's own Buddy, on their own machine: their one Buddy chat, and their older chat in this project.
+    const { swarmChat: ownersChat, chat: ownersOldChat } = await buddies(f, owner, 'owner-mac')
     for (const theirs of [ownersChat, ownersOldChat]) {
       const root = await send(f, theirs, 'OWNER BUDDY ROOT')
       await send(f, theirs, 'OWNER BUDDY REPLY', root)

@@ -492,7 +492,7 @@ export interface CommandContext {
     machineName?: string }
   /** Loaded from this tab and conversation by the store. */
   /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies), and
-   *  `threadSource` that root's source: a Buddy's proposal is news for its Buddy (buddyNews.ts). */
+   *  `threadSource` that root's source. */
   /** `agentOnly`: a notice people cannot read (model.ts agentOnly), whose thread a reply does not join. */
   reply?: { id: string; conversationId: string; author: Author; createdAt: number; thread?: string | null; threadSource?: Record<string, unknown> | null
     agentOnly?: true

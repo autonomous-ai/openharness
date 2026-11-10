@@ -92,16 +92,15 @@ export interface Agent {
    *  it still tells the machine owner who asked. */
   switchLanded?: { id: string; requestedBy: string; candidateAgentId?: string }
   switchRequest?: { id: string; engine: string; profileId: string; targetMachineId?: string; model?: string; effort?: string; requestedBy: string; at: string; claimedUntil?: string }
-  /** A Buddy's owner asked its machine to move it onto a model on the Swarm's grid, or back to their subscription (null)
-   *  (buddyModel.ts). What they were shown is kept for the line the result writes: the model's name, who serves it and its
-   *  window, the smallest any serving machine reported. One at a time; the result or the liveness sweep's lease drops it. */
+  /** A Buddy's owner asked its machine to move it onto a model on the Swarm's grid, or back to their subscription (null), with
+   *  what they were shown. Written until Buddy model switching went (2026-11-10); the Buddy conversion drops a stored one. */
   modelRequest?: { id: string; gridModel: string | null; gridName?: string; name?: string; servedBy?: string[]; machines?: string[]; contextWindow?: number; requestedBy: string; at: string
     /** Set when the Swarm sent the Buddy home by itself: the model hit a limit, kept failing, or nobody served it. */
     reason?: 'limit' | 'failing' | 'gone'
-    /** Only its thread sessions move: a move home left one on a shared model (buddyModel.ts, task #3810). */
+    /** Only its thread sessions move: a move home left one on a shared model (task #3810). */
     sessionsOnly?: true }
   /** A Buddy thread session that stayed on a shared model when its Buddy went home (task #3810): why it was sent home, and how
-   *  many times it stayed. The liveness sweep asks its machine to move it home again, three times at most (buddyModel.ts). */
+   *  many times it stayed. Written until 2026-11-10; the Buddy conversion drops it. */
   homeOwed?: { reason?: 'limit' | 'failing' | 'gone'; tries: number }
   /** When the liveness sweep first found nobody serving the Buddy's `gridModel` (ms): two minutes on, it is sent home. */
   gridModelUnservedSince?: number
@@ -752,7 +751,7 @@ export interface MessageDraft {
   /** Explicit answer in main chat, without a thread. */
   answers?: string
   recipients: string[]
-  /** Buddies this row is news for (buddyNews.ts): a delivery each, never listed among its recipients. */
+  /** Buddies this row was news for, written until 2026-11-10: a delivery each, never listed among its recipients. */
   buddyRecipients?: string[]
   /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by commands. */
   source?: Record<string, unknown>
@@ -892,7 +891,7 @@ export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harness
  *  its contributor's email (lib/machineSharePolicy.ts; final check of #2258). */
 export const agentForBuddy = <T extends Pick<Agent, 'id' | 'machineId' | 'harnessId' | 'machineOwnerId' | 'contributorId' | 'membershipGeneration' | 'hostGrant'
   | 'replacement' | 'lostTask' | 'modelRequest'>>(target: T, buddyId: string): T => {
-  // A pending model switch names the machines serving the model (buddyModel.ts); its host reads it from its own rows, never here
+  // A pending model switch names the machines serving the model; its host reads it from its own rows, never here
   // (security review 1 of #2787).
   const { modelRequest: _switching, ...unswitched } = target
   const bare = agentWithoutMachine(unswitched as T)

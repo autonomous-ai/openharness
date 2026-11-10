@@ -12,13 +12,14 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
-import { commandSchema, type Command } from '../src/superTabs/commands.js'
+import type { Command } from '../src/superTabs/commands.js'
 import { appendRouting, FIRST_INSTRUCTIONS, instructionsHash } from '../src/superTabs/instructions.js'
 import { stableId } from '../src/superTabs/model.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { rosterRows } from './hostRows.test-support.js'
+import { storeBuddy } from './storedBuddies.test-support.js'
 import { SEED_RULES } from '../src/superTabs/policy.js'
 import { plan, profiled, reads } from './plans.test-support.js'
 
@@ -37,17 +38,12 @@ const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.c
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
   store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
-/** [user]'s own Buddy, on a machine of theirs: it writes the server's notices in their private chat, where only they and it post
- *  (task #4558). */
+/** [user]'s own Buddy, on a machine of theirs, as a v3 release stored it (nothing adds one since Swarm v4): it writes the server's
+ *  notices in their private chat, where only they and it post (task #4558). */
 async function ownBuddy(tab: string, user: AuthUser) {
   const machineId = `${user.email.split('@')[0]}-mac`
   await db.machine.upsert({ where: { machineId }, update: {}, create: { machineId, userId: user.sub, apiKey: `fixture-${randomUUID()}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  const added = await run(tab, { type: 'buddy.create', machineId, engine: 'codex', setup: { name: 'Fixture Mac', cwd: '/fixture', engines: ['codex'] } }, user)
-  const startId = String(added.result.startId)
-  const onHost = (command: unknown) => store.execute(user, tab, { operationId: randomUUID(), command: commandSchema.parse(command) }, undefined, machineId)
-  await onHost({ type: 'agent.startDispatch', startId })
-  await onHost({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })
-  await onHost({ type: 'agent.startSettled', startId, warning: null })
+  await storeBuddy(db, tab, { personId: user.sub, machineId, configuration: config })
 }
 async function invite(tab: string) {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })

@@ -3,7 +3,7 @@ import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { convertBuddies } from './buddyConversion.js'
 import { giveAgentsChats } from './agentChats.js'
 import { agentChatId, agentKind } from './agentKind.js'
-import { buddyChatId, swarmBuddyChatId } from './buddies.js'
+import { buddyChatId, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { createSuperTab, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from './model.js'
 import { canReadGroup, projectsOf } from './projects.js'
 import { sessionReadsRow } from './buddySessions.js'
@@ -145,5 +145,16 @@ describe('convertBuddies', () => {
       const reads = sessionReadsRow(reader, chat, state)
       expect([reads(lost), reads(plain)]).toEqual([false, true])
     }
+  })
+
+  // Until the conversion ends it, a thread session left running writes nothing more: its rows would carry no session mark.
+  it('lets a thread session still running post nothing before the conversion ends it', () => {
+    const state = swarm()
+    const buddy = giveOwnBuddy(state, 'peer')
+    const session = { ...buddy, id: 'session', buddySession: { thread: 't', from: 0 } }
+    const chat = chatOf(state, swarmBuddyChatId(state.people[1]!))
+    chat.agentIds.push('session')
+    expect(() => requireBuddyCommand(session, { type: 'message.send', conversationId: chat.id }, state.conversations)).toThrow(expect.objectContaining({ code: 'BUDDY_SESSION_ENDED' }))
+    expect(() => requireBuddyCommand(buddy, { type: 'message.send', conversationId: chat.id }, state.conversations)).not.toThrow()
   })
 })

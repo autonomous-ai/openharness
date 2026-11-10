@@ -14,6 +14,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import { DELETED_TEXT } from '../src/superTabs/messageEdits.js'
 import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { poolRows } from './hostRows.test-support.js'
+import { storeBuddy } from './storedBuddies.test-support.js'
 import { profiled } from './plans.test-support.js'
 
 // Edit and delete your own message (task #2746): only the author, a person, on their own post. A fresh loopback replica set.
@@ -43,7 +44,7 @@ afterAll(async () => {
 })
 
 /** A Swarm with a public project `web` (its PM on the owner's Mac) and a private one `secret` (owner and peer); peer and other
- *  are members, peer with a Mac whose host runs peer's Swarm Buddy. */
+ *  are members, peer with a Mac whose host reports what runs there. */
 async function swarm() {
   const files = new MemoryAttachmentStore()
   const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
@@ -64,20 +65,14 @@ async function swarm() {
   const running: string[] = []
   const report = () => store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-  quotas: [], tools: {}, runningHarnessIds: [...running], stoppedHarnessIds: [], capabilities: ['buddySessions', 'swarmBuddy'] })
+  quotas: [], tools: {}, runningHarnessIds: [...running], stoppedHarnessIds: [] })
   await report()
-  const host = (command: Command) => execute(command, peer, undefined, 'peer-mac')
-  /** peer's one Buddy, added from # buddy and started by their Mac's host. */
+  /** peer's one Buddy, in their one Buddy chat as a v3 release stored it (nothing adds one since Swarm v4), running on their Mac. */
   const buddy = async () => {
-    const added = await execute({ type: 'buddy.create', machineId: 'peer-mac', engine: 'claude' }, peer)
-    const startId = String(added.result.startId)
-    await host({ type: 'agent.startDispatch', startId })
-    const harnessId = randomUUID()
-    running.push(harnessId)
-    const agentId = String((await host({ type: 'agent.started', startId, harnessId, configuration: config })).result.agentId)
-    await host({ type: 'agent.startSettled', startId, warning: null })
+    const stored = await storeBuddy(db, tab, { personId: peer.sub, machineId: 'peer-mac', configuration: config })
+    running.push(stored.harnessId)
     await report()
-    return { chat: String(added.result.conversationId), agentId }
+    return { chat: stored.chat, agentId: stored.agentId }
   }
   const send = async (conversationId: string, text: string, user = peer, extra: Partial<Extract<Command, { type: 'message.send' }>> = {}, asAgentId?: string) =>
     String((await execute({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [], ...extra }, user, asAgentId)).result.messageId)

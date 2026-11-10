@@ -209,7 +209,7 @@ function replyOf(prior: { revision: number; result: unknown; parts: unknown }) {
  */
 function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touch[] {
   const touches: Touch[] = delivery.authorKind === 'person' ? [{ kind: 'member', key: delivery.authorId }] : []
-  // A Buddy receives only while its person reads there (buddyNews.ts): their part guards the delivery, so taking the
+  // A Buddy receives only while its person reads there (written until 2026-11-10): their part guards the delivery, so taking the
   // project from them while a claim is in flight makes it check again (security review 1 of #2178).
   const person = state.agents.find(a => a.id === delivery.agentId)?.buddyOf?.personId
   // In the Buddy's own chat its person is also the sender: one part is touched once, or the claim's second guarded write of
@@ -505,7 +505,7 @@ export class GrantReads {
  *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
 const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
 
-/** Buddy news (buddyNews.ts) is the one delivery to an agent its row does not list among its recipients: a mark that holds
+/** Buddy news (written until 2026-11-10) is the one delivery to an agent its row does not list among its recipients: a mark that holds
  *  after the Buddy is removed or replaced (security review 1 of #2178). */
 const buddyNews = (message: Pick<SuperTabMessage, 'recipientIds'>, delivery: Pick<SuperTabDelivery, 'agentId'>): boolean =>
   !message.recipientIds.includes(delivery.agentId)
@@ -538,7 +538,7 @@ const receiptOrder = (m: Pick<SuperTabMessage, 'recipientIds'>) => (a: PageDeliv
  *  (liveness.ts unpurged; review 2 of #2258). */
 export function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
   const source = m.source as { kind?: unknown; reason?: unknown; machine?: unknown; machines?: unknown } | null
-  // A Buddy model switch's line names every machine serving the model (buddyModel.ts).
+  // A Buddy model switch's line names every machine serving the model (written until 2026-11-10).
   if (source?.kind === 'system' && Array.isArray(source.machines)) {
     const { machines, ...rest } = source
     const names = (machines as unknown[]).filter((n): n is string => typeof n === 'string' && n.length > 0).sort((a, b) => b.length - a.length)
@@ -1450,7 +1450,7 @@ export class SuperTabStore {
       // An answer right below a message (commands.ts `answers`) reads that message as a reply does; it joins no thread.
       if (command.type === 'message.send' && (command.replyTo || command.answers)) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: (command.replyTo ?? command.answers)!, tabId, conversationId: command.conversationId } })
-        // The thread's root says whose proposal the reply answers (buddyNews.ts): the reply itself, or one more read by id.
+        // The thread's root says whose proposal the reply answers (written until 2026-11-10): the reply itself, or one more read by id.
         const root = reply?.thread && reply.thread !== reply.id
           ? await tx.superTabMessage.findFirst({ where: { id: reply.thread, tabId, conversationId: command.conversationId }, select: { source: true } }) : reply
         // In a Buddy chat: whether the thread ever had a session (buddySessions.ts), by the thread index, one row at most: its
@@ -3478,7 +3478,7 @@ export class SuperTabStore {
     if (!target || target.membershipGeneration !== delivery.membershipGeneration || !group || group.archived) return false
     // The removed Leads conversation hands out nothing, a delivery stored before its removal included (model.ts leadsRemoved).
     if (isLeads(group)) return false
-    // A Buddy also hears its person's news outside its chat (buddyNews.ts), only where it reads as its person would (below). An
+    // A Buddy also hears its person's news outside its chat (written until 2026-11-10), only where it reads as its person would (below). An
     // agent with work in the project hears a person's answer to its line in the project chat while that work lasts (#2924).
     if (!group.agentIds.includes(target.id) && !isBuddy(target) && !worksInProjectChat(state, group, target.id)) return false
     return canReadAgent(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, target) &&
@@ -3820,7 +3820,7 @@ export class SuperTabStore {
           ...(!action.uncertain ? { deliveredAt: delivery.deliveredAt ?? new Date(this.now()) } : {}) } : {}) } })
       const row = await tx.superTabMessage.findUnique({ where: { id: delivery.messageId } })
       // A Buddy reads no machine names, in what it is handed too (security review 2 of #2178). News from outside its chat
-      // (buddyNews.ts) is marked, so its host words it as news to note, never a message to answer there.
+      // (written until 2026-11-10) is marked, so its host words it as news to note, never a message to answer there.
       const target = agent(state, agentId), group = conversation(state, delivery.conversationId)
       // An agent reads people by name, never email (task #2954).
       const named = row && namesPerson(row) ? rowForAgent(state, lazyUsernames(state), row) : row

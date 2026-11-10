@@ -176,6 +176,9 @@ export function requireBuddyCommand(buddy: Agent, command: { type: string; conve
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner.', 403)
   if ('agentId' in command && command.agentId !== buddy.id) fail('BUDDY_FORBIDDEN', 'A Buddy acts only for itself.', 403)
   if (command.type === 'message.send' || command.type === 'message.react') {
+    // Nothing routes a thread session's post to its thread any more (2026-11-10): one still running writes nothing until the
+    // Buddy conversion ends it (buddyConversion.ts).
+    if (buddy.buddySession) fail('BUDDY_SESSION_ENDED', 'This session has ended.', 409)
     const group = groups.find(g => g.id === command.conversationId)
     if (!group || !isBuddyChat(group) || !group.agentIds.includes(buddy.id)) {
       fail('BUDDY_FORBIDDEN', 'A Buddy posts only in its own chat.', 403)

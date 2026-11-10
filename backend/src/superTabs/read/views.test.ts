@@ -114,10 +114,13 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     }
   })
 
-  it('says to every reader that this server takes New session in a thread reply', () => {
+  // Buddies became agents (buddyConversion.ts, 2026-11-10): an app offers New session only where the server says it takes one.
+  it('offers no reader New session any more', () => {
     const { s, parts } = scene()
     for (const actor of [owner, peer, agentActor(s.worker)]) {
-      expect(readerView(parts, actor, NOW, {}).derived).toMatchObject({ threadSessions: true, sessionsFromChat: true })
+      const derived = readerView(parts, actor, NOW, {}).derived
+      expect(derived).not.toHaveProperty('threadSessions')
+      expect(derived).not.toHaveProperty('sessionsFromChat')
     }
   })
 
