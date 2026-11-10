@@ -108,10 +108,17 @@ The PM's line "Give a task to the builder who owns its part, is free and has wha
 deep" is gone from `PM_BASICS`; the PM still sizes and labels, which is judgment.
 
 **The PM announces each hand-off in the project's channel (anh Dee, 2026-11-09)** so people can read the team talk: one line in
-`PM_BASICS`, "Pip, you have #12", once per hand-off, the rest of the task's talk staying on its issue. It is a prompt line only
+`PM_BASICS`, "@Pip #12 is yours", once per hand-off, the rest of the task's record staying on its issue. It is a prompt line only
 until code does it: the PM does not see who a task went to until it reads the issue, and Harness knows at the moment it
 labels. Proposal to the maintainers: `githubAssign.ts give()` posts the line itself as it sets `builder:<name>`, keyed by
 repository, number and builder so a restart or a second daemon posts nothing twice; the prompt line goes with it (standard 13).
+
+**The channel is the team's group chat (anh Dee, 2026-11-10: "channel chat here replaces the queue"):** `SWARM_BASICS` tells
+every agent to talk to the others there, as lampOS's builders do on their Queue issue (taking a task, a pull request up, asks
+to a part's owner and answers, hand-offs, a person's decision passed on, proposals, `free`), each post opening with `@Name`
+and unsigned, while a task's own record stays on its issue or pull request. It stays a prompt line: what to say to a teammate
+is judgment. The code half is already code: an `@Name` in the channel wakes that agent (backend `recipientIds`), and the
+app shows the post's author and time, and a task's pull request talk in the task's chat.
 
 **Reassign a task when its claim goes quiet is already code:** `liveness.ts` drops a task whose lease runs out (5
 minutes with no progress report, 30 minutes quiet), `dispatch.ts` `candidatesFor` hands it on, and `stuck.ts` alerts
