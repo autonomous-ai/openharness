@@ -1,7 +1,6 @@
-import { object } from './host.js'
+import { identifier, object } from './wire.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, type Frame } from '../agentClient/model.js'
-import { identifier } from './host.js'
 import { resolve } from 'node:path'
 import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'

@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
 import { openDaemon } from '../agentClient/daemon.js'
-import { backend, identifier, object, SuperTabHostError } from './host.js'
+import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { readAuthSession } from '../lib/authSession.js'
 
 /** How often the owner's Swarms are read. */
