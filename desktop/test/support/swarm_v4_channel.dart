@@ -7,6 +7,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/voice_recorder.dart';
 
 import '../swarm_state_test.dart' show createApp;
 import 'super_tab_fixture.dart';
@@ -119,6 +120,7 @@ Future<SuperTabController> openSwarmV4(
   VoidCallback? onNewProject,
   AppNotifier? app,
   void Function(SuperTabController c)? onOpenGroupTerminals,
+  SuperTabVoiceRecorder Function()? voiceRecorder,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -170,6 +172,7 @@ Future<SuperTabController> openSwarmV4(
               shown.machines.firstWhere((m) => m.machineId == id).displayName,
           github: github,
           instructions: instructions,
+          voiceRecorder: voiceRecorder,
         ),
       ),
     ),

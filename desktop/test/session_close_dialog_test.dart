@@ -27,8 +27,7 @@ void main() {
                       const SessionCloseItem(
                         name: 'Quinn',
                         activity: 'working',
-                        protectionReason: 'Quinn is the Captain of project Pilot. Delete the project first.',
-                        coordinatorName: 'Captain',
+                        protectionReason: 'Quinn is the Product Manager of project Pilot. Delete the project first.',
                       ),
                     ]),
                 child: const Text('Open'),
@@ -39,9 +38,12 @@ void main() {
       );
       await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Captain of project Pilot'), findsOneWidget);
       expect(
-        find.textContaining('The Captain will keep running.'),
+        find.textContaining('Product Manager of project Pilot'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('The Product Manager will keep running.'),
         findsOneWidget,
       );
       expect(
