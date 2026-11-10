@@ -77,8 +77,8 @@ export function recordClosing(state: SuperTabState, target: Agent): void {
 
 /** Takes [target] out of the Swarm for good, as a person's removal does: no record of it brings it back when its session reopens,
  *  its host closes the session unless [close] is false (it closed it already), and it leaves every group, its running task
- *  waiting to be reconciled. commands.ts removeAgent adds a command's checks; the Buddy conversion calls it as it is. */
-export function removeAgent(state: SuperTabState, target: Agent, close = true): void {
+ *  waiting to be reconciled. commands.ts removeAgent adds a command's checks to it; the Buddy conversion calls it as it is. */
+export function takeOutAgent(state: SuperTabState, target: Agent, close = true): void {
   state.removedSessions = state.removedSessions?.filter(r => r.machineId !== target.machineId || r.harnessId !== target.harnessId)
   if (!state.removedSessions?.length) delete state.removedSessions
   if (close) recordClosing(state, target)

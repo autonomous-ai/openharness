@@ -63,13 +63,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
-    case 'buddy.engine': {
-      const chat = before.conversations.find(c => c.id === command.conversationId)
-      const buddy = command.conversationId ? chat && mainBuddyOf(before, chat)
-        : actor.kind === 'person' ? defaultBuddy(before, actor.userId) : undefined
-      if (buddy) machine(buddy.machineId)
-      break
-    }
     case 'task.suggest': case 'task.approve': case 'task.reject': {
       head()
       const card = before.conversations.find(c => c.id === command.conversationId)
@@ -79,12 +72,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       newMemberStarts()
       break
     }
-    case 'buddy.create':
-      // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
-      slots(command.machineId)
-      // Its name is claimed against every other name in the Swarm, as buddy.rename's is (below).
-      head()
-      break
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break

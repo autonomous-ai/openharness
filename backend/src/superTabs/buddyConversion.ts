@@ -6,7 +6,7 @@
  * once a released backend has converted every Swarm (slice S17b).
  */
 import { isBuddyChat } from './buddies.js'
-import { removeAgent } from './closedAgents.js'
+import { takeOutAgent } from './closedAgents.js'
 import type { Agent, Conversation, SuperTabState } from './model.js'
 
 /** What a Buddy start still waiting fails with: nothing starts a Buddy now. */
@@ -32,7 +32,7 @@ export function convertBuddies(state: SuperTabState): Agent[] {
   for (const buddy of state.agents.filter(a => a.buddyOf)) {
     const chat = state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(buddy.id))
     if (buddy.buddySession || buddy.buddyNarrow || !ownsItself(state, buddy, chat)) {
-      removeAgent(state, buddy)
+      takeOutAgent(state, buddy)
       removed.push(buddy)
       continue
     }

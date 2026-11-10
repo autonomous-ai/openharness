@@ -25,6 +25,10 @@ export const RETIRED_COMMANDS = [
   'member.start', 'member.helper',
   // Proposals (2026-11-10): a person asks an agent in their 1:1 chat, and a task is the project's GitHub issue.
   'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close', 'buddy.propose',
+  // Buddies (2026-11-10): each became an ordinary agent of its person, its Buddy chat their 1:1 chat (buddyConversion.ts). A
+  // host's end of a thread session and its model switch's result are ignored; a person's are refused (REFUSED_TO_PEOPLE).
+  'buddy.create', 'buddy.remove', 'buddy.default', 'buddy.chat', 'buddy.rename', 'buddy.engine', 'buddy.model', 'buddy.modelResult',
+  'buddy.sessionEnd', 'tab.buddyCap',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
@@ -42,6 +46,10 @@ const TASKS_RETIRED = { code: 'TASKS_RETIRED', status: 410, message: 'Tasks are 
 /** A proposal a person sends or answers in an older Desktop: refused in these words, which it shows where it was typed. */
 const PROPOSALS_RETIRED = { code: 'PROPOSALS_RETIRED', status: 410, message: 'Proposals are gone. Ask an agent in its chat.' }
 
+/** What an older Desktop or phone shows where a person added, opened, named, switched or removed their Buddy, or its owner set the
+ *  Swarm's Buddy cap: an ok answer would read as done. */
+const BUDDIES_RETIRED = { code: 'BUDDIES_RETIRED', status: 410, message: 'Buddies are agents now. Talk to yours in its chat.' }
+
 /** A check verdict a person records in an older Desktop's work details (work.check) is refused in these words, which it shows
  *  where the verdict was typed, rather than answered as ignored: the app takes an ok answer for a saved verdict and closes the
  *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
@@ -52,6 +60,8 @@ export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; s
   // An older Desktop's proposal from the Board, and its answer to a PM's question on one.
   'proposal.create': PROPOSALS_RETIRED,
   'proposal.answer': PROPOSALS_RETIRED,
+  'buddy.create': BUDDIES_RETIRED, 'buddy.remove': BUDDIES_RETIRED, 'buddy.default': BUDDIES_RETIRED, 'buddy.chat': BUDDIES_RETIRED,
+  'buddy.rename': BUDDIES_RETIRED, 'buddy.engine': BUDDIES_RETIRED, 'buddy.model': BUDDIES_RETIRED, 'tab.buddyCap': BUDDIES_RETIRED,
 }
 
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or

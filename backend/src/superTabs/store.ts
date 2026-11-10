@@ -765,15 +765,6 @@ export class SuperTabStore {
     }
     // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
     if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
-    // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
-    if (command.type === 'project.sharing') {
-      for (const owner of new Set([...state.agents.filter(a => a.buddySession?.projectId === command.projectId).map(a => a.buddyOf!.personId),
-        ...(state.starts ?? []).filter(s => s.request.buddySession?.projectId === command.projectId && !s.harnessId && !s.error).map(s => s.request.buddyOf!.personId)])) swarmChat(owner)
-    }
-    if (command.type === 'buddy.chat' || command.type === 'buddy.create' || command.type === 'buddy.remove') {
-      buddyChat(command.projectId, personId)
-      swarmChat(personId)
-    }
     // An instructions save posts in its project's chat, and a member's note removal tells its coordinator there, even quiet. So
     // does an older client's rule.set, a save too: in the project it names, or its agent's own (one it quotes is loaded).
     if (command.type === 'instructions.save' || command.type === 'note.remove' || command.type === 'rule.set') {
@@ -1444,12 +1435,6 @@ export class SuperTabStore {
       }
       if (command.type === 'machine.contribute') context.abandonedStartIds = await abandonedStarts(tx, tabId, original, command.machineId, context.now)
       if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request, true)
-      // A machine that is not there, or not the person's, reads as one that is not theirs: the words never say which.
-      if (command.type === 'buddy.create') context.contribution = await this.contribution(tx, original, actor, command, true).catch(error => {
-        if (error instanceof SuperTabError && ['HOST_UNAVAILABLE', 'HOST_REQUIRED'].includes(error.code)) fail('BUDDY_OWN_MACHINE', BUDDY_OWN_MACHINE_REFUSAL, 403)
-        throw error
-      })
-      if (command.type === 'buddy.rename' || command.type === 'buddy.create') context.buddyNames = await buddyNames(tx, tabId, original)
       // + New agent (task #4116): the person's own computer, by the store's reading of its account row, as a Buddy's.
       if (command.type === 'agent.new') context.contribution = await this.contribution(tx, original, actor, command, true).catch(error => {
         if (error instanceof SuperTabError && ['HOST_UNAVAILABLE', 'HOST_REQUIRED'].includes(error.code)) fail('AGENT_OWN_MACHINE', 'A new agent runs only on your own computer, in your own account.', 403)
