@@ -81,7 +81,7 @@ export interface LaunchRequestDeps {
   modelTarget: (selection: NewAgentModel) => Promise<GridLaunchOverride | null>
   /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
   guestCreate?: () => GuestCreate | null
-  /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  /** Which Swarm roles a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
   swarmLaunch?: Pick<SwarmLaunch, 'role'>
   /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeListed); absent, any is. */
   claudeHomeListed?: (claudeHome: string) => boolean
@@ -457,7 +457,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
     }
     // `swarmSkillMode` is read as nothing: the skill modes are gone (PM, 2026-11-11), and Desktop's Personal Swarm still
-    // sends one until its own removal.
+    // sends one. Delete this note on or after 2026-12-11, once no Desktop of the last 30 days sends it.
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
