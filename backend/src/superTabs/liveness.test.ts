@@ -228,7 +228,6 @@ describe('a start its machine has launched', () => {
     const rows = sweepLiveness(state, at).filter(row => row.source?.kind === 'start-timeout')
     expect(rows).toEqual([expect.objectContaining({ recipients: ['L', 'E'],
       text: 'Could not start Builder on moonshotai/kimi-k3: its machine did not start it within 3 minutes.' })])
-    expect(state.conversations[0]!.stepUp).toBeUndefined()
   })
 
   // A task with no lead (opened before its project had a coordinator) still hears its failed start: the agent that made it,

@@ -73,19 +73,6 @@ describe('with Team accounts removed', () => {
     expect(refusal(() => f.start('owner-mac', f.as(f.pm)))).toBeNull()
   })
 
-  it('routes past another person\'s computer, and keeps a teammate\'s own agent', () => {
-    const f = swarm()
-    const own = f.member('mates-own', 'mate-mac', 'mate')
-    const candidate = (id: string, machineId: string, agentId?: string) => ({ id, kind: agentId ? 'member' : 'new', ...agentId ? { agentId } : {}, machineId,
-      engine: 'claude', model: 'opus', effort: 'high', quality: 3, cost: 2, title: `${id} on ${machineId}`, label: id })
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Work.' }, excluded: [], floor: 2, notes: false, via: 'instructions', p: null,
-      belowFloor: false, why: 'Instructions.', candidates: [candidate('c2', 'mate-mac'), candidate('c3', 'mate-mac', own), candidate('c4', 'owner-mac')] }
-    const routed = f.run({ type: 'route.record', conversationId: f.task, decision } as Command, f.as(f.pm))
-    const record = (routed.routeDecisions[0] as { record: { candidates: Array<{ id: string }>; excluded: Array<{ title: string; reason: string }> } }).record
-    expect(record.candidates.map(c => c.id)).toEqual(['c3', 'c4'])
-    expect(record.excluded.map(e => e.title)).toEqual(['c2 on mate-mac'])
-  })
-
   // Security review 2 of #3446: off the Machines list, or through a machine share, the grant's contributor is not the machine's
   // owner; the start must be its owner's own, with no share, as agent.new checks.
   it('starts nothing on a computer shared through a machine share', () => {
