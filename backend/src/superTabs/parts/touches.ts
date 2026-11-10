@@ -34,9 +34,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   // and removing an agent writes every conversation it is in (rule b), so the conversation guards it. Touching them would
   // make every worker's post touch its Lead, and posts in different groups would conflict again (spec goal 1).
   if ('agentId' in command) agent(command.agentId)
-  // D9: a custom role choice reads the role sets on the head.
-  if ('roleId' in command && command.roleId) head()
-  if (command.type === 'agent.start' && command.request.roleId) head()
 
   switch (command.type) {
     // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one
@@ -68,13 +65,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
         if (project && canReadProject(before, reader, project) && !(after && canReadProject(effects.state, reader, after))) member(person.id)
       }
       break
-    case 'conversation.create': {
-      const projectId = command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : 'lead')
-      group(leadGroupOf(projectId))
-      member(command.requesterId)
-      for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
-      break
-    }
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)

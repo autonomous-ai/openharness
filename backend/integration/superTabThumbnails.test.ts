@@ -10,7 +10,7 @@ import { PrismaClient } from '@prisma/client'
 import sharp from 'sharp'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { MemoryAttachmentStore, MemoryAvatarStore, UPLOAD_CHECK_MS, type Attachment, type Attachments } from '../src/superTabs/attachments.js'
+import { MemoryAttachmentStore, UPLOAD_CHECK_MS, type Attachment, type Attachments } from '../src/superTabs/attachments.js'
 import { thumbKeyOf, thumbnailsReserve as realReserve } from '../src/superTabs/thumbnails.js'
 
 // The thumbnailer's queue is full while this says so (thumbnails.ts thumbnailsBusy).
@@ -59,7 +59,7 @@ const keyOf = (url: string) => url.slice(BASE.length)
 
 async function swarm(now: () => number = Date.now) {
   const files = new MemoryAttachmentStore()
-  const attachments: Attachments = { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: new MemoryAvatarStore('https://avatars.example.test'), avatarPrefix: 'super-tabs' }
+  const attachments: Attachments = { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' }
   const store = new SuperTabStore(db, now, attachments)
   const tab = (await store.create(owner, randomUUID(), 'Pictures', 'public')).id
   const execute = (command: Parameters<SuperTabStore['execute']>[2]['command'], user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })

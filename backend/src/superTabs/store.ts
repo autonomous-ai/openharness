@@ -1,4 +1,3 @@
-import { v3Stopping, withdrawV3Stops } from './agentStops.js'
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
 import { canReadProject } from './projects.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
@@ -31,8 +30,8 @@ import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { projectList, type ProjectList } from './projectList.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_CHECK_MS, UPLOAD_LINK_MS,
-  type Attachment, type Attachments, type AvatarStore } from './attachments.js'
+import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, typeFromHead, UPLOAD_CHECK_MS, UPLOAD_LINK_MS,
+  type Attachment, type Attachments } from './attachments.js'
 import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -42,12 +41,11 @@ import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { wordsOf, watchersLost, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, admitPerson, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
+import { wordsOf, watchersLost, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, admitPerson, projectsOf, agentProjectId, readConversation, readProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
-import { answersRequest } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
@@ -74,7 +72,7 @@ import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
-import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
+import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect, type TerminalKind } from './terminal.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
 import { DEFAULT_ROUTING_POLICY } from './routingPolicy.js'
@@ -130,7 +128,7 @@ interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: string[
 /** The groups, agents, projects and starts a command names in its own fields (design section 3.1). */
 /** Commands that register a session or can make one a Lead or a private member: checked against the other Swarms'
  *  registrations (projects.ts requireSingleRegistration). A rebind is refused onto any terminal registered elsewhere already. */
-const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'conversation.create', 'project.create'])
+const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'project.create'])
 /** The session a command registers, when it names one. */
 function registeredBy(state: SuperTabState, command: Command): Array<{ machineId: string; harnessId: string }> {
   if (command.type === 'agent.add') return [{ machineId: command.machineId, harnessId: command.harnessId }]
@@ -142,8 +140,8 @@ function registeredBy(state: SuperTabState, command: Command): Array<{ machineId
 function namedFor(command: Command): Named {
   const has = (key: string) => key in command
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
-  const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
-    'askedIn' in command ? command.askedIn?.conversationId : undefined].filter((id): id is string => !!id)
+  const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined]
+    .filter((id): id is string => !!id)
   // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too.
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
     projectIds: command.type === 'project.delete' || command.type === 'project.sharing' || command.type === 'project.closeTab' ? [command.projectId] : [] }
@@ -483,10 +481,6 @@ async function strangerRefusal<T>(state: SuperTabState, userId: string, check: (
 export class SuperTabStore {
   /** Where lag-tolerant reads go (SuperTabStoreHooks.replica); the store's own client without one. */
   readonly replica: PrismaClient
-  /** Where avatars are kept, whose links member reads carry (read/service.ts); null when avatar uploads are off. */
-  get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
-  /** The folder avatar keys start with (attachments.ts `avatarPrefix`). */
-  get avatarPrefix(): string { return trimPrefix(this.attachments?.avatarPrefix ?? this.attachments?.prefix ?? '') }
   /** Signs the links every read hands out for chat files (fileLinks.ts); null without a bucket. */
   private readonly fileLinks: FileLinks | null
 
@@ -999,10 +993,8 @@ export class SuperTabStore {
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
       }
-      // The skills its agent launches with. A contributed machine's host cannot read the Swarm to learn them (cli
-      // superTabs/start.ts): until 2026-10-28 it launched every agent on Harness orchestration, whatever its project ran.
-      const project = startProject(state, start.request)
-      const read = { ...start, skillMode: project ? skillModeOf(project) : 'default' as const }
+      // A CLI or Desktop from before #3912 reads a missing skillMode as Harness orchestration and would launch a v4 agent with its skills: always 'default', until 2026-12-11.
+      const read = { ...start, skillMode: 'default' as const }
       // The Lead reads that its machine is still preparing it, and waits instead of starting another (liveness.ts).
       return startPreparing(state, start, this.now()) ? { ...read, preparing: true as const } : read
     })
@@ -1175,10 +1167,6 @@ export class SuperTabStore {
           orderBy: [{ sequence: 'desc' }, { id: 'desc' }], take: ABOVE_ROWS, select: { id: true, author: true, source: true, recipientIds: true, thread: true } })
         const above = newest.find(m => (!m.thread || m.thread === m.id) && !agentOnly(m.source, m.recipientIds))
         if (above) context.above = { author: above.author as unknown as Author }
-      }
-      if (command.type === 'machine.engineResume' && command.askedIn) {
-        const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
-        if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
@@ -1378,15 +1366,6 @@ export class SuperTabStore {
       // deliveries of the message.
       if (command.type === 'message.send' && (command.replyTo || command.answers) && actor.kind === 'agent') {
         await this.settleAnswered(tx, tabId, (command.replyTo ?? command.answers)!, actor.agentId, context.now)
-      }
-      if (command.type === 'project.report' && actor.kind === 'agent') {
-        // Judged on the progress after this report summarized what it names.
-        const progress = projectsOf(effects.state).find(p => p.id === command.projectId)?.progress
-        if (progress?.requestMessageId && answersRequest(progress, command.throughRevision)) {
-          await this.endDeliveries(tx, tabId, { where: { agentId: actor.agentId, messageId: progress.requestMessageId } }, () => tx.superTabDelivery.updateMany({ where: { tabId, agentId: actor.agentId, messageId: progress.requestMessageId,
-            status: { in: ['queued', 'claimed', 'uncertain', 'delivered', 'confirmed'] } },
-            data: { status: 'answered', answeredAt: new Date(context.now), holdReason: null, holdSince: null } }))
-        }
       }
       const revoked = [
         ...original.people.filter(p => !effects.state.people.some(n => n.id === p.id && n.generation === p.generation))
@@ -1875,7 +1854,7 @@ export class SuperTabStore {
           const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
           if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
           // A sender who has since lost write access, or is no longer an agent of the agent's project, gets nothing.
-          mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId))
+          mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId), row.kind as TerminalKind)
           // How long until a request still waiting turns late by itself.
           const lateIn = row.status === 'pending' ? row.createdAt.getTime() + TERMINAL_PICKUP_MS - now
             : row.status === 'claimed' ? row.claimedAt!.getTime() + TERMINAL_ANSWER_MS - now : 0
@@ -1937,7 +1916,7 @@ export class SuperTabStore {
   }
 
   private async terminalRefusal(tx: Transaction, state: SuperTabState | null,
-    row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string }): Promise<string | null> {
+    row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string; kind: string }): Promise<string | null> {
     const target = state?.agents.find(a => a.id === row.agentId && a.machineId === row.machineId && a.machineOwnerId === row.machineOwnerId)
     if (!state || !target) return 'The agent is no longer in the Swarm.'
     if (target.harnessId !== row.harnessId) return 'The agent’s terminal changed since the request. Read it again.'
@@ -1947,7 +1926,7 @@ export class SuperTabStore {
     try {
       agent(state, target.id)
       await this.agentGrant(tx, state, target)
-      mayDrive(state, requester, target, await this.confidential(tx, target.id))
+      mayDrive(state, requester, target, await this.confidential(tx, target.id), row.kind as TerminalKind)
     } catch (error) {
       if (error instanceof SuperTabError) return 'This request is no longer allowed.'
       throw error
@@ -3081,7 +3060,6 @@ export class SuperTabStore {
    */
   private otherAccount(state: SuperTabState, target: Agent, row: Pick<SuperTabMessage, 'author' | 'source'>): boolean {
     const words = wordsOf(row.source), written = row.author as unknown as Author
-    if (words === 'none') return false
     if (words === 'unknown') return true
     if (words === 'author' && written.kind !== 'agent') return false
     const author = words === 'author' ? state.agents.find(a => a.id === written.id) : state.agents.find(a => a.id === words.agentId)
@@ -3204,7 +3182,7 @@ export class SuperTabStore {
 
   /**
    * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts). Since Swarm v4 (anh Dee, 2026-11-09) they
-   * run only v4's jobs: every agent gets its 1:1 chat, and the stops v3 asked for are withdrawn once. Each run is one write, so a second run, or one racing it, finds nothing new.
+   * run only v4's job: every agent gets its 1:1 chat. Each run is one write, so a second run, or one racing it, finds nothing new.
    * They write no messages.
    */
   async runTimeChecks(tabId: string): Promise<number> {
@@ -3219,20 +3197,6 @@ export class SuperTabStore {
       const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
       const state = cloneData(loaded.state), now = this.now()
       giveAgentsChats(state, now, all)
-      // The stops the v3 rules asked for, withdrawn once, with the run and session records that hold them (agentStops.ts).
-      const stopping = v3Stopping(state)
-      // A host closing one holds its close lease: that stop stands. Once per Swarm, one read by id each.
-      const closing = new Set<string>()
-      for (const a of stopping) {
-        const scope = await tx.superTabSessionScope.findUnique({ where: { id: stableId('swarm-session', state.environment, a.machineOwnerId, a.id) },
-          select: { closeLeaseUntil: true } })
-        if (scope?.closeLeaseUntil && scope.closeLeaseUntil.getTime() > now) closing.add(a.id)
-      }
-      for (const stop of withdrawV3Stops(state, closing)) {
-        await tx.superTabRun.deleteMany({ where: { id: stop.agentId, tabId, assignmentId: `release-${stop.releaseId}` } })
-        await tx.superTabSessionScope.updateMany({ where: { id: stableId('swarm-session', state.environment, stop.machineOwnerId, stop.agentId),
-          stopReleaseId: stop.releaseId }, data: { stopReleaseId: null } })
-      }
       await this.save(tx, loaded, state, clock.next())
       return 0
     })

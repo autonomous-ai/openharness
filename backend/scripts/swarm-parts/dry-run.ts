@@ -100,11 +100,11 @@ try {
       groupsSent: 'groups' in changes ? changes.groups.length : null, otherHost: { bytes: bytes(host), tabs: host.tabs.length },
       runningHost: { bytes: bytes(runner), tabs: runner.tabs.map(t => t.tabId === big.state.id ? 'big' : t.tabId) } }
   })
-  // What only the new release writes, after the migration: a private chat, and a task its worker lost.
+  // What only the new release writes, after the migration: a private project with its chat, and a task its worker lost.
   const [hidden, lost] = [seeded[2]!, seeded.slice(3).find(s => s.state.conversations.some(c => c.assignment))!]
   const unsafe = await step('5b a private chat and a lost task, written after the migration', async () => {
     const chat = await store.execute(owner(hidden), hidden.state.id, { operationId: randomUUID(),
-      command: { type: 'conversation.create', title: 'Chat with PM', brief: 'Private.', checks: [], audience: { personIds: [hidden.state.ownerId] } } })
+      command: { type: 'project.create', name: 'Private', visibility: 'private', brief: 'Private.' } })
     const task = lost.state.conversations.find(c => c.assignment)!
     await db.$transaction(async tx => {
       const group = (await parts.loadAll(tx, lost.state.id)).groups.find(g => g.key === task.id)!

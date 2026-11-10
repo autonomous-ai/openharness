@@ -9,6 +9,8 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 
 // anh Dee, 2026-11-10: the backend records which agent posted each GitHub comment (superTabs/githubComments.ts), so the merger
 // and GitHub news stop parsing signatures. Only the agent the caller's own machine runs records, on its project's repository;
@@ -43,7 +45,8 @@ afterAll(async () => {
  *  Docs with no repository and its PM Ivy, all on the owner's computer. */
 async function scene() {
   const tab = (await store.create(owner, randomUUID(), 'Comments')).id
-  const run = (command: Command, user: AuthUser = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
+  const run = (command: Command | StoredCreate, user: AuthUser = owner) => command.type === 'conversation.create' ? storeCreate(db, tab, command, user)
+    : store.execute(user, tab, { operationId: randomUUID(), command })
   const invitation = await run({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   await run({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
   const project = async (name: string, repositoryUrl: string | null, pm: string) => {
@@ -55,7 +58,7 @@ async function scene() {
   const web = await project('Web', 'https://github.com/Acme/App.git', 'Juno')
   const docs = await project('Docs', null, 'Ivy')
   const task = String((await run({ type: 'conversation.create', projectId: web.projectId, title: 'Work', brief: 'Do it',
-    checks: [{ description: 'Verified', independent: false }] } as Command)).result.conversationId)
+    checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const oak = String((await run({ type: 'agent.add', conversationId: task, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Oak',
     configuration: config, lead: false } as Command)).result.agentId)
   const record = (agentId: string, commentId: string, user: AuthUser = owner, repository = 'acme/app') =>
