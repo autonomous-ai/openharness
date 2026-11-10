@@ -9,6 +9,7 @@
 import { fail, type Actor, type Conversation, type SuperTabState } from './model.js'
 import { canReadProject, ownsProject, projectsOf, type SwarmProject } from './projects.js'
 
+
 /** Whether [project] works the Board way. */
 export const switched = (project: Pick<SwarmProject, 'boardMode'>): boolean => project.boardMode === true
 
@@ -35,13 +36,13 @@ export function canChat(state: SuperTabState, project: SwarmProject, userId: str
 
 /** Refuses [actor] writing a message into [group] when it is a switched project's chat and they may not (canChat). Every
  *  path that writes a person's message there calls it: postable (send, uploads, voice), edit, a launch's initial message
- *  and a delivery's resend. Agents, Buddy proposals and task chats are unchanged. */
+ *  and a delivery's resend. Agents and task chats are unchanged. */
 export function requireCanChat(state: SuperTabState, actor: Actor, group: Conversation): void {
   if (actor.kind !== 'person') return
   // Only a project's own chat: never groupProject, which refuses a person's Buddy chat (it belongs to no project).
   const project = projectsOf(state).find(p => p.leadConversationId === group.id)
   if (!project || !switched(project) || canChat(state, project, actor.userId)) return
-  fail('CHAT_NOT_ALLOWED', 'Only the project owner and the people they allow write in this project\'s chat. Send it as a proposal through your Buddy, or ask the owner for Can chat.', 403)
+  fail('CHAT_NOT_ALLOWED', 'Only the project owner and the people they allow write in this project\'s chat. Ask the owner for Can chat.', 403)
 }
 
 /** Refuses a person's priority in a switched project unless they steer it or it is P1-P3 on a card they requested (the spec's
@@ -54,15 +55,3 @@ export function requirePriorityRight(state: SuperTabState, actor: Actor, project
   fail('PRIORITY_FORBIDDEN', 'In this project the owner and its decider set P0 and other people\'s priorities. You set P1-P3 on your own cards.', 403)
 }
 
-/** One message a person sent [project]'s PM that it has not answered, as switching the project on hands it to the proposal
- *  cards (#3817 importLegacyProposal, agreed with Fir 11-06). The card shows the message by its id, so its text never travels. */
-export interface LegacyAsk { messageId: string; conversationId: string; personId: string; at: number; thread: string }
-
-/** Every message [project]'s PM still owes, oldest first, in its chat and its tasks' chats (pulse.ts owe). Switching the
- *  project on keeps each one until its card exists, so nothing is dropped. */
-export function legacyAsks(state: SuperTabState, project: SwarmProject): LegacyAsk[] {
-  return state.conversations
-    .filter(c => !c.archived && c.owed?.length && (c.id === project.leadConversationId || (c.projectId ?? 'lead') === project.id))
-    .flatMap(c => c.owed!.map(ask => ({ messageId: ask.id, conversationId: c.id, personId: ask.personId, at: ask.at, thread: ask.thread })))
-    .sort((a, b) => a.at - b.at)
-}

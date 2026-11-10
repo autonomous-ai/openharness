@@ -82,8 +82,8 @@ export function owedLines(state: SuperTabState, project: SwarmProject, now: numb
   const names = swarmUsernames(state)
   const ago = (at: number) => `${Math.max(0, Math.round((now - at) / MINUTE))}m`
   // A switched project records no new ask (pulse.ts owe, task #3819): what is left came before the switch, and stays until it
-  // is answered or its proposal card exists (boardRights.ts legacyAsks), so nothing is dropped (Readycheck's review).
-  const header = switched(project) ? `Owed from before this project switched to the Board (${asks.length}, oldest ${ago(asks[0]!.at)}), until each has its proposal card.`
+  // is answered, so nothing is dropped (Readycheck's review).
+  const header = switched(project) ? `Owed from before this project switched to the Board (${asks.length}, oldest ${ago(asks[0]!.at)}).`
     : `Owed asks (${asks.length}, oldest ${ago(asks[0]!.at)}).`
   return [`${header} Answer each once, in its place: harness super-tab answer GROUP MESSAGE_ID TEXT OPERATION_ID.`,
     ...asks.slice(0, OWED_LINES_MAX).map(a => `- from ${names.get(a.personId) ?? 'a person'}, ${ago(a.at)} ago (message ${a.id} in ${a.conversationId})`),
