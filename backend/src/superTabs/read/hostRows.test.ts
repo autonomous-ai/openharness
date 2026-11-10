@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { storedAssignment } from '../storedWork.test-support.js'
 import { hostTab } from './hostRows.js'
+import { agentView } from './views.js'
 import { owner, swarm } from './fixture.test-support.js'
 
 const user = { sub: owner.userId, email: owner.email } as AuthUser
@@ -26,5 +27,20 @@ describe('a host row\'s resume', () => {
     const row = roster.find(r => 'agent' in r && r.agent.id === worker) as { resume: unknown } | undefined
     expect(row).toBeDefined()
     expect(row!.resume).toBeNull()
+  })
+})
+
+// Swarm v4 has no crew (2026-11-10). An older host keeps an agent whose row carries a crew mark alive, reopening its session
+// (cli superTabs/crew.ts isCrewRow): a mark a Swarm from before stores is never sent, nor shown to readers.
+describe('a crew mark from before', () => {
+  it('is neither in its host\'s row nor in a reader\'s view', async () => {
+    const s = swarm()
+    const task = s.group('Fix login')
+    const worker = s.add('dev', task, false, owner, 'host', owner.userId)
+    s.edit(state => { Object.assign(state.agents.find(a => a.id === worker)!, { crew: { role: 'Engineer', at: 1, by: owner.userId } }) })
+    const { roster } = await hostTab('tab', s.state, 'host', user, null, lookups)
+    const row = roster.find(r => 'agent' in r && r.agent.id === worker) as { agent: object } | undefined
+    expect(row!.agent).not.toHaveProperty('crew')
+    expect(agentView(s.state.agents.find(a => a.id === worker)!)).not.toHaveProperty('crew')
   })
 })
