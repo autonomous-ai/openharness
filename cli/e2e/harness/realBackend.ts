@@ -36,9 +36,12 @@ async function freePort(): Promise<number> {
   return port
 }
 
+/** A wait that cannot end well: thrown by a check, it ends the wait at once instead of being tried again. */
+class WaitEnded extends Error {}
+
 async function until(label: string, check: () => Promise<boolean>, ms = 120_000): Promise<void> {
   const deadline = Date.now() + ms
-  while (!await check().catch(() => false)) {
+  while (!await check().catch(error => { if (error instanceof WaitEnded) throw error; return false })) {
     if (Date.now() > deadline) throw new Error(`Timed out: ${label}`)
     await new Promise(r => setTimeout(r, 200))
   }
@@ -111,7 +114,11 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   })
   const url = `http://127.0.0.1:${port}`
   try {
-    await until('backend health', async () => (await fetch(`${url}/api/health`)).ok)
+    // A backend that died while starting (a bad migration, a missing setting) fails at once, not at the deadline.
+    await until('backend health', async () => {
+      if (child.exitCode !== null || child.signalCode !== null) throw new WaitEnded(`the backend exited (${child.exitCode ?? child.signalCode}) while starting`)
+      return (await fetch(`${url}/api/health`)).ok
+    })
   } catch (error) {
     throw new Error(`${(error as Error).message}; backend log ${logPath}:\n${readFileSync(logPath, 'utf8').slice(-2000)}`)
   }
