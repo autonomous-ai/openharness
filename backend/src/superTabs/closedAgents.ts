@@ -2,7 +2,6 @@ import { isBuddy } from './buddies.js'
 import { MACHINE_FRESH_MS, teamWorkCheck, type MachineObservation } from './machines.js'
 import { activeWork, type Agent, type RemovedSession, type SuperTabState } from './model.js'
 import { agentProjectId, canReadProject, isConfidential, ledProject, projectsOf } from './projects.js'
-import { barredFromTeamWritten } from './teamWritten.js'
 
 // Huy, 2026-11-02: four agents closed on their machine sat under Idle for hours, each in the machine's stopped list, because
 // only an agent's own host removed it, and only after a stop was asked for. A session closed by hand never asked. Now the
@@ -141,7 +140,7 @@ export function restoreRefusal(state: SuperTabState, record: RemovedSession, mac
  * Brings back the agents of [machineId] whose sessions [running] lists again and the caller [allowed], from the records their
  * removal kept, and drops the records that came due or were refused. Called only with a report already proved to be this machine's;
  * no command reaches it. An agent comes back only to the open groups of its own project it was in: never a private chat, since who
- * may read there is not its to decide again, nor a task marked Team-written while it was away.
+ * may read there is not its to decide again.
  * The restored agents.
  */
 export function restoreSessions(state: SuperTabState, machineId: string, running: readonly string[], now: number,
@@ -162,7 +161,6 @@ export function restoreSessions(state: SuperTabState, machineId: string, running
     if (!state.closingSessions?.length) delete state.closingSessions
     for (const group of state.conversations) {
       if (group.archived || group.dormant || group.kind || group.audience || (state.projects && group.projectId !== record.agent.projectId)) continue
-      if (barredFromTeamWritten(state, group, record.agent)) continue
       if (record.leadOf.includes(group.id) && !group.leadId) group.leadId = record.agent.id
       // A project chat holds only its coordinator among agents (#2207): a member there comes back to it only as its coordinator.
       if (projectChats.has(group.id) && group.leadId !== record.agent.id) continue

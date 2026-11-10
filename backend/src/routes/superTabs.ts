@@ -25,7 +25,6 @@ import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superT
 import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
-import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -250,7 +249,6 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
       workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
-      ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
       // When a moved rule's task merged, as GitHub dates it, read at the instructions save (superTabs/ruleMoves.ts, task #3463).
       ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work

@@ -241,7 +241,7 @@ export function startPreparing(state: SuperTabState, start: AgentStart, now: num
   return !!report?.preparingStartIds?.includes(start.id) && now - report.receivedAt <= MACHINE_FRESH_MS
 }
 
-export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'NOT_SWARM_MACHINE' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
+export type TeamWorkCode = 'NOT_SWARM_MACHINE' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 
 /**
