@@ -32,7 +32,6 @@ import { SWITCH_ADOPT_MS, SWITCH_HOLD_MS } from './leadSwitch.js'
 import { switchChangeId } from './leadSwitchRequest.js'
 import { TerminalHost } from './terminal.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
-import { CREW_CONTINUE } from './crew.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { mayBeBuddy, retainedHarnesses, retentionFile } from './retention.js'
@@ -3976,68 +3975,14 @@ describe('ending a Buddy\'s thread sessions', () => {
 
 })
 
-// Task #3397: the host keeps a project's crew alive as it keeps the PM. A crashed crew session is reopened in place, on its own
-// conversation, and told once to continue the task it still holds; an ordinary agent is left as before.
-describe('keeping a crew member alive', () => {
-  const crewRow = (agent: Record<string, unknown> = {}) => ({ tabId: 'tab', active: false,
-    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', crew: { role: 'Engineer', at: 1, by: 'pm' }, ...agent } })
-  /** [t]'s host with its task `work` running in the session, and a screen and input the crew keeper reads and types into. */
-  const withTask = (t: ReturnType<typeof lifeFixture>, rows: Record<string, unknown>[]) => {
-    const typed: string[] = []
-    t.core.account.backend = async (_method, path, body) => {
-      if ((body as any)?.command) { t.commands.push(body as Record<string, unknown>); return { status: 200, body: { data: {} } } }
-      if (path.includes('/hosts/')) return { status: 200, body: { data: hostForm(rows, { tabs: ['tab'], assignments: [{ tabId: 'tab', assignmentId: 'work', harnessId: 'harness' }] }) } }
-      return { status: 200, body: { data: [] } }
-    }
-    let screen = '❯ '
-    ;(t.core as any).superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
-      screen: vi.fn(async () => ({ ok: true as const, text: screen, hold: null })),
-      input: vi.fn(async (_id: string, text: string) => { typed.push(text); screen = `❯ ${text}`; return { ok: true as const } }),
-      inputIfScreen: vi.fn(async (_id: string, keys: string[], seen: string) => {
-        if (seen !== screen) return { ok: false as const, error: 'SCREEN_CHANGED' }
-        typed.push(keys.join(' ')); screen = '❯ '; return { ok: true as const }
-      }) }
-    return typed
-  }
-
-  it('reopens a crashed crew session in place and tells it once to continue its task', async () => {
-    const rows = [crewRow()]
-    const t = lifeFixture(rows)
-    const typed = withTask(t, rows)
-    t.keepLeadAlive.mockResolvedValue({ ok: true })
-    await t.poll()
-    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
-    t.live(true)
-    await t.poll(1_000)
-    await t.poll(1_000)
-    expect(typed).toEqual([CREW_CONTINUE, 'Enter'])
-    await t.poll(2 * 60_000)
-    expect(typed).toEqual([CREW_CONTINUE, 'Enter'])
-    expect(t.keepLeadAlive).toHaveBeenCalledTimes(1)
-  })
-
-  // Task #4698: a Member sleeps between tasks with its folder kept; woken, it is reopened in that folder as crew is.
-  it('reopens a woken Member in place, and closes it while it sleeps', async () => {
-    const rows = [crewRow({ crew: undefined, member: { projectId: 'project-1' }, asleep: { since: 1 } })]
-    const t = lifeFixture(rows)
-    withTask(t, rows)
-    t.keepLeadAlive.mockResolvedValue({ ok: true })
-    t.live(true)
-    await t.poll()
-    expect(t.closeMember).toHaveBeenCalledWith('harness')
-    expect(t.keepLeadAlive).not.toHaveBeenCalled()
-    rows[0] = crewRow({ crew: undefined, member: { projectId: 'project-1' } })
-    t.live(false)
-    // Its folder is checked first (a dropped one comes back), then it is reopened, as a crew member's is.
-    await t.poll(1_000)
-    await t.poll(1_000)
-    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
-  })
-
-  it('reopens no ordinary agent, nor a crew member asleep or moved', async () => {
-    for (const row of [crewRow({ crew: undefined }), crewRow({ asleep: { since: 1 } }), crewRow({ movedTo: 'agent-2' })]) {
+// Backend S14 (#3877): there is no crew. A row the server still marks crew or Member is kept alive no more than any agent:
+// a gone session is not reopened, and nothing is typed into it.
+describe('a crew or Member mark', () => {
+  it('reopens no session and types nothing for it', async () => {
+    for (const agent of [{ crew: { role: 'Engineer', at: 1, by: 'pm' } }, { member: { projectId: 'project-1' } }]) {
+      const row = { tabId: 'tab', active: false, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', ...agent } }
       const t = lifeFixture([row])
-      withTask(t, [row])
+      t.keepLeadAlive.mockResolvedValue({ ok: true })
       await t.poll()
       await t.poll(60_000)
       expect(t.keepLeadAlive).not.toHaveBeenCalled()

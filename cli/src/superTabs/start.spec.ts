@@ -1449,31 +1449,15 @@ describe('neutral start prompts', () => {
   })
 })
 
-// Task #4698: a Member sets its project up once on its person's computer; a helper starts from that ready setup.
-describe('a Member and its helpers', () => {
-
-  it('readies a helper\'s folder from its Member\'s setup before it joins', async () => {
-    const f = fixture()
-    f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } as typeof f.start.request
-    const order: string[] = []
-    const scoped = vi.fn(async (payload: Record<string, unknown>) => {
-      if ((payload.command as { type?: string } | undefined)?.type === 'agent.started') order.push('joined')
-      return f.scoped(payload)
-    })
-    const beforeJoin = vi.fn(async (harnessId: string) => { order.push(`readied ${harnessId}`) })
-    await startAgent({ tabId: 'tab', startId: 'start', beforeJoin }, scoped, where, f.open)
-    expect(order).toEqual(['readied native', 'joined'])
-  })
-
-  it('starts a helper whose folder could not be readied, as a helper still', async () => {
-    const f = fixture()
-    f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } as typeof f.start.request
-    const beforeJoin = vi.fn(async () => { throw new Error('gone') })
-    const result = await startAgent({ tabId: 'tab', startId: 'start', beforeJoin }, f.scoped, where, f.open)
-    expect(beforeJoin).toHaveBeenCalledWith('native')
-    expect(f.scoped.mock.calls.some(([payload]) => (payload.command as { type?: string } | undefined)?.type === 'agent.started')).toBe(true)
-    expect(result).not.toHaveProperty('error')
-  })
+// Backend S14 (#3877): no Member sets its project up for its helpers. A helper starts as any other agent: nothing is run
+// before it joins, whatever a caller hands in.
+it('starts a helper as any other, running nothing before it joins', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } as typeof f.start.request
+  const beforeJoin = vi.fn(async () => {})
+  expect(await startAgent({ tabId: 'tab', startId: 'start', beforeJoin }, f.scoped, where, f.open)).not.toHaveProperty('error')
+  expect(beforeJoin).not.toHaveBeenCalled()
+  expect(f.scoped.mock.calls.some(([payload]) => (payload.command as { type?: string } | undefined)?.type === 'agent.started')).toBe(true)
 })
 
 describe('only a host runs a start', () => {
