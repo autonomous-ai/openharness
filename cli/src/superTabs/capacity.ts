@@ -150,6 +150,6 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
   } else if (quota.windows.some(w => w.usedPercent >= 100)) unknown.push(USED_UP_WINDOW)
   return { allowed: reasons.length === 0, reasons, unknown }
 }
-/** Quota is information, not a gate (project instructions, phase 4): a start on a used-up account goes ahead, its engine
- *  shows its usage limit, and the agent resumes when the window resets (superTabs/limitResume.ts). */
+/** Quota is information, not a gate (project instructions, phase 4): a start on a used-up account goes ahead and its engine
+ *  shows its usage limit. */
 export const USED_UP_WINDOW = 'The subscription has a used-up usage window: work there waits until it resets.'

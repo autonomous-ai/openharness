@@ -30,7 +30,6 @@ import { homedir, hostname } from 'node:os'
 import { recordsOtherFolder, scrubClaudeSession, type PurgeTarget, type ScrubTold } from './inCore/teamPurge.js'
 import { RebindSender, replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
-import { LimitResume } from './limitResume.js'
 import { CrewKeeper, isCrewRow } from './crew.js'
 import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
 import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
@@ -608,7 +607,6 @@ export class SuperTabHost {
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
   /** Gives a task lost to a usage limit back to its session once the limit has reset. */
-  private readonly limitResume: LimitResume
   /** Restarts a frozen crew session and continues a reopened one (crew.ts); the keep-alive below reopens it. */
   private readonly crew: CrewKeeper
 
@@ -631,9 +629,6 @@ export class SuperTabHost {
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     // Its pickups follow this host's delivery push lease: the server that pushes deliveries also says when a request waits.
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log, pushes: () => this.now() < this.pushUntil })
-    this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
-      owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
-        .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
     this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log,
       stillSince: harnessId => this.terminal.stillSince(harnessId),
       owns: async harnessId => (await this.sources.feed.fresh()).assignments.some(a => a.harnessId === harnessId) })
@@ -1156,7 +1151,7 @@ export class SuperTabHost {
     this.joinSwarms(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
-    if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data); void this.crew.tick(data) }
+    if (this.core.superTabs) { void this.terminal.tick(data); void this.crew.tick(data) }
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {
