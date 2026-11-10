@@ -248,7 +248,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
 
     // 1. Bob's second computer takes the pin from his first (A2), and adds a harness of its own.
     let t = Date.now()
-    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' }, signedOutGh)
+    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' })
     const B2: Side = { who: bob1b, d: two.daemon, machineId: two.machineId, client: two.client }
     sides.push(B2)
     const held = await rosterOf(A, sharedTabId)
@@ -335,6 +335,10 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
       `search issues harness-tab:${sharedTabId} --match body --limit 100 --json number,title,state,url,repository,body,updatedAt`,
       `search prs harness-tab:${sharedTabId} --match body --limit 100 --json number,state,url,repository,body,isDraft`,
     ])
+    // The second computer's gh is not signed in, as gh's own search says it. Not "no gh at all": the daemon also looks in
+    // Homebrew's folders and the login shell's PATH (lib/github.ts GH_DIRS), where a developer's Mac or a CI runner has a
+    // real one, which would read whatever login that computer has.
+    writeFileSync(join(B2.d.root, 'bin', 'gh'), "#!/bin/sh\necho 'To get started with GitHub CLI, please run:  gh auth login' >&2\nexit 4\n", { mode: 0o755 })
     expect(await am(B2, { action: 'share_tasks', sharedTabId })).toMatchObject({ error: 'GH_SIGNED_OUT' })
 
     // 5. Observation: Alice's harness is shared read-only with Bob; Bob's terminal stream from it, and no input.
@@ -644,14 +648,6 @@ async function holdThenNotInTab(A: Side, id: string, removed: number, label: str
   expect(waited, 'failed only after the hold').toBeGreaterThanOrEqual(HOLD_MS - 15_000)
 }
 
-/**
- * A daemon whose `gh` is not signed in, as gh says it (lib/github.ts reads that as GH_SIGNED_OUT). Not "no gh at all": the
- * daemon also looks in Homebrew's folders and the login shell's PATH (lib/github.ts GH_DIRS), where a developer's Mac or a CI
- * runner has a real one, so a missing gh cannot be made here, and a real gh would read whatever login that computer has.
- */
-async function signedOutGh(d: IsolatedDaemon): Promise<void> {
-  writeFileSync(join(d.root, 'bin', 'gh'), '#!/bin/sh\necho \'You are not logged into any GitHub hosts. To log in, run: gh auth login\' >&2\nexit 4\n', { mode: 0o755 })
-}
 
 /** A `gh` with canned answers for the three calls a shared tab's tasks make (messages/tasks.ts), each noted in [log];
  *  any other call fails loudly. An issue that only mentions the id, without the marker, is in the search and not a task. */
