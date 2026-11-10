@@ -221,8 +221,12 @@ const _rest = .0001;
     (
       regions: _regions(tester),
       // A glyph's smoothed edge reaches a little past its box.
+      // Selectable text (the Instructions pane's files) draws its words through an editable, not a RichText.
       words: [
-        for (final text in find.byType(RichText).evaluate())
+        for (final text in [
+          ...find.byType(RichText).evaluate(),
+          ...find.byType(EditableText).evaluate(),
+        ])
           tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
       ],
     );
