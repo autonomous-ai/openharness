@@ -31,7 +31,7 @@
 - Nano printf on a format that needs more than nano has (`%ll*`, `%j`, `%z`, `%L`, floats outside cJSON). Expected: no such format in `FW/main`, and `_printf_float` is still linked (Task 4).
 - A pet or a mark whose array was merged into another's but is drawn with its own palette or size. Expected: merged arrays are byte-identical in content *and* element type. The render tests for pets and marks still pass (Task 5).
 - A buffer moved to PSRAM that is touched from an ISR or with the cache disabled. Expected: none of the three is. `s_tx_frame` stays where it is (Task 7).
-- A task near its new stack size on a path the telemetry has not covered (voice at 16 kHz, long Swarm lists, a firmware push). Expected: each keeps ≥ 1 KB free over the Task 8 run.
+- A task near its new stack size on a path the telemetry has not covered (a long voice message, long Swarm lists). Expected: each keeps ≥ 1 KB free over the Task 8 run.
 
 ---
 
@@ -184,6 +184,6 @@
   - open Harness.
 - [ ] **Step 2:** The daemon log says `on fw 0.1.0-dev`, and no `offering firmware` follows.
 - [ ] **Step 3:** Compare the first `RAM tag=` line after boot with one from the baseline firmware in `~/.harness/logs/usb-*/dial-*.log`. Expected: `int_free` at least 25 KB higher.
-- [ ] **Step 4:** Ask Diego to use the dial for 30 minutes: Focus face, a pet alert, a voice message, the Swarm screens, and a firmware push over the cable.
+- [ ] **Step 4:** Ask Diego to use the dial for 30 minutes: Focus face, a pet alert, a voice message, the Swarm screens. (A firmware push cannot be triggered on a dev build; `cable_link`, which runs it, keeps its stack.)
   - Expected: no reboot, watchdog or `stack overflow` in the dial log.
   - Expected: every task in the new `STACK` lines keeps ≥ 1 KB free.

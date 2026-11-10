@@ -64,7 +64,6 @@ Take back the low-risk part of that, with no change in what the dial shows or do
     arrays in `pets.c` / `focus_marks.c`.
 - **On a dial** (USB flash, `-DPROJECT_VER=0.1.0-dev`, 30 minutes of normal use):
   - Focus face, pets, alerts, voice message and the Swarm screens look and work as before.
-  - A firmware push over the cable completes.
   - Every task in the new telemetry list keeps at least 1 KB of stack free.
   - The cable shows no reboot, watchdog or `stack overflow`.
 
