@@ -1068,12 +1068,7 @@ class _PersonRow extends StatelessWidget {
                     ),
                     const SizedBox(width: AppSpace.m),
                   ],
-                  SwarmAvatar(
-                    id: id,
-                    name: name,
-                    picture: person?.avatar,
-                    status: person?.statusAt(clock.now()),
-                  ),
+                  SwarmAvatar(id: id, name: name, picture: person?.avatar),
                   const SizedBox(width: AppSpace.m),
                   Expanded(
                     child: Column(

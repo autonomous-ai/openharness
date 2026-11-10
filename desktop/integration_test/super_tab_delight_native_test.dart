@@ -7,7 +7,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/test_run.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/profile_sheet.dart';
 import 'package:harness/super_tabs/ship_row.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -63,17 +62,6 @@ void main() {
       await tester.runAsync(() => shot('office-$name'));
       await tester.pumpAndSettle();
       await tester.runAsync(() => shot('office-$name-settled'));
-      final context = tester.element(find.byType(Scaffold).first);
-      showSuperTabProfile(context, c);
-      await tester.pumpAndSettle();
-      await tester.runAsync(() => shot('profile-$name'));
-      Navigator.of(context, rootNavigator: true).pop();
-      await tester.pumpAndSettle();
-      showSuperTabProfile(context, c, agentId: 'kai');
-      await tester.pumpAndSettle();
-      await tester.runAsync(() => shot('agent-avatar-$name'));
-      Navigator.of(context, rootNavigator: true).pop();
-      await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     }

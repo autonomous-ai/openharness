@@ -75,7 +75,6 @@ Future<void> showRow(
             SwarmMessageRow(
               message: message,
               name: 'owner',
-              look: (picture: null, status: null),
               role: null,
               mentions: SwarmMentions(const []),
               tagged: tagged,

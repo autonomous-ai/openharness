@@ -10,10 +10,10 @@ import 'package:harness_mobile/swarm/swarm_buddy.dart';
 /// ⚠️ A fix made to one side only fails nowhere else: a field the backend adds
 /// would parse on a computer and be dropped on the phone. Here a drift fails
 /// until the change is carried across — or, if the two are meant to differ now,
-/// until the file leaves this list on purpose. `profile_model.dart` has: Desktop
-/// no longer has reactions, which the phone still reads and draws.
+/// until the file leaves this list on purpose.
 const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
+  'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
   'lib/swarm/tasks/personal_tasks.dart':
       'lib/super_tabs/tasks/personal_tasks.dart',
   // Live cards (Slack parity, #2212): which messages are cards, and the
@@ -63,9 +63,8 @@ void main() {
   test('the phone offers a Buddy the desktop\'s engines, none turned off', () {
     // Codex is offered as Claude is since #2832 (Ken, 11-04): neither side
     // keeps a list of refused engines.
-    final desktop = File(
-      '../desktop/lib/super_tabs/buddies.dart',
-    ).readAsStringSync();
+    final desktop = File('../desktop/lib/super_tabs/buddies.dart')
+        .readAsStringSync();
     final engines = RegExp(
       r"kBuddyEngines = \{((?:\s*'\w+':\s*'[^']*',?)*)\s*\}",
     ).firstMatch(desktop)!.group(1)!;

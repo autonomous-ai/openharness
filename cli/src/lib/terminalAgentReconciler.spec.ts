@@ -150,6 +150,31 @@ describe('composite terminal reconciliation', () => {
     } finally { reconciler.stop() }
   })
 
+  // Before Hermes' gateway was told apart (processTable.ts `hermesGatewayProcess`), the first Hermes harness on Windows
+  // recorded the gateway under its pane as its engine. Upgraded, the first pass saw that pane's real Hermes, and
+  // discovery took it for another program: `%2002 replaced 5afb24e8`, `5afb24e8 forgotten` (DESKTOP-0TFH0OJ, 2026-11-10).
+  it('keeps a Hermes agent that recorded its gateway, and observes the Hermes the gateway runs under', async () => {
+    const pane: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2002' }
+    const gateway = { pid: 23704, executable: 'python.exe', startMarker: 'w:134386979499385812' }
+    const current = { ...session([pane]), engine: 'hermes' as const, sessionId: 'local-fc37402f', processIdentity: gateway }
+    const live: DiscoveredTerminalAgent = { ...observed([pane]), engine: 'hermes',
+      processIdentity: { pid: 24240, executable: 'python.exe', startMarker: 'w:134386979460000000' }, formerProcesses: [gateway] }
+    const onDiscovered = vi.fn()
+    const onObserved = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['ptyhost'],
+      onDiscovered, onObserved, onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => probe([
+        { instanceId: 'ptyhost:p2-0.5.80', result: { state: 'available', roots: [{ runtime: pane, rootPid: 24240, cwd: '/work' }] } },
+      ], [live]),
+    })
+    try {
+      await reconciler.start(60_000)
+      expect(onObserved).toHaveBeenCalledWith(live, current)
+      expect(onDiscovered).not.toHaveBeenCalled()
+    } finally { reconciler.stop() }
+  })
+
   it('advertises a retained pane even when no engine process is observed', async () => {
     const current = { ...session([tmux]), active: false }
     const onTerminalAvailability = vi.fn()

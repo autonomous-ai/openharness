@@ -214,6 +214,60 @@ describe('which agent a hook belongs to', () => {
     }
   })
 
+  // Hermes 0.22+ runs every session's hooks in one shared gateway, a child of the first Hermes client (DESKTOP-0TFH0OJ,
+  // 2026-11-09: client 24240 in pane %2002, gateway 23704 under it). A hook typed in another pane came from there, so its
+  // ancestry and pane named the first harness, which took the conversation (`5afb24e8 rebound local-fc`).
+  describe('a Hermes hook from its shared gateway', () => {
+    const gatewayTree = () => [
+      { pid: 24240, parentPid: 24088, startMarker: 'm', args: 'python.exe -I C:\\h\\hermes\\bin\\hermes-boot.py' },
+      { pid: 23704, parentPid: 24240, startMarker: 'm', args: 'python.exe -m hermes_cli.main --profile default gateway run --quiet --idle-exit' },
+      { pid: 500, parentPid: 23704, startMarker: 'm', args: 'cmd.exe /c node notify.mjs --engine hermes' },
+    ]
+    const hermes = (agentId: string, pid?: number) => ({ ...agent(agentId, pid), engine: 'hermes' }) as unknown as RegisteredSession
+
+    it('is told apart from one a pane\'s own Hermes ran', async () => {
+      const { hooks } = setup()
+      vi.mocked(processRows).mockResolvedValueOnce(gatewayTree() as never)
+      expect(await hooks.hookViaSharedProcess({ engine: 'hermes', callerPid: 500 })).toBe(true)
+      vi.mocked(processRows).mockResolvedValueOnce([{ pid: 500, parentPid: 24240, startMarker: 'm', args: 'node notify.mjs' }, gatewayTree()[0]] as never)
+      expect(await hooks.hookViaSharedProcess({ engine: 'hermes', callerPid: 500 })).toBe(false)
+      expect(await hooks.hookViaSharedProcess({ engine: 'claude', callerPid: 500 })).toBe(false)
+    })
+
+    it('is not one when nothing says so: no table, a chain that ends, or one that loops', async () => {
+      const { hooks } = setup()
+      vi.mocked(processRows).mockResolvedValueOnce(null as never)
+      expect(await hooks.hookViaSharedProcess({ engine: 'hermes', callerPid: 500 })).toBe(false)
+      vi.mocked(processRows).mockResolvedValueOnce([{ pid: 500, parentPid: 0, startMarker: 'm', args: 'node notify.mjs' }] as never)
+      expect(await hooks.hookViaSharedProcess({ engine: 'hermes', callerPid: 500 })).toBe(false)
+      vi.mocked(processRows).mockResolvedValueOnce(tree([500, 600], [600, 500]) as never)
+      expect(await hooks.hookViaSharedProcess({ engine: 'hermes', callerPid: 500 })).toBe(false)
+    })
+
+    it('says it came by its session\'s pane when nothing is there to take it', async () => {
+      const { hooks } = setup({})
+      vi.mocked(processRows).mockResolvedValueOnce(gatewayTree() as never)
+      expect(await hooks.resolveHookAgent({ engine: 'hermes', runtimeHints: [hint('%2005')], callerPid: 500, bySessionPane: true })).toBeNull()
+      expect(console.log).toHaveBeenCalledWith('[hooks] unmatched hermes hook · from its shared gateway, by its session\'s pane'
+        + ' · hints=tmux:%2005 · resolvedRuntimes=1 · agentsOnRuntime=0 · callerPid=500')
+    })
+
+    it('goes to the agent on its session\'s pane, not to the one whose Hermes the gateway sits under', async () => {
+      const first = hermes('5afb24e8', 24240)
+      const second = hermes('0c5a50a0', 24276)
+      const { hooks } = setup({ '%2002': first, '%2005': second })
+      vi.mocked(processRows).mockResolvedValue(gatewayTree() as never)
+      try {
+        // Without the session's pane, the gateway's own hint and ancestry pick the first harness: what happened.
+        expect(await hooks.resolveHookAgent({ engine: 'hermes', runtimeHints: [hint('%2002')], callerPid: 500 })).toEqual(first)
+        expect(await hooks.resolveHookAgent({ engine: 'hermes', runtimeHints: [hint('%2005')], callerPid: 500, bySessionPane: true })).toEqual(second)
+        expect(console.log).toHaveBeenCalledWith('[hooks] hermes hook from its shared gateway accepted on its session\'s pane · agent=0c5a50a0')
+        // Its pane alone is the evidence: the first harness's process above the gateway counts for nothing.
+        expect(await hooks.resolveHookAgent({ engine: 'hermes', runtimeHints: [hint('%2002')], callerPid: 500, bySessionPane: true })).toEqual(first)
+      } finally { vi.mocked(processRows).mockReset() }
+    })
+  })
+
   it('none when two agents could own the hook, saying it is ambiguous', async () => {
     vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
     const { hooks } = setup({ '%1': agent('a1', 100), '%2': agent('a2', 200) })

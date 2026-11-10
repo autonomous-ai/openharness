@@ -78,6 +78,22 @@ class FakeWebViewController extends PlatformWebViewController {
 
   @override
   Future<void> setBackgroundColor(Color color) async {}
+
+  /// What back and forward answer; a test sets them before it plays a navigation.
+  bool backward = false, forward = false;
+  int backs = 0, forwards = 0;
+
+  @override
+  Future<bool> canGoBack() async => backward;
+
+  @override
+  Future<bool> canGoForward() async => forward;
+
+  @override
+  Future<void> goBack() async => backs++;
+
+  @override
+  Future<void> goForward() async => forwards++;
 }
 
 class FakeNavigationDelegate extends PlatformNavigationDelegate {
@@ -85,6 +101,12 @@ class FakeNavigationDelegate extends PlatformNavigationDelegate {
 
   PageEventCallback? onPageStarted, onPageFinished;
   WebResourceErrorCallback? onWebResourceError;
+  UrlChangeCallback? onUrlChange;
+
+  @override
+  Future<void> setOnUrlChange(UrlChangeCallback onUrlChange) async {
+    this.onUrlChange = onUrlChange;
+  }
 
   @override
   Future<void> setOnPageStarted(PageEventCallback onPageStarted) async {
