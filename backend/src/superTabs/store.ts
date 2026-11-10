@@ -3998,17 +3998,22 @@ export class SuperTabStore {
 
   /** [loaded] with every Buddy converted, in a copy to save from [base]: a Buddy's chat, and those of [agentIds], are loaded first,
    *  dormant ones too, so the save compares them with what was read. [all] holds every conversation loaded. What waited for a
-   *  session the conversion removed, or was sent by it, ends with it, as a command's removal ends it. */
+   *  session the conversion removed ends with it, as a command's removal ends it. */
   private async withoutBuddies(tx: Transaction, tabId: string, loaded: Loaded, agentIds: string[]): Promise<{ base: Loaded; state: SuperTabState; all: SuperTabState }> {
     const named = [...agentIds, ...buddyIds(loaded.state)]
     const ensured = named.length ? await this.ensure(tx, loaded, { agentIds: named }) : loaded
     if (!holdsBuddies(loaded.state)) return { base: loaded, state: cloneData(loaded.state), all: ensured.state }
     const state = cloneData(ensured.state)
     const ids = convertBuddies(state).map(a => a.id)
+    // A few sessions at most, each status by its own `[tabId, agentId, status]` match: no `in` filter on a hot collection (hotFilters.test.ts).
     if (ids.length) {
-      await this.endDeliveries(tx, tabId, { matches: row => ids.includes(row.agentId) }, () => tx.superTabDelivery.updateMany({ where: { tabId,
-        status: { in: [...CANCELLABLE_DELIVERY] }, OR: [{ agentId: { in: ids } }, { authorKind: 'agent', authorId: { in: ids } }] },
-        data: { status: 'cancelled', holdReason: null, holdSince: null } }))
+      await this.endDeliveries(tx, tabId, { matches: row => ids.includes(row.agentId) }, async () => {
+        let count = 0
+        for (const agentId of ids) for (const status of CANCELLABLE_DELIVERY) {
+          count += (await tx.superTabDelivery.updateMany({ where: { tabId, agentId, status }, data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
+        }
+        return { count }
+      })
     }
     return { base: ensured, state, all: state }
   }

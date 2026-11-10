@@ -168,9 +168,10 @@ describe('Can chat in a switched project', () => {
     const task = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Task', priority: 'P2', requesterId: 'd',
       task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }).conversationId as string
     f.run(say(task, 'In the card chat'), member)
-    // A person's own Buddy chat belongs to no project: writing there is never this right's to refuse.
-    const buddyChat = f.run({ type: 'buddy.chat' }, member).conversationId as string
-    f.run(say(buddyChat, 'To my Buddy'), member)
+    // A person's chat with their own agent belongs to no project: writing there is never this right's to refuse.
+    const ownChat = f.run({ type: 'agent.new', kind: 'regular', machineId: 'd-mac', engine: 'claude', local: true }, member,
+      { contribution: { machineOwnerId: 'd', contributorId: 'd' } }).conversationId as string
+    f.run(say(ownChat, 'To my agent'), member)
   })
 
   it('changes nothing in a project not switched', () => {

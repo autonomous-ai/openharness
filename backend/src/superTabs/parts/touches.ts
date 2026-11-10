@@ -45,8 +45,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if ('roleId' in command && command.roleId) head()
   if (command.type === 'agent.start' && command.request.roleId) head()
 
-  // Buddy input also guards an already awake recipient, so a concurrent sleep retries against that input (#3824).
-
   switch (command.type) {
     // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one
     // landing at the same moment retries against it and is refused (security review 2 of #2457).

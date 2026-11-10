@@ -5,7 +5,8 @@ import { giveAgentsChats } from './agentChats.js'
 import { agentChatId, agentKind } from './agentKind.js'
 import { buddyChatId, swarmBuddyChatId } from './buddies.js'
 import { createSuperTab, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup } from './projects.js'
+import { canReadGroup, projectsOf } from './projects.js'
+import { sessionReadsRow } from './buddySessions.js'
 
 // Swarm v4 (the lead's decision, 2026-11-10): every v3 Buddy becomes an ordinary agent of its person, and its private Buddy chat
 // that agent's 1:1 chat with them, read by them alone, as before.
@@ -127,5 +128,22 @@ describe('convertBuddies', () => {
     giveOwnBuddy(left, 'peer')
     left.people = left.people.filter(p => p.id !== 'peer')
     expect(convertBuddies(left).map(a => a.id)).toEqual(['peer-buddy'])
+  })
+
+  it('keeps hiding, in the converted chat, the rows of a project its person no longer reads', () => {
+    const state = swarm()
+    const buddy = giveOwnBuddy(state, 'peer')
+    const id = swarmBuddyChatId(state.people[1]!)
+    const [project] = projectsOf(state)
+    project!.visibility = 'private'
+    project!.members = []
+    const lost = { id: 'r1', thread: 't', buddySession: true, buddyProject: project!.id }, plain = { id: 'r2' }
+    convertBuddies(state)
+    const chat = chatOf(state, id)
+    expect(chat.kind).toBe('agent-chat')
+    for (const reader of [undefined, state.agents.find(a => a.id === buddy.id)]) {
+      const reads = sessionReadsRow(reader, chat, state)
+      expect([reads(lost), reads(plain)]).toEqual([false, true])
+    }
   })
 })

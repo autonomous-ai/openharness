@@ -3863,9 +3863,7 @@ describe('credentials in Swarm chat', () => {
     expect(route).toMatchObject({ decision: { assessment: { why: `needs ${CREDENTIAL_MARKER}` }, excluded: [{ reason: `asked for ${CREDENTIAL_MARKER}` }] } })
     const owns = withoutCredentials({ type: 'conversation.create', title: 't', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src', github] } } as Command, removed)
     expect(owns).toMatchObject({ task: { owns: ['src', CREDENTIAL_MARKER] } })
-    const rename = withoutCredentials({ type: 'buddy.rename', conversationId: 'chat', name: github } as Command, removed)
-    expect(rename).toMatchObject({ name: CREDENTIAL_MARKER })
-    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github', 'github'])
+    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github'])
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
@@ -3894,7 +3892,7 @@ describe('credentials in every command', () => {
   }, command)
 
   it.each([
-    ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
+    ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'],
     ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
     ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'], ['crew.add', 'lane'],
     ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
@@ -3919,8 +3917,7 @@ describe('credentials in every command', () => {
       'agent.add launchRefused.model', 'agent.add launchRefused.effort',
       ...['agent.configuration', 'agent.rebind', 'agent.started', 'agent.startSettled'].flatMap(type =>
         ['engine', 'model', 'effort', 'engineVersion'].map(field => `${type} configuration.${field}`)),
-      'agent.new engine', 'agent.new model', 'buddy.create engine', 'buddy.create model', 'buddy.create setup.engines[]', 'buddy.engine engine',
-      'buddy.model gridModel', 'lead.start engine', 'lead.start model', 'lead.start effort', 'lead.switch engine', 'lead.switch model',
+      'agent.new engine', 'agent.new model', 'lead.start engine', 'lead.start model', 'lead.start effort', 'lead.switch engine', 'lead.switch model',
       'lead.switch effort', 'machine.contribute engines[]', 'machine.engineResume engine', 'localModels.status grid',
       'agent.start request.engine', 'agent.start request.model', 'agent.start request.effort', 'agent.start request.permissionMode',
       'agent.start request.gridModel', 'agent.start request.gridName', 'agent.start request.requirements.tools[]',
@@ -3934,7 +3931,7 @@ describe('credentials in every command', () => {
     // A repository URL that holds a credential is refused by its schema.
     ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl', 'github.relay repository', 'github.relay login',
       'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
-      'agent.start request.requirements.devices[]', 'buddy.create setup.cwd', 'lead.start branchRef', 'lead.start repositoryUrl',
+      'agent.start request.requirements.devices[]', 'lead.start branchRef', 'lead.start repositoryUrl',
       'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl',
       'conversation.create task.requires.devices[]',
       'conversation.unlink pullRequestUrl']],
@@ -3987,7 +3984,7 @@ describe('credentials in every command', () => {
     const exempt = NOT_WORDS.flatMap(([, fields]) => fields)
     const covered = new Set([...Object.entries(WORDS).flatMap(([type, paths]) => paths!.map(path => `${type} ${path}`)), ...exempt])
     const all = strings()
-    expect(all.length).toBeGreaterThan(200)
+    expect(all.length).toBeGreaterThan(180)
     expect(all.filter(field => !covered.has(field))).toEqual([])
     // Nothing listed is stale or listed twice.
     expect([...covered].filter(field => !all.includes(field))).toEqual([])

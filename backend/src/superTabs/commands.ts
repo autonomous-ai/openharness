@@ -195,7 +195,6 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('swarm.delete'), name: z.string().max(160) }).strict(),
   z.object({ type: z.literal('swarm.restore') }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSaveSchema.nullable() }).strict(),
-  // The most Buddies a person may have in this Swarm (buddies.ts BUDDY_CAP), set by its owner (task #3818).
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
@@ -570,8 +569,6 @@ const LOOP_WINDOW_MS = 30 * 60_000
 /** The source of the Lead's notice about a pair (LOOP_NOTICE_AT), which pairLoop passes over: counted as a break, it would
  *  start the count again and repeat the notice every LOOP_NOTICE_AT messages (final review of phase 1). */
 export const PAIR_LOOP_SOURCE = 'pair-loop'
-/** The source of a Buddy's line that it cannot start in its person's older project chat (buddyDownLine). */
-export const BUDDY_DOWN_SOURCE = 'buddy-cannot-start'
 const isPairLoopNotice = (source: unknown) => (source as { kind?: unknown } | null)?.kind === PAIR_LOOP_SOURCE
 /** How many of the newest [recent] messages in a row went between agents [a] and [b], each from one of them to the other,
  *  inside the last LOOP_WINDOW_MS; a person's message, another notice or a message to anyone else ends the run. */
