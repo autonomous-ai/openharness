@@ -82,6 +82,14 @@ describe('one Agent Messages request through the daemon', () => {
     await expect(messagesRpc(target(), {})).rejects.toMatchObject({ code: 'NO_PEER_LINK' })
     behave = (ws) => ws.close(1000)
     await expect(messagesRpc(target(), {})).rejects.toMatchObject({ code: 'DISCONNECTED' })
+    // A message too large: the daemon's refusal with its numbers, and the transport's own close, are said as such.
+    behave = (ws, frame) => {
+      if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: {} }))
+      else { ws.send(JSON.stringify({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes: 600 * 1024, limit: 512 * 1024 } })); ws.close(1009) }
+    }
+    await expect(messagesRpc(target(), {})).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE', message: expect.stringContaining('was 600 KiB, and Harness takes at most 512 KiB') })
+    behave = (ws) => ws.close(1009)
+    await expect(messagesRpc(target(), {})).rejects.toMatchObject({ code: 'REQUEST_TOO_LARGE' })
     behave = answering
     await expect(messagesRpc(target(), {})).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })

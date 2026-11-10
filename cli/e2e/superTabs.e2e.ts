@@ -294,7 +294,7 @@ it('starts either engine once, posts to its captured group and delivers shared i
   const refused = await startHere('start-refused-config', refusedRequest)
   expect(refused.code, JSON.stringify(refused.answer)).toBe(1)
   expect(refused.answer).toMatchObject({ error: 'START_FAILED', detail: expect.stringContaining('codexHome') })
-  expect(starts.get('start-refused-config')!.error).toContain('before starting an agent')
+  expect(starts.get('start-refused-config')!.error).toContain('codexHome is only valid for codex')
   const creationId = starts.get('start-refused-config')!.creationId
   expect(await client.request('agent_create_status', { creationId })).toMatchObject({ creationId, state: 'cancelled' })
   // Even a delayed valid create cannot revive the cancelled request.

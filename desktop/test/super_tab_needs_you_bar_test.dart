@@ -86,8 +86,9 @@ Future<SuperTabController> show(
   ValueChanged<SuperTabAgent>? onOpenTerminal,
   Brightness brightness = Brightness.light,
   bool terminalsVisible = false,
+  Size size = const Size(1200, 900),
 }) async {
-  await tester.binding.setSurfaceSize(const Size(1200, 900));
+  await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final c = server.controller();
   addTearDown(c.dispose);
@@ -236,6 +237,8 @@ void main() {
         server(askedOf: 'owner'),
         onOpenTerminal: (a) => opened.add(a.id),
         terminalsVisible: true,
+        // Wide enough that the terminal sits beside the chat, not in its place.
+        size: const Size(1400, 900),
       );
       await tester.tap(bar());
       await tester.pumpAndSettle();

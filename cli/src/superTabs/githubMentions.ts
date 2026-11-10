@@ -70,6 +70,12 @@ export const signedBy = (body: string, names: readonly string[]): boolean =>
  *  "pip install" names nobody. */
 export const namesAgent = (body: string, names: readonly string[]): boolean =>
   names.some(name => new RegExp(`(?<![\\w-])${escape(name)}(?![\\w-])`).test(body))
+/** A name in lower case as people and agents write it, with a capital: an agent attached as its session was named, "juno",
+ *  signs "Juno, 12:17:" and is asked "to **Juno**" (swarm-sandbox, 2026-11-10: read in its own case alone, Juno never heard
+ *  Harness's ask to read #24 again, and Pip heard its own posts). Each form is matched as written, so "pip install" names an
+ *  agent called "Pip" no more than before. Any other name is kept as it is. */
+const capitalized = (name: string): string => name === name.toLowerCase() && name !== name.toUpperCase()
+  ? name.replace(/(^|\s)(\p{Ll})/gu, (_, gap: string, letter: string) => gap + letter.toUpperCase()) : name
 /** The builder label of an agent's tasks and pull requests: builder:pip for Pip. */
 export const builderLabel = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
 
@@ -104,7 +110,8 @@ export async function watchedAgents(deps: { me: string | null; live: (harnessId:
     if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
     // The name people see first (backend agentNames.ts: a chosen name, else a free one): it names the agent's label and its
     // instructions file as the assigner and Desktop name them. Its stored name can be its engine's ("Claude Code").
-    const names = [...new Set([agent.displayName, agent.name].filter((n): n is string => typeof n === 'string' && !!n.trim()).map(n => n.trim()))]
+    const names = [...new Set([agent.displayName, agent.name].filter((n): n is string => typeof n === 'string' && !!n.trim())
+      .flatMap(n => [n.trim(), capitalized(n.trim())]))]
     if (!names.length) continue
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     if (!state) continue

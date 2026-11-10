@@ -1,6 +1,5 @@
 import 'dart:async';
 
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
@@ -362,9 +361,10 @@ class _SuperTabViewState extends State<SuperTabView>
   );
   SuperTabController get c => widget.controller;
 
-  /// The open project's week board, read once for the right pane's members
-  /// and the left sidebar's Models, so both show one week.
-  late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
+  /// The open project's week board, read for Manage's Models. Made when
+  /// Manage is first shown: a view torn down before then reads none.
+  SuperTabProjectBoard? _projectBoard;
+  SuperTabProjectBoard get _board => _projectBoard ??= SuperTabProjectBoard(c);
 
   /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is.
   SwarmAgentStates? _states;
@@ -546,8 +546,8 @@ class _SuperTabViewState extends State<SuperTabView>
       _states = _agentStates();
     }
     if (oldWidget.controller != c) {
-      _board.dispose();
-      _board = SuperTabProjectBoard(c);
+      _projectBoard?.dispose();
+      _projectBoard = null;
       _shippingBoard?.dispose();
       _shippingBoard = null;
       oldWidget.controller.threadPaneHidden();
@@ -1177,7 +1177,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // The controller outlives its view, reading another Swarm's replies.
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
-    _board.dispose();
+    _projectBoard?.dispose();
     _states?.dispose();
     _shippingBoard?.dispose();
     _facts.dispose();

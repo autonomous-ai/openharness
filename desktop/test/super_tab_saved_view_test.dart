@@ -1133,7 +1133,6 @@ class _Pages {
     Map<String, dynamic>? body,
   }) async {
     final uri = Uri.parse(path);
-    if (uri.path.endsWith('/mentions')) return {'mentions': <Object>[]};
     if (uri.queryParameters['after'] == null) {
       return {
         'tabs': [
@@ -1184,7 +1183,7 @@ void _followUpTests() {
   });
 
   // Review of #1791, 1: an iPhone suspending the tab that holds the lock.
-  test('a lock another tab holds neither delays a discovery nor its tags, '
+  test('a lock another tab holds does not delay a discovery, '
       'and the forget runs once it is free', () async {
     final kept = MemoryStore();
     final before = SuperTabSavedViews(kept);
@@ -1206,7 +1205,11 @@ void _followUpTests() {
     client.bind('owner');
     await client.refreshTabs().timeout(const Duration(seconds: 1));
     expect(client.discoveryError, isNull);
-    expect(paths, contains('/api/super-tabs/tab/mentions?state=waiting'));
+    // Discovery reads the list and nothing of each Swarm.
+    expect(paths, [
+      '/api/super-tabs/list',
+      '/api/super-tabs/list?after=second',
+    ]);
     expect(store.values['super_tab.view.owner.gone'], isNotNull);
     store.release.complete();
     await pumpEventQueue();

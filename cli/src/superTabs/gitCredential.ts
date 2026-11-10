@@ -10,6 +10,9 @@
  *
  * The calling agent is found as `harness super-tab` finds it: its tmux pane, in the daemon's list of agents. The token is
  * written to git alone, on stdout, and never logged.
+ *
+ * Only sessions started with the App before its removal name it as their helper; delete on or after 2026-12-10, with
+ * superTabs/github.ts.
  */
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
 import { callerOf, type Frame } from '../agentClient/model.js'
