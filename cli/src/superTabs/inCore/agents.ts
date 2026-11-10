@@ -7,7 +7,7 @@
 import type { SwarmAgentDeps, SwarmAgents } from '../../core/api.js'
 
 export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent, creationStatus, members }: SwarmAgentDeps & {
-  /** The Leads and crew (`leads`) and members this machine's Super Tab host keeps (superTabs/retention.ts). */
+  /** The Leads and wakeable Buddies (`leads`) and members this machine's Super Tab host keeps (superTabs/retention.ts). */
   members: { leads(): Set<string>; harnesses(): Set<string>; sleepingBuddies?(): Set<string> }
 }): SwarmAgents {
   return {

@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { CrewFolders } from './crewFolders.js'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -5488,99 +5487,17 @@ describe('a roster row from a server that still names an owed ask and a Leads co
   })
 })
 
-// Task #3398: a crew member the server put to sleep, moved, or whose folder it dropped is closed on its host, once, and never
-// kept alive; an awake one is left to the keep-alive.
-describe('a crew member at rest', () => {
-  const crewRow = (agent: Record<string, unknown> = {}) => ({ tabId: 'tab', active: true,
-    agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', crew: { role: 'Engineer', at: 1, by: 'owner' }, ...agent } })
-  it('closes an asleep member\'s live session once, keeps its folder, and never reopens it', async () => {
-    const t = lifeFixture([crewRow({ asleep: { since: 1 } })])
+// Backend S14 (#3877): there is no crew sleep. An agent that is no Buddy, asleep or moving by an older mark, is neither closed
+// nor kept alive here.
+it('closes no agent that is no Buddy for a sleep or move mark, and keeps it alive no more', async () => {
+  for (const agent of [{ asleep: { since: 1 } }, { asleep: { since: 1, folderDropped: true } }, { movedTo: { machineId: 'mini' } }]) {
+    const t = lifeFixture([{ tabId: 'tab', active: true, agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1', member: { projectId: 'p1' }, ...agent } }])
     t.live(true)
     await t.poll()
-    await t.poll(1_000)
     await t.poll(60_000)
-    expect(t.closeMember).toHaveBeenCalledTimes(1)
-    expect(t.closeMember).toHaveBeenCalledWith('harness')
+    expect(t.closeMember).not.toHaveBeenCalled()
     expect(t.keepLeadAlive).not.toHaveBeenCalled()
-  })
-  it('closes a moving member and one whose folder is dropped; an awake member is not closed', async () => {
-    for (const agent of [{ movedTo: { machineId: 'mini', startId: 's', reason: 'offline', at: 1 } }, { asleep: { since: 1, folderDropped: true } }]) {
-      const t = lifeFixture([crewRow(agent)])
-      t.live(true)
-      await t.poll()
-      expect(t.closeMember).toHaveBeenCalledWith('harness')
-    }
-    const awake = lifeFixture([crewRow()])
-    awake.live(true)
-    await awake.poll()
-    expect(awake.closeMember).not.toHaveBeenCalled()
-  })
-  it('after a host restart, an awake member whose folder was dropped gets it back before it reopens (security review of #3229)', async () => {
-    const t = lifeFixture([crewRow()])
-    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
-    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
-      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
-    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('restored')
-    await t.poll()
-    expect(restore).toHaveBeenCalledWith('tab', 'harness')
-    restore.mockRestore()
-  })
-  it('a folder drop the removal refused is tried again an hour later (review of #3229)', async () => {
-    const t = lifeFixture([crewRow({ asleep: { since: 1, folderDropped: true } })])
-    const drop = vi.spyOn(CrewFolders.prototype, 'drop').mockResolvedValue('kept')
-    await t.poll()
-    await t.poll(60_000)
-    expect(drop).toHaveBeenCalledTimes(1)
-    await t.poll(60 * 60_000)
-    expect(drop).toHaveBeenCalledTimes(2)
-    drop.mockRestore()
-  })
-  it('a woken member whose folder is coming back is not reopened until it is there (review of #3229)', async () => {
-    const t = lifeFixture([crewRow()])
-    mkdirSync(join(t.core.dataDir, 'super-tabs'), { recursive: true })
-    writeFileSync(join(t.core.dataDir, 'super-tabs', 'crew-folders-machine-1.json'),
-      JSON.stringify({ version: 1, folders: [{ tabId: 'tab', harnessId: 'harness', path: '/nowhere/ada', source: '/nowhere/clone' }] }))
-    let finish!: (value: 'restored') => void, back = false
-    // As the real restore does, a folder brought back is no longer remembered.
-    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockImplementation(() => !back)
-    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockImplementation(() => new Promise(resolve => { finish = value => { back = true; resolve(value) } }))
-    await t.poll()
-    await t.poll(10_000)
-    expect(restore).toHaveBeenCalledTimes(1)
-    expect(t.keepLeadAlive).not.toHaveBeenCalled()
-    finish('restored')
-    await t.poll(10_000)
-    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
-    restore.mockRestore()
-    remembers.mockRestore()
-  })
-  it('a restore that keeps failing never holds the keep-alive back for good (review of #3229)', async () => {
-    const t = lifeFixture([crewRow()])
-    const remembers = vi.spyOn(CrewFolders.prototype, 'remembers').mockReturnValue(true)
-    const restore = vi.spyOn(CrewFolders.prototype, 'restore').mockResolvedValue('failed')
-    await t.poll()
-    await t.poll(10_000)
-    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
-    // Tried again after its wait, not on every roster.
-    const tries = restore.mock.calls.length
-    await t.poll(10_000)
-    expect(restore.mock.calls.length).toBe(tries)
-    await t.poll(60_000)
-    expect(restore.mock.calls.length).toBe(tries + 1)
-    restore.mockRestore()
-    remembers.mockRestore()
-  })
-  it('a member woken and put to sleep again is closed again', async () => {
-    const rows = [crewRow({ asleep: { since: 1 } })]
-    const t = lifeFixture(rows)
-    t.live(true)
-    await t.poll()
-    rows[0] = crewRow()
-    await t.poll(1_000)
-    rows[0] = crewRow({ asleep: { since: 2 } })
-    await t.poll(1_000)
-    expect(t.closeMember).toHaveBeenCalledTimes(2)
-  })
+  }
 })
 
 // Task #3545: the PM's inbox goes when its turn ends. Its host says whether its turn is open with the PM's list read, and reads
@@ -5629,21 +5546,16 @@ describe('a managed main Buddy sleeps and wakes (#3824)', () => {
   it('closes once without dropping its home and reopens that harness on wake without continuation text', async () => {
     const rows = [buddyRow({ asleep: { since: 1 } })]
     const t = lifeFixture(rows)
-    const drop = vi.spyOn(CrewFolders.prototype, 'drop'), restore = vi.spyOn(CrewFolders.prototype, 'restore')
-    try {
-      t.live(true)
-      await t.poll()
-      await t.poll(1_000)
-      expect(t.closeMember).toHaveBeenCalledTimes(1)
-      expect(t.keepLeadAlive).not.toHaveBeenCalled()
-      t.live(false)
-      delete (rows[0]!.agent as Record<string, unknown>).asleep
-      await t.poll(1_000)
-      expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
-      expect(drop).not.toHaveBeenCalled()
-      expect(restore).not.toHaveBeenCalled()
-      expect(t.core.turns.deliver).not.toHaveBeenCalled()
-    } finally { drop.mockRestore(); restore.mockRestore() }
+    t.live(true)
+    await t.poll()
+    await t.poll(1_000)
+    expect(t.closeMember).toHaveBeenCalledTimes(1)
+    expect(t.keepLeadAlive).not.toHaveBeenCalled()
+    t.live(false)
+    delete (rows[0]!.agent as Record<string, unknown>).asleep
+    await t.poll(1_000)
+    expect(t.keepLeadAlive).toHaveBeenCalledWith('harness')
+    expect(t.core.turns.deliver).not.toHaveBeenCalled()
   })
   it.each(['working', 'unknown'])('refuses to close a live Buddy that now reads %s', async activity => {
     const t = lifeFixture([buddyRow({ asleep: { since: 1 } })])
