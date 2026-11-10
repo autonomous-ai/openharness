@@ -19,19 +19,22 @@ class SuperTabAvatar extends StatelessWidget {
     this.picture,
     this.engine,
     this.face = false,
-  }) : lead = false;
+  }) : lead = false,
+       offline = false;
 
   SuperTabAvatar.person(SuperTabPerson person, {super.key, this.size = 30})
     : identity = 'person:${person.id}',
-      name = person.shownName,
-      picture = person.avatar,
-      engine = null,
-      face = false,
-      lead = false;
+       name = person.shownName,
+       picture = person.avatar,
+       engine = null,
+       face = false,
+       lead = false,
+       offline = false;
 
   /// [engineBadge] off where the row already shows the engine beside the
   /// name (the roster, messages), so it shows once. [lead] marks a PM with
-  /// the Lead ring (task #4461).
+  /// the Lead ring (task #4461). An agent whose machine reports its session
+  /// gone ([SuperTabAgent.downSince]) is grey, wherever its face is drawn.
   SuperTabAvatar.agent(
     SuperTabAgent agent, {
     super.key,
@@ -43,7 +46,8 @@ class SuperTabAvatar extends StatelessWidget {
        name = name ?? agent.displayName ?? agent.name,
        picture = agent.avatar,
        engine = engineBadge ? agent.engine : null,
-       face = true;
+       face = true,
+       offline = agent.downSince != null;
 
   /// The avatar of a roster row, agent or person, so their names start at one inset.
   static const rowSize = 24.0;
@@ -62,23 +66,42 @@ class SuperTabAvatar extends StatelessWidget {
   /// moves: a PM in My agents.
   final bool lead;
 
+  /// Drawn grey: its agent is offline.
+  final bool offline;
+
   @override
   Widget build(BuildContext context) {
     final badge = size * .46;
+    final art = SuperTabAvatarFace(
+      identity: identity,
+      name: name,
+      size: size,
+      picture: picture,
+      face: face,
+    );
+    final drawn = offline
+        ? ColorFiltered(
+            key: const ValueKey('super-face-offline'),
+            colorFilter: _grey,
+            child: art,
+          )
+        : art;
+    return _drawn(drawn, badge);
+  }
+
+  Widget _drawn(Widget face, double badge) {
+    final said = [
+      if (lead) 'Lead',
+      if (offline) 'offline',
+    ];
     return Semantics(
-      label: lead ? 'Lead' : null,
+      label: said.isEmpty ? null : said.join(', '),
       child: SizedBox.square(
         dimension: size,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            SuperTabAvatarFace(
-              identity: identity,
-              name: name,
-              size: size,
-              picture: picture,
-              face: face,
-            ),
+            face,
             if (lead)
               Positioned.fill(
                 child: OverflowBox(
@@ -111,6 +134,14 @@ class SuperTabAvatar extends StatelessWidget {
     );
   }
 }
+
+/// An offline agent's face: its own, without colour.
+const _grey = ColorFilter.matrix(<double>[
+  0.2126, 0.7152, 0.0722, 0, 0, //
+  0.2126, 0.7152, 0.0722, 0, 0, //
+  0.2126, 0.7152, 0.0722, 0, 0, //
+  0, 0, 0, 1, 0, //
+]);
 
 /// The Lead ring's stroke and its gap from the face, as shares of the face's
 /// diameter (anh Dee, task #4461).

@@ -11,16 +11,16 @@ import { SuperTabStore, type Polled, type SuperTabStoreHooks } from '../src/supe
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
 import { DOWN_REMOVE_MS } from '../src/superTabs/closedAgents.js'
 import { stableId } from '../src/superTabs/model.js'
-import { commandSchema, type Command } from '../src/superTabs/commands.js'
+import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
-import { assignmentRows, poolRows, rosterRows } from './hostRows.test-support.js'
+import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
-import { SwarmReads } from '../src/superTabs/read/service.js'
 
-// Work never sits with a dead owner: an active assignment whose agent died, stalled or hit a limit becomes lost within
-// minutes, its old agent is fenced off, and the Lead is woken to hand it on. A fresh loopback replica set, created here.
+// A machine's reports and the delivery polls of its agents: what a Swarm's time checks still decide (a start that never runs), the
+// polls' costs, and what a report does to an agent closed or reopened on its machine. Swarm v4 loses no task and nudges no worker
+// (task loss, leases and review waits were tested here until then). A fresh loopback replica set, created here.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -50,11 +50,10 @@ afterAll(async () => {
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
 /** [lent]: its agents are the owner's, lent through the host's machine share, as before Swarm v3; such an agent takes no new work
  *  on another person's computer now (task #4120), so the task is left unassigned. */
-async function swarm({ legacy = false, client = db, hooks, independent = false, engines = ['codex'], lent = false }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks; independent?: boolean; engines?: string[]; lent?: boolean } = {}) {
+async function swarm({ client = db, hooks, engines = ['codex'], lent = false }: { client?: PrismaClient; hooks?: SuperTabStoreHooks; engines?: string[]; lent?: boolean } = {}) {
   let now = 10_000_000
   const timed = new SuperTabStore(client, () => now, null, hooks)
-  const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
-  if (legacy) await dropProjects(tab)
+  const tab = (await timed.create(owner, randomUUID(), 'Liveness', 'public')).id
   const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
@@ -69,7 +68,7 @@ async function swarm({ legacy = false, client = db, hooks, independent = false, 
     conversationId, machineId, harnessId, name, configuration: config, lead }, lent ? owner : host)).result.agentId)
   const lead = await add('lead', 'lead-host', harness.lead, 'Lead', true)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
-    checks: [{ description: 'Verified', independent }] })).result.conversationId)
+    checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(group, 'test-host', harness.worker, 'Worker')
   const assignmentId = lent ? '' : String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
   const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}, store = timed) => store.observeMachine(host, tab, machineId, {
@@ -96,535 +95,18 @@ async function swarm({ legacy = false, client = db, hooks, independent = false, 
     const messages = await db.superTabMessage.findMany({ where: { id: { in: ids } } })
     return ids.map(id => messages.find(m => m.id === id)!).filter(m => (m.source as { kind?: string } | null)?.kind !== 'notice-digest')
   }
-  const lostRows = async () => (await db.superTabMessage.findMany({ where: { tabId: tab }, orderBy: { sequence: 'asc' } }))
-    .filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
-  return { timed, tab, execute, lead, group, worker, assignmentId, harness, observe, beat, name, assignment, leadInbox, lostRows, add,
+  return { timed, tab, execute, lead, group, worker, assignmentId, harness, observe, beat, name, assignment, leadInbox, add,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
-/** A Swarm created before projects existed. */
-async function dropProjects(tab: string) {
-  await db.$transaction(async tx => {
-    const current = await parts.loadAll(tx, tab)
-    const state = parts.reassemble(current)
-    delete state.projects
-    const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
-      ...current.starts, ...current.progress].map(p => p.version)) + 1
-    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
-      Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
-    await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
-      sequenceBase: current.sequenceBase })
-  })
-}
-
-describe('work that loses its owner', () => {
-  // Final review, Important 3: routing keeps a lost task's worker out after the task is cancelled, from the mark on the agent.
-  it('marks its worker in the same write that loses it, and the mark outlives a cancel in first loads and change reads', async () => {
-    const f = await swarm()
-    const reads = new SwarmReads(f.timed, { now: () => f.clock.now })
-    await f.beat(f.clock.now)
-    const { cursor } = await reads.firstLoad(owner, f.tab)
-    f.clock.now += 2 * MINUTE + 5_000
-    await f.observe('lead-host', [f.harness.lead])
-    const lostAt = f.clock.now
-    expect((await f.assignment()).status).toBe('lost')
-    const [agentRow, groupRow] = [await db.swarmAgent.findFirst({ where: { tabId: f.tab, key: f.worker } }), await db.swarmGroup.findFirst({ where: { tabId: f.tab, key: f.group } })]
-    // One commit stamps every part it writes alike: the worker's part was written with the lost task's.
-    expect(agentRow!.changedAt.getTime()).toBe(groupRow!.changedAt.getTime())
-    expect((agentRow!.data as { lostTask?: unknown }).lostTask).toBeDefined()
-    f.clock.now += MINUTE
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
-    const mark = { conversationId: f.group, assignmentId: f.assignmentId, reason: 'its machine Worker Mac has been offline for 2 minutes', at: lostAt }
-    const changed = await reads.changes(owner, f.tab, cursor)
-    expect(changed.reload).toBe(false)
-    expect('agents' in changed && changed.agents.find(a => a.key === f.worker)).toMatchObject({ data: { lostTask: mark } })
-    expect((await reads.firstLoad(owner, f.tab)).agents.find(a => a.key === f.worker)!.data.lostTask).toEqual(mark)
-  })
-
-  it('is lost when its machine has been offline for 2 minutes, found by another machine\'s report', async () => {
-    const f = await swarm()
-    await f.beat(f.clock.now)
-    const silent = f.clock.now
-    // Only the Lead's machine keeps reporting. The time checks run on its reports, at most every 30 seconds.
-    f.clock.now = silent + 90_000
-    await f.observe('lead-host', [f.harness.lead])
-    expect((await f.assignment()).status).toBe('working')
-    f.clock.now = silent + 2 * MINUTE + 5_000
-    await f.observe('lead-host', [f.harness.lead])
-    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its machine Worker Mac has been offline for 2 minutes' } })
-  })
-
-  it('is not lost when a fresh report from its machine commits between the time checks\' read and their write', async () => {
-    const f = await swarm()
-    await f.beat(f.clock.now)
-    f.clock.now += 2 * MINUTE + 5_000
-    // The Lead's poll reads the worker's machine as silent; just before it writes the loss, that machine reports.
-    let raced = false
-    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
-      if (raced) return
-      raced = true
-      await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })
-    }), () => f.clock.now)
-    await racing.runTimeChecks(f.tab)
-    expect(raced).toBe(true)
-    expect((await f.assignment()).status).toBe('working')
-    expect(await f.lostRows()).toEqual([])
-  })
-
-  it('is not lost for a failing model when its host says the model recovered between the time checks\' read and their write', async () => {
-    const f = await swarm()
-    await f.beat(f.clock.now)
-    // An agent whose model alert is on before it has a task: the time checks, not the alert, would lose its next task.
-    const group = String((await f.execute({ type: 'conversation.create', title: 'Second task', brief: 'Do it', checks: [{ description: 'Done', independent: false }] })).result.conversationId)
-    const other = await f.add(group, 'test-host', f.harness.other, 'Other')
-    await f.observe('test-host', [f.harness.worker, f.harness.other])
-    await f.execute({ type: 'agent.alert', agentId: other, alert: 'model', active: true }, host, other)
-    await f.execute({ type: 'work.assign', conversationId: group, agentId: other })
-    // The Lead's poll reads the alert as on; just before it writes the loss, the host reports the model answering again.
-    let raced = false
-    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
-      if (raced) return
-      raced = true
-      await f.execute({ type: 'agent.alert', agentId: other, alert: 'model', active: false }, host, other)
-    }), () => f.clock.now)
-    await racing.runTimeChecks(f.tab)
-    expect(raced).toBe(true)
-    expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === group)!.assignment!.status).toBe('working')
-  })
-
-  it('is lost at once when the host reports its session stopped, and the Lead is woken with who, why and the last result', async () => {
-    const f = await swarm()
-    await f.beat(f.clock.now)
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working',
-      result: 'Parser half done, pushed to https://github.com/example/project/pull/7' }, host, f.worker)
-    f.clock.now += 3 * MINUTE
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
-    const wake = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'work-lost')!
-    expect(wake.conversationId).toBe(f.group)
-    expect(wake.text).toBe(`${await f.name(f.worker)} lost its task`+' "Ship the parser": its session on Worker Mac stopped. Last progress 3 minutes ago. '
-      + 'Last result: Parser half done, pushed to https://github.com/example/project/pull/7.')
-  })
-
-  it('is lost at once when its agent hits a usage limit', async () => {
-    const f = await swarm()
-    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
-    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: `it hit a usage limit until ${new Date(f.clock.now + 30 * MINUTE).toISOString().slice(11, 16)} UTC` } })
-    expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(true)
-  })
-
-  // Night shift: a task lost to a usage limit whose screen gave a reset time resumes in that same session after the reset.
-  it('tells the worker\'s host when its lost task resumes, and gives it back to the same session after the reset', async () => {
-    const f = await swarm()
-    const resetAt = new Date(f.clock.now + 30 * MINUTE).toISOString(), lostAt = f.clock.now
-    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt }, host, f.worker)
-    const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
-    expect((await row()).resume).toEqual({ conversationId: f.group, assignmentId: f.assignmentId, lostAt, at: resetAt })
-    const resume = () => f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker)
-    await expect(resume()).rejects.toThrow('Its usage limit has not reset yet.')
-    f.clock.now += 30 * MINUTE
-    await resume()
-    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, agentId: f.worker, status: 'working' })
-    expect((await row()).resume).toBeNull()
-    const said = `${await f.name(f.worker)} resumed its task after its usage limit reset.`
-    const resumed = (await f.leadInbox()).find(m => m.text === said)!
-    // The Lead's alone, like the loss it follows: people read the task working again on its status line.
-    expect((await f.timed.messages(host, f.tab, resumed.conversationId, {}, f.lead)).messages.map(m => m.id)).toContain(resumed.id)
-    expect((await f.timed.messages(owner, f.tab, resumed.conversationId, {})).messages.map(m => m.id)).not.toContain(resumed.id)
-  })
-
-  // 2026-10-28: a resumed task keeps its id. When its session then stopped, the second loss wrote the first loss's notice
-  // ids again: the machine's report and the Lead's poll each failed on the duplicate from then on, so the machine looked
-  // offline and nothing reached the Lead.
-  it('is lost again after it resumed, and its machine\'s report and its Lead\'s poll still go through', async () => {
-    const f = await swarm()
-    const lostAt = f.clock.now
-    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
-    f.clock.now += 30 * MINUTE
-    await f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker)
-    await f.leadInbox()
-    f.clock.now += MINUTE
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped', at: f.clock.now } })
-    expect((await f.lostRows()).filter(m => m.recipientIds.includes(f.lead))).toHaveLength(2)
-    expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'work-lost').at(-1)!.text)
-      .toContain('lost its task "Ship the parser": its session on Worker Mac stopped.')
-  })
-
-  // The stuck Swarm of that day: its first loss's notices were written under the old ids, named by the task alone. Its next
-  // check writes the loss under new ids, and the Lead and the worker each receive their notice.
-  it('heals a resumed task whose first loss was written under the old notice ids', async () => {
-    const f = await swarm()
-    for (const id of [stableId('work-lost', f.assignmentId), stableId('work-lost', f.assignmentId, 'agent')]) {
-      await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: f.group, sequence: 1, author: { kind: 'agent', id: f.lead },
-        text: 'The first loss', replyTo: null, recipientIds: [], mentions: [] } })
-    }
-    f.clock.now += MINUTE
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
-    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} lost its task "Ship the parser": its session on Worker Mac stopped. `
-      + 'Last progress 1 minute ago. Last result: none.')
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker,
-      messageId: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') } })).toBe(1)
-  })
-
-  // One duplicate stopped every later report and poll for 45 minutes that day. A notice of the time checks found already
-  // stored as that same notice is kept, and its missing deliveries are written, so its recipients still receive it.
-  describe('a lost notice already stored', () => {
-    const lostIds = (f: Awaited<ReturnType<typeof swarm>>) =>
-      ({ lead: stableId('work-lost', f.assignmentId, String(f.clock.now)), agent: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') })
-    const STOPPED = 'its session on Worker Mac stopped'
-    /** Stores `text` under `id` as the loss notice the time checks write for this task, or as one with `source` changed. */
-    const store = (f: Awaited<ReturnType<typeof swarm>>, id: string, text: string,
-      { conversationId = f.group, source = {} }: { conversationId?: string; source?: Record<string, unknown> } = {}) => db.superTabMessage.create({ data: { id,
-      tabId: f.tab, conversationId, sequence: 1, author: { kind: 'agent', id: f.lead },
-      source: { kind: 'work-lost', agentId: f.worker, assignmentId: f.assignmentId, reason: STOPPED, ...source },
-      text, replyTo: null, recipientIds: [], mentions: [] } })
-
-    it('is kept on its machine\'s report, and the Lead and the worker still receive it', async () => {
-      const f = await swarm()
-      f.clock.now += MINUTE
-      const ids = lostIds(f)
-      await store(f, ids.lead, 'Stored for the Lead')
-      await store(f, ids.agent, 'Stored for the worker')
-      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-      expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
-      expect((await f.leadInbox()).map(m => m.text)).toContain('Stored for the Lead')
-      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker, messageId: ids.agent } })).toBe(1)
-    })
-
-    it('gets no second delivery when its delivery is stored too', async () => {
-      const f = await swarm()
-      f.clock.now += MINUTE
-      const ids = lostIds(f)
-      await store(f, ids.lead, 'Stored for the Lead')
-      await db.superTabDelivery.create({ data: { id: stableId(ids.lead, f.lead), tabId: f.tab, conversationId: f.group, messageId: ids.lead, agentId: f.lead,
-        machineId: 'lead-host', machineOwnerId: host.sub, assignmentId: null, membershipGeneration: 'g', authorKind: 'agent', authorId: f.lead, authorGeneration: 'g' } })
-      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-      expect(await f.assignment()).toMatchObject({ status: 'lost' })
-      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: ids.lead } })).toBe(1)
-    })
-
-    it('gets no second delivery when its delivery was compacted into its receipts (spec 5 C)', async () => {
-      const f = await swarm()
-      f.clock.now += MINUTE
-      const ids = lostIds(f), compacted = stableId(ids.lead, f.lead)
-      await store(f, ids.lead, 'Stored for the Lead')
-      await db.$runCommandRaw({ update: 'SuperTabReceipt', updates: [{ q: { _id: ids.lead }, upsert: true, u: {
-        $set: { tabId: f.tab, conversationId: f.group, [`receipts.${f.lead}`]: { deliveryId: compacted, status: 'answered' } },
-        $addToSet: { deliveryIds: compacted } } }] })
-      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-      expect(await f.assignment()).toMatchObject({ status: 'lost' })
-      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: ids.lead } })).toBe(0)
-    })
-
-    it('still refuses a stored message that is not this notice', async () => {
-      const f = await swarm()
-      f.clock.now += MINUTE
-      await store(f, lostIds(f).lead, 'Another message', { conversationId: 'lead' })
-      await expect(f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })).rejects.toThrow('Unique constraint failed')
-      expect(await f.assignment()).toMatchObject({ status: 'working' })
-    })
-
-    // Review of #2034: a loss notice of another task, or of another worker, is not this loss; kept, it would be delivered as it.
-    it.each([
-      ['another task', { assignmentId: 'another-assignment' }],
-      ['another worker', { agentId: 'another-agent' }],
-      ['another reason', { reason: 'it hit a usage limit until 12:00 UTC' }],
-    ])('still refuses a stored loss notice of %s, and delivers nothing', async (_, source) => {
-      const f = await swarm()
-      f.clock.now += MINUTE
-      const ids = lostIds(f)
-      await store(f, ids.lead, 'Another loss', { source })
-      await expect(f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })).rejects.toThrow('Unique constraint failed')
-      expect(await f.assignment()).toMatchObject({ status: 'working' })
-      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: { in: [ids.lead, ids.agent] } } })).toBe(0)
-    })
-  })
-
-  // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
-  // rows do (cli superTabs/limitResume.ts reads them before typing).
-  it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
-    const f = await swarm()
-    const lostAt = f.clock.now
-    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
-    f.clock.now += 30 * MINUTE
-    const resume = { operationId: `limit-resume-${f.assignmentId}-${lostAt}`, command: { type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt } as Command }
-    const listed = async () => (await assignmentRows(f.timed, host, 'test-host')).some(a => a.tabId === f.tab && a.assignmentId === f.assignmentId && a.harnessId === f.harness.worker)
-    await f.timed.execute(host, f.tab, resume, f.worker)
-    expect(await listed()).toBe(true)
-    // Its answer never reached the host. The Product Manager cancels the task and hands it to another agent.
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moving it on' })
-    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
-    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })
-    expect((await f.timed.execute(host, f.tab, resume, f.worker)).result).toEqual({})
-    expect(await listed()).toBe(false)
-  })
-
-  it('does not resume a task handed to another agent before the reset, and its host is no longer asked to', async () => {
-    const f = await swarm()
-    const lostAt = f.clock.now
-    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
-    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
-    const handedOn = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
-    const row = async () => (await rosterRows(f.timed, host, 'test-host')).find(t => t.tabId === f.tab && t.agent?.id === f.worker)!
-    expect((await row()).resume).toBeNull()
-    f.clock.now += 30 * MINUTE
-    await expect(f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker))
-      .rejects.toThrow('This task was handed on or closed, so it does not resume.')
-    expect(await f.assignment()).toMatchObject({ id: handedOn, agentId: other, status: 'working' })
-  })
-
-  it('gives a session still running but quiet (a long silent test run) 30 minutes from its last progress', async () => {
-    const f = await swarm()
-    const progress = f.clock.now
-    for (let minute = 1; minute <= 30; minute++) {
-      f.clock.now = progress + minute * MINUTE
-      await f.beat(progress)
-      await f.leadInbox()
-    }
-    expect((await f.assignment()).status).toBe('working')
-    f.clock.now = progress + 30 * MINUTE + 1
-    await f.beat(progress)
-    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
-  })
-
-  it('keeps its lease while the host reports progress, an older host reports it running, or the agent reports', async () => {
-    const f = await swarm()
-    for (let minute = 1; minute <= 12; minute++) {
-      f.clock.now += MINUTE
-      // Minutes 1-4: screen changes; 5-8: an older host that sends no progress; 9-12: only the agent's own status.
-      if (minute <= 4) await f.beat(f.clock.now - 10_000)
-      else if (minute <= 8) await f.beat()
-      else {
-        await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: `Minute ${minute}` }, host, f.worker)
-        await f.observe('lead-host', [f.harness.lead])
-        await f.observe('test-host', [f.harness.worker], { harnessProgress: {} })
-      }
-      await f.leadInbox()
-      expect((await f.assignment()).status).toBe('working')
-    }
-    expect((await f.assignment()).leaseUntil).toBe(f.clock.now + 5 * MINUTE)
-  })
-
-  it('fences the old agent once lost: its status, checks and done are refused and it is told its task moved', async () => {
-    const f = await swarm()
-    const check = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    for (const command of [
-      { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null },
-      { type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'done', result: 'Shipped' },
-      { type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId: check, passed: true, evidence: 'Ran it' },
-    ] as Command[]) await expect(f.execute(command, host, f.worker)).rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
-    const told = await f.timed.deliveries(host, f.tab, f.worker)
-    const notice = (await db.superTabMessage.findMany({ where: { id: { in: told.map(d => d.messageId) } } }))
-      .find(m => (m.source as { kind?: string }).kind === 'work-lost')!
-    expect(notice.text).toBe('Your task "Ship the parser" moved: its session on Worker Mac stopped. Stop working on it; your status and results for it are no longer accepted.')
-  })
-
-  // Ken, 2026-10-29: a notice telling an agent to stop is the agent's alone; people read the cancel on the task itself.
-  it('tells the worker of a cancelled task to stop, a notice no person reads, and shows a cancel with nobody to tell', async () => {
-    const f = await swarm()
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
-    const told = await f.timed.deliveries(host, f.tab, f.worker)
-    const notice = (await db.superTabMessage.findMany({ where: { id: { in: told.map(d => d.messageId) } } }))
-      .find(m => m.text === 'owner cancelled this task: Not needed. Stop working on it.')!
-    const page = async (user: AuthUser, asAgentId?: string) => (await f.timed.messages(user, f.tab, f.group, {}, asAgentId)).messages.map(m => m.id)
-    expect(await page(host, f.worker)).toContain(notice.id)
-    for (const user of [owner, host]) expect(await page(user)).not.toContain(notice.id)
-    expect(await page(host, f.lead)).not.toContain(notice.id)
-    expect(await f.assignment()).toMatchObject({ status: 'cancelled', result: 'Not needed' })
-
-    // A lost task's agent was told already: its cancel reaches no agent, so it stays the task's record for people.
-    const lost = await swarm()
-    await lost.observe('test-host', [], { stoppedHarnessIds: [lost.harness.worker] })
-    await lost.execute({ type: 'work.cancel', conversationId: lost.group, assignmentId: lost.assignmentId, reason: 'Not needed' })
-    expect((await lost.timed.messages(owner, lost.tab, lost.group, {})).messages.map(m => m.text)).toContain('owner cancelled this task: Not needed.')
-  })
-
-  /** A second task whose chat the Lead left before its worker was assigned (a Lead outside a task's chat), or one in
-   *  `projectId`, a project with no Lead. */
-  const withoutLead = async (f: Awaited<ReturnType<typeof swarm>>, projectId?: string) => {
-    const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it', ...(projectId ? { projectId } : {}),
-      checks: [{ description: 'Read', independent: false }] } as Command)).result.conversationId)
-    if (!projectId) await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
-    const harness = randomUUID()
-    const worker = await f.add(group, 'test-host', harness, 'Writer')
-    await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })
-    return { group, worker, harness }
+/** Three messages of a person to the Lead, in the order of their conversation. The ids of the messages. */
+async function threeMessagesToTheLead(f: Awaited<ReturnType<typeof swarm>>): Promise<string[]> {
+  const ids: string[] = []
+  for (const text of ['Parser?', 'Renderer?', 'Exporter?']) {
+    ids.push(String((await f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId))
   }
-
-  // Review of #2177: a notice that reaches no agent is the people's to act on, so they read it. The old agent's notice still
-  // reaches it alone.
-  it('shows people a lost-task notice no Lead receives, and keeps the moved notice the agent\'s', async () => {
-    const f = await swarm()
-    const projectId = String((await f.execute({ type: 'project.create', name: 'No Lead yet', visibility: 'public', brief: '' })).result.projectId)
-    const { group, worker, harness } = await withoutLead(f, projectId)
-    await f.observe('test-host', [harness], { stoppedHarnessIds: [harness] })
-    const rows = (await f.lostRows()).filter(m => m.conversationId === group || m.recipientIds.includes(worker))
-    const wake = rows.filter(m => m.text.includes('lost its task'))
-    const moved = rows.find(m => m.recipientIds.includes(worker))!
-    expect(wake.length).toBeGreaterThan(0)
-    expect(wake.every(m => !m.recipientIds.length)).toBe(true)
-    const shown = (await f.timed.messages(owner, f.tab, group, {})).messages.map(m => m.id)
-    expect(wake.filter(m => m.conversationId === group).map(m => m.id).every(id => shown.includes(id))).toBe(true)
-    expect(shown).not.toContain(moved.id)
-  })
-
-  // The Lead outside the task's chat hears in its own chat; the task's chat keeps a copy for no one, which is that same notice.
-  it('hides the task chat\'s copy of a lost-task notice whose Lead hears it in the project chat', async () => {
-    const f = await swarm()
-    const { group, harness } = await withoutLead(f)
-    await f.observe('test-host', [harness], { stoppedHarnessIds: [harness] })
-    const rows = (await f.lostRows()).filter(m => m.text.includes('lost its task "Write the docs"'))
-    expect(rows.map(m => [m.conversationId, m.recipientIds])).toEqual(expect.arrayContaining([[group, []], ['lead', [f.lead]]]))
-    for (const conversationId of [group, 'lead']) {
-      const shown = (await f.timed.messages(owner, f.tab, conversationId, {})).messages.map(m => m.id)
-      expect(rows.filter(m => shown.includes(m.id))).toEqual([])
-    }
-    expect((await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.map(m => m.id)).toEqual(expect.arrayContaining(rows.filter(m => m.conversationId === 'lead').map(m => m.id)))
-  })
-
-  // Re-check of #2177: such copies stored before the mark carry none. One whose Lead copy reached the Lead is that same
-  // notice and stays hidden; a reply someone wrote in its thread while it was shown reads in the chat.
-  it('hides a task chat\'s copy stored without the mark when its Lead copy reached the Lead, and keeps replies under it', async () => {
-    const f = await swarm()
-    const { group, harness } = await withoutLead(f)
-    await f.observe('test-host', [harness], { stoppedHarnessIds: [harness] })
-    const copy = (await f.lostRows()).find(m => m.conversationId === group && m.text.includes('lost its task'))!
-    const { recipientsOnly: _mark, ...source } = copy.source as Record<string, unknown>
-    expect(_mark).toBe(true)
-    await db.superTabMessage.update({ where: { id: copy.id }, data: { source: source as Prisma.InputJsonValue } })
-    const id = randomUUID().replaceAll('-', '').slice(0, 24)
-    await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: group, sequence: copy.sequence + 1, author: { kind: 'person', id: owner.sub, name: owner.email },
-      text: 'Who takes this?', replyTo: copy.id, thread: copy.id, recipientIds: [], mentions: [] } })
-    const page = await f.timed.messages(owner, f.tab, group, {})
-    expect(page.messages.map(m => m.id)).not.toContain(copy.id)
-    expect(await f.timed.messages(owner, f.tab, group, { messageId: copy.id })).toMatchObject({ messages: [] })
-    const reply = page.messages.find(m => m.id === id)!
-    expect(reply.thread ?? reply.id).toBe(reply.id)
-    expect(page.threads.map(t => t.id)).not.toContain(copy.id)
-  })
-
-  it('lets the Lead assign the lost work to another agent, and keeps the old one fenced', async () => {
-    const f = await swarm()
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
-    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
-    expect(await f.assignment()).toMatchObject({ id: next, agentId: other, status: 'working' })
-    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
-      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: next, status: 'working', result: 'Taking over' }, host, other)
-  })
-
-  it('lets the Lead cancel lost work', async () => {
-    const f = await swarm()
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect((await f.assignment()).status).toBe('lost')
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed any more' }, host, f.lead)
-    expect((await f.assignment()).status).toBe('cancelled')
-  })
-
-  it('wakes the Lead of an older Swarm without stored projects, once', async () => {
-    const f = await swarm({ legacy: true })
-    expect((await f.timed.read(owner, f.tab)).state.projects).toBeUndefined()
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.lostRows()).toHaveLength(2)
-    expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'work-lost')).toHaveLength(1)
-  })
-})
-
-// 10-29: after its task moved, a prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions
-// were stored with no delivery at all, and the worker stayed down 4 h 50 min. Its status stays refused; its messages arrive.
-describe('messages from an agent whose task moved', () => {
-  /** Every agent the message has a delivery for, from the stored rows. */
-  const deliveredTo = async (messageId: string) => (await db.superTabDelivery.findMany({ where: { messageId } })).map(d => d.agentId).sort()
-  const post = async (f: Awaited<ReturnType<typeof swarm>>, agentId: string, text: string, extra: { replyTo?: string; recipientIds?: string[] } = {}) =>
-    String((await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: extra.replyTo ?? null, recipientIds: extra.recipientIds ?? [] },
-      host, agentId)).result.messageId)
-
-  // Since #2963 a post reaches the Lead when it names it or answers it; an unnamed one reaches no agent.
-  it('reach the Lead once the task is lost, its alarm naming it and its reply to the Lead\'s question alike, while its status stays refused', async () => {
-    const f = await swarm()
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect((await f.assignment()).status).toBe('lost')
-    expect(await deliveredTo(await post(f, f.worker, 'Is anyone there?'))).toEqual([])
-    const alarm = await post(f, f.worker, 'Severe, prod: the backend worker has been down for 44 minutes.', { recipientIds: [f.lead] })
-    const question = await post(f, f.lead, 'Is it still down?', { recipientIds: [f.worker] })
-    const answer = await post(f, f.worker, 'Still down at 22:50.', { replyTo: question })
-    expect(await deliveredTo(alarm)).toEqual([f.lead])
-    expect(await deliveredTo(answer)).toEqual([f.lead])
-    expect((await f.leadInbox()).map(m => m.id)).toEqual(expect.arrayContaining([alarm, answer]))
-    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Still watching' }, host, f.worker))
-      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
-  })
-
-  it('reach the Lead and the agents they name after the task moved to another agent, and nobody outside the project', async () => {
-    const f = await swarm()
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
-    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
-    const elsewhere = String((await f.execute({ type: 'conversation.create', title: 'Ship the lexer', brief: 'Implement it',
-      checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
-    const neighbour = await f.add(elsewhere, 'test-host', randomUUID(), 'Neighbour')
-    const otherProject = String((await f.execute({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' })).result.conversationId)
-    const outsider = await f.add(otherProject, 'test-host', randomUUID(), 'Outsider')
-    // An unnamed post reaches the task's assignee now, the Lead when it names it (#2963).
-    expect(await deliveredTo(await post(f, f.worker, 'The worker is down.'))).toEqual([other])
-    expect(await deliveredTo(await post(f, f.worker, 'The worker is down.', { recipientIds: [f.lead] }))).toEqual([f.lead])
-    // A post that names its agents reaches only them, never a copy to the Lead (project instructions, phase 1).
-    expect(await deliveredTo(await post(f, f.worker, 'Over to you.', { recipientIds: [other] }))).toEqual([other])
-    const stored = await db.superTabMessage.count({ where: { tabId: f.tab } })
-    await expect(post(f, f.worker, 'Psst.', { recipientIds: [outsider] })).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab } })).toBe(stored)
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: outsider } })).toBe(0)
-    // An agent of the same project in another task is named directly, and joins the group to answer there.
-    expect(await deliveredTo(await post(f, f.worker, 'Can you look?', { recipientIds: [neighbour] }))).toEqual([neighbour])
-    // The new worker names the Lead; the Lead's plain post reaches the new worker, not the old one.
-    expect(await deliveredTo(await post(f, other, 'Taking over.'))).toEqual([])
-    expect(await deliveredTo(await post(f, other, 'Taking over.', { recipientIds: [f.lead] }))).toEqual([f.lead])
-    expect(await deliveredTo(await post(f, f.lead, 'Go ahead.'))).toEqual([other])
-    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
-      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: next, status: 'working', result: 'Taking over' }, host, other)
-  })
-
-  it('reach the Lead after the Lead cancelled the lost task', async () => {
-    const f = await swarm()
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed any more' }, host, f.lead)
-    expect(await deliveredTo(await post(f, f.worker, 'Stopping; the last check was clean.'))).toEqual([])
-    expect(await deliveredTo(await post(f, f.worker, 'Stopping; the last check was clean.', { recipientIds: [f.lead] }))).toEqual([f.lead])
-  })
-
-  // Review of #2243: only the current assignment and the latest lost attempt were recognized.
-  it('reach the Lead after the task was cancelled and assigned to another agent', async () => {
-    const f = await swarm()
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moving it' }, host, f.lead)
-    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
-    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })
-    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.', { recipientIds: [f.lead] }))).toEqual([f.lead])
-    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
-      .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
-  })
-
-  it('reach the Lead from the first agent after the next agent lost the task too', async () => {
-    const f = await swarm()
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
-    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
-    // The first worker is back and running; only the second's session stopped.
-    await f.observe('test-host', [f.harness.worker], { stoppedHarnessIds: [f.harness.other] })
-    expect(await f.assignment()).toMatchObject({ id: next, status: 'lost' })
-    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.', { recipientIds: [f.lead] }))).toEqual([f.lead])
-    expect(await deliveredTo(await post(f, other, 'Lost my session.', { recipientIds: [f.lead] }))).toEqual([f.lead])
-    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
-      .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
-    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: next, status: 'working', result: null }, host, other))
-      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
-  })
-})
+  return ids
+}
 
 /** A client that records the key of every SwarmGroup row a read returns. */
 function recordingGroups() {
@@ -636,148 +118,6 @@ function recordingGroups() {
   } } } }) as unknown as PrismaClient
   return { client, keys }
 }
-
-// Every machine reports every 15 s, and each report loaded, copied and compared the whole Swarm: about 1.1 MB for a busy one
-// (#876). It reads only the conversations its checks read, whole, and writes only what it changed.
-describe('work waiting for its review', () => {
-  // 2026-10-29: five Engineers who had pushed and handed over lost their tasks after 30 quiet minutes waiting for a Reviewer.
-  // Project instructions, phase 4: the review status waits; a failed check is a finding that moves nothing. An older skill's
-  // working hand-off waits too while agents on those skills exist (this release), until someone else's verdict finds problems.
-  // Task #3399: a failed check brings a task in review back to its Engineer, which keeps it for 60 minutes to pick it up.
-  it('stays with its Engineer through 45 quiet minutes in review and 45 more once a failed check brings it back, and counts 30 once it is working again', async () => {
-    const f = await swarm({ independent: true })
-    const handedOver = f.clock.now
-    const status = (status: 'review' | 'working', result: string) =>
-      f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status, result }, host, f.worker)
-    /** Both machines report every minute, the worker's screen still since the hand-off, and the Lead polls. */
-    const quiet = async (from: number, minutes: number) => {
-      for (let minute = 1; minute <= minutes; minute++) {
-        f.clock.now = from + minute * MINUTE
-        await f.beat(handedOver)
-        await f.leadInbox()
-      }
-    }
-    await status('review', 'Ready for review: PR #7 at 4f9c2e1')
-    await quiet(handedOver, 45)
-    expect((await f.assignment()).status).toBe('review')
-    const check = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
-    await f.execute({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId: check, passed: false, evidence: 'Two findings' })
-    expect(await f.assignment()).toMatchObject({ status: 'working', reopened: { at: f.clock.now } })
-    await quiet(f.clock.now, 45)
-    expect((await f.assignment()).status).toBe('working')
-    expect(await f.lostRows()).toEqual([])
-    // Back to working, as an older skill hands over: that hand-off waits too, until a person's verdict finds problems in it.
-    await status('working', 'Ready for review: PR #7 at 4f9c2e1')
-    await quiet(f.clock.now, 45)
-    expect((await f.assignment()).status).toBe('working')
-    await f.execute({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId: check, passed: false, evidence: 'Still one finding' })
-    // Its quiet time counts from that verdict.
-    const found = f.clock.now
-    await quiet(found, 30)
-    expect((await f.assignment()).status).toBe('working')
-    f.clock.now = found + 30 * MINUTE + 1
-    await f.beat(handedOver)
-    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
-  })
-})
-
-// Diego, 2026-11-01: a Reviewer checks and posts in the build's group, which never renewed its own review task, so after a
-// normal fix round of ~31 minutes that task was lost, its Lead woken and the Reviewer told to stop with its verdict refused.
-// Review of #2487: it follows the Reviewer, never the Engineer, so an idle Reviewer is still lost.
-describe('a review task while its build is back with the Engineer', () => {
-  /** Review task "Review: Ship the parser" (reviewOf the build) assigned to a Reviewer on the worker's machine, which is also
-   *  in the build's group, as a Reviewer is to check and post there. */
-  async function reviewing() {
-    const f = await swarm()
-    const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Ship the parser', brief: 'Review it', reviewOf: f.group,
-      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
-    const reviewer = await f.add(review, 'test-host', f.harness.other, 'Reviewer')
-    const part = await db.swarmAgent.findFirstOrThrow({ where: { tabId: f.tab, key: reviewer } })
-    await db.swarmAgent.update({ where: { id: part.id }, data: { data: { ...part.data as object, role: 'reviewer' } } })
-    await f.execute({ type: 'conversation.agent', conversationId: f.group, agentId: reviewer, present: true, lead: false })
-    const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
-    const waitFrom = f.clock.now
-    const asReviewer = (command: Command) => f.execute(command, host, reviewer)
-    const engineer = (status: 'working' | 'review', result: string) =>
-      f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status, result }, host, f.worker)
-    /** Both machines report and the Lead polls each minute: the Engineer's screen changes and it sends a "working" heartbeat
-     *  every 4 minutes; the Reviewer's screen stays still. */
-    const minutes = async (count: number, { heartbeats = true }: { heartbeats?: boolean } = {}) => {
-      for (let minute = 1; minute <= count; minute++) {
-        f.clock.now += MINUTE
-        if (heartbeats && minute % 4 === 0) await engineer('working', 'Working: awaiting review')
-        await f.observe('lead-host', [f.harness.lead])
-        await f.observe('test-host', [f.harness.worker, f.harness.other],
-          { harnessProgress: { [f.harness.worker]: f.clock.now - 10_000, [f.harness.other]: waitFrom } })
-        await f.leadInbox()
-      }
-    }
-    /** The Reviewer's machine reports at [at], its screen still since the wait began: a report loses its own agents' tasks
-     *  at once, while the Lead's poll may answer quietly within 30 seconds of its last full one. */
-    const reviewerReport = async (at: number) => {
-      f.clock.now = at
-      await f.observe('test-host', [f.harness.worker, f.harness.other], { harnessProgress: { [f.harness.worker]: at, [f.harness.other]: waitFrom } })
-    }
-    const task = async () => (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === review)!.assignment!
-    const lost = async () => (await f.lostRows()).filter(m => (m.source as { assignmentId?: string }).assignmentId === verdict)
-    const buildCheck = async () => (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
-    const requestChanges = async () => asReviewer({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId: await buildCheck(),
-      passed: false, evidence: 'Two findings' })
-    return { ...f, review, reviewer, verdict, waitFrom, minutes, task, lost, asReviewer, engineer, requestChanges, reviewerReport }
-  }
-
-  it('keeps it from its verdict asking for changes through a 35-minute fix round, and gives it 30 minutes from the next Ready', async () => {
-    const f = await reviewing()
-    await f.requestChanges()
-    expect(await f.task()).toMatchObject({ status: 'working', changesRequestedAt: f.waitFrom, leaseUntil: f.waitFrom + 5 * MINUTE })
-    await f.minutes(35)
-    expect(await f.task()).toMatchObject({ status: 'working' })
-    expect(await f.lost()).toEqual([])
-    await f.engineer('review', 'Ready for review: PR #7 at 5a0d3f2')
-    const ready = f.clock.now
-    expect((await f.task()).changesRequestedAt).toBeUndefined()
-    await f.minutes(30, { heartbeats: false })
-    expect(await f.task()).toMatchObject({ status: 'working' })
-    expect(await f.lost()).toEqual([])
-    await f.reviewerReport(ready + 30 * MINUTE + 1)
-    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
-    expect(await f.lost()).not.toEqual([])
-  })
-
-  it('is lost after 30 minutes when its Reviewer sits idle, though the Engineer keeps sending "working" heartbeats', async () => {
-    const f = await reviewing()
-    await f.minutes(30)
-    expect(await f.task()).toMatchObject({ status: 'working' })
-    await f.reviewerReport(f.waitFrom + 30 * MINUTE + 1)
-    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
-  })
-
-  it('is renewed by its own Reviewer\'s post in the build\'s group', async () => {
-    const f = await reviewing()
-    await f.minutes(28)
-    await f.asReviewer({ type: 'message.send', conversationId: f.group, text: 'Still reading the parser changes.', replyTo: null, recipientIds: [f.worker] })
-    const posted = f.clock.now
-    expect(await f.task()).toMatchObject({ leaseUntil: posted + 5 * MINUTE, progressAt: posted })
-    await f.minutes(5)
-    expect(await f.task()).toMatchObject({ status: 'working' })
-    await f.reviewerReport(posted + 5 * MINUTE + 1)
-    expect(await f.task()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 5 minutes' } })
-  })
-
-  // Task steps design (#2511): a review is a step of its build, and a task that ends cancels its open steps with its reason,
-  // so a cancelled build no longer leaves its review to be lost by time later.
-  it('is cancelled with its build, and is never lost by time after', async () => {
-    const f = await reviewing()
-    await f.requestChanges()
-    await f.minutes(10)
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
-    expect(await f.task()).toMatchObject({ status: 'cancelled', result: 'Ship the parser was cancelled.' })
-    await f.minutes(20, { heartbeats: false })
-    await f.reviewerReport(f.waitFrom + 30 * MINUTE + 1)
-    expect(await f.task()).toMatchObject({ status: 'cancelled', result: 'Ship the parser was cancelled.' })
-    expect(await f.lost()).toEqual([])
-  })
-})
 
 // Review of #2275: the review-capacity notice took the command's own message id, which the Ready for review row already had,
 // so the real write hit a duplicate key and rolled the whole status back: no Builder could hand over during a quota shortage.
@@ -838,37 +178,12 @@ describe('a machine\'s report', () => {
     expect(machines.map(m => m.observation?.receivedAt)).toEqual([f.clock.now, f.clock.now])
   })
 
-  it('still loses a task through a light load, and leaves the finished conversations as they were', async () => {
-    const f = await swarm()
-    const finished = await finishedGroups(f, 3)
-    const before = await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: finished } }, orderBy: { key: 'asc' } })
-    await f.beat(f.clock.now)
-    f.clock.now += 2 * MINUTE + 5_000
-    await f.observe('lead-host', [f.harness.lead])
-    expect((await f.assignment()).status).toBe('lost')
-    expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'work-lost')).toHaveLength(1)
-    expect(await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: finished } }, orderBy: { key: 'asc' } })).toEqual(before)
-  })
-
   it('reports a machine of a Swarm whose head stored no Leads conversation, as every Swarm made now', async () => {
     const f = await swarm()
     const head = (await db.swarmHead.findFirst({ where: { tabId: f.tab } }))!
     expect(head.data).not.toHaveProperty('leadsConversationId')
     await f.beat(f.clock.now)
     expect((await f.timed.read(owner, f.tab)).state.machines!.map(m => m.observation?.receivedAt)).toEqual([f.clock.now, f.clock.now])
-  })
-
-  // Ruling (#876): whether a worker leads a conversation is judged from the conversations the report loads, so a former Lead
-  // named only on an old finished one is a worker like any other. Before, any open conversation it led kept its task forever.
-  it('judges a former Lead still named on an old open conversation like any worker, and loses its task', async () => {
-    const f = await swarm()
-    const [old] = await finishedGroups(f, 1)
-    const row = (await db.swarmGroup.findFirst({ where: { tabId: f.tab, key: old } }))!
-    await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object, leadId: f.worker } } })
-    await f.beat(f.clock.now)
-    f.clock.now += 2 * MINUTE + 5_000
-    await f.observe('lead-host', [f.harness.lead])
-    expect((await f.assignment()).status).toBe('lost')
   })
 
   it('credits no Lent hours to a worker that is in a private chat (leaderboard/lent.ts)', async () => {
@@ -893,7 +208,7 @@ describe('a machine\'s report', () => {
 
 // A report never reads its projects' report progress (projectUpdates.ts): only commands and native events note reports.
 describe('machine reports and report progress', () => {
-  it('reads no report progress and writes none, also when the report loses a task', async () => {
+  it('reads no report progress and writes none, also when the worker\'s machine goes silent', async () => {
     const f = await swarm()
     await f.execute({ type: 'message.send', conversationId: f.group, text: 'Parser done', replyTo: null, recipientIds: [] })
     // Nothing marks a work group for a report any more (task #3593), so no report progress exists to read or write.
@@ -902,153 +217,14 @@ describe('machine reports and report progress', () => {
     const { reads } = await profiledReads(db, /\.SwarmProgress$/, async () => {
       // The tab's first report, so it runs the liveness sweep too.
       await f.observe('test-host', [f.harness.worker])
-      // The worker's machine is silent past its grace: this report loses its task and writes the group and the agent.
+      // The worker's machine is silent past its grace: the Swarm's other machine reports, and the sweep runs again.
       f.clock.now += 2 * MINUTE + 5_000
       await f.observe('lead-host', [f.harness.lead])
     })
     expect(reads).toBe(0)
-    expect((await f.assignment()).status).toBe('lost')
+    // Swarm v4 loses no task on a report: it is the worker's own person who stops it.
+    expect((await f.assignment()).status).toBe('working')
     expect(await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })).toBeNull()
-  })
-})
-
-// After a release every machine went offline for about 2 minutes while its CLI updated: 16 tasks were lost, their agents came
-// back, and every assignment to the same agent was refused as busy for good, even after the Lead cancelled the lost task.
-describe('an agent whose task was lost', () => {
-  type Fixture = Awaited<ReturnType<typeof swarm>>
-  /** The worker's machine goes silent for over 2 minutes; the loss is found by the Lead machine's report or by the Lead's poll. */
-  // Found by the next machine report; since Swarm v4 the PM's poll and the time checks lose no task (timeChecks.ts).
-  async function loseByOffline(f: Fixture) {
-    await f.beat(f.clock.now)
-    f.clock.now += 2 * MINUTE + 5_000
-    await f.observe('lead-host', [f.harness.lead])
-    expect((await f.assignment()).status).toBe('lost')
-  }
-  const backOnline = async (f: Fixture) => { f.clock.now += MINUTE; await f.beat(f.clock.now) }
-  const runOf = (agentId: string) => db.superTabRun.findUnique({ where: { id: agentId } })
-  const pending = (tabId: string, assignmentId: string) => db.superTabDelivery.findMany({ where: { tabId, assignmentId, status: { in: ['queued', 'claimed', 'uncertain'] } } })
-  /** What an older server left behind when a task was lost outside a command: the agent's run record, and the lost task's
-   *  deliveries still pending (one claimed, the rest queued), which the loss on this server has already cancelled. */
-  async function leftBehind(f: Fixture, assignmentId = f.assignmentId, tabId = f.tab) {
-    await db.superTabRun.upsert({ where: { id: f.worker },
-      create: { id: f.worker, tabId, assignmentId, machineId: 'test-host', harnessId: f.harness.worker }, update: { tabId, assignmentId } })
-    const rows = await db.superTabDelivery.findMany({ where: { tabId, assignmentId } })
-    await db.superTabDelivery.updateMany({ where: { tabId, assignmentId }, data: { status: 'queued' } })
-    if (rows[0]) await db.superTabDelivery.update({ where: { id: rows[0].id }, data: { status: 'claimed' } })
-    return rows.length
-  }
-
-  it('takes work again once its machine is back, the loss found by a report', async () => {
-    const f = await swarm()
-    expect(await pending(f.tab, f.assignmentId)).not.toEqual([])
-    await loseByOffline(f)
-    // The loss frees the agent and drops what was still queued for the lost task.
-    expect(await runOf(f.worker)).toBeNull()
-    expect(await pending(f.tab, f.assignmentId)).toEqual([])
-    await backOnline(f)
-    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).result.assignmentId)
-    expect(await f.assignment()).toMatchObject({ id: next, agentId: f.worker, status: 'working' })
-    expect(await runOf(f.worker)).toMatchObject({ tabId: f.tab, assignmentId: next })
-  })
-
-  // Project instructions, phase 4 (decision 16): the lost-task mark is information, and any assignment, an agent's or a
-  // person's, clears it; it no longer stays on a coordinator's pick.
-  it('takes the coordinator\'s explicit assignment with a reason, which clears the mark that it lost a task', async () => {
-    const f = await swarm()
-    await loseByOffline(f)
-    await backOnline(f)
-    const mark = async () => (await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.worker)!.lostTask
-    expect(await mark()).toMatchObject({ assignmentId: f.assignmentId })
-    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
-      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
-        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
-      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
-    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: f.group, decision } as Command, host, f.lead)).result.routeDecisionId)
-    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker, routeDecisionId,
-      overrideReason: 'Its machine is back and it has the context.' } as Command, host, f.lead)
-    expect(await f.assignment()).toMatchObject({ agentId: f.worker, status: 'working' })
-    expect(await mark()).toBeUndefined()
-  })
-
-  it('takes work again after the Lead cancels its lost task, though an older server left it marked running', async () => {
-    const f = await swarm()
-    await loseByOffline(f)
-    await leftBehind(f)
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed any more' }, host, f.lead)
-    expect(await runOf(f.worker)).toBeNull()
-    await backOnline(f)
-    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })
-    expect(await f.assignment()).toMatchObject({ agentId: f.worker, status: 'working' })
-  })
-
-  it('is assigned past a record an older server left for its lost task, which is then replaced, its old deliveries dropped', async () => {
-    const f = await swarm()
-    await loseByOffline(f)
-    expect(await leftBehind(f)).toBeGreaterThan(0)
-    expect(await pending(f.tab, f.assignmentId)).not.toEqual([])
-    await backOnline(f)
-    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).result.assignmentId)
-    expect(await runOf(f.worker)).toMatchObject({ tabId: f.tab, assignmentId: next })
-    // The lost task's old instructions never reach the worker after its new assignment.
-    expect(await pending(f.tab, f.assignmentId)).toEqual([])
-    expect(await pending(f.tab, next)).not.toEqual([])
-  })
-
-  it('has records left for ended work removed on the Lead\'s poll, keeping those for active work and stopping agents', async () => {
-    const f = await swarm()
-    const second = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
-      checks: [{ description: 'Read', independent: false }] })).result.conversationId)
-    // Its work runs on the Lead's machine, which keeps reporting, so it stays active while the worker's machine goes silent.
-    const other = await f.add(second, 'lead-host', f.harness.other, 'Other')
-    const active = String((await f.execute({ type: 'work.assign', conversationId: second, agentId: other })).result.assignmentId)
-    await loseByOffline(f)
-    await leftBehind(f)
-    const stopping = await db.superTabRun.create({ data: { id: randomUUID(), tabId: f.tab, assignmentId: `release-${randomUUID()}`, machineId: 'test-host', harnessId: randomUUID() } })
-    const live = await pending(f.tab, active)
-    expect(live).not.toEqual([])
-    await f.leadInbox()
-    expect(await runOf(f.worker)).toBeNull()
-    expect(await pending(f.tab, f.assignmentId)).toEqual([])
-    expect(await pending(f.tab, active)).toEqual(live)
-    expect(await runOf(other)).toMatchObject({ assignmentId: active })
-    expect(await runOf(stopping.id)).not.toBeNull()
-    // Removing them again changes nothing.
-    await f.leadInbox()
-    expect(await runOf(other)).toMatchObject({ assignmentId: active })
-  })
-
-  it('keeps the record of an assignment that commits between the Lead\'s poll reading the Swarm and removing stale records', async () => {
-    const f = await swarm()
-    await loseByOffline(f)
-    await leftBehind(f)
-    await backOnline(f)
-    // The poll reads the old record as stale; just before it removes it, the Lead's assignment replaces it with a live one.
-    let next = ''
-    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
-      if (next) return
-      next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).result.assignmentId)
-    }), () => f.clock.now)
-    await racing.runTimeChecks(f.tab)
-    expect(next).not.toBe('')
-    expect(await runOf(f.worker)).toMatchObject({ tabId: f.tab, assignmentId: next })
-    expect(await f.assignment()).toMatchObject({ id: next, status: 'working' })
-  })
-
-  it('stays busy while it works in another Swarm, whose record is never removed from this one', async () => {
-    const f = await swarm()
-    await loseByOffline(f)
-    await backOnline(f)
-    // The same session is a member of a second Swarm and holds active work there, which this Swarm cannot read.
-    const elsewhere = await swarm()
-    // It is that Swarm's worker: its record there is this agent's.
-    await db.superTabRun.delete({ where: { id: elsewhere.worker } })
-    await leftBehind(f, elsewhere.assignmentId, elsewhere.tab)
-    const theirs = await pending(elsewhere.tab, elsewhere.assignmentId)
-    expect(theirs).not.toEqual([])
-    await expect(f.execute({ type: 'work.assign', conversationId: f.group, agentId: f.worker })).rejects.toMatchObject({ code: 'AGENT_BUSY' })
-    await f.leadInbox()
-    expect(await runOf(f.worker)).toMatchObject({ tabId: elsewhere.tab })
-    expect(await pending(elsewhere.tab, elsewhere.assignmentId)).toEqual(theirs)
   })
 })
 
@@ -1445,25 +621,11 @@ describe('the delivery poll of an agent with a held delivery', () => {
     }
   })
 
-  // #2022: one write's deliveries share a creation time; the held answer keeps each conversation's tied rows in its order too.
+  // #2022: deliveries tied in their creation time stay in their conversation's order, in the held answer too.
   it('returns tied held deliveries in their conversation\'s order, without loading the Swarm', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
-    const assignments: string[] = []
-    for (const title of ['Parser', 'Renderer', 'Exporter']) {
-      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
-        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
-      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
-      const worker = await f.add(group, 'test-host', randomUUID(), title)
-      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
-    }
-    f.clock.now += 6 * MINUTE
-    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
-    // The workers' machine reports their sessions gone, and its report loses the tasks (liveness.ts sweepLiveness).
-    await f.observe('lead-host', [f.harness.lead])
-    await f.observe('test-host', [])
-    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
+    const expectedIds = await threeMessagesToTheLead(f)
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
@@ -1500,31 +662,14 @@ describe('the delivery poll of an agent with a held delivery', () => {
 describe('the push for a new delivery', () => {
   it('keeps several messages batched for one recipient in conversation order, including equal timestamps', async () => {
     const f = await swarm()
-    const assignments: string[] = []
-    for (const title of ['Parser', 'Renderer', 'Exporter']) {
-      const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
-        checks: [{ description: 'Built', independent: false }] })).result.conversationId)
-      // Without the Lead in these groups, each loss is delivered in the same project chat.
-      await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
-      const worker = await f.add(group, 'test-host', randomUUID(), title)
-      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
-    }
-    f.clock.now += 6 * MINUTE
-    // Each loss notice is named by its task and the time of the loss (this poll).
-    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
-    // One report of the workers' machine, their sessions gone, loses all three and inserts their messages and deliveries together.
-    await f.observe('lead-host', [f.harness.lead])
-    await f.observe('test-host', [])
-    // Gathered for a digest; each goes on its own after the settle pass's 30 minutes, the ones these cases are about.
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: f.lead, status: 'gathered' }, data: { status: 'queued' } })
+    const expectedIds = await threeMessagesToTheLead(f)
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
     expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
-    expect(new Set(first.map(row => row.createdAt.getTime())).size).toBe(1)
     // The Lead's alone, so it reads their order (people do not read them).
     const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     expect(page).toHaveLength(3)
-    // In conversation order; each loss's Stuck reply in its task's thread is written between them (task #2693).
+    // In conversation order.
     expect(page[1]!.sequence).toBeGreaterThan(page[0]!.sequence)
     expect(page[2]!.sequence).toBeGreaterThan(page[1]!.sequence)
     expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
@@ -1747,15 +892,16 @@ describe('an agent closed on its machine', () => {
     expect(await closing(f)).toEqual([])
   })
 
-  it('keeps an agent whose task was just lost, tells its Lead, and removes it once the Lead cancels the task', async () => {
+  it('keeps an agent that holds a task, which no report loses, and removes it once the Lead cancels the task', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     f.clock.now += MINUTE
     await f.observe('lead-host', [f.harness.lead])
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
-    expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(true)
+    expect(await f.assignment()).not.toMatchObject({ status: 'lost' })
+    expect((await f.leadInbox()).some(m => (m.source as { kind?: string }).kind === 'work-lost')).toBe(false)
     await reports(f, 60, [], [f.harness.worker])
+    expect(await f.assignment()).not.toMatchObject({ status: 'lost' })
     expect(await ids(f)).toContain(f.worker)
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
     await reports(f, 10, [], [f.harness.worker])

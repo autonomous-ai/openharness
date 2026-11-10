@@ -718,7 +718,7 @@ visibility on its own.
     "roster": [                       // exactly today's GET /hosts/:m rows for this tab, `revision` replaced by `lastChangedAt`
       { "tabId": "c514…", "tabName": "openharness", "lastChangedAt": 1793010106120, "paused": false, "active": true,
         "attention": null, "agent": { …Agent… }, "joinSwarm": false, "skillMode": "default", "lead": false,
-        "leadsConversationId": "…",   // new: lets the host's mayRead skip the full read (cli host.ts:874-876)
+        "leadsConversationId": "…",   // new: lets the host's mayRead skip the full read (cli host.ts:874-876); removed in Swarm v4 (#3679), the server sends null
         "stopRequested": false, "observers": [ { "email": "ken15@autonomous.ai", "userId": "6a86…" } ] },
       { "tabId": "c514…", "agent": { "id": "…", "harnessId": "…", "machineId": "7835…" }, "closeSession": true, "active": false },
       { "tabId": "c514…", "cleanup": { "machineId": "7835…", "removalId": "…" } },
@@ -835,7 +835,7 @@ record, and the whole list on every poll.
 | Host tick (`host.ts:280`, `:502`) | `GET /hosts/:m` every 1 s | `GET /hosts/:m/changes?cursor=` every 1 s; `full=1` at start and every 60 s (4.10). Keep the rows per Swarm and replace a Swarm's rows when it is returned. |
 | Pools (`machines.ts:151`, 5 s) | `GET /hosts/:m/pools` | `tabs[].pool` from the same host form. |
 | Assignments (`host.ts:343`, 5 s; `github.ts:123`, 60 s) | `GET /hosts/:m/assignments` | `tabs[].assignments` from the host form. |
-| `mayRead` (`host.ts:874-876`) | full read per tab:agent | roster `lead` and `leadsConversationId`. |
+| `mayRead` (`host.ts:874-876`) | full read per tab:agent | roster `lead` and `leadsConversationId`. Removed in Swarm v4 (#3679): no Leads conversation. |
 | `releaseWorker`, `tellSkill`, `swarmRoleFor` (`host.ts:371-410`, `735-738`, `61-71`) | full read | parts cache with `asAgentId` (rare events). |
 | Deliveries (`host.ts:577-589`, `936`, `924-930`, `1011-1012`, `477-495`) | per agent per tick | unchanged routes and bodies. Claims no longer bump the Swarm (3.5). |
 | Native recorder (`native.ts:139-146`, `290-294`) | reads `result.eventId` | unchanged; the reply's `revision` becomes `sequence` and is not read. |

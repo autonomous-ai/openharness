@@ -27,7 +27,8 @@ export interface ReportRecord {
   lentProjects?: Record<string, number>
   /** Whether any machine of the Swarm was being removed (machines.ts expireRemovals). */
   removals: boolean
-  /** The earliest a worker here may lose its task to time (liveness.ts nextLossAt), at most DEADLINE_CAP_MS on. */
+  /** The earliest a closed agent's removal falls due (closedAgents.ts nextRemovalAt), at most DEADLINE_CAP_MS on: this record holds a
+   *  heartbeat on the fast path until then. */
   deadline: number
   /** Whether the Swarm's record says the machine is a Team account's (store.ts teamByRecord). */
   team: boolean
