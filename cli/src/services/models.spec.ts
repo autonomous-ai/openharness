@@ -99,9 +99,8 @@ vi.mock('../lib/apiModels.js', () => ({
 }))
 vi.mock('../lib/claudeProfiles.js', async (importOriginal) => ({
   profileId: (await importOriginal<typeof import('../lib/claudeProfiles.js')>()).profileId,
-  listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude', reportLabel: 'Claude' }))),
-  offerAccount: vi.fn((_engine: string, path: string, offered: boolean) => (path ? { offered } : { error: 'INVALID_PATH' })),
-  linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked', reportLabel: 'Linked' } } : { error: 'INVALID_PATH' })),
+  listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude' }))),
+  linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked' } } : { error: 'INVALID_PATH' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({
   defaultCodexHome: () => '/home/me/.codex',
@@ -945,7 +944,7 @@ describe('the models service', () => {
         expect(vi.mocked(apiTargetAnswer).mock.calls.at(-1)!.slice(1)).toEqual(['a', 'm'])
       })
 
-      it('codex_profiles_list: the folders this machine offers, with the ones the asker has seen; a failed scan is said', async () => {
+      it('codex_profiles_list: the folders this machine lists, with the ones the asker has seen; a failed scan is said', async () => {
         const { ask } = setup()
         const { core } = setup()
         const id = (path: string) => profileId(core.daemon.machineId(), 'codex', path)
@@ -970,12 +969,13 @@ describe('the models service', () => {
         log.mockRestore()
       })
 
-      it('swarm_account_offer: takes the owner\'s explicit choice, and nothing less', async () => {
+      // F9: offering an account to the Swarm went with Desktop's accounts page. A Desktop of the last 30 days may still ask, and is
+      // told no account is offered; nothing is kept.
+      it('swarm_account_offer: offers nothing and keeps nothing, and says so', async () => {
         const { ask } = setup()
-        expect(await ask('swarm_account_offer', { engine: 'claude', path: '/p', offered: true })).toEqual({ offered: true })
-        expect(await ask('swarm_account_offer', { engine: 'codex', path: '/p', offered: false })).toEqual({ offered: false })
-        expect(await ask('swarm_account_offer', { engine: 'claude', path: '/p' })).toEqual({ error: 'INVALID_OFFER' })
-        expect(await ask('swarm_account_offer', { engine: 'claude', path: 42, offered: true })).toEqual({ error: 'INVALID_PATH' })
+        for (const payload of [{ engine: 'claude', path: '/p', offered: true }, { engine: 'codex', path: '/p', offered: false }, { engine: 'claude', path: 42 }]) {
+          expect(await ask('swarm_account_offer', payload)).toEqual({ offered: false, ignored: true })
+        }
       })
 
       it('the Claude and Codex profile requests answer OWNER_REQUIRED to a guest', async () => {
@@ -985,9 +985,9 @@ describe('the models service', () => {
         }
       })
 
-      it('claude_profiles_list: the folders this machine offers under its own machine id; a failed scan is said', async () => {
+      it('claude_profiles_list: the folders this machine lists under its own machine id; a failed scan is said', async () => {
         const { ask, core } = setup()
-        expect(await ask('claude_profiles_list', { observedPaths: ['/home/me/.claude-work', 7] })).toEqual({ profiles: [{ id: 'p', path: '/home/me/.claude-work', label: 'Claude', reportLabel: 'Claude' }] })
+        expect(await ask('claude_profiles_list', { observedPaths: ['/home/me/.claude-work', 7] })).toEqual({ profiles: [{ id: 'p', path: '/home/me/.claude-work', label: 'Claude' }] })
         expect(listClaudeProfiles).toHaveBeenLastCalledWith(['/home/me/.claude-work'], { machineId: core.daemon.machineId() })
         expect(await ask('claude_profiles_list')).toEqual({ profiles: [] })
         vi.mocked(listClaudeProfiles).mockImplementationOnce(() => { throw new Error('unreadable') })
@@ -996,7 +996,7 @@ describe('the models service', () => {
 
       it('claude_profile_link: links the folder and answers the profile, or why not', async () => {
         const { ask, core } = setup()
-        expect(await ask('claude_profile_link', { path: '/home/me/.claude-work' })).toEqual({ profile: { id: 'p', path: '/home/me/.claude-work', label: 'Linked', reportLabel: 'Linked' } })
+        expect(await ask('claude_profile_link', { path: '/home/me/.claude-work' })).toEqual({ profile: { id: 'p', path: '/home/me/.claude-work', label: 'Linked' } })
         expect(await ask('claude_profile_link', { path: 42 })).toEqual({ error: 'INVALID_PATH' })
         expect(linkClaudeProfile).toHaveBeenLastCalledWith('', core.daemon.machineId())
       })

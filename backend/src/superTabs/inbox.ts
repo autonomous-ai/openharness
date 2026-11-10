@@ -1,15 +1,13 @@
 /**
- * The PM's inbox (task #3403, anh Dee's Swarm redesign, 11-05): its digest starts with what it owes people (pulse.ts owed
- * asks), oldest first, each with who asked, how long ago and where, so it answers each once, in its place (answers.ts). A
- * person is named by username, never by email.
+ * The PM's inbox (task #3403, anh Dee's Swarm redesign, 11-05): people's new messages and its crew's needs, each with who
+ * asked and where, so it answers each once, in its place (answers.ts). A person is named by username, never by email.
  */
 import type { SuperTabDelivery } from '@prisma/client'
 import { crewNeedOf, type CrewNeed } from './crewNeeds.js'
 import type { Agent, Author, SuperTabState } from './model.js'
 import { digestIsDue, noticeLine } from './noticeDigest.js'
 import { TURN_END_WAIT_MS } from './turnEnd.js'
-import { ledProject, type SwarmProject } from './projects.js'
-import { switched } from './boardRights.js'
+import { ledProject } from './projects.js'
 import { swarmUsernames } from './usernames.js'
 
 /** What a host reports (machines.ts `capabilities`) when it sends its PM's turn with the PM's delivery list read (cli
@@ -68,24 +66,4 @@ export function crewNeedLine(state: SuperTabState, delivery: Where, need: CrewNe
   // A crew-need row's own text (crewNeeds.ts crewNeedText) starts with its lead-in and ends with its options: the line says both.
   const asked = need.question ?? words.replace(/^Crew need for [^\n]*\n\n/, '').replace(/\n\nOptions: [\s\S]*$/, '')
   return `${shortened(`- ${who} needs ${people}: ${oneLine(asked)}${options}`, INBOX_LINE_MAX - ids.length)}${ids}`
-}
-
-/** The asks one inbox names; the board lists them all. */
-export const OWED_LINES_MAX = 10
-const MINUTE = 60_000
-
-/** [project]'s owed asks as the inbox's lines: a header and one line per ask, oldest first. None when nothing is owed. */
-export function owedLines(state: SuperTabState, project: SwarmProject, now: number): string[] {
-  const asks = state.conversations.filter(c => !c.archived && c.owed && (c.projectId ?? 'lead') === project.id)
-    .flatMap(c => c.owed!.map(ask => ({ ...ask, conversationId: c.id }))).sort((a, b) => a.at - b.at)
-  if (!asks.length) return []
-  const names = swarmUsernames(state)
-  const ago = (at: number) => `${Math.max(0, Math.round((now - at) / MINUTE))}m`
-  // A switched project records no new ask (pulse.ts owe, task #3819): what is left came before the switch, and stays until it
-  // is answered, so nothing is dropped (Readycheck's review).
-  const header = switched(project) ? `Owed from before this project switched to the Board (${asks.length}, oldest ${ago(asks[0]!.at)}).`
-    : `Owed asks (${asks.length}, oldest ${ago(asks[0]!.at)}).`
-  return [`${header} Answer each once, in its place: harness super-tab answer GROUP MESSAGE_ID TEXT OPERATION_ID.`,
-    ...asks.slice(0, OWED_LINES_MAX).map(a => `- from ${names.get(a.personId) ?? 'a person'}, ${ago(a.at)} ago (message ${a.id} in ${a.conversationId})`),
-    ...asks.length > OWED_LINES_MAX ? [`And ${asks.length - OWED_LINES_MAX} more owed: the board lists them all.`] : []]
 }
