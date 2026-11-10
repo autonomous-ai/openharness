@@ -18,7 +18,7 @@
  */
 import { labelOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { identifier, object } from './wire.js'
 
@@ -43,14 +43,14 @@ const SELF = 'Harness'
 export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string }
 
 /** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
-export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean; roster: () => Promise<Json[]>
+export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean | Promise<boolean>; roster: () => Promise<Json[]>
   read: (tabId: string, agentId: string) => Promise<Json> }): Promise<LedProject[]> {
   if (!deps.me) return []
   const found = new Map<string, LedProject>()
   for (const row of await deps.roster()) {
     const agent = object(row.agent)
     if (row.lead !== true || !identifier(row.ledConversationId) || !identifier(row.tabId) || !identifier(agent.id) || row.closeSession === true) continue
-    if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
+    if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !await deps.live(agent.harnessId)) continue
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     const project = (Array.isArray(state?.projects) ? state.projects.map(object) : []).find(p => p.leadConversationId === row.ledConversationId)
     const repo = repositorySlug(object(project?.repository).repositoryUrl)
@@ -114,7 +114,8 @@ export class GitHubMerge {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly reads: GitHubReads
-  private readonly unreadable = new Map<string, number>()
+  /** How long each repository is left alone after it failed: one this login cannot read, or one whose pass failed. */
+  private readonly waits = new Waits()
   /** What each pull request was last told, by head and reason, so it is told once for each head. */
   private readonly told = new Map<string, string>()
   private projects: { at: number; list: LedProject[] } | null = null
@@ -151,21 +152,27 @@ export class GitHubMerge {
   private async pass(): Promise<void> {
     if (!this.projects || this.now() - this.projects.at >= PROJECTS_FRESH_MS) this.projects = { at: this.now(), list: await this.deps.projects() }
     if (!this.projects.list.length || this.now() < this.offUntil) return
+    // Whether a repository is being left alone: the pass then says nothing of running again.
+    let held = false
     try {
       for (const project of this.projects.list) {
-        if ((this.unreadable.get(project.repo) ?? 0) > this.now()) continue
-        try { await this.mergeReady(project) } catch (error) {
+        if (this.waits.held(project.repo, this.now())) { held = true; continue }
+        try { await this.mergeReady(project); this.waits.ok(project.repo) } catch (error) {
           this.reads.forget(project.repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
-          if (error instanceof GitHubStop) this.unreadable.set(project.repo, error.until)
-          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
+          held = true
+          // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so).
+          const wait = this.waits.miss(project.repo, this.now(), error instanceof GitHubStop ? error.until - this.now() : 0)
+          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
         }
       }
-      this.note('', '')
+      this.waits.ran()
+      if (!held) this.note('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
-      this.offUntil = error.until
-      this.note(error.code, error.message)
+      const wait = this.waits.stop(error.until - this.now())
+      this.offUntil = this.now() + wait
+      this.note(error.code, `${error.message} (again in ${waitWords(wait)})`)
     }
   }
 
@@ -191,12 +198,12 @@ export class GitHubMerge {
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
-      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed on ${head.slice(0, 7)}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`); continue }
+      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
-      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`); continue }
-      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`); continue }
-      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`); continue }
+      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`, comments); continue }
+      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`, comments); continue }
+      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`, comments); continue }
       if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
       const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: head })
       if (merged.status !== 200) {
@@ -212,13 +219,18 @@ export class GitHubMerge {
     }
   }
 
-  /** Tells the pull request's author, by name on the pull request itself, once for each head and reason. */
-  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string): Promise<void> {
+  /** Says once for a head why it is not merged. It names the head, and a restart finds it among the pull request's comments:
+   *  remembered only in memory, every release (each restarts the PM's daemon, seven on 2026-11-10) said it again. */
+  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string, comments: Json[]): Promise<void> {
     const key = `${repo}#${number}`, said = `${head}\n${what}`
     if (this.told.get(key) === said) return
+    const line = `not merged yet at ${head.slice(0, 7)}: ${what}`
+    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(line))) {
+      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${line}`)
+    }
+    // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
     this.told.set(key, said)
     if (this.told.size > 1_000) this.told.delete(this.told.keys().next().value!)
-    await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: not merged yet: ${what}`)
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {
