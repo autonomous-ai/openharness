@@ -3993,8 +3993,8 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Closed tasks read for the Backlog whose `shippedAt` falls in the read's
-  /// window, by id; the Backlog places them, as some wait for their merge. Kept here so an open of the tab reads nothing again: a task
+  /// Closed tasks read for the Tasks board whose `shippedAt` falls in the read's
+  /// window, by id; the board places them, as some wait for their merge. Kept here so an open of it reads nothing again: a task
   /// that closes later is one this reader holds, and [snapshot] keeps it. They
   /// join no snapshot, which is built again on every change, and no project's
   /// "Closed" count.
@@ -4012,7 +4012,7 @@ class SuperTabController extends ChangeNotifier {
   Iterable<SuperTabConversation> get closedShipped => _closedShipped.values;
 
   /// Tells of a change to [closedShipped] or [closedShippedFailed], and nobody
-  /// else who watches this controller: a page changes only the Backlog.
+  /// else who watches this controller: a page changes only the Tasks board.
   Listenable get closedShippedChanged => _closedShippedChanged;
 
   /// Reads the closed tasks shipped since [since] of each project not read yet.

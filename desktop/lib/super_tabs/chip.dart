@@ -85,8 +85,8 @@ Color superTabPriorityColor(SuperTabTaskPriority priority) =>
       SuperTabTaskPriority.p2 || SuperTabTaskPriority.p3 => DesktopChrome.muted,
     };
 
-/// A task's priority as a tinted badge, "P0", leading a card's caption, a
-/// Backlog row's title and the task header's title. With [menu] it carries a
+/// A task's priority as a tinted badge, "P0", leading a card's caption and the
+/// task header's title. With [menu] it carries a
 /// ▾, for the header's button that opens the priority menu.
 class SuperTabPriorityBadge extends StatelessWidget {
   const SuperTabPriorityBadge(this.priority, {super.key, this.menu = false});

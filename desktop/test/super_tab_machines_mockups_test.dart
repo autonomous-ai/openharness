@@ -120,6 +120,11 @@ void main() {
         tester.getTopLeft(key('machines-disk-build')).dx,
       );
       expect(find.text('200 GB free'), findsNWidgets(4));
+      // A crew member's machine (crew-one, from an older server) reads no crew.
+      expect(
+        find.textContaining(RegExp('crew', caseSensitive: false)),
+        findsNothing,
+      );
       expect(find.textContaining('last seen'), findsWidgets);
     },
   );

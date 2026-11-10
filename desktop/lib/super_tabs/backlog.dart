@@ -4,21 +4,6 @@ import 'controller.dart';
 import 'linked_tasks.dart';
 import 'model.dart';
 
-/// The groups Manage ▸ Backlog lists a Swarm's tasks in, in this order (Scholes,
-/// task #2355): where each task is on its way from asked to shipped.
-enum SuperTabBacklogGroup {
-  waitingForMachine('Waiting for a machine'),
-  working('Working'),
-  waitingOnSomeone('Waiting on someone'),
-  inReview('In review'),
-  readyToMerge('Ready to merge'),
-  releasing('Releasing'),
-  shipped('Shipped');
-
-  const SuperTabBacklogGroup(this.label);
-  final String label;
-}
-
 /// How far back Shipped looks: fixed, with no control to change it (the PM's
 /// reshape of Scholes's ask, task #2551).
 const superTabBacklogShippedWindow = Duration(days: 7);

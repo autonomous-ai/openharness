@@ -138,13 +138,14 @@ void main() {
     for (final gone in ['backlog', 'scorecard']) {
       expect(key('super-manage-tab-$gone'), findsNothing, reason: gone);
     }
-    expect(find.textContaining('crew'), findsNothing);
+    final crew = RegExp('crew', caseSensitive: false);
+    expect(find.textContaining(crew), findsNothing);
     for (final tab in ['models', 'swarm', 'machines']) {
       await tester.tap(key('super-manage-tab-$tab'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: tab);
     }
-    expect(find.textContaining('crew'), findsNothing);
+    expect(find.textContaining(crew), findsNothing);
 
     // And back to a chat: the left pane still answers.
     await tester.tap(key('super-agent-second'));
