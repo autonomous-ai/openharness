@@ -746,15 +746,6 @@ void main() {
     expect(_shown(app, tab), 'swarm-owner-$kPersonalSwarmOperation');
   });
 
-  test('this computer joins Personal as Add machine adds it: through Team '
-      'accounts where the Swarm uses them', () async {
-    final (app, backend) = await _twoTabs();
-    await PersonalSwarm.of(app).show(app.activeSwarmId);
-    await _settle();
-    final id = PersonalSwarm.of(app).id!;
-    expect(backend.contributions(id).single['teamAccountOnly'], isTrue);
-  });
-
   test('an add that answers after Personal was let go adds nothing and '
       'says nothing', () async {
     final (app, backend) = await _twoTabs();
@@ -1447,13 +1438,11 @@ void main() {
       expect(added(backend, c.tabId), before);
     });
 
-    test('asks the server to add a machine only if it is missing, and lends it only through Team accounts, with Team accounts off too', () async {
+    test('asks the server to add a machine only if it is missing', () async {
       final (app, backend) = await _twoTabs();
       await PersonalSwarm.of(app).show(app.activeSwarmId);
       await _settle();
       final c = await app.superTabs.open(PersonalSwarm.of(app).id!);
-      backend.servers[c.tabId]!.state['teamAccounts'] = false;
-      await c.refresh();
       _ownMachine(app, 'rig');
       await PersonalMachines.of(app).sync(c);
       await _settle();
@@ -1461,7 +1450,6 @@ void main() {
           .contributions(c.tabId)
           .firstWhere((m) => m['machineId'] == 'rig');
       expect(sent['ifMissing'], isTrue);
-      expect(sent['teamAccountOnly'], isTrue);
     });
 
     test('this computer stays out too once its person took it out, and its add asks the server so', () async {
@@ -1520,13 +1508,6 @@ void main() {
         expect(PersonalMachines.of(app).waiting(c), isEmpty);
       },
     );
-
-    test('a Buddy-only machine, hidden from the Swarm\'s list, is added as an ordinary one', () async {
-      final (_, backend, c) = await personal(
-        before: (a) => _ownMachine(a, 'buddy-only'),
-      );
-      expect(added(backend, c.tabId), contains('buddy-only'));
-    });
 
     group('a machine that has not joined says why in a few words, with '
         'Try again (task #3042)', () {
@@ -1713,7 +1694,6 @@ void main() {
         expect(PersonalMachines.of(app).waiting(c), isEmpty);
       });
     });
-
   });
 
   // Task #2920 (review of #3021): the app starts the sync of names people chose, on its own triggers.

@@ -1782,10 +1782,7 @@ class SuperTabController extends ChangeNotifier {
   bool messagesRead(String id) => _messages[id] != null;
 
   static bool _listed(SuperTabMessage m) =>
-      m.source['kind'] != 'update-request' &&
-      !m.terminalPrompt &&
-      !m.terminalGap &&
-      !m.instructionsSave;
+      !m.terminalPrompt && !m.terminalGap && !m.instructionsSave;
 
   bool hasOlder(String id) => _before[id] != null;
 
@@ -2746,13 +2743,10 @@ class SuperTabController extends ChangeNotifier {
     return _heldSinceRead(group) ? count : max(count, 1);
   }
 
-  /// Whether [m] is the reader's own: written by them, not by an agent, a
-  /// terminal or the server in their name.
+  /// Whether [m] is the reader's own: written by them, not by an agent or a
+  /// terminal.
   bool isOwn(SuperTabMessage m) =>
-      !m.fromAgent &&
-      !m.fromTerminal &&
-      !m.postedForAuthor &&
-      m.authorId == accountId;
+      !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
 
   /// Whether what [id]'s main stream gained since sequence [after] is all the reader's own, sent from
   /// any device. Unsure is no: a message that can't be read is told about, never lost.

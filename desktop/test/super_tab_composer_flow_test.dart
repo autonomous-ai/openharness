@@ -43,13 +43,13 @@ void main() {
   String composerText(WidgetTester tester) =>
       tester.widget<TextField>(composer).controller!.text;
 
-  for (final chat in ['a workgroup', 'the Buddy chat']) {
+  for (final chat in ['a workgroup', "an agent's chat"]) {
     testWidgets(
       'Reply in $chat puts the cursor in the composer, reply attached',
       (tester) async {
         final server = ConversationServer.chat();
-        if (chat == 'the Buddy chat') {
-          // The reader's own Buddy chat, where the PM's private lines land.
+        if (chat == "an agent's chat") {
+          // The reader's chat with their own agent.
           final pm = (server.state['conversations'] as List)[1] as Map;
           pm['kind'] = 'agent-chat';
           server.append(
@@ -60,7 +60,7 @@ void main() {
           server.append('Which build should I test?');
         }
         final c = await show(tester, server);
-        if (chat == 'the Buddy chat') {
+        if (chat == "an agent's chat") {
           c.select('offline');
           await tester.pumpAndSettle();
           expect(c.selectedId, 'offline');

@@ -142,8 +142,7 @@ void main() {
   });
 
   group('a link into a hidden Chat with PM', () {
-    /// Ken's Chat with PM from before Buddies replaced it, as a server from
-    /// before 10-29 still sends it (as in super_tab_buddies_test).
+    /// Ken's private chat with the PM, which the app does not open.
     Future<(ConversationServer, String, String)> hidden() async {
       final server = ownAgentSwarm();
       (server.state['conversations'] as List).add({

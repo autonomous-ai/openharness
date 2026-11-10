@@ -1915,8 +1915,8 @@ class _SuperTabViewState extends State<SuperTabView>
     // reader may read it, and a refusal looks like a message that is gone.
     final readable = await c.loadGroup(id);
     if (!mounted || request != _jumpRequest || c.accessRevoked) return;
-    // The app may open another chat for it (an old Chat with PM, with Buddies
-    // on): that is not this message, so the reader stays where they are.
+    // The app may open another chat for it (a private chat it hides): that
+    // is not this message, so the reader stays where they are.
     if (!readable || c.landsOn(id) != id) {
       say('Message unavailable');
       return;
@@ -2081,12 +2081,7 @@ class _SuperTabViewState extends State<SuperTabView>
       (agentId) => c.snapshot?.agent(agentId),
     );
     return messages
-        .where(
-          (m) =>
-              _shown(m) &&
-              (replies || m.inMainStream) &&
-              !answered.contains(m.id),
-        )
+        .where((m) => (replies || m.inMainStream) && !answered.contains(m.id))
         .toList();
   }
 
@@ -2096,27 +2091,6 @@ class _SuperTabViewState extends State<SuperTabView>
     for (final m in _shownMessages(id))
       if (m.conversationId == id) m,
   ];
-
-  /// What people never read in a chat, in the list and as a reply's quote: a
-  /// message waiting for an agent, notices older backends stored, the PM's own
-  /// notices about the work (backend NOTICE_READERS).
-  static const _neverShown = {
-    'delivery-hold',
-    'work-stalled',
-    'work-lost',
-    'work-resumed',
-    'idle-stop',
-    'idle',
-    'review-failed',
-    'update-request',
-    'digest-request',
-    'overlap',
-    'pair-loop',
-    'notice-digest',
-  };
-
-  static bool _shown(SuperTabMessage m) =>
-      !_neverShown.contains(m.source['kind']);
 
   /// The row of [id]'s list that shows [messageId], its own. Null while the
   /// message is not loaded.
@@ -3556,9 +3530,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final quoted = answers == null || byId.containsKey(answers)
         ? null
         : c.quoted(message.conversationId, answers);
-    final fetched = quoted?.message;
-    final reply =
-        byId[answers] ?? (fetched != null && _shown(fetched) ? fetched : null);
+    final reply = byId[answers] ?? quoted?.message;
     final writable = c.canWrite && c.selected?.archived == false;
     final root = message.thread;
     final thread = inThread || root != message.id
@@ -3870,7 +3842,7 @@ class _SuperTabViewState extends State<SuperTabView>
     bool tagged(SuperTabMessage m) =>
         (talk && m.namesAgents) ||
         switch (c.thread(m.conversationId, m.id)) {
-          final thread? => thread.askTag != null || thread.replies > 0,
+          final thread? => thread.replies > 0,
           null => false,
         };
     final at = split == null
@@ -4526,8 +4498,6 @@ class _SuperTabViewState extends State<SuperTabView>
             );
           },
         ),
-        // A chat kept to read gets one muted bar in place of the box, so
-        // nothing looks typeable: a closed group.
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && _agentsOnly(group))
@@ -4552,14 +4522,6 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
-            ),
-          )
-        else if (group != null && group.archived)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-            child: Text(
-              'This group is closed. You can read it but not write.',
-              style: DesktopChrome.metadata(),
             ),
           )
         else

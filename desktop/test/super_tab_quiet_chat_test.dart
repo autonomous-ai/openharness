@@ -48,37 +48,6 @@ ConversationServer project(List<Map<String, dynamic>> rows, {int read = 0}) {
 }
 
 void main() {
-  for (final kind in [
-    'work-stalled',
-    'work-lost',
-    'work-resumed',
-    'idle',
-    'idle-stop',
-    'review-failed',
-    'update-request',
-    'digest-request',
-    'overlap',
-    'pair-loop',
-    'notice-digest',
-  ]) {
-    testWidgets(
-      'the PM\'s notice "$kind" never shows in the chat people read',
-      (tester) async {
-        final c = await showView(
-          tester,
-          project([
-            row('m1', 1, 'A message'),
-            row('n1', 2, 'This notice is for the PM', kind: kind),
-          ]),
-        );
-        await c.loadMessages('lead');
-        await tester.pumpAndSettle();
-        expect(find.text('A message'), findsOneWidget);
-        expect(find.text('This notice is for the PM'), findsNothing);
-      },
-    );
-  }
-
   testWidgets('the New line stays, on the first message people see', (
     tester,
   ) async {
@@ -86,7 +55,13 @@ void main() {
       tester,
       project([
         row('m1', 1, 'Read already'),
-        row('n1', 2, 'This notice is for the PM', kind: 'work-stalled'),
+        row(
+          'n1',
+          2,
+          'What was typed into the terminal',
+          kind: 'native',
+          source: {'phase': 'prompt'},
+        ),
         row('m2', 3, 'New to the reader'),
       ], read: 1),
     );

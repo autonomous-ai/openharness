@@ -368,7 +368,7 @@ void main() {
     ]) {
       expect(command(keys), expected, reason: keys);
     }
-    // Chat with PM opened the Buddy chat, which v4 has not: its key is free.
+    // Chat with PM is gone in v4: its key is free.
     expect(command('cmd+shift+k'), isNull);
     expect(harnessCommandById['swarm.chat_with_pm'], isNull);
     // Parity with the table that handles real workspace input, including all

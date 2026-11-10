@@ -229,9 +229,6 @@ class PersonalMachines extends ChangeNotifier {
         machineId,
         setupId: 'personal-machine-$machineId',
         alive: alive,
-        // If someone joins Personal later, teammates' work still never runs
-        // on these under their owner's login.
-        teamAccountOnly: true,
         // Only what is missing, and never one the person took out: the server
         // decides, whatever this computer's read was.
         ifMissing: true,
