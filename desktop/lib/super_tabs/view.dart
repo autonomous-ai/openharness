@@ -27,7 +27,6 @@ import '../core/local_key_value_store.dart';
 import '../core/models.dart' show sameMachineId;
 import '../logging/app_log.dart';
 import '../state/app_state.dart';
-import '../state/harness_activity.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import '../shortcuts/app_keymap.dart' show KeymapRegion;
@@ -3904,9 +3903,8 @@ class _SuperTabViewState extends State<SuperTabView>
     };
     // A message to it waits while its engine starts (the daemon's message_waiting): its bar says so.
     final starting =
-        widget.app != null &&
-        harnessActivity(widget.app!, agent.machineId, agent.harnessId) ==
-            HarnessActivity.starting;
+        agent.downSince == null &&
+        (widget.app?.engineStarting(agent.machineId, agent.harnessId) ?? false);
     final detail = [machine, ?engine, if (starting) 'starting'].join(' · ');
     final terminalOpen = _terminalsVisible;
     return Container(

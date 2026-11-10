@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -16,7 +19,7 @@ void main() {
     'type': 'message_waiting',
     'agentId': agentId,
     'dbSessionId': 'session-$agentId',
-    'payload': {'reason': 'engine_starting', 'waitMs': 60000},
+    'payload': {'reason': 'engine_starting'},
   };
 
   test(
@@ -142,6 +145,48 @@ void main() {
       // Its turn's watchdog and preview go with the app, before the timers are checked.
       app.dispose();
       await tester.pump();
+    },
+  );
+
+  test('a wait that ends without a word ends after two minutes', () {
+    fakeAsync((async) {
+      final app = createApp(connected: true);
+      unawaited(app.handleEventForTest('m', waiting('a6')));
+      async.flushMicrotasks();
+      expect(harnessActivity(app, 'm', 'a6'), HarnessActivity.starting);
+      async.elapse(AppNotifier.engineWaitFor - const Duration(seconds: 1));
+      expect(harnessActivity(app, 'm', 'a6'), HarnessActivity.starting);
+      async.elapse(const Duration(seconds: 2));
+      expect(harnessActivity(app, 'm', 'a6'), HarnessActivity.idle);
+      app.dispose();
+    });
+  });
+
+  test(
+    'another conversation\'s late turn frame does not end the wait',
+    () async {
+      final app = createApp(connected: true);
+      addTearDown(app.dispose);
+      final machine = app.machineStates['m']!;
+      machine.agents = [
+        for (final agent in machine.agents)
+          if (agent.id != 'a7') agent,
+        Agent(
+          id: 'a7',
+          name: 'Agent 7',
+          engine: 'codex',
+          terminalAvailable: true,
+          sessionId: 'now',
+        ),
+      ];
+      await app.handleEventForTest('m', waiting('a7'));
+      await app.handleEventForTest('m', {
+        'type': 'turn_ended',
+        'agentId': 'a7',
+        'dbSessionId': 'before',
+        'payload': <String, dynamic>{},
+      });
+      expect(harnessActivity(app, 'm', 'a7'), HarnessActivity.starting);
     },
   );
 

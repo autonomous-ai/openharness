@@ -899,7 +899,9 @@ class ProjectSidebar extends StatelessWidget {
           ? 'Opens its terminal'
           : null,
       // A message waits while its engine starts: it says so, before anything else it is doing.
-      detail: _activity(agent) == HarnessActivity.starting
+      detail:
+          SwarmAgentStates.offlineOf(agent) == null &&
+              (app?.engineStarting(agent.machineId, agent.harnessId) ?? false)
           ? 'starting'
           : agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
       selected: _chatLit(chat),

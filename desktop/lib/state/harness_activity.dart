@@ -71,10 +71,9 @@ HarnessActivity? harnessActivity(
     return HarnessActivity.offline;
   }
   if (agent.isStopped) return HarnessActivity.paused;
-  if (machine.engineStartingAgentIds.contains(agentId)) {
-    return HarnessActivity.starting;
-  }
-  if (agent.launchState == 'starting' || agent.launchState == 'held') {
+  if (machine.engineStartingAgentIds.contains(agentId) ||
+      agent.launchState == 'starting' ||
+      agent.launchState == 'held') {
     return HarnessActivity.starting;
   }
   if (agent.launchState == 'failed') {
