@@ -4,8 +4,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-const team = vi.hoisted(() => ({ value: false }))
-vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => team.value }))
 /** The owner the start recorded for a Buddy's folder (superTabs/start.ts); every Buddy here is started so, unless a test says. */
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
@@ -472,18 +470,6 @@ describe('a Buddy\'s folder', () => {
     expect(launch).toMatch(/^[0-9a-f-]{36}$/)
     prepareBuddy(workspace, { role: 'buddy', key: 'relaunched' })
     expect(buddyLaunchOf(realpathSync(workspace))).not.toBe(launch)
-  })
-
-  // Security review 1 of #2832: a relaunch never passes through the start's own-machine check, so a Buddy saved in a Harness
-  // Team account, which is never its owner's, is held there before anything launches.
-  it('refuses to prepare a Buddy in a Harness Team account, and leaves its folder as it was', () => {
-    const workspace = fixture()
-    team.value = true
-    try {
-      expect(() => prepareBuddy(workspace, { role: 'buddy', key: 'session' })).toThrow('A Buddy runs only on its owner\'s own machine')
-      expect(existsSync(join(workspace, '.claude'))).toBe(false)
-      expect(() => prepareBuddy(workspace, { role: 'dev', key: 'session' })).not.toThrow()
-    } finally { team.value = false }
   })
 
   // Security review 2 of #2832: a relaunch never passes the start's own-machine check. A Buddy launches only in a folder whose

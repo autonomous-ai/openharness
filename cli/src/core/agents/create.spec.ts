@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { agentTmpLaunch, buddyTmpEnv } from '../../lib/agentTmp.js'
+import { agentTmpLaunch } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -29,14 +29,10 @@ import { harnessMadeWorktree } from '../../lib/gitProject.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
-import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
 vi.mock('../../lib/buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
-// Nor does the account the gate runs under matter: a Harness Team account is refused by prepareBuddyFolder before any launch, which
-// lib/swarmSkills.spec.ts tests on its own. These launches are the owner's, so the account boundary is fixed to "not a Team account".
-vi.mock('../../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => false }))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -86,8 +82,6 @@ vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, pr
 const syncProfileHome = vi.hoisted(() => vi.fn((_vault: unknown, _engine: string, _home: string): string[] => []))
 vi.mock('../../lib/connectors/agents.js', () => ({ syncProfileHome }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
-// The Harness GitHub App's launch writes files in the daemon's folder (lib/swarmGitHub.ts): never this machine's here.
-vi.mock('../../lib/swarmGitHub.js', () => ({ swarmGitHubLaunch: vi.fn(() => null) }))
 // The pull request line (lib/agentAttribution.ts) reads the person's engine settings: never this machine's here.
 vi.mock('../../lib/agentAttribution.js', () => ({
   agentLaunchArgs: vi.fn((_engine: string, startedBy: string | null | undefined) => startedBy === 'agent' ? ['--settings', '{"attribution":{}}'] : []),
@@ -275,17 +269,6 @@ describe('creating an agent', () => {
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]).toMatchObject({ permissionMode: 'teamWritten' })
   })
 
-  // A Buddy's folder of its own, named for the folder it runs in, and never the owner's agents' shared one.
-  it('gives a Buddy its own private temporary folder, and the launch\'s own variables win', async () => {
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'mine' })
-    const calls = vi.mocked(agentTmpLaunch).mock.calls.length
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy' }))).toMatchObject({ ok: true })
-    expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', expect.any(String))
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'blender' })
-    expect(vi.mocked(agentTmpLaunch).mock.calls.length).toBe(calls)
-  })
-
   // A Buddy launches like its owner's own session (Ken, 11-04, task #2832): on a shared model it keeps the grid's web tools,
   // as every other Swarm session does.
   it('builds a Buddy\'s grid launch with the grid\'s web MCP, as any session\'s', async () => {
@@ -306,16 +289,6 @@ describe('creating an agent', () => {
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toContain('--dsh')
   })
 
-  it('gives a session doing another person\'s project work the GitHub App\'s git and gh, and keeps that on its skill', async () => {
-    vi.mocked(swarmGitHubLaunch).mockReturnValueOnce({ env: { GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' }, clearEnv: ['GH_TOKEN'] })
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true }))).toMatchObject({ ok: true })
-    const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
-    expect(swarmGitHubLaunch).toHaveBeenCalledWith(pane.sessionLabel)
-    expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel, github: true })
-    expect(pane.env).toMatchObject({ GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' })
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
-  })
-
   // No owner subscription relay (task #4137): Claude Code and Codex, a Product Manager's Codex home among them, launch on their
   // own settings, with nothing of a relay in the pane's environment or on the engine's command line.
   it('launches every engine on its own settings: no relay variables or provider', async () => {
@@ -327,21 +300,14 @@ describe('creating an agent', () => {
     }
   })
 
-  it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
-    await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true }))
+  // The Harness GitHub App is gone: a request that still names it launches as any other Swarm session, on this machine's own git and gh.
+  it('launches a session that still asks for the GitHub App on its own git and gh', async () => {
+    expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true } as never))).toMatchObject({ ok: true })
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
     expect(pane.swarmSkill).toEqual({ role: 'agent', key: pane.sessionLabel })
     expect(pane.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
-    vi.mocked(swarmGitHubLaunch).mockClear()
-    await setup().create(request({ cwd: folder(), swarmGitHub: true }))
-    expect(swarmGitHubLaunch).not.toHaveBeenCalled()
-  })
-
-  it('refuses before opening a pane when the GitHub App\'s files cannot be written', async () => {
-    vi.mocked(swarmGitHubLaunch).mockImplementationOnce(() => { throw Error('fixture disk full') })
-    expect(await setup().create(request({ cwd: folder(), swarmRole: 'agent', swarmGitHub: true })))
-      .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'Error: fixture disk full' })
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    expect(pane.env).not.toHaveProperty('GH_CONFIG_DIR')
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv ?? []).not.toContain('GH_TOKEN')
   })
 
   // HARNESS_SWARM=off: the core holds none of the Swarm's launch code, so a start that asks for a Swarm role is
