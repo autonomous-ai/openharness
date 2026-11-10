@@ -13,7 +13,7 @@ import type { PhoneNotice, Sender } from './sender.js'
 /** A platform's sender, or null when the server has no keys for it. */
 export type PhoneSenders = Record<PushPlatform, Sender | null>
 
-/** Which kind of notice it is, by its key's first word (reply, mention, decision, chat): a fixed few, never an id. */
+/** Which kind of notice it is, by its key's first word (`chat` since Swarm v4; reply, mention and decision before): never an id. */
 const kindOf = (notice: PhoneNotice): string => notice.key.slice(0, notice.key.indexOf(':'))
 
 /** Sends to Apple and Google at once: a 100-person thread's reply is done in a few rounds without opening 100 streams. */

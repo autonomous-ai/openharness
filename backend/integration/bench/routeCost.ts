@@ -56,7 +56,6 @@ async function main() {
       'GET :tab/changes (Desktop poll)': () => desktop.poll(),
       'GET conversation messages': () => call(owner, 'GET', `/api/super-tabs/${tabId}/conversations/${w.group}/messages`),
       'GET lead messages': () => call(owner, 'GET', `/api/super-tabs/${tabId}/conversations/lead/messages`),
-      'GET mentions': () => call(owner, 'GET', `/api/super-tabs/${tabId}/mentions?state=waiting`),
       'POST machines/:id (observation)': () => driver.observeMachine(tabId, owner, machineId(0), {
         generation: generations[0]!, quotas: [], tools: {}, runningHarnessIds: ['bench-lead'], stoppedHarnessIds: [],
         resources: { cpuPercent: 10 + (n++ % 50), memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,

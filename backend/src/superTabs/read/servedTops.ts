@@ -4,7 +4,7 @@
  * is now read by nobody (model.ts NOTICE_READERS), so a chat whose newest main row is one would stay unread: Desktop and the
  * phone count a chat unread while that number is past the reader's mark, and send no read at or below the mark the server
  * holds (Grebe2639's review of #2950). Readers are served instead the newest main row of that chat people read, as the
- * inbox's latest preview finds it (inbox.ts latestIn): in a first load's whole groups, and in the changed groups a poll sends
+ * latest row finds it (latest.ts latestIn): in a first load's whole groups, and in the changed groups a poll sends
  * whole from the change feed. A poll's other groups are light (parts/light.ts) and carry no such number.
  *
  * Only project chats are looked at: those lines were written there alone. Which row is the newest people read depends only on
@@ -16,7 +16,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type { Conversation, SuperTabState } from '../model.js'
 import { projectsOf } from '../projects.js'
-import { latestIn } from './inbox.js'
+import { latestIn } from './latest.js'
 
 /** Answers kept; the one kept longest goes first. */
 export const KEPT = 20_000

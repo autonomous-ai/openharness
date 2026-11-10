@@ -1,14 +1,9 @@
-import { checksOpenWork, isStep, taskEnded } from './steps.js'
 import { isBuddy, isSwarmBuddy } from './buddies.js'
 import { buddyEngineChat } from './buddyEngine.js'
-import { isCrew } from './crew.js'
 import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
-import { githubRepository, type GitHubRepository } from '../github/repository.js'
-import { activeWork, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, canReadGroup, groupProject, isAgentChat, ledProject, projectsOf } from './projects.js'
-import { toLead } from './terminal.js'
-import { roleNameOf } from './instructions.js'
+import { stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { canReadGroup, ledProject } from './projects.js'
 
 // Dee, 2026-11-06: the server handles routine idle decisions. After 15 minutes it requests a host-confirmed stop for an
 // idle non-crew Engineer and keeps Reviewers/Testers; standing crew use their existing sleep/wake keeper. Tidying governs
@@ -76,31 +71,6 @@ export function staleModelRequests(state: SuperTabState, now: number): MessageDr
   return drafts
 }
 
-/** A linked task (`reviewOf`) the Swarm does not archive by itself: none of its checks carries evidence, nobody cancelled it,
- *  and the task it links to is still going. Once that task is done or cancelled the link is moot. By hand any agent of the
- *  project or a person archives it (project instructions, phase 4). */
-export const linkPending = (state: SuperTabState, linked: Conversation): boolean => {
-  if (!linked.reviewOf || linked.assignment?.status === 'cancelled' || linked.checks.some(c => c.evidence)) return false
-  const target = state.conversations.find(c => c.id === linked.reviewOf)
-  return !!target && activeWork(target)
-}
-
-/** How long a finished group stays open after its last message: an archived group refuses posts, and the Lead still talks
- *  to its worker for a while after the task ends (ruling in the plan, 2026-10-27). */
-export const ARCHIVE_QUIET_MS = 30 * 60_000
-
-/** Whether a group may archive by itself, as far as the Swarm alone can tell: its task done or cancelled, quiet for
- *  ARCHIVE_QUIET_MS, not a linked task still owing its verdict (linkPending), not a step whose task is still open
- *  (steps.ts taskEnded), and not a Lead conversation, a private chat with people or the Leads conversation. Its pull requests and decisions are checked by the caller (archive.ts). */
-export function archivable(state: SuperTabState, group: Conversation, now: number): boolean {
-  if (state.tidy === false || group.archived || group.kind || group.audience) return false
-  if (projectsOf(state).some(p => p.leadConversationId === group.id)) return false
-  if (!['done', 'cancelled'].includes(group.assignment?.status ?? '') || linkPending(state, group)) return false
-  if (isStep(group) && !taskEnded(state, group)) return false
-  const last = time(group.lastActivityAt)
-  return last !== undefined && now - last >= ARCHIVE_QUIET_MS
-}
-
 /** Work that ended without finishing: only a cancel with a reason closes it, never an archive alone (#558). */
 export const unfinishedWork = (group: Conversation): boolean => ['lost', 'stopped'].includes(group.assignment?.status ?? '')
 
@@ -115,101 +85,3 @@ export function cancelledTags(state: SuperTabState, group: Conversation, actor?:
 
 /** Why a cancelled task ended, as its cancel recorded it, without the final full stop. */
 export const cancelReason = (group: Conversation): string => (group.assignment?.result ?? '').replace(/[.\s]+$/, '')
-
-/** "PR #1875", as a Lead's cancel or a builder's result names a pull request without its link. */
-const PR_NUMBER = /\bPR #([1-9][0-9]{0,8})\b/gi
-/** A repository's name, or owner/name, as a result writes it next to "PR #N": "from autonomous-harness PR #2716", "PR #12 in acme/tool". */
-const REPO_NAME = '([A-Za-z0-9](?:[\\w.-]*\\w)?(?:/[A-Za-z0-9](?:[\\w.-]*\\w)?)?)'
-const NAME_BEFORE = new RegExp(`(?:^|[\\s(])(from\\s+)?${REPO_NAME}\\s+$`, 'i'), NAME_AFTER = new RegExp(`^\\s+(?:in|of)\\s+${REPO_NAME}`, 'i')
-/** English compounds a result writes before "PR", which look like a repository's name and are none. */
-const COMPOUND = /^(?:follow-(?:up|on)|(?:re|co|pre|non|one)-\w+)$/i
-
-/** Whether [name] next to a "PR #N" plainly names a repository other than the project's. Dropping one of its own numbers
- *  archives a group while that pull request is open (#558); reading another's as its own waits at most until that number
- *  closes here or is not found. So "Desktop/CLI PR #12", "test-only PR #12" and "PR #12 in docs/plans" stay its own (review
- *  of #2895): a name counts after "from" ("Ported from autonomous-harness PR #2716"), or as owner/name of the project's owner. */
-function otherRepository(name: string | undefined, from: boolean, repository: GitHubRepository | null): boolean {
-  if (!name) return false
-  const [owner, repo] = name.toLowerCase().split('/')
-  if (repo === undefined) return from && /^[a-z]/.test(owner!) && /[._-]/.test(owner!) && !COMPOUND.test(owner!) && owner !== repository?.name.toLowerCase()
-  if (name.toLowerCase() === repository?.fullName.toLowerCase()) return false
-  return from || owner === repository?.owner.toLowerCase()
-}
-
-/** How a pull request an archive waits on ended: merged, closed, or missing, a number GitHub knows no pull request by in
- *  that repository (another repository's, #2602). */
-export type SettledPullRequest = 'merged' | 'closed' | 'missing'
-
-/** The pull requests a group's archive waits on: those it links, and those its result and check evidence name, a "PR #N"
- *  read in its project's repository. A cancel saying "Handed off as PR #1875" linked nothing, so the group archived while
- *  that PR was open (#558). A number another repository's name sits next to is that repository's, and never waited on
- *  ("Ported from autonomous-harness PR #2716" held a task open forever, #2602). Null when it names a number with no GitHub
- *  repository to read it in: it stays open. */
-export function archiveWaitsFor(group: Conversation, repositoryUrl: string | null | undefined): string[] | null {
-  const texts = [group.assignment?.result, ...group.checks.map(check => check.evidence)]
-  const named = { pullRequestUrls: [...group.pullRequestUrls ?? []] } as Conversation
-  appendPullRequestUrls(named, texts)
-  const repository = githubRepository(repositoryUrl)
-  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)]
-    .filter(match => {
-      const before = NAME_BEFORE.exec(text!.slice(0, match.index))
-      return !otherRepository(before?.[2], !!before?.[1], repository)
-        && !otherRepository(NAME_AFTER.exec(text!.slice(match.index + match[0].length))?.[1], false, repository)
-    })
-    .map(match => match[1]!))
-  if (!numbers.length) return named.pullRequestUrls!
-  if (!repository) return null
-  return [...new Set([...named.pullRequestUrls!, ...numbers.map(n => `https://github.com/${repository.fullName}/pull/${n}`)])]
-}
-
-/** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead.
- *  A cancelled task's requester is tagged in it (cancelledTags). */
-export function archiveLine(state: SuperTabState, group: Conversation, now: number): MessageDraft | null {
-  const prs = group.pullRequestUrls?.length ? ' and its pull requests are merged or closed' : ''
-  const mentions = cancelledTags(state, group), reason = mentions.length && cancelReason(group) ? ` (${cancelReason(group)})` : ''
-  const line = leadLine(state, group, now, `Archived: the work is ${group.assignment!.status}${reason}${prs}.`)
-  return line && mentions.length ? { ...line, mentions } : line
-}
-
-function leadLine(state: SuperTabState, group: Conversation, now: number, text: string): MessageDraft | null {
-  const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
-  const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
-  if (!lead) return null
-  return { id: stableId('auto-archive', group.id, String(now)), conversationId: group.id, replyTo: null, recipients: [],
-    author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
-    text, source: { kind: 'auto-archive' } }
-}
-
-// A review nobody is reviewing closes once the work it reviews needs no Swarm review (Ken, 2026-10-30): 28 of 31 open
-// review groups waited for a Reviewer on pull requests already merged, reviewed outside the Swarm or folded into a batch PR.
-// A review with no Reviewer has no task to finish or cancel, so `archivable` never matched it.
-
-/** A review group with no active Reviewer: none was ever free, or its Reviewer's task ended. The archive pass reads these
- *  as it reads finished work (parts/write.ts workFinished). */
-export const unattendedReview = (group: Conversation): boolean => !!group.reviewOf && !activeWork(group)
-
-/** The pull requests that decide whether an unattended review still matters: those it links and those of the work it reviews. */
-export function reviewPullRequests(state: SuperTabState, review: Conversation): string[] {
-  const reviewed = state.conversations.find(c => c.id === review.reviewOf)
-  return [...new Set([...review.pullRequestUrls ?? [], ...reviewed?.pullRequestUrls ?? []])]
-}
-
-/** Whether an unattended review may close by itself, as far as the Swarm alone can tell: the work it reviews is done or
- *  cancelled, it links, or that work links, a pull request, and it has been quiet for ARCHIVE_QUIET_MS. That each of those pull requests is merged or
- *  closed, and that no decision waits there, the caller checks (archive.ts, store.ts archiveFinished). */
-export function reviewClosable(state: SuperTabState, review: Conversation, now: number): boolean {
-  if (state.tidy === false || review.archived || review.kind || review.audience || !unattendedReview(review)) return false
-  if (!taskEnded(state, review)) return false
-  if (projectsOf(state).some(p => p.leadConversationId === review.id)) return false
-  if (!reviewPullRequests(state, review).length) return false
-  const last = time(review.lastActivityAt)
-  return last !== undefined && now - last >= ARCHIVE_QUIET_MS
-}
-
-const pullNumber = (url: string) => `#${url.slice(url.lastIndexOf('/') + 1)}`
-
-/** The one quiet line a closed review gets, naming each pull request and how it ended. */
-export function reviewCloseLine(state: SuperTabState, review: Conversation, settled: Readonly<Record<string, SettledPullRequest>>, now: number): MessageDraft | null {
-  const prs = reviewPullRequests(state, review).map(url => `${pullNumber(url)} ${settled[url] === 'missing' ? 'not found' : settled[url]}`).join(', ')
-  return leadLine(state, review, now, `Closed: ${prs}; no Swarm review is needed now.`)
-}

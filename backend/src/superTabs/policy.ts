@@ -24,11 +24,10 @@ const timeZone = z.string().min(1).max(64).refine(zone => {
 const line = (max: number) => z.string().trim().min(1).max(max).regex(/^[^\x00-\x1f\x7f]*$/, 'One line, without control characters.')
 const minutes = z.number().int().min(1).max(10_080)
 const reads = z.number().int().min(1).max(5)
-/** A path pattern relative to the repository (globMatch): never absolute, never climbing out of it. */
+/** A path pattern relative to the repository: never absolute, never climbing out of it. */
 const glob = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_.*?\/@+ -]+$/, 'A path pattern: letters, digits and _ . * ? / @ + - only.')
   .refine(g => !g.startsWith('/') && !g.split('/').includes('..'), 'A path pattern relative to the repository, without "..".')
   // At most MAX_WILDCARDS a pattern, a double star counting as one, and no run of three stars (security review of #3216).
-  // globMatch is linear whatever the pattern; this keeps patterns readable and the matcher's work small.
   .refine(g => !g.includes('***') && (g.match(/\*\*|\*|\?/g)?.length ?? 0) <= MAX_WILDCARDS,
     'A path pattern has at most 4 wildcards (* ? or **).')
 const globs = z.array(glob).max(MAX_LIST)
@@ -101,8 +100,8 @@ export const projectRulesSchema = z.preprocess(legacyDispatch, z.object({
   releasePace: z.object({ backendEveryMinutes: minutes, appsAfterVisibleBatch: z.boolean(),
     backendPause: z.object({ start: clock, end: clock }).strict().refine(p => p.start < p.end, 'The pause ends after it starts.').nullable() }).strict(),
   /** How many independent reads a change gets: the default, more for a change to the paths of an area listed; where a change
-   *  runs, for its test; and the paths whose change alone needs no test (tests, fixtures, docs). requiredReads and testsFor
-   *  read it. */
+   *  runs, for its test; and the paths whose change alone needs no test (tests, fixtures, docs). The review steps read it before
+   *  Swarm v4, which opens none (2026-11-10); a saved record keeps it. */
   reviews: z.object({
     defaultReads: reads,
     rows: distinct(z.object({ area: line(80), reads, paths: globs }).strict(), row => row.area, 'area'),
@@ -153,8 +152,7 @@ function deepFreeze<T>(value: T): T {
  * The review table's security areas (project instructions, Ken 2026-10-29: two independent reviews for sign-in, tokens,
  * access, encryption, the Buddy guard, the device link and anything that deletes data). Each old term matches as a name or as
  * a folder, as the merge train's own matcher did before it read this record (task #3475, review of #3250: it erred wide, and
- * so does this). The seed starts from these rows, and requiredReads never asks fewer than two reads where they match, whatever
- * a saved record says (River, 2026-11-06): a record can raise an area, never lower it.
+ * so does this). The seed starts from these rows.
  */
 export const SECURITY_ROWS: ReadonlyArray<{ area: string; reads: number; paths: string[] }> = deepFreeze([
   { area: 'Sign-in', reads: 2, paths: ['**/*auth*', '**/*login*', '**/*logout*', '**/*signin*', '**/*sign_in*', '**/middlewares/**', '**/sessionScope*', 'backend/src/**/session*', '**/community/session*', '**/session-lock*', 'store/agents/**/guard.py'] },
@@ -165,31 +163,12 @@ export const SECURITY_ROWS: ReadonlyArray<{ area: string; reads: number; paths: 
   { area: 'Device links', reads: 2, paths: ['**/*device*', 'cli/src/device/**', 'cli/src/devices/**', 'cli/src/lib/*device*/**', '**/add_device/**', '**/*wifi_robot*', 'devices/**/*cable*', 'devices/**/*pair*', 'devices/**/*link*', 'devices/**/*key*', '**/*harnesslinks*', '**/*harnesslinks*/**', '**/*harness_links*', '**/*harness_links*/**', '**/*pairing*', '**/*pairing*/**', '**/*joinlink*', '**/*joinlink*/**', '**/*join_link*', '**/*join_link*/**', '**/*deviceauth*'] },
   { area: 'Deletion', reads: 2, paths: ['**/*delet*', '**/*delet*/**', '**/*purge*', '**/*purge*/**', '**/*cleanup*', '**/*cleanup*/**', '**/*sweep*', '**/*sweep*/**', '**/*prune*', '**/*prune*/**', '**/*tombstone*', '**/*wipe*', '**/account_keys*'] },
 ])
-/** The fewest reads a change to a security area gets, whatever a saved record says. */
-export const SECURITY_FLOOR_READS = 2
-/** What runs no code: images (not SVG, which can carry script), video, 3D models, Markdown, docs, samples and build output.
- *  The built-in security patterns never catch it (River, SecAlder and ReviewLinnea, review of #3250); a path a person writes
- *  into a security row of their record still does, as written. */
-const NOT_CODE = /\.(png|jpe?g|gif|webp|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i
-/** Names a security term catches by accident, per area: accessibility is not access control. */
-const NOT_AREA: Readonly<Record<string, RegExp>> = { access: /accessib/i }
-/** The built-in patterns of each security area, by its name in lower case. */
-const BUILT_IN = new Map(SECURITY_ROWS.map(row => [row.area.toLowerCase(), new Set(row.paths)]))
-/** Whether [glob] of a security area's row catches [file]: a built-in pattern catches code only, not a known false name; a
- *  pattern a person added to the row in their record catches exactly what it says (SecAlder, re-review of #3250). */
-function securityGlob(area: string, glob: string, file: string): boolean {
-  if (!globMatch(glob, file)) return false
-  if (!BUILT_IN.get(area.toLowerCase())?.has(glob)) return true
-  return !NOT_CODE.test(file) && !NOT_AREA[area.toLowerCase()]?.test(file)
-}
-const inSecurityArea = (row: { area: string; paths: readonly string[] }, file: string) => row.paths.some(glob => securityGlob(row.area, glob, file))
-
 /** Today's numbers (task #3393; project instructions, 2026-11-05): what a project reads until its first save. */
 export const SEED_RULES: ProjectRules = deepFreeze({
   releaseWindow: { start: '09:00', end: '18:00', timeZone: 'Asia/Ho_Chi_Minh' },
   releasePace: { backendEveryMinutes: 120, appsAfterVisibleBatch: true, backendPause: { start: '09:00', end: '10:00' } },
-  // The review table the review steps plan by (#3401, reviewTable.ts at c935c0665): two security reviews for these areas
-  // (project instructions, Ken 2026-10-29), a test where the change runs (Workflow 2).
+  // The review table the review steps planned by before Swarm v4 (#3401): two security reviews for these areas (project
+  // instructions, Ken 2026-10-29), a test where the change runs (Workflow 2).
   reviews: {
     defaultReads: 1,
     rows: SECURITY_ROWS.map(row => ({ ...row, paths: [...row.paths] })),
@@ -263,99 +242,3 @@ export interface RulesWrite {
   at: number
 }
 
-type GlobToken = { kind: 'char'; c: string } | { kind: 'one' } | { kind: 'name' } | { kind: 'any' } | { kind: 'dirs' }
-const tokenCache = new Map<string, GlobToken[]>()
-/** [glob] as tokens: `**` then a slash, any folders or none (`dirs`); `**` anything (`any`); `*` within one name (`name`); `?` one
- *  character of a name (`one`); anything else itself, lower-cased. */
-function globTokens(glob: string): GlobToken[] {
-  let tokens = tokenCache.get(glob)
-  if (tokens) return tokens
-  tokens = []
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i]!
-    if (c === '*' && glob[i + 1] === '*') {
-      if (glob[i + 2] === '/') { tokens.push({ kind: 'dirs' }); i += 2 } else { tokens.push({ kind: 'any' }); i += 1 }
-    } else if (c === '*') tokens.push({ kind: 'name' })
-    else if (c === '?') tokens.push({ kind: 'one' })
-    else tokens.push({ kind: 'char', c: c.toLowerCase() })
-  }
-  // Bounded: a project has at most 50 rows of 50 patterns; the cache only saves tokenizing them again.
-  if (tokenCache.size > 10_000) tokenCache.clear()
-  tokenCache.set(glob, tokens)
-  return tokens
-}
-
-/** Whether [path] matches [glob], ignoring case: `**` any folders (or none), `*` and `?` within one name; anything else is
- *  itself. The review steps' rules (#3401 reviewTable.ts globMatch), so both read a row alike. It walks the pattern as a
- *  set of positions, one step per character of the path: time grows with the path times the pattern and never backtracks,
- *  whatever a project saves (security review of #3216: the regex it replaced took 19 s on `*a` ten times). */
-export function globMatch(glob: string, path: string): boolean {
-  const tokens = globTokens(glob), end = tokens.length
-  // A double star and a slash matches no folders, or any characters ending in a slash, as the regex `(?:.*/)?` did. So it
-  // has two positions: at its token i (it may still match nothing and move on), and inside it, -(i + 1), having read
-  // characters, which it leaves only by reading a slash. Without the inside position `a/**/b` matched `a/xb` (Reviewers).
-  const inside = (i: number) => -(i + 1)
-  // Every position reachable from [from] without reading a character: a wildcard may match nothing.
-  const close = (from: Iterable<number>): Set<number> => {
-    const seen = new Set<number>(), stack = [...from]
-    while (stack.length) {
-      const i = stack.pop()!
-      if (seen.has(i)) continue
-      seen.add(i)
-      const t = i >= 0 ? tokens[i] : undefined
-      if (t && (t.kind === 'name' || t.kind === 'any' || t.kind === 'dirs')) stack.push(i + 1)
-    }
-    return seen
-  }
-  let states = close([0])
-  for (const raw of path) {
-    const c = raw.toLowerCase(), next: number[] = []
-    for (const i of states) {
-      if (i < 0) {
-        // Inside a double star and a slash: any characters, leaving only after a slash.
-        next.push(i)
-        if (c === '/') next.push(-i)
-        continue
-      }
-      const t = tokens[i]
-      if (!t) continue
-      if (t.kind === 'char') { if (t.c === c) next.push(i + 1) }
-      else if (t.kind === 'one') { if (c !== '/') next.push(i + 1) }
-      else if (t.kind === 'name') { if (c !== '/') next.push(i) }
-      else if (t.kind === 'any') next.push(i)
-      else if (c === '/') next.push(i + 1, inside(i))
-      else next.push(inside(i))
-    }
-    if (!next.length) return false
-    states = close(next)
-  }
-  return states.has(end)
-}
-
-const matchesAny = (patterns: readonly string[], file: string) => patterns.some(g => globMatch(g, file))
-
-/** The review rows a change to [files] touches; every row when its files could not be read (null): fail closed. */
-export function touchedRows(rules: ProjectRules, files: readonly string[] | null): ProjectRules['reviews']['rows'] {
-  return files === null ? [...rules.reviews.rows] : rules.reviews.rows.filter(row => files.some(file => matchesAny(row.paths, file)))
-}
-
-/** The independent reads a change to [files] needs: the most any touched row asks, at least the default. Files that could
- *  not be read (null) need the most any row asks (the merge train and the review steps fail closed, #3401, #3402). */
-export function requiredReads(rules: ProjectRules, files: readonly string[] | null): number {
-  // The floor (River, 2026-11-06): a security area's two reads hold whatever the record's own rows say, and unknown files
-  // touch every area.
-  const security = files === null || files.some(file => SECURITY_ROWS.some(row => inSecurityArea(row, file)))
-  // A security area's own row in the record reads files the same way, so a doc or an image named after a device asks no
-  // second read; any other row reads every file.
-  const areas = new Set(SECURITY_ROWS.map(row => row.area.toLowerCase()))
-  const rows = files === null ? touchedRows(rules, null) : rules.reviews.rows.filter(row => areas.has(row.area.toLowerCase())
-    ? files.some(file => inSecurityArea(row, file)) : files.some(file => row.paths.some(glob => globMatch(glob, file))))
-  return Math.max(rules.reviews.defaultReads, ...rows.map(row => row.reads), security ? SECURITY_FLOOR_READS : 0)
-}
-
-/** Where a change to [files] runs, for its test, in the table's order: none for tests, fixtures and docs alone, and none when
- *  its files could not be read (where it runs is unknown). */
-export function testsFor(rules: ProjectRules, files: readonly string[] | null): string[] {
-  const running = (files ?? []).filter(file => !matchesAny(rules.reviews.untested, file))
-  return rules.reviews.test.filter(row => running.some(file => matchesAny(row.paths, file))).map(row => row.where)
-}

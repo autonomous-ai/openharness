@@ -41,6 +41,16 @@ async function saveState(tab: string, state: SuperTabState) {
       sequenceBase: current.sequenceBase })
   })
 }
+/** Makes [id], a plain task of [tab], a step of [reviewOf] named [name], as a Swarm from before Swarm v4 stored one: v4 opens none
+ *  (conversation.create with `reviewOf` answers as retired). It keeps its task's Team-written mark, as one opened then did. */
+async function storeStep(tab: string, id: string, reviewOf: string, name: string): Promise<string> {
+  const state = await storedState(tab)
+  const parent = state.conversations.find(c => c.id === reviewOf)!
+  Object.assign(state.conversations.find(c => c.id === id)!, { reviewOf, step: name,
+    ...parent.teamWritten ? { teamWritten: true, ...parent.teamWrittenBy ? { teamWrittenBy: parent.teamWrittenBy } : {} } : {} })
+  await saveState(tab, state)
+  return id
+}
 let store: SuperTabStore
 const TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -198,7 +208,7 @@ describe('a task a Team agent worked on', () => {
   const owners = async (tab: string, conversationId: string) => String((await run(tab, { type: 'agent.add', conversationId, machineId: 'personal-mac',
     harnessId: randomUUID(), name: 'Mate Reviewer', configuration: config, lead: false }, person)).result.agentId)
   const task = async (tab: string, title: string) => String((await run(tab, { type: 'conversation.create', projectId: 'lead', title, brief: 'Do it', checks: [] })).result.conversationId)
-  const step = async (tab: string, reviewOf: string) => String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read it', reviewOf, step: 'Review', checks: [] })).result.conversationId)
+  const step = async (tab: string, reviewOf: string) => storeStep(tab, await task(tab, 'Review'), reviewOf, 'Review')
 
   it('keeps its mark through a save and a load, and refuses the main account\'s agent on its step', async () => {
     const { tab, builder, teamGroup, generation } = await fixture()
@@ -255,7 +265,7 @@ describe('a task a Team agent worked on', () => {
     state0.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
     await saveState(tab, state0)
     const clean = await task(tab, 'Owner work'), main = await owners(tab, clean), bare = await step(tab, clean)
-    const named = String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read PR #2500', reviewOf: clean, step: 'Review 2', checks: [] })).result.conversationId)
+    const named = await storeStep(tab, String((await run(tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read PR #2500', checks: [] })).result.conversationId), clean, 'Review 2')
     const read = vi.fn(async () => 'clean' as const)
     const asked = new SuperTabStore(db, Date.now, undefined, { pushOrigin: read })
     const assign = (conversationId: string) => asked.execute(owner, tab, { operationId: randomUUID(), command: { type: 'work.assign', conversationId, agentId: main } })
@@ -385,7 +395,7 @@ describe('a task\'s Team-written mark rests on its own code', () => {
 
   it('marks a step for a Team pull request its reviewer names in its Ready, never the task; a link posted there marks nothing', async () => {
     const f = await setup()
-    const review = String((await run(f.tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read it', reviewOf: f.task, step: 'Review', checks: [] })).result.conversationId)
+    const review = await storeStep(f.tab, String((await run(f.tab, { type: 'conversation.create', projectId: 'lead', title: 'Review', brief: 'Read it', checks: [] })).result.conversationId), f.task, 'Review')
     // A Team-account reviewer, as #3462's were, given the step before the release (task #4120).
     await beforeV3(f.tab, f.generation, () => f.exec({ type: 'work.assign', conversationId: review, agentId: f.builder }))
     const step = (await storedState(f.tab)).conversations.find(c => c.id === review)!
@@ -413,51 +423,6 @@ describe('a task\'s Team-written mark rests on its own code', () => {
     legacy.pullRequestUrls = [OWN, TEAM_PR]
     await saveState(f.tab, state)
     await expect(f.join('Owner Builder 2')).rejects.toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
-  })
-})
-
-// Huy's groupme, 2026-11-05 (task #3266): a Team account start for a repository the Harness GitHub App is not on failed
-// twice on its machine and suspended Claude there. The store reads the project's GitHub access first and refuses it at once.
-describe('a start whose account cannot reach the project repository', () => {
-  const withRepository = async (tab: string) => {
-    const state = await storedState(tab)
-    state.projects!.find(p => p.id === 'lead')!.repository = { machineId: 'owner-host', cwd: '/repo', repositoryUrl: 'https://github.com/acme/app' }
-    await saveState(tab, state)
-  }
-  // A teammate's own agent, started by them on their own Mac (task #4120: no start lands in a Team account now): it reaches the
-  // owner's repository only through the Harness GitHub App, as a Team account did.
-  const personalMac = async (tab: string) => {
-    await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
-    const generation = (await poolRows(store, person, 'personal-mac')).find(p => p.tabId === tab)!.machine.generation
-    await store.observeMachine(person, tab, 'personal-mac', reading(generation))
-  }
-  const startOn = (asked: SuperTabStore, tab: string, conversationId: string) => asked.execute(person, tab, { operationId: randomUUID(), command: { type: 'agent.start',
-    request: { conversationId, machineId: 'personal-mac', engine: 'codex', name: 'Reviewer', cwd: '/work/lead', worktree: false, requirements } } })
-  const starts = async (tab: string) => (await storedState(tab)).starts?.length ?? 0
-
-  it('is refused through the store before anything is queued, from the access it reads for that project', async () => {
-    const { tab, teamGroup } = await fixture()
-    await personalMac(tab)
-    await withRepository(tab)
-    const reach = vi.fn(async () => ({ state: 'not-installed' as const, repository: 'acme/app', installUrl: 'https://github.com/apps/harness/installations/new' }))
-    const asked = new SuperTabStore(db, Date.now, undefined, { repositoryReach: reach })
-    const before = await starts(tab)
-    await expect(startOn(asked, tab, teamGroup)).rejects.toMatchObject({ code: 'REPOSITORY_UNREACHABLE', status: 409,
-      message: expect.stringContaining('An owner of acme installs it (https://github.com/apps/harness/installations/new)') })
-    expect(reach).toHaveBeenCalledWith('prod', tab, 'lead', 'https://github.com/acme/app')
-    expect(await starts(tab)).toBe(before)
-  })
-
-  it('starts as before when the read fails, and reads nothing for a project with no GitHub repository', async () => {
-    const { tab, teamGroup } = await fixture()
-    await personalMac(tab)
-    const reach = vi.fn(async () => { throw new Error('GitHub did not answer') })
-    const asked = new SuperTabStore(db, Date.now, undefined, { repositoryReach: reach })
-    await expect(startOn(asked, tab, teamGroup)).resolves.toBeTruthy()
-    expect(reach).not.toHaveBeenCalled()
-    await withRepository(tab)
-    await expect(startOn(asked, tab, teamGroup)).resolves.toBeTruthy()
-    expect(reach).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -627,7 +592,6 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.sharing(team, f.tab)).rejects.toMatchObject(LIMITED)
     await expect(store.previewJoin(team, f.tab, 'token')).rejects.toMatchObject(LIMITED)
     await expect(store.accountPolicy(team)).rejects.toMatchObject(LIMITED)
-    await expect(store.mentions(team, f.tab, 'waiting')).rejects.toMatchObject(LIMITED)
     await expect(store.hostGrids(team)).rejects.toMatchObject(LIMITED)
     await expect(store.machineRemoval(team, f.tab, 'team-mac')).rejects.toMatchObject(LIMITED)
     expect(await store.mayObserve(team, f.tab, 'team-mac', 'any', person.sub)).toBe(false)

@@ -69,9 +69,10 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need, {bool quiet = false}) {
   );
 }
 
-/// The notification one task's questions share (task #3607; backend
-/// `push/notices.ts` taskSlot): a decision asked of the person, and the
-/// task's "stuck" or "needs you". A later one replaces the earlier quietly.
+/// The notification one task's questions share (task #3607): the task's
+/// "stuck" or "needs you", and a decision asked of the person (the server
+/// pushed those in this slot until Swarm v4). A later one replaces the
+/// earlier quietly.
 String swarmTaskSlot(String swarmId, String conversationId) =>
     'task:$swarmId:$conversationId';
 

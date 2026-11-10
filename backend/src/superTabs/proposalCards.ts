@@ -196,8 +196,7 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
       card.task = command.task
       card.brief = renderWorkTask(command.task)
       card.briefAt = now
-      card.stepIds = []
-      card.checks = command.checks.map((check, i) => ({ id: stableId(operationId, 'check', String(i)), description: check.description, independent: check.independent ?? false, evidence: null, passedBy: null, verdicts: [] }))
+      card.checks = command.checks.map((check, i) => ({ id: stableId(operationId, 'check', String(i)), description: check.description, independent: check.independent ?? false, evidence: null, passedBy: null }))
       stampLane(card)
       recordAsked(card, card.requesterId, now)
       // The person approves the task the PM shaped: an approval stored before this decision never carries over.

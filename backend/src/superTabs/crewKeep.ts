@@ -11,13 +11,31 @@ import { activeWork, actorKey, stableId, type Agent, type AgentStart, type Agent
 import { isBuddy } from './buddies.js'
 import { isCrew } from './crew.js'
 import { roleNameOf } from './instructions.js'
-import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
+import { AGENT_MEMORY_BYTES, MACHINE_FRESH_MS, projectFolder, type ContributedMachine } from './machines.js'
 import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
 import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
-import { quotaOf, resetMs } from './reviewSeats.js'
 import { groupsOf, idleSince } from './tidy.js'
 import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, QUOTA_FLOOR_PERCENT, QUOTA_FLOOR_PM_PERCENT, SLEEP_IDLE_MS, UNSTABLE_STOPS, UNSTABLE_WINDOW_MS } from './crewRules.js'
+
+/** What a Harness Team account says of an engine that spends its Mac owner's subscription through the owner's relay: the
+ *  allowance is that subscription's, read on the Mac. The same sentence as cli superTabs/capacity.ts RELAYED_QUOTA, which
+ *  writes it. */
+const RELAYED_QUOTA = "This account runs on its owner's subscription; its allowance is read on the owner's machine."
+
+/** The engine's quota reading for [pool]: its own, or for a Team account that spends its Mac's subscription, the Mac's. */
+function quotaOf(state: SuperTabState, pool: ContributedMachine, engine: string, now: number) {
+  const own = pool.observation?.quotas.find(q => q.engine === engine)
+  if (own?.known || !pool.hostMachineId || pool.observation?.quotaReasons?.[engine] !== RELAYED_QUOTA) return own
+  const mac = state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId)
+  return mac?.observation && now - mac.observation.receivedAt <= MACHINE_FRESH_MS ? mac.observation.quotas.find(q => q.engine === engine) : own
+}
+
+function resetMs(value: string | number | null): number | null {
+  if (typeof value === 'number') return value > 1e10 ? value : value * 1000
+  if (typeof value === 'string') { const ms = Date.parse(value); return Number.isFinite(ms) ? ms : null }
+  return null
+}
 
 export type CrewAction =
   | { kind: 'sleep'; agentId: string }

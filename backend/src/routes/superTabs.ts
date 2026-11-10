@@ -20,15 +20,12 @@ import { redisPollMemory } from '../superTabs/pollMemory.js'
 import { redisAutoJoinMemory } from '../superTabs/autoJoin.js'
 import { redisReportMemory } from '../superTabs/machineReports.js'
 import { routingPolicySaveSchema } from '../superTabs/routingPolicy.js'
-import { machineObservationSchema, teamAccountRequired } from '../superTabs/machines.js'
-import { repositoryReachOf } from '../superTabs/repositoryReach.js'
+import { machineObservationSchema } from '../superTabs/machines.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 import { holdReason } from '../superTabs/holdReason.js'
 import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
 import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
-import { projectPullRequestFiles } from '../superTabs/pullRequestFiles.js'
-import { appPullRequestWatch } from '../superTabs/pullRequestEvents.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
 import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
@@ -37,14 +34,10 @@ import { createRepository, createStateSecret, GITHUB_OWNER, ownerCheckAllowed, r
 import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
-import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
-import { READ_THREADS_ASKED_MAX, readFollowedThreads, threadsWait } from '../superTabs/read/followedThreads.js'
-import { activityWait } from '../superTabs/activity.js'
-import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
-import { PICTURES_RETIRED } from '../superTabs/retired.js'
+import { PICTURES_RETIRED, REMINDERS_RETIRED, RETIRED_READS, RETIRED_WRITES, retiredCatchUp } from '../superTabs/retired.js'
 import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
@@ -75,6 +68,8 @@ const uploadLinkBody = z.object({ conversationId: id, name: z.string().max(1000)
 const emptyBody = z.object({}).strict().optional()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
+// `mentions=1` asked an older Desktop's tag counts, which Swarm v4 has none of (2026-11-10): taken and answered with none. It goes
+// with the retired reads (superTabs/retired.ts), not before 2026-12-09.
 const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 // `derivedEtag`: the summary's etag the client holds (read/derivedEtag.ts, task #2906).
@@ -100,25 +95,14 @@ const messageParams = tabParams.extend({ conversationId: id })
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
 // Mark unread names the message it starts from: the mark goes to just before it.
 const unreadBody = z.object({ sequence: z.number().int().positive().safe() }).strict()
-const followBody = z.object({ follow: z.boolean().nullable() }).strict()
 const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
-const activityReadBody = z.object({ through: z.string().datetime() }).strict()
-// A time sets or replaces the reminder; null clears it. One POST, as Desktop reaches the backend through the daemon, which
-// forwards only GET and POST (cli superTabs/service.ts), and the web's transport sends no other.
-const reminderBody = z.object({ at: z.string().datetime({ offset: true }).nullable() }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
-const reminderParams = messageParams.extend({ messageId: id })
 const noQuery = z.object({}).strict()
-/** The followed-threads read's query (read/followedThreads.ts): how many read threads to answer. */
-const threadsQuery = z.object({ read: z.string().regex(/^[1-9][0-9]{0,2}$/).transform(Number)
-  .refine(n => n <= READ_THREADS_ASKED_MAX, `At most ${READ_THREADS_ASKED_MAX}.`).optional() }).strict()
 // The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
 const proposalsQuery = z.object({ projectId: id }).strict()
 /** The Cmd-N and join project list's query (superTabs/projectList.ts): the project the person was invited to, if any. */
 const projectListQuery = z.object({ invitedTo: id.optional() }).strict()
-// The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
-const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional(),
@@ -161,8 +145,6 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ack'), claimId: id, receipt: z.string().min(1).max(2000), uncertain: z.boolean() }).strict(),
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
-const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
-const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered', 'settled']) }).strict()
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySaveSchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
@@ -248,7 +230,7 @@ export const HOT_BODY_LIMIT = 128 * 1024
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
-async function productionStore(github: GitHubTokens | null, approvals: Approvals): Promise<SuperTabStore> {
+async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
   const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers },
     { VoiceQuotaExceededError, voiceQuotaService }, { pickWavLang, transcribeWavWithDeepgram }] = await Promise.all([
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
@@ -267,15 +249,6 @@ async function productionStore(github: GitHubTokens | null, approvals: Approvals
       ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
       // When a moved rule's task merged, as GitHub dates it, read at the instructions save (superTabs/ruleMoves.ts, task #3463).
       ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
-      // A task's Ready reads the files its pull requests change, and the server opens its review steps from them (task #3401).
-      ...(github ? { pullRequestFiles: projectPullRequestFiles(github.app) } : {}),
-      // A verdict naming a head the record does not have, and a Ready, read the pull request's head now (task #3628).
-      ...(github ? { pullRequestReader: () => appPullRequestWatch(github.app) } : {}),
-      // A start or assignment its account cannot reach the repository from is refused at once, by the read Project details
-      // shows (task #3266): the token endpoint below would refuse it on the machine, after the start was queued.
-      ...(github ? { repositoryReach: async (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) =>
-        repositoryReachOf(await projectGitHubAccess(github.app, repositoryUrl, { canApprove: false,
-          approved: async repository => !teamAccountRequired() || approvals.approved(autonomousEnv, tabId, projectId, repository) })) } : {}),
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
@@ -325,7 +298,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     throw new SuperTabError('GITHUB_REPOSITORY_NOT_APPROVED', `Nobody who can push to ${repository.fullName} has approved it for this project yet, `
       + 'so teammates\' agents get no access to it. Someone who can push to it approves it in Harness: Project details, GitHub access.', 403)
   }
-  const store = options.store ?? await productionStore(github, approvals)
+  const store = options.store ?? await productionStore(github)
   // A rename in Machines reaches the Swarms the machine is in at once (MachineService.rename).
   onMachineRenamed(rename => store.machineRenamed(rename))
   // An account's rename: the person's name in each of their Swarms follows it (personNames.ts followAccountName).
@@ -559,7 +532,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.tabPolicy(req.user!, req.params.tabId, req.query.asAgentId)))
   app.get('/api/super-tabs', updateRequired)
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
-    (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after, req.query.mentions === '1')))
+    (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
     (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility)))
   // The owner's deleted Swarms they can still restore (superTabs/deletion.ts); restoring is the swarm.restore command.
@@ -600,21 +573,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => reads.machineReadings(req.user!, req.params.tabId, req.query.asAgentId)))
-  // A person's unread threads and each chat's latest message (read/inbox.ts): read when the change feed moves, never on a timer.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/inbox',
-    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
-      const wait = await inboxWait(req.user!, req.params.tabId)
-      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many inbox reads. Try again in a moment.', 'RATE_LIMITED', 429)
-      return respond(reply, () => readInbox(store, req.user!, req.params.tabId))
-    })
-  // A person's followed threads, unread first (read/followedThreads.ts): Desktop's Threads view, read as the inbox is.
-  // `read`: how many read threads to answer (Activity's Threads asks 50 at a time, task #2835); 30 when not asked.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof threadsQuery> }>('/api/super-tabs/:tabId/threads',
-    { preHandler: [validateParams(tabParams), validateQuery(threadsQuery)] }, async (req, reply) => {
-      const wait = await threadsWait(req.user!, req.params.tabId)
-      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many thread reads. Try again in a moment.', 'RATE_LIMITED', 429)
-      return respond(reply, () => readFollowedThreads(store, req.user!, req.params.tabId, req.query.read))
-    })
   // One project's Buddy proposals its PM has not answered, oldest first (superTabs/proposals.ts): the Tasks view's Proposals.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
     { preHandler: [validateParams(tabParams), validateQuery(proposalsQuery)] },
@@ -623,26 +581,16 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof projectListQuery> }>('/api/super-tabs/:tabId/project-list',
     { preHandler: [validateParams(tabParams), validateQuery(projectListQuery)] },
     (req, reply) => respond(reply, () => store.projectList(req.user!, req.params.tabId, req.query.invitedTo)))
-  // A person's Activity (superTabs/activity.ts): replies to their messages, read when its digest moves.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/activity',
-    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
-      const wait = await activityWait(req.user!, req.params.tabId)
-      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many Activity reads. Try again in a moment.', 'RATE_LIMITED', 429)
-      return respond(reply, () => reads.activity(req.user!, req.params.tabId))
-    })
-  // A person's due reminders and when the next is due (superTabs/reminders.ts), read when its digest moves or at that time.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery> }>('/api/super-tabs/:tabId/reminders',
-    { preHandler: [validateParams(tabParams), validateQuery(noQuery)] }, async (req, reply) => {
-      const wait = await reminderWait(req.user!, req.params.tabId)
-      if (wait) return sendError(reply.header('Retry-After', String(wait)), 'Too many reminder reads. Try again in a moment.', 'RATE_LIMITED', 429)
-      return respond(reply, () => reads.reminders(req.user!, req.params.tabId))
-    })
-  app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
-    { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
-    (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
-  // The scorecard is gone with Swarm v4, but an older Desktop's Scorecard tab still reads it: it answers no days, to everyone, and
-  // names no Swarm, as `updateRequired` does for the retired full-state reads. A Team session never reaches it (lib/teamSession.ts).
-  app.get('/api/super-tabs/:tabId/scorecard', { preHandler: validateParams(tabParams) }, (_req, reply) => sendSuccess(reply, { days: [] }))
+  // Reads Swarm v4 removed, which an older client still makes (superTabs/retired.ts): each answers its empty answer to everyone, with
+  // whatever query it sent, and names no Swarm, as `updateRequired` does for the retired full-state reads.
+  for (const [url, empty] of Object.entries(RETIRED_READS)) app.get(url, (_req, reply) => sendSuccess(reply, empty))
+  for (const [url, done] of Object.entries(RETIRED_WRITES)) app.post(url, (_req, reply) => sendSuccess(reply, done))
+  app.get<{ Querystring: { after?: unknown } }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
+    (req, reply) => sendSuccess(reply, retiredCatchUp(req.query.after)))
+  // An older Desktop's Remind me: clearing one answers that none was cleared; setting one is refused in words, which the app shows
+  // where it was set, rather than answered as if a reminder were kept (superTabs/retired.ts REMINDERS_RETIRED).
+  app.post<{ Body: { at?: unknown } }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder', (req, reply) =>
+    req.body?.at === null ? sendSuccess(reply, { cleared: false }) : sendError(reply, REMINDERS_RETIRED.message, REMINDERS_RETIRED.code, REMINDERS_RETIRED.status))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
@@ -753,12 +701,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     scope.addContentTypeParser('multipart/form-data', { parseAs: 'buffer', bodyLimit: 2 * 1024 * 1024 }, (_req, _body, done) => done(null))
     scope.post('/api/super-tabs/:tabId/avatars', (_req, reply) => sendError(reply, PICTURES_RETIRED.message, PICTURES_RETIRED.code, PICTURES_RETIRED.status))
   })
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',
-    { preHandler: [validateParams(tabParams), validateQuery(mentionQuery)] },
-    (req, reply) => respond(reply, () => store.mentions(req.user!, req.params.tabId, req.query.state)))
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personDecisionQuery> }>('/api/super-tabs/:tabId/decisions',
-    { preHandler: [validateParams(tabParams), validateQuery(personDecisionQuery)] },
-    (req, reply) => respond(reply, () => store.decisions(req.user!, req.params.tabId, req.query.state, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
     { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))
@@ -782,23 +724,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/read',
     { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(readMarkBody)] },
     (req, reply) => respond(reply, () => reads.markThreadRead(req.user!, req.params.tabId, req.params.conversationId, req.params.threadId, req.body.sequence)))
-  // A person's own Follow or Unfollow of a thread, kept on its thread mark (superTabs/readMarks.ts writeThreadFollow); null clears it.
-  app.post<{ Params: z.infer<typeof threadParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof followBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow',
-    { preHandler: [validateParams(threadParams), validateQuery(noQuery), validateBody(followBody)] },
-    (req, reply) => respond(reply, () => reads.followThread(req.user!, req.params.tabId, req.params.conversationId, req.params.threadId, req.body.follow)))
-  // A person's own reminder of a message (superTabs/reminders.ts): set or replace its time, or clear it (`at` null).
-  app.post<{ Params: z.infer<typeof reminderParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof reminderBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder',
-    { preHandler: [validateParams(reminderParams), validateQuery(noQuery), validateBody(reminderBody)] },
-    (req, reply) => respond(reply, () => req.body.at === null
-      ? reads.clearReminder(req.user!, req.params.tabId, req.params.conversationId, req.params.messageId)
-      : reads.setReminder(req.user!, req.params.tabId, req.params.conversationId, req.params.messageId, req.body.at)))
   // A person's own notification setting for a chat (superTabs/chatSettings.ts): all, mentions or muted.
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof notifyBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/notifications',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(notifyBody)] },
     (req, reply) => respond(reply, () => reads.setChatNotify(req.user!, req.params.tabId, req.params.conversationId, req.body.notify)))
-  app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof catchUpQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
-    { preHandler: [validateParams(messageParams), validateQuery(catchUpQuery)] },
-    (req, reply) => respond(reply, () => store.catchUp(req.user!, req.params.tabId, req.params.conversationId, req.query.after)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/attempts',
     { preHandler: [validateParams(messageParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.attempts(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))

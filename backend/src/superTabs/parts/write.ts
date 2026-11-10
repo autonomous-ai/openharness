@@ -113,9 +113,8 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
         agentIds: group.agentIds, feedIds: feedIdsOf(group), executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
-        // A step is never marked by a write: it archives with its task (task steps design; steps.ts endSteps), not on its own clock.
-        // Only the worker's startup marks one, once its task has ended (archive.ts markFinishedGroups).
-        workFinished: !group.reviewOf && (['done', 'cancelled'].includes(group.assignment?.status ?? '') || (!!group.reviewOf && !activeWork(group))) }
+        // A finished task, never a step. Nothing reads it since the archive pass went (Swarm v4); its index goes with the schema (S19).
+        workFinished: !group.reviewOf && ['done', 'cancelled'].includes(group.assignment?.status ?? '') }
     }
     case 'agent': {
       const agent = data as Agent
