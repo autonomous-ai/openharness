@@ -328,15 +328,17 @@ describe("scripts/install.sh command contract", () => {
     } finally { rmSync(scratch, { recursive: true, force: true }); }
   };
 
-  it("replaces a managed Node below 24 and keeps one that is 24", () => {
-    const old = nodeSelection("22");
-    expect(old.stdout).toContain("[]");
-    const current = nodeSelection("24");
-    expect(current.stdout).toContain(`[${current.node}]`);
+  // The CLI runs on 22 until the move is done, and its updater moves a managed 22 to 24 itself.
+  it("replaces a managed Node below 22 and keeps 22 and 24", () => {
+    expect(nodeSelection("20").stdout).toContain("[]");
+    for (const major of ["22", "24"]) {
+      const kept = nodeSelection(major);
+      expect(kept.stdout).toContain(`[${kept.node}]`);
+    }
   });
 
   it("names the floor an explicit Node override fails", () => {
-    expect(readFileSync(installer, "utf8")).toContain("is older than Node 24");
+    expect(readFileSync(installer, "utf8")).toContain("is older than Node 22");
   });
 
   it("refuses an unverified Node archive", () => {

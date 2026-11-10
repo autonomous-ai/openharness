@@ -166,20 +166,29 @@ void main() {
     },
   );
 
-  test('a managed Node 22 is not ready: the CLI needs Node 24', () async {
-    await createManagedHarness();
-    final provisioner = EnvironmentProvisioner(
-      harnessHome: scratch,
-      isMacOS: true,
-      isLinux: false,
-      run: runner(tmuxPresent: () => true, nodeVersion: 'v22.23.2'),
+  for (final (node, ready) in [('v20.18.0', false), ('v22.23.2', true)]) {
+    test(
+      'a managed Node $node is ${ready ? '' : 'not '}ready: the CLI runs on 22 and moves itself to 24',
+      () async {
+        await createManagedHarness();
+        final provisioner = EnvironmentProvisioner(
+          harnessHome: scratch,
+          isMacOS: true,
+          isLinux: false,
+          run: runner(tmuxPresent: () => true, nodeVersion: node),
+        );
+        final readiness = await provisioner.ensureReady(
+          onProgress: (_) {},
+          install: false,
+        );
+        expect(
+          readiness.isReady,
+          ready,
+          reason: readiness.output.join('\n'),
+        );
+      },
     );
-    final readiness = await provisioner.ensureReady(
-      onProgress: (_) {},
-      install: false,
-    );
-    expect(readiness.isReady, isFalse, reason: readiness.output.join('\n'));
-  });
+  }
 
   for (final (version, ready) in [
     ('0.0.1-dev.7c3d6315c.startup-retry.dirty', true),
@@ -269,7 +278,7 @@ void main() {
       expect(readiness.phase, EnvironmentSetupPhase.review);
       expect(readiness.plan.map((item) => item.title), [
         'tmux',
-        'Managed Node 24+ & Harness CLI',
+        'Managed Node 22+ & Harness CLI',
       ]);
       expect(readiness.plan.first.requiresTerminal, isFalse);
       expect(readiness.plan.first.command, kHarnessHostSetupCommand);
@@ -1020,7 +1029,7 @@ void main() {
       );
       expect(readiness.plan.map((item) => item.title), [
         'Linux host dependencies',
-        'Managed Node 24+ & Harness CLI',
+        'Managed Node 22+ & Harness CLI',
       ]);
       expect(readiness.plan.first.packages, ['curl']);
       expect(readiness.plan.first.step, EnvironmentStep.harness);

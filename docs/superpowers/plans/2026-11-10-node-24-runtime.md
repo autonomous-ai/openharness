@@ -152,8 +152,8 @@
 ### Task 6: Installers and floors
 
 **Files:**
-- Modify: `cli/scripts/install.sh:547-611` (`node_is_usable` needs 24; a managed Node below 24 is replaced, not reused), `cli/scripts/install-cli.sh:77-78`, and `cli/package.json` (`engines.node` → `>=24.16.0`).
-- Modify Desktop: `desktop/lib/bootstrap/environment_provisioner.dart:1496` (the check is ≥ 24), `:296,305,637,640` (copy `Node 24+`), and `desktop/lib/widgets/dsh_install_panel.dart:341` (`brew install node@24`).
+- Modify: `cli/scripts/install.sh:547-611` (`node_is_usable` reuses a managed Node ≥ 22; a fresh install gets the manifest's Node), `cli/scripts/install-cli.sh:77-78` (22.15), and `cli/package.json` (`engines.node` → `>=22.15.0`). Ruling after the final review: every floor is 22, what the bundle runs on during the window; the updater moves a managed 22 to 24.
+- Modify Desktop: `desktop/lib/bootstrap/environment_provisioner.dart:1496` (the check is ≥ 22), `:296,305,637,640` (copy `Node 22+`), and `desktop/lib/widgets/dsh_install_panel.dart:341` (`brew install node@22`).
 - Test: `cli/src/scripts/install.spec.ts`, `desktop/test/environment_provisioner_test.dart`, `desktop/test/dsh_install_panel_test.dart`
 
 - [ ] **Step 1: Write the failing tests.**
@@ -214,7 +214,7 @@
 
 ### Task 10: End to end, numbers, release
 
-- [ ] **Step 1: Migration E2E against the staging manifest** (`ADAPTER_RUNTIME_METADATA_URL` and `HARNESS_RUNTIME_METADATA_URL` pointed at staging). On each machine, start from a released Harness on Node 22 with Claude Code installed through Harness's npm recipe. Install the dev build as an update (the updater path, not `make install-cli`), then check:
+- [ ] **Step 1: Migration E2E against the staging manifest** (`ADAPTER_RUNTIME_METADATA_URL` and `HARNESS_RUNTIME_METADATA_URL` pointed at staging). The migration lags one release: an updater from before this release only replaces `cli.js`, so a machine moves to Node 24 on the first update after this release is installed. On each machine, start from a released Harness on Node 22 with Claude Code installed through Harness's npm recipe. Install this build as an update (the updater path, not `make install-cli`); it still runs on 22. Then serve a newer build from the staging manifest, let this build's updater install it, and check:
   - `harness status` shows `node v<NODE24>`;
   - `current-node` names v24, and v22 is kept;
   - Claude Code still starts from New;
@@ -233,5 +233,7 @@
 - [ ] **Step 5: Production, then release.** Only on Ken's word, and inside the release window (memory `release-window`):
   - publish both runtimes with `METADATA_PATH=harness/runtime/metadata.json`;
   - verify all six production keys show `v<NODE24>`;
-  - then release the CLI.
+  - then release the CLI;
+  - cut the next CLI release within the window: installs move to Node 24 on that update, the first after this one;
+  - release Desktop only after the production manifest has Node 24.
 - [ ] **Step 6: Follow-up task.** "CLI esbuild targets `node20` → `node24`, and `@types/node` → `^24` (drop the `execve` cast), no earlier than <release date + 30 days>."

@@ -159,6 +159,8 @@ interface ManagedArchive {
   readOnly?: boolean
   /** Whether the runtimes this one replaces, but the last, are removed (see [retireSuperseded]). */
   retiresSuperseded: boolean
+  /** Whether `current-<name>` is left as it is: the caller names the new runtime there itself, when it is time. */
+  leavesPointer?: boolean
   /** How long the manifest may take to answer; [MANIFEST_TIMEOUT_MS] unless the caller has less time. */
   manifestTimeoutMs?: number
   log: (message: string) => void
@@ -270,7 +272,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<ArchiveResult
     }
     // Written last, and only once the binary has answered: Desktop Harness and the hook installer
     // both read this file to decide what to execute, so it must never name something that cannot run.
-    writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, { mode: 0o600 })
+    if (!spec.leavesPointer) writeFileSync(join(env.ADAPTER_RUNTIME_DIR, `current-${spec.name}`), `${binary}${layout.eol}`, { mode: 0o600 })
     spec.log(`  ✓ ${spec.label} runtime ready → ${target}`)
     if (spec.retiresSuperseded) retireSuperseded(spec.name, key, target, installed)
     return { path: binary, reason: null }
@@ -335,24 +337,24 @@ export async function ensureManagedRuntime(log: (message: string) => void = () =
 }
 
 /**
- * Move the managed Node to the manifest's when the one installed is below [MINIMUM_NODE_MAJOR] — the one
- * time a Node that is already installed is replaced. `node` is the managed Node to use from now on: the new
- * one, or on any failure the one already there, with `reason` saying why it stayed. Nothing is fetched while
- * the installed Node meets the minimum. A computer on a Node the product did not lay down is left alone, and
- * `reason` is 'unmanaged' when that Node is too old.
+ * Lay down the manifest's Node when the managed one is below [MINIMUM_NODE_MAJOR] — the one time a Node that is
+ * already installed is replaced. `node` is the managed Node to run on next: the new one, once it has answered
+ * `--version`, or on any failure the one already there, with `reason` saying why it stayed. Nothing is fetched while
+ * the installed Node meets the minimum. A computer on a Node the product did not lay down is left alone, and `reason`
+ * is 'unmanaged' when that Node ([running], this process's) is too old.
  *
- * Writes `current-node` only once the new Node has answered `--version`; it never touches the interpreter
- * this process is running on, which the next exec picks up.
+ * `current-node` is left as it is: what starts the daemon next reads it, so it may name the new Node only together
+ * with a build staged on probation, whose rollback takes it back (lib/selfUpdate.ts `startSelfUpdater`).
  */
 export async function ensureNodeMeetsMinimum(
   log: (message: string) => void,
-  timeoutMs?: number,
+  { timeoutMs, running = process.versions.node }: { timeoutMs?: number; running?: string } = {},
 ): Promise<{ node: string | null; reason: NodeMigrationReason | null }> {
   const spec = nodeArchive(log)
   const installed = spec.installed()
   if (!installed) {
-    const tooOld = Number(process.versions.node.split('.')[0]) < MINIMUM_NODE_MAJOR
-    if (tooOld) log(`  ✗ Node ${process.versions.node} is not the Harness runtime, and is older than ${MINIMUM_NODE_MAJOR}`)
+    const tooOld = Number(running.split('.')[0]) < MINIMUM_NODE_MAJOR
+    if (tooOld) log(`  ✗ Node ${running} is not the Harness runtime, and is older than ${MINIMUM_NODE_MAJOR}`)
     return { node: null, reason: tooOld ? 'unmanaged' : null }
   }
   if ((nodeMajorOf(installed) ?? 0) >= MINIMUM_NODE_MAJOR) return { node: installed, reason: null }
@@ -361,6 +363,7 @@ export async function ensureNodeMeetsMinimum(
     followsPin: true,
     acceptsVersion: (version) => Number(/^v?(\d+)\./.exec(version)?.[1] ?? 0) >= MINIMUM_NODE_MAJOR,
     manifestTimeoutMs: timeoutMs,
+    leavesPointer: true,
   })
   if (result.reason) log(`  ✗ Node stays at ${installed}: ${result.reason}`)
   return { node: result.path, reason: result.reason }

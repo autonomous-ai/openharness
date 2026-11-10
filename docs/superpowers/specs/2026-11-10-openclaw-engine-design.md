@@ -34,9 +34,10 @@ this work, so the OpenClaw install recipe runs with the Node that Harness ships.
   (`harness/runtime/metadata.json`, read by `install.sh`, `install.ps1` and `runtimeInstall`), both runtime publishers,
   `CLI_NODE_VERSION` and the CLI, release, Windows and OS `node-version` pins in `.github/workflows/`, the OS image Node
   packages, and the Windows E2E fake CDN's default. Take the newest 24.x patch that is at least two weeks old and
-  ≥ 24.16.0 (the probe ran 24.22.2). `cli/package.json` `engines.node` and the `>= 20` floors in `install-cli.sh`,
-  `install.sh` and Desktop's provisioner (its check at `environment_provisioner.dart:1496`, not only its copy) rise to
-  24.
+  ≥ 24.16.0 (the probe ran 24.22.2). `cli/package.json` `engines.node` (`>=22.15.0`) and the `>= 20` floors in
+  `install-cli.sh`, `install.sh` (the managed Node it reuses) and Desktop's provisioner (its check at
+  `environment_provisioner.dart:1496`, not only its copy) rise to 22, what the bundle runs on during the window: a
+  floor of 24 would block every machine the updater has not moved yet. A fresh install gets the manifest's Node 24.
 - **Scope.** This covers the Node that runs the CLI and daemon. The backend and website containers
   (`node:22-bookworm-slim`) and their CI jobs, including `ci.yml:407,444`, stay on 22. (My call.)
 - **The bundle still runs on 22 for one release window.** The CLI esbuild targets (`node20`) and `@types/node` stay
@@ -46,12 +47,16 @@ this work, so the OpenClaw install recipe runs with the Node that Harness ships.
   `ensureManagedRuntime` has `followsPin: false` and runs only under `harness start --repair`, `install.sh` reuses any
   managed Node ≥ 20, and self-update replaces `cli.js` only. The migration rides the update path that already exists:
   - The updater makes sure the manifest's Node 24 is installed (staged, sha256 checked, `--version` checked) before it
-    stages a new build, and writes `current-node`.
+    stages a new build, and runs the build's canary on it. It writes `current-node` only together with the stage, on
+    the build's probation: a build that is not staged leaves the next start on the Node the daemon runs on. A build that
+    runs on 22 and not on 24 goes in on 22, recorded as `does-not-run`.
   - `startMasterFromBundle` (`cli/src/masterProcess.ts`) already execs onto the lean bundle. It probes the bundle on,
     and execs onto, `namedNode(managedNodePath())` when that Node meets the minimum, so the migration happens in the
     update's existing gap. No new re-exec kind and no extra core restart are needed.
   - The Node switch goes on the update's probation. If the core does not come up healthy on 24, `current-node` is
-    written back to the previous Node, and the master re-execs onto it, as a failed update rolls back.
+    written back to the previous Node, and the master re-execs onto it, as a failed update rolls back. A master whose
+    lean bundle does not answer on 24 stays on its own Node and puts `current-node` back the same way. The Node that
+    failed is recorded, and later updates go in without the switch until the manifest offers another Node 24.
   - After a switch, everything else that names the Node moves with it: the `harness` launcher (`ensureLauncher`), the
     launchd plist and systemd unit (`harnessd/platform.ts`), and a Team account's copied Node and links
     (`team/script.ts`, `linkTeamNodeTools`).
@@ -65,7 +70,10 @@ this work, so the OpenClaw install recipe runs with the Node that Harness ships.
   Node 24 in the manifest for this platform, download or check failed, rolled back, unmanaged Node too old). Desktop
   shows the same.
 - **Release order.** Node 24 is published to the staging manifest first, then tested, then promoted to production.
-  Only then is the CLI release published. The macOS/Linux publisher (`desktop/scripts/publish-managed-node-runtime.sh`)
+  Only then is the CLI release published. The migration lags one release: an updater from before this release only
+  replaces `cli.js`, so a machine moves to Node 24 on the first update after this release is installed. The release
+  plan therefore cuts the next CLI release within the window. Desktop is released only after the production manifest
+  has Node 24. The macOS/Linux publisher (`desktop/scripts/publish-managed-node-runtime.sh`)
   defaults to staging, as the Windows one already does. Today it writes production directly.
 - **Harness OS.** Arch moves from `nodejs-lts-jod` to Node 24's LTS package. Both packages conflict on `nodejs`, and
   `runtime_update.py` runs `pacman --noconfirm -U`, which answers "no" to removing a conflicting package. The update

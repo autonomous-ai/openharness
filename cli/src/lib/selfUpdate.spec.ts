@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
-import { nodeMigration } from './nodeMigration.js'
+import { failedNode, nodeMigration } from './nodeMigration.js'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { createHash } from 'crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
-  msUntilSlot, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate,
+  msUntilSlot, putNodeBack, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate,
   stage as stageOn, startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
 } from './selfUpdate.js'
 import { env } from '../config/env.js'
@@ -1540,12 +1540,16 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
       return new Response(url.endsWith('cli.js') ? cli : notify)
     })
   }
-  /** Node 24 put in place as `ensureNodeMeetsMinimum` does: `current-node` names it. */
-  const installs24 = (events: string[]) => async () => {
+  /** Node 24 put in place as `ensureNodeMeetsMinimum` does: installed and answering, `current-node` left alone. */
+  const installs24 = (events: string[], node = v24) => async () => {
     events.push(`ensure on ${managedNodePath()}`)
-    writeFileSync(currentNode, `${v24}\n`)
-    return { node: v24, reason: null }
+    return { node, reason: null }
   }
+  const updater = (dir: string, events: string[], ensure = installs24(events)) => startSelfUpdater({
+    currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+    node: { ensure, running: v22 },
+    onStaged: () => { events.push(`staged with ${managedNodePath()}`) },
+  })
 
   it('installs Node 24 before staging the build, whose canary runs on it', async () => {
     // A build that says its version only on Node 24: the canary runs on the Node the next daemon runs on.
@@ -1564,6 +1568,78 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
     // The rollback's way back.
     expect(note(dir)).toMatchObject({ version: '9.9.9', previousNode: v22 })
     expect(nodeMigration(dir)).toBeNull()
+  })
+
+  it('leaves current-node on the Node the daemon runs on when the canary refuses the build', async () => {
+    serveUpdate(Buffer.from('process.exit(3)\n'))
+    const dir = tempDir()
+    const events: string[] = []
+    const refused = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const poller = updater(dir, events)
+    try {
+      await vi.waitFor(() => expect(refused.mock.calls.flat().join('\n')).toContain('failed its canary'), { timeout: 10_000 })
+    } finally { poller.stop() }
+    expect(events).toEqual([`ensure on ${v22}`])
+    expect(managedNodePath()).toBe(v22)
+  })
+
+  it('stages a build that runs on the Node before but not on Node 24 without the switch, and records that 24 does not run', async () => {
+    serveUpdate(Buffer.from('if (process.execPath.includes("node-v24.")) process.exit(3)\nconsole.log("9.9.9")\n'))
+    const dir = tempDir()
+    const events: string[] = []
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const poller = updater(dir, events)
+    try {
+      await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
+    } finally { poller.stop() }
+    expect(events).toEqual([`ensure on ${v22}`, `staged with ${v22}`])
+    expect(nodeMigration(dir)).toBe('does-not-run')
+    expect(failedNode(dir)).toBe(v24)
+  })
+
+  it('does not move again to a Node a rollback moved the daemon off, until the manifest offers another', async () => {
+    serveUpdate(Buffer.from('console.log("9.9.9")\n'))
+    const dir = tempDir()
+    writeFileSync(join(dir, 'cli.js'), 'old')
+    writeFileSync(join(dir, 'notify.mjs'), 'old')
+    stage(dir, Buffer.from('new'), Buffer.from('new'), '9.9.8', 'darwin', v22)
+    writeFileSync(currentNode, `${v24}\n`)
+    restore(dir)
+    expect(failedNode(dir)).toBe(v24)
+    // The same Node 24 again: the build goes in on 22, and the record stands.
+    const events: string[] = []
+    let poller = updater(dir, events)
+    try {
+      await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
+    } finally { poller.stop() }
+    expect(events).toEqual([`ensure on ${v22}`, `staged with ${v22}`])
+    expect(nodeMigration(dir)).toBe('rolled-back')
+    // A Node 24 the manifest offers since: the update moves to it.
+    const newer = join(runtime, 'node-v24.23.0-test', 'bin', 'node')
+    mkdirSync(dirname(newer), { recursive: true }); placeNode(newer)
+    try {
+      confirm(dir)
+      const moved: string[] = []
+      poller = startSelfUpdater({
+        currentVersion: '9.9.8', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+        node: { ensure: installs24(moved, newer), running: v22 },
+        onStaged: () => { moved.push(`staged with ${managedNodePath()}`) },
+      })
+      try {
+        await vi.waitFor(() => expect(moved).toHaveLength(2), { timeout: 10_000 })
+      } finally { poller.stop() }
+      expect(moved).toEqual([`ensure on ${v22}`, `staged with ${newer}`])
+      expect(nodeMigration(dir)).toBeNull()
+    } finally { rmSync(dirname(dirname(newer)), { recursive: true, force: true }) }
+  })
+
+  it('puts current-node back on the Node the master runs on when the lean bundle does not answer on Node 24', () => {
+    const dir = tempDir()
+    writeFileSync(currentNode, `${v24}\n`)
+    expect(putNodeBack(dir, v22, 'does-not-run')).toBe(v22)
+    expect(readFileSync(currentNode, 'utf8')).toBe(`${v22}\n`)
+    expect(nodeMigration(dir)).toBe('does-not-run')
+    expect(failedNode(dir)).toBe(v24)
   })
 
   it('stages the build when Node 24 does not go in, and records why for `harness status`', async () => {
@@ -1592,6 +1668,7 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
     expect(readFileSync(currentNode, 'utf8')).toBe(`${v22}\n`)
     expect(statSync(currentNode).mode & 0o777).toBe(0o600)
     expect(nodeMigration(dir)).toBe('rolled-back')
+    expect(failedNode(dir)).toBe(v24)
     expect(readFileSync(join(dir, 'cli.js'), 'utf8')).toBe('old')
     // An update that moved no Node leaves it be.
     stage(dir, Buffer.from('newer'), Buffer.from('newer'), '9.9.10', 'darwin', v22)

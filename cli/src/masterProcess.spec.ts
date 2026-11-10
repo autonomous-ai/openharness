@@ -107,6 +107,36 @@ describe('a master started on cli.js', () => {
     }
   })
 
+  it('goes back to the Node it runs on when the lean bundle does not answer on Node 24, and execs there', () => {
+    const next = '/rt/node-v24.22.2-test/libexec/harnessd/harnessd'
+    const own = '/rt/node-v22.23.2-test/libexec/harnessd/harnessd'
+    const back: boolean[] = []
+    const probed: string[] = []
+    const { given, calls } = deps({
+      node: () => next,
+      nodeBack: (failed) => { back.push(failed); return own },
+      probe: (node) => { probed.push(node); return node === next ? { ok: false, detail: 'exit 1' } : { ok: true, detail: PROBE_ANSWER } },
+    })
+    startMasterFromBundle('/cli/cli.js', given)
+    expect(probed).toEqual([next, own])
+    expect(back).toEqual([true])
+    expect(calls.execs.map(({ file }) => file)).toEqual([own])
+    expect(calls.logs).toEqual([`[harnessd] the lean bundle /data/lean/harnessd-aaaa.mjs did not answer its probe on ${next} (exit 1): the master stays on ${own}`])
+  })
+
+  it('puts current-node back whenever the master stays on the Node it runs on: the next start must not go to 24 unjudged', () => {
+    for (const over of [{ leanOff: () => true }, { env: { HARNESSD_LEAN: 'off' } }, { execve: null }, { exists: (path: string) => path !== '/data/lean/harnessd-aaaa.mjs' }] as Array<Partial<Deps>>) {
+      const back: boolean[] = []
+      const { given } = deps({ node: () => '/rt/node-v24.22.2-test/libexec/harnessd/harnessd', nodeBack: (failed) => { back.push(failed); return null }, ...over })
+      startMasterFromBundle('/cli/cli.js', given)
+      expect(back).toEqual([false])
+    }
+    // Windows: harness-launch.exe started this master on what current-node names.
+    const back: boolean[] = []
+    startMasterFromBundle('/cli/cli.js', deps({ platform: 'win32', nodeBack: (failed) => { back.push(failed); return null } }).given)
+    expect(back).toEqual([])
+  })
+
   it('runs from cli.js, with the services still from the lean bundle, where this Node cannot re-execute', () => {
     const { given, calls } = deps({ execve: null })
     startMasterFromBundle('/cli/cli.js', given)

@@ -1,4 +1,5 @@
-import { cleanUsageContext, type ProductUsageContext } from '../lib/productHealthContract.js'
+import { cleanUsageContext, type NODE_HELD_REASONS, type ProductUsageContext } from '../lib/productHealthContract.js'
+import type { NodeStatus } from '../lib/nodeStatus.js'
 import { cleanHealthState, createProductHealth, type HealthState } from './productHealth.js'
 import { reportFailure } from './reportFailure.js'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -84,6 +85,8 @@ export interface ProductUsageDeps {
   file: string
   context?: ProductUsageContext
   sample?: () => { rss: number; cpuPercent?: number }
+  /** The daemon's Node (lib/nodeStatus.ts), counted once a collector day. */
+  node?: () => NodeStatus
   /** `retryAfterMs`: the answer's Retry-After, when it had one (gateway/accountHttp.ts). */
   request(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown>; retryAfterMs?: number }>
   now?(): number
@@ -251,6 +254,12 @@ export function createProductUsage(deps: ProductUsageDeps) {
   function dirty(): void {
     if (!persistTimer) { persistTimer = setTimeout(() => { void persist() }, 1000); persistTimer.unref() }
   }
+  /** Enums only: the major's bucket, and the reason's name. No version, path or machine. */
+  function countNode(node: NodeStatus): void {
+    const major = node.version.replace(/^v/, '').split('.')[0]
+    add(`health_cli_node_${major === '22' || major === '24' ? major : 'other'}`)
+    if (node.migration) add(`health_cli_node_held_${node.migration.replaceAll('-', '_') as typeof NODE_HELD_REASONS[number]}`)
+  }
   function add(metric: ProductUsageMetric, day = key(now())): void {
     if (state.measurementDay !== key(now())) {
       state.measurementDay = key(now())
@@ -325,7 +334,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
       if (!enabled) return
       if (context) {
         health.start(context.release); health.checkpoint(); health.sample(deps.sample)
-        if (state.healthDay !== key(now())) { state.healthDay = key(now()); add('health_cli_collector_days') }
+        if (state.healthDay !== key(now())) { state.healthDay = key(now()); add('health_cli_collector_days'); if (deps.node) countNode(deps.node()) }
       }
       for (const turn of running.values()) if (!turn.response && !turn.waited && now() - turn.started >= 60_000) {
         turn.waited = true; add('turns_waiting_over_1m')

@@ -323,10 +323,10 @@ void main() {
       expect(uv.title, 'uv is not installed on this machine.');
       expect(uv.command, 'curl -LsSf https://astral.sh/uv/install.sh | sh');
 
-      final node = describe(lines: ['ok git', 'miss node 18.2 < 24']);
+      final node = describe(lines: ['ok git', 'miss node 18.2 < 22']);
       expect(node.title, 'Node.js is missing or too old.');
-      expect(node.body, 'node 18.2 < 24');
-      expect(node.command, 'brew install node@24');
+      expect(node.body, 'node 18.2 < 22');
+      expect(node.command, 'brew install node@22');
     });
 
     test('a slow check and a failed download are said plainly', () {

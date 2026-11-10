@@ -87,15 +87,25 @@ class BundleGuards(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ['pacman', '--noconfirm', '--ask=4', '-U', str(kernel), str(self.package)])
 
     def test_an_update_from_jod_to_the_node_24_package_replaces_it_without_a_prompt(self):
-        # --ask=4 answers pacman's "remove conflicting package?" question; with --noconfirm alone it
-        # defaults to no and the transaction aborts when nodejs-lts-krypton gives way to nodejs-lts-krypton.
-        for call in (lambda: update.install_package(self.package, self.version, self.runtime),
-                     lambda: update.prepare_packages(self.package)):
+        # The package needs nodejs-lts-krypton, which pacman takes from the snapshot and which conflicts with the
+        # nodejs-lts-jod installed. With --noconfirm alone pacman answers no to removing jod and the transaction
+        # aborts; --ask=4 answers yes. A rollback onto a package that needs jod meets the same question.
+        source = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location('build_package', source / 'os/tools/build-package.py')
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        self.assertIn('nodejs-lts-krypton', builder.DEPENDENCIES)
+        self.assertNotIn('nodejs-lts-jod', builder.DEPENDENCIES)
+        for call, argv in (
+                (lambda: update.install_package(self.package, self.version, self.runtime),
+                 ['pacman', '--noconfirm', '--ask=4', '-U', str(self.package)]),
+                (lambda: update.prepare_packages(self.package),
+                 ['pacman', '--noconfirm', '--ask=4', '-U', '--downloadonly', str(self.package)])):
             with patch.object(update.subprocess, 'run') as run, \
                     patch.object(update, 'installed_version', return_value=self.version), \
                     patch.object(update, 'verify_runtime'):
                 call()
-            self.assertIn('--ask=4', run.call_args.args[0])
+            self.assertEqual(run.call_args.args[0], argv)
 
     def test_dependency_prefetch_includes_kernel_without_installing(self):
         kernel = self.root / 'linux-t2.pkg.tar.zst'

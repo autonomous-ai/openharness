@@ -29,7 +29,7 @@ import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
 import { ts } from './lib/log.js'
-import { confirm as confirmUpdate, pendingVersion, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
+import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
 
@@ -323,6 +323,13 @@ export interface BundleMasterDeps {
   /** The node the master re-executes on (`masterNode`), under the name `harnessd` (harnessd/processName.ts), so
    *  Activity Monitor names it. Asked only when it can re-execute; defaults to this process's. */
   node?: () => string
+  /**
+   * The master stays on the Node it runs on although `node` named another (a lean bundle that did not answer there,
+   * which [failed] says, or a master that runs from cli.js): `current-node` is put back on this one, or the next start
+   * (launchd, systemd, `harness start`) would go onto a Node no probation judged. Returns this process's Node named
+   * `harnessd`, or null when `node` named this one.
+   */
+  nodeBack?: (failed: boolean) => string | null
   start: (start: MasterStart) => unknown
   log: (line: string) => void
   /** This operating system (Windows: no lean bundle). */
@@ -362,6 +369,12 @@ export const processBundleDeps = (): BundleMasterDeps => ({
   probe: (node, leanPath, probeEnv) => probeLean(node, leanPath, probeEnv),
   execve: processExecve(),
   node: () => namedNode(masterNode(baseNode(process.execPath)), 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) }),
+  nodeBack: (failed) => {
+    const own = baseNode(process.execPath)
+    if (masterNode(own) === own) return null
+    putNodeBack(env.ADAPTER_CLI_DIR, own, failed ? 'does-not-run' : null)
+    return namedNode(own, 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) })
+  },
   start: startMaster,
   log: (line) => console.log(`${ts()} ${line}`),
   platform: process.platform,
@@ -376,13 +389,15 @@ export const processBundleDeps = (): BundleMasterDeps => ({
  * a master is never handed the daemon.
  */
 export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps = processBundleDeps()): void {
+  // The lean bundle's claims and its services' identity rely on hard links of the managed node (harnessd/AGENTS.md
+  // rules 7 and 8), which a Windows install does not make: there the master and everything it starts run from cli.js,
+  // on the Node harness-launch.exe started it on, the one `current-node` names.
+  if (deps.platform === 'win32') { deps.start({ scriptPath: bundlePath }); return }
   const fromBundle = (reason: string | null, lean?: { path: string; fingerprint: string }): void => {
     if (reason) deps.log(`[harnessd] ${reason}`)
+    deps.nodeBack?.(false)
     deps.start({ scriptPath: bundlePath, ...(lean ? { serviceScriptPath: lean.path, leanFingerprint: lean.fingerprint } : {}) })
   }
-  // The lean bundle's claims and its services' identity rely on hard links of the managed node (harnessd/AGENTS.md
-  // rules 7 and 8), which a Windows install does not make: there the master and everything it starts run from cli.js.
-  if (deps.platform === 'win32') { fromBundle(null); return }
   if (deps.env.HARNESSD_LEAN === 'off') { fromBundle(null); return }
   if (deps.leanOff()) { fromBundle(`${LEAN_OFF_FILE} is there: the master, the core and the services run from ${bundlePath}`); return }
   let written: { lean: LeanBundle; path: string } | null
@@ -399,8 +414,16 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
   const leanEnv = { ...deps.env, [BUNDLE_ENV]: bundlePath, [BUNDLE_SHA256_ENV]: lean.bundleSha256, [LEAN_FINGERPRINT_ENV]: fingerprint }
   // Probed on the Node the master will run on: one that cannot run it there is never handed the daemon. Without an
   // exec, that is this one.
-  const node = deps.execve ? deps.node?.() ?? process.execPath : process.execPath
-  const probed = deps.probe(node, leanPath, leanEnv)
+  let node = deps.execve ? deps.node?.() ?? process.execPath : process.execPath
+  let probed = deps.probe(node, leanPath, leanEnv)
+  // Only a Node `node` named is the new one's fault: without an exec, the probe ran on this one.
+  const own = probed.ok || !deps.execve ? null : deps.nodeBack?.(true) ?? null
+  if (own) {
+    // Moving Nodes, and the bundle did not answer on the new one: the master stays on its own, as before the update.
+    deps.log(`[harnessd] the lean bundle ${leanPath} did not answer its probe on ${node} (${probed.detail}): the master stays on ${own}`)
+    node = own
+    probed = deps.probe(node, leanPath, leanEnv)
+  }
   if (!probed.ok) {
     fromBundle(`the lean bundle ${leanPath} did not answer its probe (${probed.detail}): the master, the core and the services run from ${bundlePath}`)
     return
