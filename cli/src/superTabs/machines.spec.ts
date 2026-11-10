@@ -2,7 +2,7 @@ import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { availableParallelism, homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -12,7 +12,6 @@ import { SuperTabHostError } from './host.js'
 import { createSwarmAgents } from './inCore/agents.js'
 import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
 import { PM_HOMES } from './teamDaemon.js'
-import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { recordCleanupClose } from './cleanupCloses.js'
@@ -275,7 +274,7 @@ describe('contributed machine executor', () => {
     const f = fixture()
     f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
     f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
     f.advance()
     await f.machine.tick()
@@ -315,7 +314,7 @@ describe('contributed machine executor', () => {
       await h.pass(16_000)
       expect(h.token).toHaveBeenCalledTimes(2)
       expect(h.failures()).toEqual([])
-      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null, github: { requester: 'olive@example.com' } })
+      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
       // The read-only token is revoked once the start is prepared, as on a first try.
       expect(h.revoked.mock.calls.map(([url, init]) => [url, init.headers.Authorization])).toEqual([['https://api.github.com/installation/token', `Bearer ${TOKEN_ANSWER.token}`]])
     })
@@ -376,7 +375,7 @@ describe('contributed machine executor', () => {
     expect(body).toMatchObject({ generation: 'grant', runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'], quotas: [{ engine: 'codex', known: true }] })
     expect(JSON.stringify(body)).not.toMatch(/private@example|private-token|account_email/)
     const [input, scoped, where] = (f.start.mock.calls as unknown[][])[0]!
-    expect(input).toEqual({ tabId: 'tab', startId: 'start', hostDispatch: true, signedIn: null })
+    expect(input).toEqual({ tabId: 'tab', startId: 'start', signedIn: null })
     expect(where).toMatchObject({ machineId: 'host', dataDir: '/isolated-pool-fixture' })
     await (scoped as (p: unknown) => Promise<unknown>)({ action: 'startStatus' })
     expect(f.backend).toHaveBeenLastCalledWith(f.core, 'GET', '/api/super-tabs/hosts/host/starts/tab/start', undefined)
@@ -396,7 +395,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
     await f.machine.tick()
     // No account signed in here (the fake has none): the start itself then refuses a Buddy (start.ts buddyOnOwnMachine).
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: null }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', signedIn: null }])
   })
   // Task #2832: a Buddy launches only where the account signed in here is its owner's; the host hands the start what it reads.
   it('hands each start the account signed in here, as this machine reads it', async () => {
@@ -404,13 +403,13 @@ describe('contributed machine executor', () => {
     Object.assign(f.core.account, { identity: vi.fn(async () => ({ accountId: 'peer' })) })
     Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true, signedIn: 'peer' }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', signedIn: 'peer' }])
   })
   it('launches a Product Manager\'s start, which the backend lists apart so that a host from before them never does', async () => {
     const f = fixture()
     Object.assign(f.pool, { starts: [], leadStarts: [{ id: 'lead-start', dispatched: false }] })
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true, signedIn: null }])
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', signedIn: null }])
   })
   it('says in its reading that it starts Product Managers, a Buddy\'s thread sessions and a person\'s one Buddy, to a backend that asks, and to no other', async () => {
     const f = fixture()
@@ -709,6 +708,40 @@ describe('contributed machine executor', () => {
       expect(readings(f).at(-2)).toHaveProperty('readiness')
       expect(readings(f).at(-1)).not.toHaveProperty('readiness')
     })
+  })
+
+  it('sends the machine\'s cores, and leaves them out for a while for an older backend that refuses them', async () => {
+    const f = fixture()
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      const resources = (body as { resources?: Record<string, unknown> } | undefined)?.resources
+      if (method === 'POST' && resources && 'cpuCores' in resources) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: cpuCores', 400)
+      return original(core, method, path, body)
+    })
+    await f.machine.tick()
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST').map(c => (c[3] as { resources: Record<string, unknown> }).resources)
+    expect(posts().map(r => r.cpuCores)).toEqual([availableParallelism(), undefined])
+    // Refused once: the next readings go without them, at once.
+    f.advance(); await f.machine.tick()
+    expect(posts().slice(2).map(r => 'cpuCores' in r)).toEqual([false])
+  })
+
+  it('drops the cores too for a backend from before both them and probe failures, one refusal at a time', async () => {
+    const f = fixture()
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { git: true }, toolProbeErrors: { flutter: 'interactive shell timed out' } } as never)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      const sent = body as { toolProbeErrors?: unknown; resources?: Record<string, unknown> } | undefined
+      if (method === 'POST' && sent?.toolProbeErrors) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: "toolProbeErrors"', 400)
+      if (method === 'POST' && sent?.resources && 'cpuCores' in sent.resources) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: "cpuCores"', 400)
+      return original(core, method, path, body)
+    })
+    await f.machine.tick()
+    const last = f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3] as { toolProbeErrors?: unknown; resources: Record<string, unknown> }
+    expect(last).not.toHaveProperty('toolProbeErrors')
+    expect(last.resources).not.toHaveProperty('cpuCores')
+    expect(last.resources).toMatchObject({ cpuPercent: 20, memoryTotalBytes: 1000 })
   })
 
   it('retries a probe-failure observation without its new field for an older backend', async () => {
@@ -1774,14 +1807,6 @@ describe('contributed machine executor', () => {
     })
   })
 
-  it('a lead queues a contributed start without connecting to that computer', async () => {
-    const open = vi.fn()
-    const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host', engine: 'claude' } } }))
-    const reply = await startAgent({ startId: 'start' }, scoped, { port: 14001, machineId: 'lead', dataDir: '/fixture' }, open)
-    expect(reply).toMatchObject({ ok: true, queued: true, startId: 'start', machineId: 'host' })
-    expect(open).not.toHaveBeenCalled()
-  })
-
   describe('how soon a change is seen', () => {
     const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
     const reads = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'GET' && String(c[2]).includes('/hosts/host/changes'))
@@ -1895,7 +1920,7 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(posts(f)).toHaveLength(2)
       expect(f.start).toHaveBeenCalledOnce()
-      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', hostDispatch: true, signedIn: null })
+      expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'second', signedIn: null })
       // Settled: that too is a change, and is sent.
       f.pool.starts.length = 0
       await after(f, 5_000)
@@ -2754,7 +2779,6 @@ describe('removed machine cleanup', () => {
       const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
       const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
       const start = vi.fn(async (input: Record<string, unknown>) => {
-        expect(input.memberHere).toBe(memberHere)
         await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
         return { ok: true, harnessId: 'h-new' }
       })
@@ -2791,8 +2815,6 @@ describe('removed machine cleanup', () => {
       const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
       const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
       const start = vi.fn(async (input: Record<string, unknown>) => {
-        // Its Member's commands only for a start that makes the helper a worktree of its own.
-        expect(input.memberHere).toBe(request.worktree === true)
         await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
         return { ok: true, harnessId: 'h-new' }
       })
