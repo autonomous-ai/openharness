@@ -153,15 +153,22 @@ describe('message.edit', () => {
   })
 })
 
+/** Makes peer's message [id] in the project chat their Buddy's proposal, as buddy.propose posted it until proposals went
+ *  (2026-11-10): their words, with the goal and scope the Buddy wrote, and the files it carried. Such rows are still stored. */
+async function storeProposal(id: string, buddyId: string, goal: string, scope: string, files: string[] = []) {
+  const attachments = (await db.superTabAttachment.findMany({ where: { id: { in: files } } }))
+    .map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: `https://cdn.example.test/${row.objectKey}` }))
+  await db.superTabMessage.update({ where: { id }, data: { source: { kind: 'buddy-proposal', personId: peer.sub, buddyId, goal, scope, priority: 'normal' },
+    ...attachments.length ? { attachments } : {} } })
+}
+
 describe('message.delete', () => {
   it.each([false, true])('lets only the owner delete their Buddy proposal, removing its content with replies: %s', async hasReplies => {
     const f = await swarm()
-    const { chat, agentId } = await f.buddy()
-    const line = 'Fix my login'
-    const ask = await f.send(chat, line)
-    const command: Command = { type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, projectId: f.web.projectId,
-      text: line, goal: line, scope: 'Private detail copied into the scope', priority: 'normal' }
-    const id = String((await f.execute(command, peer, agentId)).result.messageId)
+    const { agentId } = await f.buddy()
+    const line = 'Fix my login', scope = 'Private detail copied into the scope'
+    const id = await f.send(f.web.conversationId, line)
+    await storeProposal(id, agentId, line, scope)
     const answer = hasReplies ? await f.send(f.web.conversationId, 'I can reproduce it.', other, { replyTo: id }) : undefined
     for (const person of [owner, other]) await expect(f.remove(f.web.conversationId, id, person)).rejects.toThrow(refused('FORBIDDEN'))
     await expect(f.remove(f.web.conversationId, id, owner, f.pm)).rejects.toThrow(expect.objectContaining({ status: 403 }))
@@ -175,15 +182,13 @@ describe('message.delete', () => {
       const thread = await f.page(f.web.conversationId, other, { thread: id })
       expect(thread.messages.map(m => m.id)).toEqual([id, answer])
       expect(JSON.stringify(thread)).not.toContain(line)
-      expect(JSON.stringify(thread)).not.toContain(command.scope)
+      expect(JSON.stringify(thread)).not.toContain(scope)
       await expect(f.remove(f.web.conversationId, id)).rejects.toThrow(refused('MESSAGE_DELETED'))
     } else {
       expect(row).toBeNull()
       expect((await f.page(f.web.conversationId)).messages.some(m => m.id === id)).toBe(false)
     }
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: id, status: { in: ['queued', 'claimed', 'gathered'] } } })).toBe(0)
-    // Deleting the post does not grant the Buddy permission to post the same ask again.
-    await expect(f.execute(command, peer, agentId)).rejects.toThrow(refused('PROPOSAL_SENT'))
   })
 
   it('never treats a non-proposal source or a mismatched source owner as permission to delete', async () => {
@@ -202,10 +207,11 @@ describe('message.delete', () => {
       { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
     const handed = await upload('owner-note.txt'), owned = await upload('proposal-note.txt', true)
     const ask = await f.send(chat, 'Send the notes to the PM', peer, { attachmentIds: [handed] })
-    const id = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, projectId: f.web.projectId,
-      text: 'Send the notes to the PM', goal: 'Fix drafts', scope: 'Desktop', priority: 'normal', attachmentIds: [handed, owned] }, peer, agentId)).result.messageId)
-    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: handed } })).toMatchObject({ usedBy: ask, proposedBy: id })
-    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: owned } })).toMatchObject({ usedBy: id })
+    // The Buddy's own upload went with the proposal; its owner's file stayed on their message and was handed on with it.
+    const id = await f.send(f.web.conversationId, 'Send the notes to the PM')
+    await storeProposal(id, agentId, 'Fix drafts', 'Desktop', [handed, owned])
+    await db.superTabAttachment.update({ where: { id: handed }, data: { proposedBy: id } })
+    await db.superTabAttachment.update({ where: { id: owned }, data: { usedBy: id } })
     if (hasReplies) await f.send(f.web.conversationId, 'I can reproduce it.', other, { replyTo: id })
     const entries = await profiled(db, () => f.remove(f.web.conversationId, id))
     const kept = await db.superTabAttachment.findUniqueOrThrow({ where: { id: handed } })

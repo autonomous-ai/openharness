@@ -3,11 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/swarm_layout.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
+import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/pull_chip.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:xterm/xterm.dart' show TerminalStyle;
 
 import 'package:flutter/gestures.dart';
 
@@ -289,6 +291,98 @@ void main() {
   );
 
   testWidgets(
+    '⑂ shows the project\'s pull requests in three columns by who acts next, as lampOS\'s train bot sorts them, and a card '
+    'opens its own chat: its text, its review\'s line comment and its READ-OK, in time order, where it stands',
+    (tester) async {
+      await show(tester, size: const Size(2000, 900));
+      await tester.tap(key('swarm-pulls-button'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-task-board'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-right-pane'),
+          matching: find.text('Pull requests'),
+        ),
+        findsOneWidget,
+      );
+      Finder inColumn(String name, Finder f) =>
+          find.descendant(of: key('swarm-task-column-$name'), matching: f);
+      // Nobody has read #5772; #5771, no task's, failed its check; #5770 has its READ-OK and green checks.
+      expect(inColumn('To read', key('swarm-pull-card-5772')), findsOneWidget);
+      expect(inColumn('To fix', key('swarm-pull-card-5771')), findsOneWidget);
+      expect(inColumn('Merging', key('swarm-pull-card-5770')), findsOneWidget);
+      // No tasks among them.
+      expect(key('swarm-task-5759'), findsNothing);
+      await tester.tap(key('swarm-pull-card-5770'));
+      await tester.pumpAndSettle();
+      Finder inPanel(Finder f) =>
+          find.descendant(of: key('swarm-issue-panel'), matching: f);
+      expect(inPanel(find.text('#5770')), findsOneWidget);
+      expect(inPanel(find.text('Score the update rows again')), findsOneWidget);
+      expect(inPanel(find.text('#5770 Merging')), findsOneWidget);
+      final body = inPanel(find.textContaining('Scores both rows again'));
+      final line = inPanel(find.textContaining('keep the old row name too'));
+      final read = inPanel(find.textContaining('READ-OK f6edb44'));
+      for (final post in [body, line, read]) {
+        expect(post, findsOneWidget);
+      }
+      double top(Finder f) => tester.getTopLeft(f).dy;
+      expect(top(body), lessThan(top(line)));
+      expect(top(line), lessThan(top(read)));
+      expect(
+        inPanel(find.textContaining('rows.py, line 40', findRichText: true)),
+        findsOneWidget,
+      );
+      // Read only: agents write on GitHub.
+      expect(find.byType(EditableText), findsNothing);
+      await tester.tap(key('swarm-issue-close'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-issue-panel'), findsNothing);
+      expect(key('swarm-pull-card-5770'), findsOneWidget);
+      // ▦ swaps the pane for the tasks; ⑂ again closes it.
+      await tester.tap(key('swarm-tasks-button'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-task-5759'), findsOneWidget);
+      expect(key('swarm-pull-card-5770'), findsNothing);
+      await tester.tap(key('swarm-pulls-button'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-pulls-button'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-task-board'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'a task\'s pull request row opens its chat in the task\'s place, and closing it goes back to the task',
+    (tester) async {
+      await show(tester, size: const Size(2000, 900));
+      await tester.tap(key('swarm-tasks-button'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-task-5759'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-issue-pull'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: key('swarm-issue-panel'),
+          matching: find.text('#5770'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-issue-close'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: key('swarm-issue-panel'),
+          matching: find.text('#5759'),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
     'its person deletes an agent: right-click, Delete, confirm, gone',
     (tester) async {
       final c = await show(tester);
@@ -418,6 +512,36 @@ void main() {
   }
 
   const fileKey = 'session-first builder/first builder';
+
+  // anh Dee, 2026-11-10: "keep all the font size consistent between chat pane, terminal pane, and instruction pane. and resize
+  // the font will resize all."
+  testWidgets(
+    'an agent\'s instructions read at the terminal\'s size beside its chat, and follow it when it changes',
+    (tester) async {
+      final saved = terminalFontStore.value;
+      addTearDown(() => terminalFontStore.value = saved);
+      final computer = SwarmV4Computer(
+        files: {fileKey: 'Answer in Vietnamese.\n'},
+      );
+      await show(tester, computer: computer, size: const Size(2000, 900));
+      await openInstructions(tester);
+      double size() => tester
+          .widget<SelectableText>(key('swarm-instructions-text'))
+          .style!
+          .fontSize!;
+      expect(size(), terminalFontStore.size);
+      expect(size(), 13);
+      // As ⌘+ three times, or Settings ▸ Terminal's stepper, sets it.
+      terminalFontStore.value = TerminalStyle(
+        fontSize: 16,
+        fontFamily: saved.fontFamily,
+        fontFamilyFallback: saved.fontFamilyFallback,
+      );
+      await tester.pump();
+      expect(size(), 16);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'Instructions\' Edit and × end the header at the pane\'s right edge, and so do Cancel and Save',

@@ -586,7 +586,7 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                                       reply,
                                       replies[index - 1],
                                       inThread: true,
-                                      // A reply to a teammate stands on its own row, where "Pip to Juno" shows, as in the channel.
+                                      // A reply to a teammate stands on its own row, its name over its tags, as in the channel.
                                       tagged: widget.agentsOnly
                                           ? (m) => m.namesAgents
                                           : (_) => false,

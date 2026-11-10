@@ -16,12 +16,9 @@ import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
-import 'package:harness/super_tabs/channel_feed.dart';
-import 'package:harness/super_tabs/channel_feed_widgets.dart';
 import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/github_row.dart';
 import 'package:harness/super_tabs/task_board.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
@@ -170,7 +167,7 @@ Future<List<SuperTabController>> _show(
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 3310);
+  tester.view.physicalSize = const Size(760, 3096);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -563,6 +560,24 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
+              // Its pull requests, what ⑂ opens (anh Dee 2026-11-10): three columns by who acts next, as lampOS's train bot sorts them.
+              title(
+                'Pull requests: To read, To fix, Merging; a card opens its chat',
+              ),
+              SizedBox(
+                width: 760,
+                height: 250,
+                child: SwarmTaskBoard(
+                  controller: swarm,
+                  conversationId: 'lead',
+                  github: swarmV4GitHub(),
+                  pulls: true,
+                  refreshEvery: null,
+                  now: () => DateTime.utc(2026, 11, 9, 9),
+                  onOpen: (_, _) {},
+                  onClose: () {},
+                ),
+              ),
               title('Chat: bubbles, a time after a pause, cards'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -701,42 +716,13 @@ class _Gallery extends StatelessWidget {
                 height: 60,
                 child: SuperTabEmptyWords(superTabEmptyChannel),
               ),
-              // What a project's agents do on GitHub, in its channel (anh Dee 2026-11-09): their cards, why it stops, and the
-              // button for older cards after a read that failed.
-              title(
-                'Channel feed: an agent\'s card on GitHub, why it stops, older cards',
-              ),
+              // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
+              title('GitHub card: what GitHub said to your agent'),
               SizedBox(
                 width: 560,
-                child: Column(
-                  children: [
-                    _githubCard(
-                      'Quinn',
-                      'comment',
-                      12,
-                      'issue',
-                      'Quinn, 07:05: Taking #12. Measuring the clips first.',
-                    ),
-                    _githubCard(
-                      'Kai',
-                      'merged',
-                      20,
-                      'pull',
-                      'Score the update rows again',
-                    ),
-                    _githubCard(
-                      'Quinn',
-                      'task',
-                      13,
-                      'issue',
-                      'Voice: answer within a second',
-                    ),
-                    SwarmFeedState(
-                      feed: _feed()
-                        ..error = 'Sign in to GitHub: run gh auth login.',
-                    ),
-                    SwarmFeedEarlier(feed: _feed()..moreFailed = true),
-                  ],
+                child: _githubCard(
+                  3879,
+                  'Juno, 14:20, to Pip: HOLD d0bf35b. Add the far-field test.',
                 ),
               ),
             ],
@@ -747,47 +733,27 @@ class _Gallery extends StatelessWidget {
   }
 }
 
-/// A card in a channel of what an agent did on GitHub, as the channel draws one ([SuperTabGitHubRow]): [who]'s, for [event]
-/// (`comment`, `opened`, `merged`, `task`) on issue or pull request [number], its words [text].
-Widget _githubCard(
-  String who,
-  String event,
-  int number,
-  String on,
-  String text,
-) {
-  final agent = _agent(who);
-  return SuperTabGitHubRow(
-    agent: agent,
-    author: who,
-    onOpen: on == 'issue' ? () {} : null,
-    message: SuperTabMessage.fromJson({
-      'id': 'gh-$who-$number-$event',
-      'conversationId': 'github:lead',
-      'sequence': 0,
-      'text': event == 'task'
-          ? 'New task for $who: issue autonomous-ai/lampOS#$number $text\nhttps://github.com/autonomous-ai/lampOS/issues/$number'
-          : 'On GitHub, deehw wrote on $on autonomous-ai/lampOS#$number:\n$text\nhttps://github.com/autonomous-ai/lampOS/$on/$number',
-      'createdAt': '2026-11-09T07:05:00Z',
-      'author': {'kind': 'agent', 'id': agent.id, 'name': who},
-      'source': {
-        'kind': 'github',
-        'event': event,
-        'on': on,
-        'repository': 'autonomous-ai/lampOS',
-        'number': number,
-        'url': 'https://github.com/autonomous-ai/lampOS/$on/$number',
-        'login': 'deehw',
-      },
-    }),
-  );
-}
-
-/// A feed that reads nothing: the state and the button are drawn from what it says.
-SwarmChannelFeed _feed() => SwarmChannelFeed(
-  github: SwarmGitHub(),
-  repository: 'autonomous-ai/lampOS',
-  channelId: 'lead',
+/// What GitHub said to a person's agent on pull request [number], as their chat with it draws it ([SuperTabGitHubRow]): its
+/// words [text], relayed by their Harness.
+Widget _githubCard(int number, String text) => SuperTabGitHubRow(
+  message: SuperTabMessage.fromJson({
+    'id': 'gh-$number',
+    'conversationId': 'agent-chat-pip',
+    'sequence': 0,
+    'text':
+        'On GitHub, deehw wrote on pull request autonomous-ai/lampOS#$number:\n$text\nhttps://github.com/autonomous-ai/lampOS/pull/$number',
+    'createdAt': '2026-11-09T07:05:00Z',
+    'author': {'kind': 'person', 'id': 'owner', 'name': 'Dee'},
+    'source': {
+      'kind': 'github',
+      'event': 'comment',
+      'on': 'pull',
+      'repository': 'autonomous-ai/lampOS',
+      'number': number,
+      'url': 'https://github.com/autonomous-ai/lampOS/pull/$number',
+      'login': 'deehw',
+    },
+  }),
 );
 
 /// A chat message row, as the chat draws one. Its time is words, which the

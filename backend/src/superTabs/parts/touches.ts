@@ -79,30 +79,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       newMemberStarts()
       break
     }
-    case 'proposal.close':
-      head()
-      leadCheck(command.projectId)
-      break
-    case 'proposal.create':
-      head()
-      group(leadGroupOf(command.projectId))
-      break
-    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
-      head()
-      const card = before.conversations.find(c => c.id === command.conversationId)
-      leadCheck(card && groupProject(before, card).id)
-      for (const identity of card?.proposal?.senders ?? []) member(identity.personId)
-      if (command.type === 'proposal.merge') {
-        group(command.intoConversationId)
-        for (const id of card?.proposal?.mergedFrom ?? []) group(id)
-      }
-      break
-    }
-    case 'buddy.propose':
-      head()
-      leadCheck(command.projectId)
-      if (actor.kind === 'agent') member(before.agents.find(a => a.id === actor.agentId)?.buddyOf?.personId)
-      break
     case 'buddy.create':
       // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
       slots(command.machineId)
@@ -135,12 +111,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'rule.set':
       leadCheck(command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : undefined))
       break
-    case 'person.tell':
-      // The line reads that its person still reads the agent's project: their own part guards it, as a revoke touches the
-      // people it removes (project.sharing below) and member.remove writes it (security review 2 of #2090).
-      member(command.personId)
-      leadCheck(actor.kind === 'agent' ? agentProject(actor.agentId) : undefined)
-      break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).
       for (const person of before.people) {
@@ -155,7 +125,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(leadGroupOf(projectId))
       member(command.requesterId)
       for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
-      if (command.proposalMessageId) head()
       break
     }
     case 'conversation.unlink':
@@ -207,7 +176,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       head()
       break
     }
-    case 'agent.release': case 'crew.add': case 'crew.remove':
+    case 'agent.release':
       leadCheck(agentProject(command.agentId))
       break
     case 'agent.rebind':

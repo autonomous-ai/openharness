@@ -2,17 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, authorizeCommandAccess, commandSchema, withoutCredentials, type CommandContext } from './commands.js'
 import { fullSwarm, NOW, owner, peer, outsider } from './read/fixture.test-support.js'
 import type { Actor } from './model.js'
-import { queueSiblings } from './taskQueue.js'
 import { touchesFor } from './parts/touches.js'
 import { GROUP_FIELDS } from './parts/light.js'
 import { storedAssignment } from './storedWork.test-support.js'
 
 const words = 'Keep offline edits.'
 const task = { goal: words, changes: 'Persist drafts', constraints: 'No sign-in', owns: ['backend/src/superTabs/'] }
-function fixture(board = true) {
+function fixture() {
   const f = fullSwarm(NOW)
-  if (board) f.state.projects![0]!.boardMode = true
-  else delete f.state.projects![0]!.boardMode
+  f.state.projects![0]!.boardMode = true
   const candidate = f.add('candidate', f.web), other = f.add('other-candidate', f.web)
   let seq = 0
   const pm: Actor = { kind: 'agent', agentId: f.lead, machineOwnerId: `${owner.userId}-machine` }
@@ -26,12 +24,7 @@ function fixture(board = true) {
   const mode = (mode: string) => run({ type: 'member.approvalMode', mode })
   const create = () => run({ type: 'conversation.create', title: 'Offline drafts', task, priority: 'P2', requesterId: peer.userId,
     checks: [{ description: 'Restores drafts' }] }, pm).result.conversationId as string
-  const propose = () => run({ type: 'buddy.propose', conversationId: f.buddyChat, projectId: 'lead', ownerMessageId: 'ask',
-    text: words, goal: words, scope: 'Drafts', priority: 'normal', why: 'Lost edits', doneWhen: 'Drafts return', evidence: ['Reproduction'] }, buddy, {
-    proposalAsk: { id: 'ask', conversationId: f.buddyChat, source: false, author: { kind: 'person', id: peer.userId, name: 'Peer',
-      membershipGeneration: f.state.people.find(p => p.id === peer.userId)!.generation }, text: words,
-      createdAt: NOW, newestOwnerMessageId: 'ask', shown: [] } })
-  return Object.assign(f, { runCommand: run, card, mode, create, propose, pm, buddyActor: buddy, candidate, other })
+  return Object.assign(f, { runCommand: run, card, mode, create, pm, buddyActor: buddy, candidate, other })
 }
 
 describe('personal approval enforced before work', () => {
@@ -44,10 +37,9 @@ describe('personal approval enforced before work', () => {
     expect(commandSchema.safeParse({ type: 'member.approvalMode', mode: 'review', personId: owner.userId }).success).toBe(false)
     for (const actor of [f.pm, f.buddyActor]) expect(() => f.runCommand({ type: 'member.approvalMode', mode: 'autoApprove' }, actor)).toThrow()
   })
-  it('stages a PM task, keeps it out of Next up, and blocks starts and registration until approval', () => {
+  it('stages a PM task, and blocks starts and registration until approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal', personId: peer.userId } })
-    expect(queueSiblings(f.state, f.state.projects![0]!)).not.toContainEqual(f.card(id))
     expect(() => f.runCommand({ type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, f.pm))
       .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
@@ -104,16 +96,6 @@ describe('personal approval enforced before work', () => {
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'rejected', reason: 'Keep current behavior' } })
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_DECIDED' }))
   })
-  // Task #4218: a rejection wrote only the approval, so the PM was told the proposal still waited and could accept it into a task
-  // that could never run.
-  it('settles the proposal its person rejects, which its PM can no longer accept', () => {
-    const f = fixture(); f.mode('review'); f.propose()
-    const card = f.state.conversations.find(c => c.proposal)!
-    f.runCommand({ type: 'task.reject', conversationId: card.id, reason: 'Not now' })
-    expect(f.card(card.id).proposal).toMatchObject({ decision: { kind: 'no', reason: 'Not now', at: NOW } })
-    expect(() => f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build it', task,
-      checks: [{ description: 'Restores drafts' }] }, f.pm)).toThrow(expect.objectContaining({ code: 'PROPOSAL_DECIDED' }))
-  })
   // Task #4218: approval is the requesting membership's, so once they left nobody could approve or reject it again, and the task
   // stayed open for good. A rejoined person decides nothing of the membership they left.
   it('rejects a leaving requester\'s pending approvals and tells the PM', () => {
@@ -155,25 +137,19 @@ describe('personal approval enforced before work', () => {
     expect(f.card(id)).toMatchObject({ requesterId: owner.userId, assignment: { agentId: f.candidate } })
     expect(f.card(id).taskApproval).toBeUndefined()
   })
-  it.each([true, false])('keeps consented Buddy proposals in Tasks and reaches the PM with board mode %s', board => {
-    const f = fixture(board); f.mode('review'); const sent = f.propose()
-    const card = f.state.conversations.find(c => c.proposal?.senders.some(s => s.buddyId === f.buddy))!
-    expect(card).toMatchObject({ requesterId: peer.userId, assignment: null, taskApproval: { state: 'proposal' }, proposal: { text: words } })
-    expect(sent.messages.some(m => m.recipients.includes(f.lead) && m.author.id === peer.userId)).toBe(true)
-    if (board) {
-      f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build it', task,
-        checks: [{ description: 'Restores drafts' }] }, f.pm)
-      f.runCommand({ type: 'task.approve', conversationId: card.id })
-      expect(f.card(card.id).taskApproval?.state).toBe('approved')
-    }
-  })
-  it('cannot merge an unapproved proposal into another card to bypass its person', () => {
-    const f = fixture(); f.mode('review'); f.propose()
-    const card = f.state.conversations.find(c => c.taskApproval)!
-    const other = f.runCommand({ type: 'proposal.create', projectId: 'lead', title: 'Other', text: 'Other', goal: 'Other', why: 'Other',
-      doneWhen: 'Other', evidence: ['Reproduction'], priority: 'P2' }, owner).result.conversationId
-    expect(() => f.runCommand({ type: 'proposal.merge', conversationId: card.id, intoConversationId: other, reason: 'Same' }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+  // Proposals are gone (2026-11-10), but cards made before are stored: one its PM never accepted or reshaped, Later too, is still no
+  // task its person approves or anyone starts (#4249).
+  it.each([['undecided', undefined], ['Later', 'later']] as const)('refuses approving or starting a stored proposal card its PM left %s', (_, decision) => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    const senders = [{ personId: peer.userId, generation: f.state.people.find(p => p.id === peer.userId)!.generation }]
+    f.edit(s => { s.conversations.find(c => c.id === id)!.proposal = { senders, ...decision ? { decision: { kind: decision, reason: 'Next week' } } : {} } })
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
+    // Approved while undecided, as a server before #4249 allowed, with no agent chosen.
+    f.edit(s => { s.conversations.find(c => c.id === id)!.taskApproval = { ...s.conversations.find(c => c.id === id)!.taskApproval!, state: 'approved', decidedAt: NOW, suggestedAgentId: undefined } })
+    expect(() => f.runCommand({ type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
   })
   it('refuses invalid suggestions and rechecks a changed agent atomically on approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
@@ -199,85 +175,6 @@ describe('personal approval enforced before work', () => {
     f.edit(s => { s.agents = s.agents.filter(a => a.id !== f.candidate) })
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'SUGGESTED_AGENT_GONE' }))
     expect(f.card(id).taskApproval?.state).toBe('proposal')
-  })
-  it('keeps a legacy proposal’s decision when the PM converts it to a task and refuses a second conversion', () => {
-    const f = fixture(false); f.mode('review'); const sent = f.propose()
-    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
-    const proposal = { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null }
-    const input = { type: 'conversation.create', title: 'Prepared', task, priority: 'P2', proposalMessageId: row.id,
-      checks: [{ description: 'Restores drafts' }] }
-    const id = f.runCommand(input, f.pm, { proposal }).result.conversationId
-    expect(f.card(id).taskApproval?.state).toBe('proposal')
-    expect(f.state.conversations.filter(c => !c.archived && c.requesterId === peer.userId && (c.task || c.proposal))).toHaveLength(1)
-    expect(() => f.runCommand(input, f.pm, { proposal })).toThrow()
-  })
-  it('refuses approving an undecided or Later proposal; the person approves the task the PM shaped (#4249)', () => {
-    const f = fixture(); f.mode('review'); f.propose()
-    const card = f.state.conversations.find(c => c.proposal)!
-    f.runCommand({ type: 'task.suggest', conversationId: card.id, agentId: f.candidate })
-    expect(() => f.runCommand({ type: 'task.approve', conversationId: card.id })).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
-    expect(f.card(card.id).taskApproval?.state).toBe('proposal')
-    f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build', task,
-      checks: [{ description: 'Restores drafts' }] }, f.pm)
-    f.runCommand({ type: 'task.approve', conversationId: card.id })
-    expect(f.card(card.id).taskApproval?.state).toBe('approved')
-  })
-  it('refuses approving a proposal the PM marked Later (#4249)', () => {
-    const f = fixture(); f.mode('review'); f.propose()
-    const card = f.state.conversations.find(c => c.proposal)!
-    f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'later', reason: 'Next week', revisitAt: NOW + 86_400_000 }, f.pm)
-    expect(() => f.runCommand({ type: 'task.approve', conversationId: card.id })).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
-  })
-  it.each(['accept', 'reshape'])('a stored approval from before the decision does not carry over to the task the PM shapes on %s (#4249)', decision => {
-    const f = fixture(); f.mode('review'); f.propose()
-    const card = f.state.conversations.find(c => c.proposal)!
-    // Approved while undecided, as a server before this fix allowed.
-    f.edit(s => Object.assign(s.conversations.find(c => c.id === card.id)!.taskApproval!,
-      { state: 'approved', decidedAt: NOW, suggestedAgentId: f.candidate }))
-    f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision, reason: 'Bigger', task: { ...task, changes: 'Persist drafts and sync them' },
-      checks: [{ description: 'Restores drafts' }] }, f.pm)
-    expect(f.card(card.id).taskApproval).toMatchObject({ state: 'proposal', suggestedAgentId: f.candidate })
-    expect(f.card(card.id).taskApproval?.decidedAt).toBeUndefined()
-  })
-  it('a converted older proposal gets a fresh approval, never the card’s decision (#4249)', () => {
-    const f = fixture(false); f.mode('review'); const sent = f.propose()
-    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
-    const mirror = f.state.conversations.find(c => c.taskApproval && c.proposal)!
-    f.edit(s => Object.assign(s.conversations.find(c => c.id === mirror.id)!.taskApproval!,
-      { state: 'approved', decidedAt: NOW, suggestedAgentId: f.candidate }))
-    const id = f.runCommand({ type: 'conversation.create', title: 'Prepared', task: { ...task, changes: 'A different scope' }, priority: 'P2',
-      proposalMessageId: row.id, checks: [{ description: 'Restores drafts' }] }, f.pm,
-    { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } }).result.conversationId
-    expect(f.card(id).taskApproval).toMatchObject({ state: 'proposal', personId: peer.userId })
-    expect(f.card(id).taskApproval?.suggestedAgentId).toBeUndefined()
-    expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
-  })
-  it('cannot merge an approved Review proposal and lose its chosen agent or requester', () => {
-    const f = fixture(); f.mode('review'); f.propose()
-    const card = f.state.conversations.find(c => c.proposal)!
-    f.runCommand({ type: 'task.suggest', conversationId: card.id, agentId: f.candidate })
-    // Approved while undecided, as a server before #4249 allowed.
-    f.edit(s => Object.assign(s.conversations.find(c => c.id === card.id)!.taskApproval!, { state: 'approved', decidedAt: NOW }))
-    const target = f.runCommand({ type: 'proposal.create', projectId: 'lead', title: 'Other', text: 'Other', goal: 'Other', why: 'Other',
-      doneWhen: 'Other', evidence: ['Reproduction'], priority: 'P2' }, owner).result.conversationId
-    expect(() => f.runCommand({ type: 'proposal.merge', conversationId: card.id, intoConversationId: target, reason: 'Same' }, f.pm)).toThrow()
-  })
-  it('removes a closed legacy proposal mirror from active Tasks', () => {
-    const f = fixture(false); const sent = f.propose()
-    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
-    f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Not planned' }, f.pm,
-      { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
-    expect(f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)?.archived).toBe(true)
-  })
-  it('records on the card that the PM closed their proposal and why, with no line in their private chat (tasks #4252, #4558)', () => {
-    const f = fixture(false); const sent = f.propose()
-    const row = sent.messages.find(m => m.source?.kind === 'buddy-proposal')!
-    const closed = f.runCommand({ type: 'proposal.close', projectId: 'lead', messageId: row.id, reason: 'Out of scope' }, f.pm,
-      { proposal: { id: row.id, conversationId: row.conversationId, author: row.author, source: row.source ?? null } })
-    const mirror = f.state.conversations.find(c => c.proposal?.legacyMessageId === row.id)!
-    expect(mirror.proposal!.decision).toMatchObject({ kind: 'no', reason: 'Out of scope' })
-    const privateChats = new Set(f.state.conversations.filter(c => c.kind === 'buddy' || c.kind === 'swarm-buddy').map(c => c.id))
-    expect(closed.messages.filter(m => privateChats.has(m.conversationId) || m.source?.kind === 'proposal-notice')).toEqual([])
   })
   it('redacts a pasted credential from a rejection before its reason reaches stored parts or messages', () => {
     const token = ['sk', 'AbCdEf0123456789'.repeat(3)].join('-') // Synthetic fixture, never a provider credential.

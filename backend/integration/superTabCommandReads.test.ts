@@ -31,9 +31,9 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A prod-sized Swarm on a store with prod's GitHub reads, each answering at once. */
+/** A prod-sized Swarm on a store. */
 async function swarm() {
-  const store = new SuperTabStore(db, Date.now, null, { pushOrigin: async () => 'clean' })
+  const store = new SuperTabStore(db, Date.now, null)
   const tab = (await store.create(owner, randomUUID(), 'Reads', 'public')).id
   const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
   // One person adds at most 20 machines: the rest are copies of the first, as their own rows.
@@ -141,7 +141,7 @@ describe('a slow command names its phases', () => {
   it('logs its type, total and each phase, never its words, and nothing for a fast one', async () => {
     let now = 1_000_000, step = 0
     // Each read of the clock moves it on by `step`: a command that reads it a few times takes seconds, with no wait in the test.
-    const store = new SuperTabStore(db, () => (now += step), null, { pushOrigin: async () => 'clean' })
+    const store = new SuperTabStore(db, () => (now += step), null)
     const tab = (await store.create(owner, randomUUID(), 'Phases', 'public')).id
     const create = (title: string) => store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'conversation.create', title, checks: [],
       task: { goal: `${title}.`, changes: 'The change.', constraints: 'None.', owns: ['backend/a.ts'] } } as Command })
@@ -156,7 +156,7 @@ describe('a slow command names its phases', () => {
       const fields = lines[0]![1] as { totalMs: number; phases: Record<string, number> }
       expect(fields).toMatchObject({ tabId: tab, type: 'conversation.create', byAgent: false })
       expect(fields.totalMs).toBeGreaterThanOrEqual(1_000)
-      expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['read:pushOrigin', 'attempts', 'pool', 'body',
+      expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['read:pullRequestMerges', 'attempts', 'pool', 'body',
         'commit', 'stamps', 'afterCommit', 'other']))
       expect(fields.phases.attempts).toBe(1)
       expect(JSON.stringify(lines)).not.toContain('Secret words')

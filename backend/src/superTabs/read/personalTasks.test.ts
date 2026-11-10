@@ -38,9 +38,8 @@ describe('personal Tasks summaries', () => {
     data.assignment = null
     if (decision) data.taskApproval = { ...data.taskApproval!, state: decision }
     else delete data.taskApproval
-    if (proposal) data.proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2',
-      createdAt: NOW, questions: [], senders: [{ personId: peer.userId, generation: s.f.state.people.find(p => p.id === peer.userId)!.generation }],
-      ...proposal === 'undecided' ? {} : { decision: { kind: proposal, reason: 'PM', at: NOW, by: 'lead' } } }
+    if (proposal) data.proposal = { senders: [{ personId: peer.userId, generation: s.f.state.people.find(p => p.id === peer.userId)!.generation }],
+      ...proposal === 'undecided' ? {} : { decision: { kind: proposal, reason: 'PM' } } }
     expect(personalTasksFor([row], s.view(), peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, canApprove })])
   })
   it.each(['foreign', 'stale'])('never exposes an actionable pending approval for a %s membership', kind => {
@@ -142,8 +141,7 @@ describe('personal Tasks summaries', () => {
   it('keeps a proposal the PM declined, as rejected with its reason; a merged one still leaves (task #4252, audit 3 and 18)', () => {
     const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!
     const generation = s.f.state.people.find(p => p.id === peer.userId)!.generation
-    const proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2',
-      createdAt: NOW, questions: [], senders: [{ personId: peer.userId, generation }], decision: { kind: 'no', reason: 'Out of scope', at: NOW, by: 'pm' } }
+    const proposal = { senders: [{ personId: peer.userId, generation }], decision: { kind: 'no', reason: 'Out of scope' } }
     const declined = { ...row, data: { ...row.data!, assignment: null, taskApproval: undefined, archived: true, proposal } } as typeof row
     expect(personalTasksFor([declined], s.view(), peer)!.upserts).toEqual([expect.objectContaining({ id: row.key, status: 'rejected', reason: 'Out of scope' })])
     const merged = { ...declined, data: { ...declined.data!, proposal: { ...proposal, mergedInto: 'other' } } } as typeof row
@@ -175,8 +173,7 @@ describe('personal Tasks summaries', () => {
     const s = scene(), row = s.stored.groups.find(g => g.key === s.f.web)!
     delete row.data!.taskApproval
     row.data!.assignment = null
-    row.data!.proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2',
-      createdAt: NOW, questions: [], senders: [{ personId: peer.userId, generation: s.f.state.people.find(p => p.id === peer.userId)!.generation }] }
+    row.data!.proposal = { senders: [{ personId: peer.userId, generation: s.f.state.people.find(p => p.id === peer.userId)!.generation }] }
     expect(personalTasksFor([row], s.view(), peer)!.upserts[0]!.status).toBe('proposal')
     row.data!.proposal.mergedInto = 'prepared-task'
     expect(personalTasksFor([row], s.view(), peer)!.removed).toEqual([row.key])

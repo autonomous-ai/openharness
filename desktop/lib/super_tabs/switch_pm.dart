@@ -367,14 +367,11 @@ Future<void> showSwitchPm(
                           style: DesktopChrome.metadata(),
                         ),
                       ],
-                      if (activePool != null &&
-                          activePool['contributorId'] != c.accountId) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          'Only accounts its owner offered are listed.',
-                          style: DesktopChrome.metadata(),
-                        ),
-                      ],
+                      const SizedBox(height: 8),
+                      Text(
+                        'A PM runs on its machine’s default account.',
+                        style: DesktopChrome.metadata(),
+                      ),
                       const SizedBox(height: 12),
                       Text(
                         'The new session starts fresh and reads a handoff note. Tasks and chat stay.',
