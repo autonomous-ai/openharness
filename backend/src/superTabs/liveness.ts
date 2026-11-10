@@ -1,4 +1,3 @@
-import { CREW_REOPEN_GRACE_MS, isCrew } from './crew.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
 import { failedSessionStart } from './buddySessions.js'
@@ -14,7 +13,6 @@ import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
-import { crewClock, DISPATCH_RULES, laneOf, returnReason } from './dispatch.js'
 import { handed, pickUp, unclaimedReason } from './handed.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
@@ -165,20 +163,13 @@ function limitReason(worker: Agent, now: number): string | null {
     ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
 }
 
-/** A crew member whose session went down less than CREW_REOPEN_GRACE_MS ago, which its host is reopening: never one asleep
- *  (closed on purpose) or moved to another machine (task #3398 adds both marks), which its host leaves closed. */
-const reopening = (worker: Agent, now: number): boolean => {
-  const away = worker as Agent & { asleep?: unknown; movedTo?: unknown }
-  return isCrew(worker) && !away.asleep && !away.movedTo && !!worker.downSince && now - Date.parse(worker.downSince) < CREW_REOPEN_GRACE_MS
-}
-
-/** Why [worker] cannot work now: its session stopped (unless [closedOnPurpose]: asleep, task #3398; or, for a task it
- *  [holds], a crew member its host is reopening, crew.ts), its machine offline, a usage limit, or its model failing. A task
+/** Why [worker] cannot work now: its session stopped (unless [closedOnPurpose]: asleep, task #3398), its machine offline, a
+ *  usage limit, or its model failing. A task
  *  its agent holds is lost for it (lostReason).
  *  Only a machine that has reported can be offline. */
-function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false, holds = false): string | null {
+function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
-  if (!closedOnPurpose && pool?.observation?.stoppedHarnessIds.includes(worker.harnessId) && !(holds && reopening(worker, now))) return sessionStopped(pool.name)
+  if (!closedOnPurpose && pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
   const limited = limitReason(worker, now)
   if (limited) return limited
@@ -192,16 +183,12 @@ function unavailableReason(state: SuperTabState, worker: Agent, now: number, clo
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number): string | null {
   // A handed task waits on its Reviewers and CI, not on its Engineer, which may be down or at work elsewhere (task #3399).
   if (handed(group)) return null
-  // A crew member its host is reopening keeps its task for the reopen's grace (crew.ts).
-  const gone = unavailableReason(state, worker, now, false, true)
+  const gone = unavailableReason(state, worker, now)
   if (gone) return gone
   // Back with its Engineer and not picked up in time: anyone free in the lane takes it (handed.ts, #3399).
   const unclaimed = unclaimedReason(assignment, now)
   if (unclaimed) return unclaimed
   if (waitingForReview(assignment) || waitingOnPerson(state, group, worker, assignment)) return null
-  // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
-  const rules = DISPATCH_RULES
-  if (crewClock(group, worker, assignment, now, rules) === 'return') return returnReason(laneOf(group, rules.lanes), rules)
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
     const progress = lastProgress(state, worker, assignment)

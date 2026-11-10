@@ -45,10 +45,6 @@ export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
 export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'> & {
-  /** A task's lane, as the crew dispatch hands it out (dispatch.ts laneOf: its PM's, else its owned paths'), null when no
-   *  lane owns its paths; absent on a chat or a step. From the group alone, so a change read's changed tasks keep every lane's
-   *  count whole on the reader's side (task #3400). Absent from an older backend. */
-  handOutLane?: string | null
   /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
   shippedAt?: number
   /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */

@@ -435,44 +435,6 @@ describe('a Buddy matching agents to people (delta review 1 of #2258)', () => {
   })
 })
 
-// Only the person and their own agent post in their private chat (anh Dee, 11-07, task #4558): the PM's private line, which
-// opened a person's Buddy chat before any Buddy (Ken, 10-29), is refused, and opens no chat.
-describe('a PM\'s private line to a person (task #4558)', () => {
-  const tell = (text: string) => ({ type: 'person.tell' as const, personId: peer.sub, text })
-  const chats = async (tab: string) => (await db.swarmGroup.findMany({ where: { tabId: tab, deleted: false } }))
-    .filter(row => ['buddy', 'swarm-buddy'].includes(String((row.data as { kind?: string }).kind))).map(row => row.key)
-
-  it('is refused, naming where to post instead, writes nothing in the person\'s chat, and the PM still cannot read it', async () => {
-    const f = await swarm()
-    const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
-    await expect(f.execute(tell('Your fix is merged.'), owner, f.lead)).rejects.toMatchObject({ code: 'PRIVATE_CHAT', message: expect.stringContaining('project chat') })
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
-    await expect(f.store.messages(owner, f.tab, chat, {}, f.lead)).rejects.toThrow('unavailable')
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
-  })
-
-  it('opens no Buddy chat for the person, and tells the PM first when they cannot read the project', async () => {
-    const f = await swarm()
-    await expect(f.execute(tell('First.'), owner, f.lead)).rejects.toMatchObject({ code: 'PRIVATE_CHAT' })
-    expect(await chats(f.tab)).toEqual([])
-    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
-    await expect(f.execute(tell('Second.'), owner, f.lead)).rejects.toThrow('cannot read this project')
-    expect(await chats(f.tab)).toEqual([])
-  })
-
-  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need.
-  it('gives the PM another agent\'s line as a crew need, and opens no Buddy chat for it', async () => {
-    const f = await swarm()
-    const engineer = String((await f.execute({ type: 'agent.add', conversationId: 'lead', machineId: 'owner-mac', harnessId: randomUUID(), name: 'Engineer',
-      configuration: config, lead: false })).result.agentId)
-    await f.execute(tell('From the Engineer.'), owner, engineer)
-    const needs = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: 'lead' } }))
-      .filter(m => (m.source as { kind?: string } | null)?.kind === 'crew-need')
-    expect(needs).toEqual([expect.objectContaining({ recipientIds: [f.lead], source: expect.objectContaining({ crewNeed: expect.objectContaining({ agentId: engineer, personIds: [peer.sub] }) }) })])
-    expect(await chats(f.tab)).toEqual([])
-  })
-})
-
 describe('naming a Buddy through the store (Diego, 10-29)', () => {
   const rename = (f: Awaited<ReturnType<typeof swarm>>, chat: string, name: string | null, user = peer, asAgentId?: string) =>
     f.execute({ type: 'buddy.rename', conversationId: chat, name }, user, asAgentId)

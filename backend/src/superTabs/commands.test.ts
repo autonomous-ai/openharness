@@ -2140,7 +2140,6 @@ describe('any agent of the project', () => {
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
     const commands: Array<[Command, Partial<CommandContext>]> = [
       [{ type: 'agent.start', request, ...via } as Command, { contribution: f.contribution, ...decisionIn(group) }],
-      [{ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, {}],
       [{ type: 'agent.input', agentId: f.worker, keys: ['Enter'] }, {}],
       [{ type: 'conversation.create', projectId: 'lead', title: 'Mine', brief: 'Do it.', checks: [{ description: 'Done.', independent: false }] }, {}],
     ]
@@ -2148,22 +2147,12 @@ describe('any agent of the project', () => {
     for (const [command, context] of commands) {
       // The outsider reads none of this project, and its own project's chat is not the peer's to read.
       expect(() => f.run(command, outsider, context), command.type).toThrow(expect.objectContaining({
-        code: command.type === 'person.tell' ? 'INVALID_PERSON' : command.type === 'agent.input' ? 'AGENT_UNAVAILABLE' : 'NOT_FOUND' }))
+        code: command.type === 'agent.input' ? 'AGENT_UNAVAILABLE' : 'NOT_FOUND' }))
       expect(() => f.run(command, buddy, context), command.type).toThrow(expect.objectContaining({ code: 'BUDDY_FORBIDDEN' }))
     }
     expect(JSON.stringify(f.state)).toBe(before)
   })
 
-  // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts, task #3404): another agent's line is the PM's crew need.
-  it('refuses the PM\'s private line to a person, and turns another agent\'s line into a crew need', () => {
-    const { f, E } = project(), pm = f.leadActor
-    f.invite()
-    expect(f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, E).messages.map(m => m.source?.kind)).toEqual(['crew-need'])
-    // Only the person and their own agent post in their private chat (anh Dee, 11-07, task #4558): the PM tags them in the project chat.
-    expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, pm)).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
-    expect(f.state.conversations.filter(c => c.kind === 'swarm-buddy' || c.kind === 'buddy')).toEqual([])
-    expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Hello.' })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-  })
 
   // A person keeps today's rule (decision 4); an agent's start, its maker and the project's coordinator (decision 6).
   it('lets a person carry on only a start they made, and an agent its own start or, as the coordinator, any agent\'s of the project', () => {
@@ -3894,9 +3883,9 @@ describe('credentials in every command', () => {
   }, command)
 
   it.each([
-    ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
+    ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
     ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
-    ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'], ['crew.add', 'lane'],
+    ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'],
     ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
     ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'], ['conversation.create', 'step'],
     ['conversation.create', 'task.requires.access[]'], ['route.record', 'decision.context.missing[]'], ['agent.screenResult', 'error'],
@@ -3986,7 +3975,7 @@ describe('credentials in every command', () => {
     const exempt = NOT_WORDS.flatMap(([, fields]) => fields)
     const covered = new Set([...Object.entries(WORDS).flatMap(([type, paths]) => paths!.map(path => `${type} ${path}`)), ...exempt])
     const all = strings()
-    expect(all.length).toBeGreaterThan(200)
+    expect(all.length).toBeGreaterThan(190)
     expect(all.filter(field => !covered.has(field))).toEqual([])
     // Nothing listed is stale or listed twice.
     expect([...covered].filter(field => !all.includes(field))).toEqual([])
