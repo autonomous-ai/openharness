@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
+import 'package:collection/collection.dart' show mergeSort;
 
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
@@ -91,20 +92,41 @@ class SwarmIssue {
   }
 }
 
+/// What a post in a task's chat is: a comment on its issue, or what a pull request that closes it said (a comment, a review, a
+/// line comment) and when it was opened and merged (anh Dee, 2026-11-10: "github pr comments need to have their own thread
+/// chat or part of the task chat").
+enum SwarmTalk { comment, review, line, opened, merged }
+
 /// One comment on an issue: an agent's post, signed by its name in its first words ("Migrate, 09:3x GMT+7: …"), as
-/// lampOS's builders sign theirs, under its person's GitHub account.
+/// lampOS's builders sign theirs, under its person's GitHub account. Or one on a pull request that closes it ([pull]).
 class SwarmIssueComment {
   const SwarmIssueComment({
     required this.body,
     this.author,
     this.createdAt,
     this.url,
+    this.pull,
+    this.talk = SwarmTalk.comment,
+    this.verdict,
+    this.path,
+    this.line,
   });
 
   final String body;
   final String? author;
   final DateTime? createdAt;
   final String? url;
+
+  /// The pull request it is on; null for a comment on the issue itself.
+  final int? pull;
+  final SwarmTalk talk;
+
+  /// A review's verdict in GitHub's words: `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`.
+  final String? verdict;
+
+  /// The file and line a line comment is on.
+  final String? path;
+  final int? line;
 
   /// The name it is signed with: the words before its first comma, when they read as a name. Null otherwise.
   String? get signedBy {
@@ -114,7 +136,8 @@ class SwarmIssueComment {
   }
 }
 
-/// An issue opened beside its project's channel: its text and its comments, oldest first.
+/// An issue opened beside its project's channel: its text and its comments, oldest first, and what the pull requests that
+/// close it said.
 class SwarmIssueThread {
   const SwarmIssueThread({
     required this.issue,
@@ -123,6 +146,7 @@ class SwarmIssueThread {
     required this.open,
     this.createdAt,
     this.earlier,
+    this.pullTalk = const [],
   });
 
   final SwarmIssue issue;
@@ -135,6 +159,11 @@ class SwarmIssueThread {
 
   /// Where the comments before [comments] start, or null when it holds them all.
   final String? earlier;
+
+  /// What the pull requests that close it said, oldest first: when each was opened, its newest [SwarmGitHub.pullComments]
+  /// comments and [SwarmGitHub.pullReviews] reviews, each with its first [SwarmGitHub.reviewLines] line comments, and when it
+  /// was merged. Its chat shows them among the issue's comments, each with its pull request's number.
+  final List<SwarmIssueComment> pullTalk;
 }
 
 /// A page of the comments before the ones a thread holds, oldest first.
@@ -148,24 +177,11 @@ class SwarmIssueEarlier {
 
 /// Why GitHub could not be read, in the words the person sees.
 class SwarmGitHubError implements Exception {
-  const SwarmGitHubError(this.message, {this.retryAt});
+  const SwarmGitHubError(this.message);
   final String message;
-
-  /// When GitHub will answer again, for a read it refused for asking too much; null for every other failure.
-  final DateTime? retryAt;
 
   @override
   String toString() => message;
-}
-
-/// One answer of a REST list ([SwarmGitHub.rest]): its ETag and its JSON text, or neither when GitHub said it has not changed.
-class SwarmRestPage {
-  const SwarmRestPage({this.etag, this.body});
-
-  final String? etag;
-
-  /// Null for a list that has not changed since the ETag it was asked with.
-  final String? body;
 }
 
 /// Runs `gh` with these arguments; tests give their own.
@@ -190,6 +206,12 @@ class SwarmGitHub {
 
   /// How many comments one "earlier" read brings.
   static const earlierComments = 100;
+
+  /// How many pull requests that close an issue its chat reads: an issue's work is one, now and then a second that replaced it.
+  static const closingPulls = 2;
+
+  /// How many of such a pull request's newest comments and reviews its issue's chat reads, and line comments of each review.
+  static const pullComments = 20, pullReviews = 10, reviewLines = 5;
 
   /// How many threads are kept to open again at once.
   static const threadsKept = 60;
@@ -388,6 +410,7 @@ class SwarmGitHub {
       createdAt: issue.createdAt,
       comments: comments.comments,
       earlier: comments.earlier,
+      pullTalk: _pullTalkOf(map['closedByPullRequestsReferences']),
     );
     final key = '$repository#$number';
     _threads.remove(key);
@@ -497,6 +520,95 @@ class SwarmGitHub {
     );
   }
 
+  /// What the pull requests in [value] (an issue's `closedByPullRequestsReferences`) said, oldest first: each one's opening, its
+  /// comments, its reviews and their line comments, and its merge. A review with no words of its own that holds line comments
+  /// is its line comments alone; one with no words and no verdict is left out.
+  static List<SwarmIssueComment> _pullTalkOf(Object? value) {
+    final talk = <SwarmIssueComment>[];
+    for (final pull in _nodes(value)) {
+      if (pull is! Map || pull['number'] is! int) continue;
+      final number = pull['number'] as int;
+      final by = _login(pull['author']);
+      if (_time(pull['createdAt']) case final at?) {
+        talk.add(
+          SwarmIssueComment(
+            body: '',
+            author: by,
+            createdAt: at,
+            pull: number,
+            talk: SwarmTalk.opened,
+          ),
+        );
+      }
+      for (final row in _nodes(pull['comments'])) {
+        if (row is! Map || row['body'] is! String) continue;
+        talk.add(
+          SwarmIssueComment(
+            body: row['body'] as String,
+            author: _login(row['author']),
+            createdAt: _time(row['createdAt']),
+            url: row['url'] is String ? row['url'] as String : null,
+            pull: number,
+          ),
+        );
+      }
+      for (final review in _nodes(pull['reviews'])) {
+        if (review is! Map) continue;
+        final body = review['body'] is String
+            ? (review['body'] as String).trim()
+            : '';
+        final verdict = review['state'] is String
+            ? review['state'] as String
+            : null;
+        final lines = [
+          for (final row in _nodes(review['comments']))
+            if (row is Map && row['body'] is String)
+              SwarmIssueComment(
+                body: row['body'] as String,
+                author: _login(row['author']),
+                createdAt: _time(row['createdAt']),
+                url: row['url'] is String ? row['url'] as String : null,
+                pull: number,
+                talk: SwarmTalk.line,
+                path: row['path'] is String ? row['path'] as String : null,
+                line: row['line'] is int ? row['line'] as int : null,
+              ),
+        ];
+        if (body.isNotEmpty || (verdict != 'COMMENTED' && verdict != null)) {
+          talk.add(
+            SwarmIssueComment(
+              body: body,
+              author: _login(review['author']),
+              createdAt: _time(review['submittedAt']),
+              url: review['url'] is String ? review['url'] as String : null,
+              pull: number,
+              talk: SwarmTalk.review,
+              verdict: verdict,
+            ),
+          );
+        }
+        talk.addAll(lines);
+      }
+      if (_time(pull['mergedAt']) case final at?) {
+        talk.add(
+          SwarmIssueComment(
+            body: '',
+            createdAt: at,
+            pull: number,
+            talk: SwarmTalk.merged,
+          ),
+        );
+      }
+    }
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    // Stable, so two posts of one second keep GitHub's order.
+    mergeSort(
+      talk,
+      compare: (a, b) => (a.createdAt ?? epoch).compareTo(b.createdAt ?? epoch),
+    );
+    return talk;
+  }
+
   /// The value [path] names in a GraphQL answer's `data`; unreadable when the answer, or it, is not what was asked for.
   static Map<Object?, Object?> _data(String answer, List<String> path) {
     Object? value;
@@ -548,11 +660,18 @@ class SwarmGitHub {
   static const _commentFields =
       'pageInfo{hasPreviousPage startCursor} nodes{body createdAt url author{login}}';
 
+  static const _talkFields = 'body createdAt url author{login}';
+
   static const _threadQuery =
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!){'
       r'repository(owner:$owner,name:$name){issue(number:$number){'
       '$_issueFields body state '
-      'comments(last:\$last){totalCount $_commentFields}}}}';
+      'comments(last:\$last){totalCount $_commentFields} '
+      'closedByPullRequestsReferences(first:$closingPulls,includeClosedPrs:true){nodes{'
+      'number createdAt mergedAt author{login} '
+      'comments(last:$pullComments){nodes{$_talkFields}} '
+      'reviews(last:$pullReviews){nodes{state submittedAt body url author{login} '
+      'comments(first:$reviewLines){nodes{$_talkFields path line}}}}}}}}}';
 
   static const _earlierQuery =
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!,$before:String){'
@@ -591,51 +710,6 @@ class SwarmGitHub {
       'GitHub issues not read: $kind (gh exited ${result.exitCode})',
     );
     if (kind == 'rate limited') _limitedUntil = clock.now().add(limitedFor);
-    throw refusal;
-  }
-
-  /// One page of a REST list of [repository] (`gh api repos/<repository>/<path>`), conditional on [etag]: GitHub answers a list
-  /// that has not changed 304 with no body, and does not count that against its rate limit. A refusal for asking too much says
-  /// when to ask again ([SwarmGitHubError.retryAt]).
-  Future<SwarmRestPage> rest(
-    String repository,
-    String path, {
-    String? etag,
-  }) async {
-    final result = await _ask(
-      [
-        'api',
-        '-i',
-        if (etag != null) ...['-H', 'If-None-Match: $etag'],
-        'repos/$repository/$path',
-      ],
-      log: 'feed',
-      missing:
-          'Install the GitHub CLI (gh) to see what your agents do on GitHub.',
-    );
-    final answer = _RestAnswer.read('${result.stdout}');
-    if (answer != null) {
-      if (answer.status == 304) return const SwarmRestPage();
-      if (answer.status >= 200 && answer.status < 300) {
-        return SwarmRestPage(etag: answer.headers['etag'], body: answer.body);
-      }
-      if (answer.limited) {
-        appLog.warn('super-tabs', 'GitHub feed not read: rate limited');
-        throw SwarmGitHubError(
-          'GitHub is limiting requests.',
-          retryAt: answer.retryAt,
-        );
-      }
-    }
-    final (kind, refusal) = _refusal(
-      result.exitCode,
-      '${result.stderr}',
-      repository,
-    );
-    appLog.warn(
-      'super-tabs',
-      'GitHub feed not read: $kind (gh exited ${result.exitCode})',
-    );
     throw refusal;
   }
 
@@ -735,55 +809,6 @@ class SwarmGitHub {
       arguments,
       environment: const {'GH_PROMPT_DISABLED': '1', 'NO_COLOR': '1'},
     );
-  }
-}
-
-/// What `gh api -i` printed: the status line, the headers (names in lower case) and the body after the first empty line.
-class _RestAnswer {
-  const _RestAnswer(this.status, this.headers, this.body);
-
-  final int status;
-  final Map<String, String> headers;
-  final String body;
-
-  /// Null for output that is not an HTTP answer (gh failed before it asked).
-  static _RestAnswer? read(String output) {
-    final end = RegExp(r'\r?\n\r?\n').firstMatch(output);
-    final head = (end == null ? output : output.substring(0, end.start)).split(
-      RegExp(r'\r?\n'),
-    );
-    final status = RegExp(r'^HTTP/\S+\s+(\d{3})').firstMatch(head.first);
-    if (status == null) return null;
-    final headers = <String, String>{};
-    for (final line in head.skip(1)) {
-      final colon = line.indexOf(':');
-      if (colon > 0) {
-        headers[line.substring(0, colon).trim().toLowerCase()] = line
-            .substring(colon + 1)
-            .trim();
-      }
-    }
-    return _RestAnswer(
-      int.parse(status.group(1)!),
-      headers,
-      end == null ? '' : output.substring(end.end),
-    );
-  }
-
-  /// A refusal for asking too much: 429, or 403 with none left or a wait named.
-  bool get limited =>
-      status == 429 ||
-      (status == 403 &&
-          (headers['x-ratelimit-remaining'] == '0' ||
-              headers.containsKey('retry-after')));
-
-  /// When GitHub will answer again: its `Retry-After`, else its reset; a minute from now when it names neither.
-  DateTime get retryAt {
-    final wait = int.tryParse(headers['retry-after'] ?? '');
-    final reset = int.tryParse(headers['x-ratelimit-reset'] ?? '');
-    if (wait != null) return clock.now().add(Duration(seconds: wait));
-    if (reset != null) return DateTime.fromMillisecondsSinceEpoch(reset * 1000);
-    return clock.now().add(const Duration(minutes: 1));
   }
 }
 

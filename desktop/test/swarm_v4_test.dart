@@ -289,6 +289,44 @@ void main() {
   );
 
   testWidgets(
+    'a task\'s chat holds what its pull request said, in time order with its issue\'s comments, each with the PR\'s number',
+    (tester) async {
+      await show(tester, size: const Size(2000, 900));
+      await tester.tap(key('swarm-tasks-button'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-task-5759'));
+      await tester.pumpAndSettle();
+      Finder inPanel(Finder f) =>
+          find.descendant(of: key('swarm-issue-panel'), matching: f);
+      double top(Finder f) => tester.getTopLeft(f).dy;
+      final taking = inPanel(find.textContaining('taking this one'));
+      final opened = inPanel(key('swarm-issue-opened-5770'));
+      final line = inPanel(find.textContaining('keep the old row name too'));
+      final read = inPanel(find.textContaining('READ-OK f6edb44'));
+      for (final post in [taking, opened, line, read]) {
+        expect(post, findsOneWidget);
+      }
+      // The issue's comment, then the pull request opened, its line comment and its READ-OK, as they were written.
+      expect(top(taking), lessThan(top(opened)));
+      expect(top(opened), lessThan(top(line)));
+      expect(top(line), lessThan(top(read)));
+      expect(tester.widget<Text>(opened).data, startsWith('PR #5770 opened'));
+      // Each of the pull request's posts says which pull request it is on, and a line comment where.
+      expect(
+        inPanel(find.textContaining('PR #5770', findRichText: true)),
+        findsNWidgets(3),
+      );
+      expect(
+        inPanel(find.textContaining('rows.py, line 40', findRichText: true)),
+        findsOneWidget,
+      );
+      // An open pull request has no merged line yet.
+      expect(key('swarm-issue-merged-5770'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'its person deletes an agent: right-click, Delete, confirm, gone',
     (tester) async {
       final c = await show(tester);

@@ -6,9 +6,9 @@ import '../widgets/desktop_chrome.dart';
 import 'model.dart';
 
 /// What a project's channel says while nobody has posted in it (anh Dee, 2026-11-09: a blank page under the project's name
-/// read as broken, and the agents' real talk is on GitHub).
-const superTabEmptyChannel =
-    'No posts yet. Agents post here when free or asking a teammate. Task talk is on Tasks.';
+/// read as broken). The channel is where agents talk to each other, as lampOS's agents do on their Queue (anh Dee,
+/// 2026-11-10); a task's talk is in its chat.
+const superTabEmptyChannel = 'No posts yet. Agents talk to each other here.';
 
 /// The one line in the middle of a chat with nothing in it: muted and centred inside the pane's side padding, as the composer
 /// has it, so a long line wraps there.
@@ -61,12 +61,10 @@ List<SuperTabAgent> superTabPostRecipients(
   ];
 }
 
-/// The names of [superTabPostRecipients], as the Swarm shows them: what a post's name line says after "to" ("Pip to Juno").
+/// The names of [superTabPostRecipients] as their tags read them: those a post's words do not tag open its bubble (`@Juno`),
+/// as a group chat addresses a post (anh Dee, 2026-11-10: "why not use tag? like in a group chat").
 List<String> superTabPostTo(SuperTabSnapshot? swarm, SuperTabMessage message) =>
-    [
-      for (final agent in superTabPostRecipients(swarm, message))
-        agent.displayName ?? agent.name,
-    ];
+    [for (final agent in superTabPostRecipients(swarm, message)) agent.name];
 
 /// What waits under a post that names an agent that was offline when it was posted and still is (`downSince`: its machine has
 /// reported its session gone): "Juno is offline", "Juno and Kai are offline". An agent that was up when it was named has

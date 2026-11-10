@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' show max;
 
 import 'package:clock/clock.dart';
+import 'package:collection/collection.dart' show mergeSort;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -470,15 +471,45 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel>
             ],
           ),
         ],
-        for (final comment in _comments) ...[
+        for (final post in _talk(thread)) ...[
           const SizedBox(height: 18),
-          _post(context, comment, agents),
+          switch (post.talk) {
+            SwarmTalk.opened || SwarmTalk.merged => _note(post),
+            _ => _post(context, post, agents),
+          },
         ],
       ],
     );
   }
 
-  /// One post: the face and name it is signed with (else its GitHub login), its login and time, then its text.
+  /// The issue's comments held and what the pull requests that close it said, in time order (anh Dee, 2026-11-10: "github pr
+  /// comments need to have their own thread chat or part of the task chat"): one chat for the task, its work's talk included.
+  List<SwarmIssueComment> _talk(SwarmIssueThread thread) {
+    if (thread.pullTalk.isEmpty) return _comments;
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    // Stable, so posts of one second keep the order they were read in.
+    final talk = [..._comments, ...thread.pullTalk];
+    mergeSort(
+      talk,
+      compare: (a, b) => (a.createdAt ?? epoch).compareTo(b.createdAt ?? epoch),
+    );
+    return talk;
+  }
+
+  /// When a pull request that closes the task was opened or merged: one quiet centred line, as a chat's day line reads.
+  Widget _note(SwarmIssueComment note) => Center(
+    child: Text(
+      [
+        'PR #${note.pull} ${note.talk == SwarmTalk.merged ? 'merged' : 'opened'}',
+        if (note.createdAt case final at?) _when(at, widget.now()),
+      ].join(' · '),
+      key: ValueKey('swarm-issue-${note.talk.name}-${note.pull}'),
+      style: DesktopChrome.metadata(),
+    ),
+  );
+
+  /// One post: the face and name it is signed with (else its GitHub login), its login, the pull request it is on with a
+  /// review's verdict or a line comment's place, and its time, then its text.
   Widget _post(
     BuildContext context,
     SwarmIssueComment post,
@@ -502,6 +533,15 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel>
                       text: [
                         if (post.author != null && post.author != name)
                           post.author!,
+                        if (post.pull case final pull?) 'PR #$pull',
+                        if (post.talk == SwarmTalk.review)
+                          switch (post.verdict) {
+                            'APPROVED' => 'Approved',
+                            'CHANGES_REQUESTED' => 'Changes requested',
+                            _ => 'Review',
+                          },
+                        if (post.path case final path?)
+                          post.line == null ? path : '$path, line ${post.line}',
                         if (post.createdAt case final at?)
                           _when(at, widget.now()),
                       ].map((part) => ' · $part').join(),

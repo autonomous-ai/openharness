@@ -183,16 +183,6 @@ SwarmGitHub swarmV4GitHub({
   bool Function()? signedOut,
 }) => SwarmGitHub(
   run: (arguments) async {
-    // The channel's feed reads three REST lists with `gh api -i` (Swarm v4): nothing is in them here, and they are not among the
-    // calls these tests count.
-    if (arguments.contains('-i')) {
-      return ProcessResult(
-        1,
-        0,
-        'HTTP/2.0 200 OK\r\nEtag: W/"none"\r\n\r\n[]',
-        '',
-      );
-    }
     calls?.add(arguments);
     if (signedOut?.call() ?? false) {
       return ProcessResult(
@@ -206,6 +196,7 @@ SwarmGitHub swarmV4GitHub({
         .firstWhere((a) => a.startsWith('query='), orElse: () => '')
         .substring(6);
     const url = 'https://github.com/autonomous-ai/lampOS/issues';
+    const pull = 'https://github.com/autonomous-ai/lampOS/pull';
     Map<String, Object?> issue(int number, String title, String updated) => {
       'number': number,
       'title': title,
@@ -378,6 +369,50 @@ SwarmGitHub swarmV4GitHub({
                   'First builder, 09:4x: I\'m taking this one.',
                   '2026-11-09T02:27:00Z',
                 ),
+              ],
+            },
+            // Its pull request #5770, as GitHub links it to the issue it closes: opened, a line comment in a review, a READ-OK.
+            'closedByPullRequestsReferences': {
+              'nodes': [
+                {
+                  'number': 5770,
+                  'createdAt': '2026-11-09T02:40:00Z',
+                  'mergedAt': null,
+                  'author': {'login': '69tc'},
+                  'comments': {
+                    'nodes': [
+                      {
+                        'body': 'Migrate, 10:05 GMT+7: READ-OK f6edb44',
+                        'createdAt': '2026-11-09T03:05:00Z',
+                        'url': '$pull/5770#issuecomment-9',
+                        'author': {'login': '69tc'},
+                      },
+                    ],
+                  },
+                  'reviews': {
+                    'nodes': [
+                      {
+                        'state': 'COMMENTED',
+                        'submittedAt': '2026-11-09T02:50:00Z',
+                        'body': '',
+                        'url': '$pull/5770#pullrequestreview-1',
+                        'author': {'login': 'deehw'},
+                        'comments': {
+                          'nodes': [
+                            {
+                              'body': 'First builder, 09:50: keep the old row name too.',
+                              'createdAt': '2026-11-09T02:50:00Z',
+                              'url': '$pull/5770#discussion_r1',
+                              'author': {'login': 'deehw'},
+                              'path': 'rows.py',
+                              'line': 40,
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
               ],
             },
           },
