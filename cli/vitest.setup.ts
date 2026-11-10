@@ -43,7 +43,8 @@ for (const name of [
   'AGY_HOME', 'AGY_CONFIG_DIR', 'OPENCODE_DB', 'KILO_DB', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME',
 ]) delete process.env[name]
 
-process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-data-'))
+// A short name: the daemon's Unix socket goes in here, and a socket's path has 96 bytes (lib/localSocket.ts, vitest.tmpdir.ts).
+process.env.ADAPTER_DATA_DIR = mkdtempSync(join(tmpdir(), 'data-'))
 process.env.ADAPTER_RUNTIME_DIR = mkdtempSync(join(tmpdir(), 'adapter-test-runtime-'))
 // Real zsh subprocesses must not load a developer's prompts, plugins, updates,
 // or nvm configuration. Shell-startup tests supply their own ZDOTDIR fixture.
