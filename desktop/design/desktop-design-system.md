@@ -506,7 +506,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   columns, To do (nobody has it), Assigned (its `builder:<name>` label names an
   agent) and On it (its `status:taken` label), each headed by its name and
   count, newest activity first; a narrower pane scrolls sideways (a column is
-  220 wide at least). A card is a hairline (`DesktopChrome.rim`) at radius 12
+  140 wide at least, so all three show beside the channel in the 1280 window the
+  app opens in). A card is a hairline (`DesktopChrome.rim`) at radius 12
   on `cardBg` and holds what github.com's list shows: the issue's number in a
   grey capsule (`AppSurface.recess`, 12 metadata), its title in 14 semibold on
   up to three lines, its labels as chips in their own GitHub colour (the first
@@ -516,21 +517,22 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   before it) and, at the right, how many comments it has (a speech bubble and
   the count, none for no comments). A task with an open pull request (one
   that closes it, "Closes #14", else one on its builder's branch for it,
-  `pip/14`) shows it at the card's top right (`SwarmPullChip`,
+  `pip/14`) shows it at the card's top right, or under the task's number when the column has no room for both whole (`SwarmPullChip`,
   `super_tabs/pull_chip.dart`): the pull request's icon, number and one word in
   a capsule of its colour at 14%, by the rule Harness merges by
   (`super_tabs/github_pulls.dart`): Draft and Checks (running) in muted grey,
   Review (green checks, no READ-OK on its head yet) in the accent, Failing and
   Conflict in the error red, Held (a reader's last word is a HOLD) in `warn`,
   and Merging (a READ-OK on its head from someone other than its builder, two
-  for TWO READS, checks green) in `online`; in a narrow column the word
+  for TWO READS, checks green; from the login that opened it only one signed by
+  another of the Swarm's agents, as Harness merges) in `online`; in a narrow column the word
   shortens, never the task's number. No pull request, no chip. The open pull
   requests are one GraphQL read after the issues (the newest 50), and a read
   of them that fails keeps the last chips. The board shows what it last read at once
   and brings the rest: the newest hundred first, then the others, but only
   where nothing shows yet: a list already shown stays whole while a refresh is
   read, one refresh at a time. A refresh that fails keeps the cards and says
-  why in the bar, in 12 metadata grey, with a retry icon (`Try again`).
+  why in the bar, in 12 metadata grey on up to two lines, with a retry icon (`Try again`).
   A card opens its issue in the board's place (`SwarmIssuePanel`,
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
   its title, its agent, state and who opened it, its labels, its open pull
@@ -543,7 +545,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   later read joins what is held when its newest comments start at one of them,
   else it stands alone: a gap is never hidden. The header says `opened now` or
   `opened 5m ago`. A project with no GitHub repository says so in one line; a failed read says
-  what to do (`Sign in to GitHub: run gh auth login.`) with a retry.
+  what to do (`Sign in to GitHub: run gh auth login.`; `GitHub is limiting
+  requests. Wait a few minutes.` when GitHub's rate limit answers, and
+  then no `gh` runs for two minutes, whatever asks; `Authorize gh for this
+  organization's SSO: run gh auth refresh.` when SAML does) with a retry.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   one thing: `Project settings…`, whose rows are Rename project, Project
   details, Switch PM… and Delete Project. It has no Notifications: a channel
@@ -569,7 +574,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   you and a chat's own agent (a Buddy chat, an agent chat) there are no names
   or faces; in a group chat a speaker's name sits over their first bubble in
   13 plain secondary ink, and their round 28 face by their last. No engine
-  mark: colour is the face's. Text reads at 14 on 20 px lines (`SwarmType`).
+  mark: colour is the face's. Text reads at 14 on 20 px lines (`SwarmType`). A
+  message reads in the direction of its first words (the first letter of its prose; code, links, `@name` and `#12`
+  aside): Arabic or Hebrew from the bubble's right edge, whatever the app's; its code still left to right
+  (`SuperTabMessageText.directionOf`).
 - **Chat times.** No time in a bubble's row. A time sits centered between
   messages only after a pause of more than five minutes (`SwarmChatTime`);
   a bubble's full date and time are on its tooltip.
@@ -637,7 +645,7 @@ Top to bottom:
  #  lampos                    a project's channel; bold: something new
  Your Machines         ›     quiet heading, folded, but open by itself while a computer is off; each row a computer of this account, `offline` at its right when it is
                               (a click opens Manage's Machines)
- Top Teams             ›     quiet heading, folded, only once someone has points
+ Top Teams             ›     quiet heading, folded, only once someone has points (in a Swarm of one, a board of one zero shows nothing)
  D  dee                 120   the board's top 8 by points; a tap opens it
  ⚙  Manage                    at the foot
 ```

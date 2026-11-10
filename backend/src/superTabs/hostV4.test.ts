@@ -10,7 +10,7 @@ import type { AgentStart } from './model.js'
 // 2026-11-09: anh Dee's Mac 3 showed offline for hours, its agents' chats undelivered: every read of its host failed with "This
 // project is unavailable." A Swarm of Swarm v4 has agents in chats that belong to no project, and no project called 'lead'.
 const user = { sub: owner.userId, email: owner.email } as AuthUser
-const lookups = (): HostLookups => ({ people: [{ id: owner.userId, email: owner.email }], confidential: new Set(), agentGrant: async () => {}, githubApp: false })
+const lookups = (): HostLookups => ({ people: [{ id: owner.userId, email: owner.email }], confidential: new Set(), agentGrant: async () => {} })
 
 /** A Swarm whose first project is gone (all its projects have ids of their own), with a Regular agent's chat and its start,
  *  still waiting on `mac3`: what a server-started New agent leaves until its host launches it. */
