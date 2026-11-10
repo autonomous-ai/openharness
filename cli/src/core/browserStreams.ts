@@ -7,9 +7,11 @@
  * - **Credit.** At most one window of bytes the viewer has not taken is ever ahead of a terminal's echo: the child's
  *   stdout pauses at `pauseBytes` unacknowledged and resumes below `resumeBytes`. A viewer acks the bytes its page has
  *   drawn (`agent_browser_ack {streamId, bytes}`, the count since its last ack), because noVNC queues what it cannot
- *   draw and disconnects at 40 MiB (second spike). An ack that never comes closes the stream with `backlog` after 10 s.
- * - **Pacing.** Bytes on the relay and on TURN cost money and share the backend's per-machine budget: their total
- *   leaves at `bytesPerSecond`, taken in turn by the streams that have bytes to send. A direct link is not paced.
+ *   draw and disconnects at 40 MiB (second spike). An ack that never comes closes the stream with `backlog` after 10 s,
+ *   and so does a viewer that never answers the server's banner, which would otherwise hold a viewer slot for good.
+ * - **Pacing.** Bytes on the relay and on TURN cost money and share the backend's per-machine budget: their total,
+ *   counted sealed as the backend counts them, leaves at `bytesPerSecond`, taken in turn by the streams that have bytes
+ *   to send. A direct link is not paced.
  * - **Nothing dropped.** VNC has no keyframe, so a lost chunk corrupts the screen for good. A send that is refused
  *   closes the stream (`backlog`), a route that went away closes it (`route`), and a relay that refused a frame closes
  *   every stream on the relay (`rate`). The panel then shows why, and reconnects.
@@ -21,7 +23,7 @@ import { RfbShaper, type StreamProfile } from './rfbShaper.js'
 import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { sid } from '../lib/log.js'
 import type { AGENT_BROWSER_CLOSE_REASONS, ProductUsageMetric } from '../lib/productUsageContract.js'
-import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { TERMINAL_BINARY_HEADER_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
 
 type BrowserCloseReason = typeof AGENT_BROWSER_CLOSE_REASONS[number]
@@ -33,13 +35,29 @@ const BROWSER_PROFILES: Readonly<Record<BrowserRoute, StreamProfile>> = {
   turn: { quality: 3, compression: 6, fps: 5 },
   relay: { quality: 3, compression: 6, fps: 2 },
 }
-/** The backend's browser budget per machine socket (backend lib/terminalRelay.ts): every relayed and TURN stream of
- *  this machine shares it. */
-export const BROWSER_PACING_BYTES_PER_SECOND = 512 * 1024
+/** The backend's browser budget per machine socket, 512 KiB a second of sealed frames counted per fixed minute (backend
+ *  lib/terminalRelay.ts): every relayed and TURN stream of this machine shares it. */
+const BACKEND_BROWSER_BYTES_PER_SECOND = 512 * 1024
+/** What the backend counts of a frame beyond its bytes: the sealed envelope's 20-byte header, the stream id and seq
+ *  in its plaintext (24 bytes) and the AEAD tag (16 bytes) (lib/e2ee/terminalSeal.ts). */
+const SEALED_FRAME_OVERHEAD_BYTES = TERMINAL_BINARY_HEADER_BYTES + 24 + 16
+/** 90% of the backend's budget. The pace holds up to one second of itself, and a fixed minute can start just as that
+ *  second is spent, so it sees 61 seconds of the pace: 61 × 0.9 = 55 seconds of budget, under the 60 that would close
+ *  every relayed stream with `rate` (two viewers scrolling at the whole budget did, review 2026-11-10). */
+export const BROWSER_PACING_BYTES_PER_SECOND = Math.floor(BACKEND_BROWSER_BYTES_PER_SECOND * 0.9)
 /** The credit window: one 1080p update at q6 is 105-173 KB (second spike), so a window holds one with room to spare. */
 export const BROWSER_WINDOW = { pauseBytes: 256 * 1024, resumeBytes: 128 * 1024 }
 const BROWSER_VIEWERS_MAX = 4
 const STALL_MS = 10_000
+/**
+ * How long a viewer has to say anything once its stream sent it the server's banner. Its first ack cannot be the
+ * test: a viewer acks every 64 KiB drawn (Desktop `browserAckStepBytes`), and a still page's whole first screen can be
+ * smaller than that. Its answer to the banner can: the Desktop loads noVNC before it opens, and noVNC sends its version
+ * the moment the banner arrives. The clock starts when the banner leaves, after its pace on the slowest route (the
+ * relay), so what is left is one round trip; the 10 s an owed ack gets is far more than that. A Desktop that gave up on
+ * its open never answers (review 2026-11-10).
+ */
+const ANSWER_MS = STALL_MS
 const KILL_GRACE_MS = 1_000
 const STDERR_KEPT = 2_000
 
@@ -57,6 +75,9 @@ interface Stream {
   waiting: Uint8Array[]
   paused: boolean
   stallTimer: NodeJS.Timeout | null
+  /** The viewer has sent something: an ack or its own bytes. */
+  answered: boolean
+  answerTimer: NodeJS.Timeout | null
   stderr: string
 }
 
@@ -101,7 +122,7 @@ export class BrowserStreamManager {
       id: randomUUID(), connId, agentId, local, route: local ? 'direct' : null, child,
       // Until the gateway says which route it took, a remote stream gets the relay's profile, the cheapest.
       shaper: new RfbShaper(BROWSER_PROFILES[local ? 'direct' : 'relay']),
-      seq: 0, unacked: 0, waiting: [], paused: false, stallTimer: null, stderr: '',
+      seq: 0, unacked: 0, waiting: [], paused: false, stallTimer: null, answered: false, answerTimer: null, stderr: '',
     }
     this.streams.set(stream.id, stream)
     stream.shaper.onOutput(bytes => { if (this.streams.get(stream.id) === stream) child.stdin?.write(bytes) })
@@ -128,8 +149,10 @@ export class BrowserStreamManager {
 
   ack(connId: string, payload: Record<string, unknown>): void {
     const stream = this.of(connId, payload.streamId)
+    if (!stream) return
+    this.heard(stream)
     const bytes = payload.bytes
-    if (!stream || typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return
+    if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return
     stream.unacked = Math.max(0, stream.unacked - bytes)
     if (stream.paused && stream.unacked < this.deps.window.resumeBytes) {
       stream.paused = false
@@ -139,7 +162,10 @@ export class BrowserStreamManager {
   }
 
   input(connId: string, streamId: string, bytes: Uint8Array): void {
-    this.of(connId, streamId)?.shaper.push(bytes)
+    const stream = this.of(connId, streamId)
+    if (!stream) return
+    this.heard(stream)
+    stream.shaper.push(bytes)
   }
 
   close(connId: string, payload: Record<string, unknown>): void {
@@ -216,10 +242,24 @@ export class BrowserStreamManager {
   private send(stream: Stream, bytes: Uint8Array): boolean {
     const sent = this.deps.sendBinaryTarget(stream.connId, { kind: TerminalBinaryKind.browser, streamId: stream.id, seq: stream.seq++, bytes, compressed: false })
     if (!sent) this.end(stream, 'backlog')
+    else if (!stream.answered && !stream.answerTimer) {
+      stream.answerTimer = setTimeout(() => {
+        console.warn(`[agent-browser] stream ${sid(stream.id)} closed: its viewer never answered in ${ANSWER_MS / 1000} s`)
+        this.end(stream, 'backlog')
+      }, ANSWER_MS)
+      stream.answerTimer.unref?.()
+    }
     return sent
   }
 
-  /** One token bucket for every paced stream, filled at `bytesPerSecond` and holding at most one second of it. */
+  private heard(stream: Stream): void {
+    stream.answered = true
+    if (stream.answerTimer) clearTimeout(stream.answerTimer)
+    stream.answerTimer = null
+  }
+
+  /** One token bucket for every paced stream, filled at `bytesPerSecond` of sealed bytes and holding at most one second
+   *  of it. */
   private pace(): void {
     if (this.paceTimer) return
     const rate = this.deps.pacing.bytesPerSecond
@@ -228,12 +268,13 @@ export class BrowserStreamManager {
     this.refilledAt = now
     for (const stream of this.turns) {
       const chunk = stream.waiting[0]
-      if (chunk.length > this.tokens) {
-        this.paceTimer = setTimeout(() => { this.paceTimer = null; this.pace() }, Math.ceil(((chunk.length - this.tokens) * 1000) / rate))
+      const cost = chunk.length + SEALED_FRAME_OVERHEAD_BYTES
+      if (cost > this.tokens) {
+        this.paceTimer = setTimeout(() => { this.paceTimer = null; this.pace() }, Math.ceil(((cost - this.tokens) * 1000) / rate))
         this.paceTimer.unref?.()
         return
       }
-      this.tokens -= chunk.length
+      this.tokens -= cost
       stream.waiting.shift()
       // Its next chunk waits behind every other stream's.
       this.turns.delete(stream)
@@ -263,6 +304,7 @@ export class BrowserStreamManager {
     this.turns.delete(stream)
     stream.waiting = []
     if (stream.stallTimer) clearTimeout(stream.stallTimer)
+    if (stream.answerTimer) clearTimeout(stream.answerTimer)
     this.deps.sendTarget(stream.connId, 'agent_browser_close', { streamId: stream.id, reason })
     this.deps.measure(`agent_browser_stream_closed_${reason}`)
     const { child } = stream

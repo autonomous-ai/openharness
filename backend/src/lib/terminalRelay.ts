@@ -56,7 +56,8 @@ export const RELAY_BUSY_STREAMS = 64
 const ACKS_PER_STREAM_PER_MINUTE = 3_750
 /** The daemon flushes a remote stream's output at most every 8 ms (`OUTPUT_FLUSH_MS` in the CLI). */
 const OUTPUT_FRAMES_PER_STREAM_PER_MINUTE = 7_500
-/** A machine's browser bytes on the relay: 512 KiB a second (agent browser spec, "Stream profiles by route"). */
+/** A machine's browser bytes on the relay, counted sealed: 512 KiB a second (agent browser spec, "Stream profiles by
+ *  route"). The daemon paces at 90% of it (cli core/browserStreams.ts), so this cap is only the backstop. */
 const BROWSER_OUTPUT_BYTES_PER_MINUTE = 512 * 1024 * 60
 /** How many drawn bytes a viewer acks at once (the CLI's browser stream). */
 const BROWSER_ACK_STEP_BYTES = 64 * 1024
@@ -89,7 +90,8 @@ function limits(type: string): { frames: number; bytes: number } {
   if (type === 'terminal_open' || type === 'terminal_capabilities') return { frames: 60, bytes: 4 * 1024 * 1024 }
   // Agent browser streams (spec 2026-11-10-agent-browser-design, "Nothing is dropped silently"), in buckets of their own
   // so a busy browser never throttles a terminal. `agent_browser_output` is a machine's kind-8 bytes, all its browsers
-  // and viewers together: the most the relay carries for one machine, which its daemon paces under. The frame cap lets
+  // and viewers together, each its sealed frame's length: the most the relay carries for one machine, which its daemon
+  // paces under with room for a fixed minute that catches its one-second burst. The frame cap lets
   // the byte cap bind first for any frame of 1 KiB or more.
   if (type === 'agent_browser_output') return { frames: BROWSER_OUTPUT_BYTES_PER_MINUTE / 1024, bytes: BROWSER_OUTPUT_BYTES_PER_MINUTE }
   // A viewer's kind-8 bytes: keys, pointer and clipboard, about 1 KB/s in the first spike. Frames as terminal input.

@@ -2,8 +2,9 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Asker } from './api.js'
-import { BrowserStreamManager } from './browserStreams.js'
-import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { BROWSER_PACING_BYTES_PER_SECOND, BrowserStreamManager } from './browserStreams.js'
+import { sealTerminalBinary } from '../lib/e2ee/terminalSeal.js'
+import { BROWSER_CHUNK_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
 
 const KiB = 1024
@@ -230,10 +231,64 @@ describe('the bytes of a browser stream', () => {
     expect(h.children[0].kill).toHaveBeenCalled()
   })
 
+  // Review finding: the daemon paced plaintext at the whole budget, the backend counts sealed bytes per fixed minute,
+  // and two viewers scrolling for a minute went over it, closing every relayed stream with `rate`.
+  it('two relayed streams at full speed stay under the backend\'s count of sealed bytes, minute after minute', async () => {
+    vi.useFakeTimers()
+    // The backend's rule (backend lib/terminalRelay.ts, adapterWs.ts): a kind-8 frame's sealed length, into a bucket
+    // that starts at its first frame and lasts a fixed minute, refused past 512 KiB × 60.
+    const BUDGET = 512 * KiB * 60
+    const windows: number[] = []
+    let startedAt = Number.NEGATIVE_INFINITY
+    let refused = 0
+    const closed: string[] = []
+    const key = new Uint8Array(32).fill(9)
+    let counter = 0
+    const children: FakeChild[] = []
+    const manager = new BrowserStreamManager({
+      command: () => ({ argv: ARGV }),
+      asker: (connId) => ASKERS[connId],
+      sendTarget: (connId, type, payload) => {
+        // Each viewer answers the server's banner, as noVNC does.
+        if (type === 'agent_browser_open_result') queueMicrotask(() => manager.input(connId, payload.streamId as string, new TextEncoder().encode('RFB 003.008\n')))
+        if (type === 'agent_browser_close') closed.push(payload.reason as string)
+        return true
+      },
+      sendBinaryTarget: (_connId, frame) => {
+        const sealed = sealTerminalBinary(key, counter++, frame)!.length
+        if (Date.now() - startedAt >= 60_000) { startedAt = Date.now(); windows.push(0) }
+        if (windows[windows.length - 1] + sealed > BUDGET) refused++
+        else windows[windows.length - 1] += sealed
+        return true
+      },
+      spawn: (() => { const child = fakeChild(); children.push(child); return child }) as never,
+      measure: () => {},
+      pacing: { bytesPerSecond: BROWSER_PACING_BYTES_PER_SECOND },
+      // The viewers draw at once: only the pace holds the bytes back.
+      window: { pauseBytes: 1024 * 1024 * KiB, resumeBytes: 512 * 1024 * KiB },
+      chunkBytes: BROWSER_CHUNK_BYTES,
+    })
+    // Neither route is known yet: both are paced as relayed.
+    for (const connId of ['mac-2', 'mac-3']) manager.open(connId, { requestId: `r-${connId}`, agentId: 'a1' })
+    // Idle first, so the pace's bucket is full when the scrolling starts.
+    await vi.advanceTimersByTimeAsync(5_000)
+    const screen = bytes(64 * KiB)
+    // Each stream offers more than the whole budget: 640 KiB a second.
+    const feed = setInterval(() => { for (const child of children) child.stdout.emit('data', screen) }, 100)
+    await vi.advanceTimersByTimeAsync(3 * 60_000)
+    clearInterval(feed)
+    expect(refused).toBe(0)
+    expect(closed).toEqual([])
+    expect(windows).toHaveLength(3)
+    // And the pace is not so careful that it wastes the budget.
+    for (const used of windows) expect(used).toBeGreaterThan(0.85 * BUDGET)
+  })
+
   it('a stream whose credit stays used up for 10 s is closed with reason backlog', async () => {
     vi.useFakeTimers()
     const h = harness()
     const streamId = h.open('local:w')
+    h.manager.input('local:w', streamId, new TextEncoder().encode('RFB 003.008\n'))
     h.children[0].stdout.emit('data', bytes(256 * KiB))
     await vi.advanceTimersByTimeAsync(9_999)
     expect(h.closes()).toEqual([])
@@ -241,10 +296,47 @@ describe('the bytes of a browser stream', () => {
     expect(h.closes()).toEqual([['local:w', streamId, 'backlog']])
   })
 
+  // Review finding: a Desktop that gave up on its open (or closed its panel first) never answers, and its stream held one
+  // of the browser's four viewer slots until it reconnected.
+  it('a viewer that never answers the banner is closed with reason backlog 10 s after it was sent, and logged once', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const h = harness()
+    const silent = h.open('mac-2')
+    const answered = h.open('mac-3')
+    h.manager.route(silent, 'relay')
+    h.manager.route(answered, 'relay')
+    // The exec takes a while to start: the viewer is not owed a word before its banner left.
+    await vi.advanceTimersByTimeAsync(5_000)
+    const banner = new TextEncoder().encode('RFB 003.008\n')
+    for (const child of h.children) child.stdout.emit('data', Buffer.from(banner))
+    h.manager.input('mac-3', answered, banner)
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(h.closes()).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(h.closes()).toEqual([['mac-2', silent, 'backlog']])
+    expect(warn.mock.calls.filter(call => call.join(' ').includes(`${silent.slice(0, 8)}`))).toHaveLength(1)
+    expect(warn.mock.calls.flat().join(' ')).toContain('never answered')
+    // Its slot is free again; the viewer that answered keeps its stream however long its screen stays still.
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(h.closes()).toEqual([['mac-2', silent, 'backlog']])
+  })
+
+  it('an ack is an answer too', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const streamId = h.open('local:w')
+    h.children[0].stdout.emit('data', bytes(64 * KiB))
+    h.manager.ack('local:w', { streamId, bytes: 64 * KiB })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.closes()).toEqual([])
+  })
+
   it('bytes still waiting for their pace do not count as a lost ack', async () => {
     vi.useFakeTimers()
     const h = harness()
     const streamId = h.open('mac-2')
+    h.manager.input('mac-2', streamId, new TextEncoder().encode('RFB 003.008\n'))
     h.manager.route(streamId, 'relay')
     h.children[0].stdout.emit('data', bytes(256 * KiB))
     // A whole window at the relay's pace takes half a second to leave, after which the ack has 10 s.
