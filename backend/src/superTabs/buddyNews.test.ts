@@ -5,8 +5,6 @@ import { buddyChatId } from './buddies.js'
 import { assignedNotice, buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
 import { TASK_LINE_KIND } from './taskLine.js'
-import { leaderboard } from './leaderboard/stats.js'
-import { weekStart } from './leaderboard/week.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -193,29 +191,13 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
     return { f, group, created, find: () => f.state.conversations.find(c => c.id === group)! }
   }
 
-  it('is requested by the person the proposal was sent for, who gets the assignment news, the ship news and the Shipped points', () => {
+  it('is requested by the person the proposal was sent for, who gets the assignment news', () => {
     const { f, group, created, find } = opened()
     expect(find().requesterId).toBe('peer')
     expect(created.result.requesterUnknown).toBeUndefined()
     const worker = f.add(group, 'worker')
     expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.filter(m => m.recipients.includes('buddy')))
       .toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' } })])
-    const assignmentId = find().assignment!.id
-    for (const check of find().checks) f.run({ type: 'work.check', conversationId: group, assignmentId, checkId: check.id, passed: true, evidence: 'ok' })
-    // Done with its pull request reads ready and is no news yet; its recorded merge ships it (taskLine.ts; PM, review of #2633),
-    // and their Buddy hears it inside the task, once.
-    const done = f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Review passed: https://github.com/o/r/pull/7' },
-      agentActor(worker))
-    expect(done.messages.filter(m => m.thread === find().cards!.line!.messageId)).toEqual([])
-    expect(done.messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
-    const merged = f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
-    expect(merged.messages).toEqual(expect.arrayContaining([expect.objectContaining({ thread: find().cards!.line!.messageId, text: 'Merged: PR #7. Ships in the next release.' })]))
-    // A merge is not shipped: the news waits for the release that holds it (task #4217).
-    expect(merged.messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
-    expect(f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/o/r/pull/7' }, agentActor(worker))
-      .messages.filter(m => m.recipients.includes('buddy'))).toEqual([])
-    const board = leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: f.app.projectId, week: weekStart(1000), now: 1000 })
-    expect(board.people.find(p => p.personId === 'peer')).toMatchObject({ points: 3, shipped: { count: 1 } })
   })
 
   it('keeps the requester the PM names, even someone else', () => {

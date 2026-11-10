@@ -38,6 +38,11 @@ enum ProductFlow {
   /// Import an agent running on this Mac (task #2379): started when its
   /// handoff preview shows, then imported, failed or cancelled.
   agentImport('agent_import'),
+
+  /// A Team account's removal from this computer (anh Dee, 2026-11-10: every
+  /// Team account goes): ok removed or already gone, failed when the system
+  /// refused or kept it, cancelled at the admin prompt.
+  teamAccountRemoval('team_account_removal'),
   // The same card offered once to a computer that never had it, after one of its own harnesses
   // finished a turn (`AppNotifier._offerPhoneAfterWork`): counted apart, so the two offers read apart.
   phoneOfferAfterWork('phone_offer_after_work'),
@@ -68,6 +73,7 @@ enum ProductFlow {
     phoneOfferReturning => 6,
     shareInvite || shareAccept => 5,
     agentImport => 7,
+    teamAccountRemoval => 8,
     phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
     _ => 1,
   };
@@ -734,7 +740,7 @@ class ProductMeasurement extends ChangeNotifier {
   /// after work or after time away 4, first-run/invite counters 5, and an opened agent Browser 8. Other
   /// health measures use [health] to wait for support before counting.
   static int _vocabularyOf(String metric) {
-    if (metric == 'agent_browser_opened') return 8;
+    if (metric == 'agent_browser_opened') return 9;
     if (metric.startsWith('ui_desktop_phone_offer_skipped_') ||
         metric.startsWith('ui_desktop_add_phone_paired_')) {
       return 6;

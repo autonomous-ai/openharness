@@ -15,7 +15,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
   const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
   const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
-    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
+    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -29,6 +29,8 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname) ? state.reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/compare\/main\.\.\.[0-9a-f]+$/.test(url.pathname) ? state.compare.get(url.pathname.split('...').at(-1)!) ?? null
       : url.pathname === '/repos/acme/app/labels' ? state.labels
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/issues' ? (url.searchParams.get('state') === 'closed' ? state.closed : state.open)
@@ -234,6 +236,31 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
     const team: Crew = { builders: [...crew().builders, { id: 'atlas', name: 'Atlas', label: 'builder:atlas', machineId: 'mac', engine: 'codex' }],
       machines: crew().machines }
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
+
+    // lampOS #5212: a read posted as a review is a read; asked for another, its pull request waited on a reader it already had.
+    it('counts a READ-OK posted as a review as a read, and asks nobody else', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.reviews.set(30, [{ id: 7, state: 'APPROVED', body: 'Juno, 07:10, to **Pip**: READ-OK f6edb44', submitted_at: '2026-11-09T07:10:00Z',
+        author_association: 'MEMBER', user: { login: 'deehw' } }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+    })
+
+    // lampOS lib.sh patch_of: a verdict on an earlier head whose change is the head's still stands. Updated from main with nothing of
+    // its own changed, the pull request was read again for nothing, or its HOLD asked about before its author fixed anything.
+    it('asks nobody again for a verdict on an earlier head whose change is the head\'s: a READ-OK stands, a HOLD waits for its author', async () => {
+      const change = { files: [{ filename: 'sandbox/quotes.py', status: 'modified', changes: 1, patch: '@@ -4,3 +4,3 @@\n x\n-    days = 1\n+    days = int(n)' }] }
+      for (const verdict of ['READ-OK', 'HOLD']) {
+        const f = setup([], { crew: team })
+        f.github.state.pulls = [pull()]
+        f.github.state.comments.set(30, [comment(`Juno, 07:10, to **Pip**: ${verdict} a1b2c3d`)])
+        f.github.state.compare.set('a1b2c3d', change)
+        f.github.state.compare.set(HEAD, change)
+        await f.assigner.tick()
+        expect(asks(f), verdict).toEqual([])
+      }
+    })
 
     it('counts no READ-OK its author signed, however its two-word name is written, and asks a reader', async () => {
       const two: Crew = { builders: [...crew().builders, { id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }],

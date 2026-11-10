@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { noteSwarmBasics, PM_BASICS, prepareSwarmSkill, SWARM_BASICS } from '../lib/swarmSkills.js'
+import { noteSwarmBasics, PM_BASICS, SWARM_BASICS } from '../lib/swarmSkills.js'
 import { BUDDY_COPIES_FILE, BUDDY_HOME_MANIFEST, buddyHomeRefreshing, refreshBuddyHome, stopBuddyHomeRefresh } from './buddyHome.js'
 import { buddyAccountFile, buddyLaunchFile, buddyReadsOf, forgetBuddyReads, grantBuddyWide } from '../lib/buddyGuard.js'
 import { env } from '../config/env.js'
@@ -13,10 +13,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The real lists cleanup, which one test makes throw what it never throws today: an error that is not its own.
 // The real folder code, with the calls the delivery loop makes held open by the tests that need a pass to be running.
-// Whether this process runs as a Harness Team account, which a Buddy is never prepared in (lib/swarmSkills.ts prepareBuddyFolder).
-// The tests set it, so they pass the same in an owner account, a Team account and CI: it reports an owner account unless a test says.
-const team = vi.hoisted(() => ({ value: false }))
-vi.mock('../team/config.js', async original => ({ ...await original<typeof import('../team/config.js')>(), isTeamAccount: () => team.value }))
 vi.mock('./buddyHome.js', async original => {
   const real = await original<typeof import('./buddyHome.js')>()
   return { ...real, refreshBuddyHome: vi.fn(real.refreshBuddyHome), buddyHomeRefreshing: vi.fn(real.buddyHomeRefreshing), stopBuddyHomeRefresh: vi.fn(real.stopBuddyHomeRefresh) }
@@ -49,7 +45,7 @@ const roots: string[] = []
 const hosts: SuperTabHost[] = []
 /** The machine's host form and Swarm reads, as the service hands them to the host and the role lookup. */
 const sourcesOf = (core: CoreApi) => ({ feed: new HostFeed(core, 'machine-1'), reads: new SwarmReads(core) })
-afterEach(() => { team.value = false; for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { for (const host of hosts.splice(0)) host.stop(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'super-tab-host-')); roots.push(dir)
@@ -3331,7 +3327,7 @@ describe('the beat a host keeps', () => {
     const start = vi.fn(() => new Promise(() => {}))
     let clock = 0
     const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never,
-      prepare: async () => null, start: start as never, now: () => clock } })
+      prepare: async () => {}, start: start as never, now: () => clock } })
     const readings = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'POST' && path === '/api/super-tabs/tab/machines/machine-1')
     host.start()
     await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
@@ -3534,41 +3530,6 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     for (const at of [60_000, 30 * 60_000, 24 * 60 * 60_000]) await t.pass(at)
     expect(t.prepare).toHaveBeenCalledTimes(1)
   })
-})
-
-// Swarm v4 (anh Dee 2026-11-08): plain agents are told nothing by the host. Only a Buddy keeps its own skill, whose limits
-// are not in code yet.
-describe('plain agents: the host tells a Swarm agent nothing, and keeps only a Buddy\'s skill', () => {
-  /** A save's time before any launch in these tests: a session launched since has read that revision. */
-  const LONG_AGO = '2026-01-01T00:00:00.000Z'
-  const COMMAND = 'harness super-tab --tab tab instructions'
-  type Name = 'pm' | 'tester' | 'reviewer' | 'buddy'
-  const AGENTS: Record<Name, { role: 'lead' | 'dev' | 'review' | 'buddy'; roleName: string; lead?: true }> = {
-    pm: { role: 'lead', roleName: 'PM', lead: true }, tester: { role: 'dev', roleName: 'Tester' },
-    reviewer: { role: 'review', roleName: 'Reviewer' }, buddy: { role: 'buddy', roleName: 'Buddy' } }
-  const runtime = (cwd: string, name: string) => join(realpathSync(cwd), '.harness', 'runtime', createHash('sha256').update(`key-${name}`).digest('hex'), 'swarm')
-  /** What an older release left in a session's folder: its role file, its tools sheet and its instructions skill; a Buddy's
-   *  instructions skill beside the Buddy skill its launch wrote. */
-  function olderSkills(cwd: string, name: Name): string {
-    const skills = join(runtime(cwd, name), 'skills')
-    for (const skill of name === 'buddy' ? ['swarm-instructions'] : [`swarm-${AGENTS[name].role}`, 'swarm-tools', 'swarm-instructions']) {
-      mkdirSync(join(skills, skill), { recursive: true })
-      writeFileSync(join(skills, skill, 'SKILL.md'), `---\nname: ${skill}\n---\nAn older release of this skill.\n`)
-      writeFileSync(join(skills, skill, 'version.json'), JSON.stringify({ text: 'old', notified: 'old' }))
-    }
-    return skills
-  }
-
-  // The refusal itself (#2832): a Buddy is never prepared in a Harness Team account, and its folder is left as it was.
-  it('still refuses to prepare a Buddy in a Harness Team account', () => {
-    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-    team.value = true
-    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).toThrow(/runs only on its owner's own machine/)
-    expect(readdirSync(folder)).toEqual([])
-    team.value = false
-    expect(() => prepareSwarmSkill(folder, { role: 'buddy', key: 'key-buddy' })).not.toThrow()
-  })
-
 })
 
 // Swarm v4: Desktop's Attach brings a session its person started outside the Swarm into their team. The Swarm starts every
@@ -3875,6 +3836,101 @@ describe('ending a Buddy\'s thread sessions', () => {
       ? { status: 200, body: { data: [{ id: 'waiting', conversationId: chat, status: 'queued' }] } } : backendOf(method, path, body)
     await awake(t, 2 * BUDDY_SESSION_IDLE_MS)
     expect(ends(t)).toEqual([])
+  })
+
+  // A delivery its pane held (a draft, a dialog) was tried again every second, and each try wrote and fsynced the journal twice:
+  // the 'submitting' intent before the core's check of the pane, then 'prepared' again. The pane is asked first now, from the core,
+  // with nothing written, and the intent is written only for a pane that takes it (Q3, 2026-11-10).
+  it('writes nothing while its pane holds a delivery, asking the core about the pane, and writes and types it once it may', async () => {
+    const write = vi.fn(writeJournal)
+    const t = lifeFixture([sessionRow()], { write })
+    t.live(true)
+    const backendOf = t.core.account.backend
+    t.core.account.backend = async (method, path, body) => {
+      if (method === 'GET' && path.endsWith('/agents/agent/deliveries')) return { status: 200, body: { data: [{ id: 'delivery', conversationId: chat, status: 'claimed' }] } }
+      if ((body as Record<string, unknown> | undefined)?.type === 'claim') {
+        return { status: 200, body: { data: { delivery: { id: 'delivery' }, message: { id: 'm', conversationId: chat, text: 'Still there?', author: { name: 'Peer' } } } } }
+      }
+      return backendOf(method, path, body)
+    }
+    vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_draft'))
+    let hold: string | null = 'team_waiting_draft'
+    t.core.turns.holdOf = vi.fn(async () => hold)
+    t.push({ type: 'super_tab_deliveries' })
+    await t.poll()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    const refused = write.mock.calls.length
+    for (let i = 0; i < 10; i++) await t.poll(1_000)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(write.mock.calls.length).toBe(refused)
+    expect(t.core.turns.holdOf).toHaveBeenCalledWith('harness', 'team:service:superTabs:delivery')
+    hold = null
+    await t.poll(1_000)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+  })
+
+  // A delivery its busy agent's pane refused was tried again on every tick (each second) while the agent worked, and each try wrote
+  // and fsynced the journal twice ('submitting', then 'prepared' again): 120 fsyncs a minute for one busy agent, 180 ms each on a
+  // busy Mac (Q3, 2026-11-10). It waits for the agent's turn to end instead, and 30 s at most when no end is heard.
+  describe('a delivery its busy agent refused', () => {
+    const held = (t: ReturnType<typeof lifeFixture>) => {
+      t.live(true)
+      const backendOf = t.core.account.backend
+      t.core.account.backend = async (method, path, body) => {
+        if (method === 'GET' && path.endsWith('/agents/agent/deliveries')) return { status: 200, body: { data: [{ id: 'delivery', conversationId: chat, status: 'claimed' }] } }
+        if ((body as Record<string, unknown> | undefined)?.type === 'claim') {
+          return { status: 200, body: { data: { delivery: { id: 'delivery' }, message: { id: 'm', conversationId: chat, text: 'Still there?', author: { name: 'Peer' } } } } }
+        }
+        return backendOf(method, path, body)
+      }
+      vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_idle'))
+      // It works until a test says otherwise.
+      vi.mocked(t.core.agents.activity).mockImplementation(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'working' as const])))
+      t.push({ type: 'super_tab_deliveries' })
+    }
+
+    it('writes nothing while its agent works, and is typed once as soon as the turn ends', async () => {
+      const write = vi.fn(writeJournal)
+      const t = lifeFixture([sessionRow()], { write })
+      held(t)
+      await t.poll()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      const refused = write.mock.calls.length
+      for (let i = 0; i < 20; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(write.mock.calls.length).toBe(refused)
+      t.end()
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
+    // The end can come before the refusal it answers (the core reads the pane while the turn ends), or the pane can still look
+    // busy a moment after it: the host asks whether the agent works, from memory, and tries it at once when it does not.
+    it('is tried at the next tick when its agent no longer works, however the end and the refusal crossed', async () => {
+      const t = lifeFixture([sessionRow()])
+      held(t)
+      // The turn ends while the core reads the pane: its end is heard first, then the refusal.
+      vi.mocked(t.core.turns.deliver).mockImplementationOnce(() => {
+        vi.mocked(t.core.agents.activity).mockImplementation(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'idle' as const])))
+        t.end()
+        t.event('rejected', 'team_waiting_idle')
+      })
+      await t.poll()
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
+    it('is tried again 30 s on when no end of the turn is heard, once', async () => {
+      const t = lifeFixture([sessionRow()])
+      held(t)
+      await t.poll()
+      for (let i = 0; i < 29; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+      for (let i = 0; i < 29; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
   })
 
   // Spec 2026-11-02-poll-cost Part 3: a delivery its pane holds no longer keeps its list read each second, and still waits.

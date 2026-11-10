@@ -1,5 +1,4 @@
 import type { SwarmProject } from './projects.js'
-import type { Conversation } from './model.js'
 
 export type ProjectProcess = 'simple' | 'full'
 export interface BoardColumn { id: string; title: string }
@@ -17,8 +16,3 @@ const COLUMNS: Record<ProjectProcess, readonly BoardColumn[]> = {
 export const processOf = (project: SwarmProject): ProjectProcess => project.process ?? 'full'
 export const projectColumns = (project: SwarmProject): readonly BoardColumn[] => COLUMNS[processOf(project)]
 
-/** Simple simplifies existing tasks. Returning to Full keeps those tasks Simple, even if they were dormant during the
- *  switch. An unnumbered legacy task predates the switch; new tasks always receive a number from the head counter. */
-export const taskProcess = (project: SwarmProject, task: Pick<Conversation, 'process' | 'number'>): ProjectProcess =>
-  processOf(project) === 'simple' || task.process === 'simple'
-    || (project.simpleThrough !== undefined && (task.number ?? 0) <= project.simpleThrough) ? 'simple' : 'full'

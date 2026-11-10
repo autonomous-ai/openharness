@@ -26,6 +26,7 @@
 #include "ui/ui_screens.h"
 #include "ui/habitat/supertab.h"
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "cable_client";
 
@@ -163,40 +164,7 @@ const char *cable_fw_version(void)
  * arrangement, and an app that knew them would have to be updated in step with a header it cannot see.
  * `round` is the face, not a preference — it tells the app which rows to leave out entirely.
  */
-static cJSON *companion_json(const ui_companion_t *identity)
-{
-    if (!identity->id[0]) return cJSON_CreateNull();
-    cJSON *o=cJSON_CreateObject();
-    if (!o) return NULL;
-    if (!cJSON_AddStringToObject(o,"id",identity->id) || !cJSON_AddStringToObject(o,"uid",identity->uid) ||
-        !cJSON_AddStringToObject(o,"name",identity->name) || !cJSON_AddStringToObject(o,"version",identity->version) ||
-        !cJSON_AddNumberToObject(o,"seed",identity->seed) || !cJSON_AddNumberToObject(o,"colour",identity->colour) ||
-        !cJSON_AddNumberToObject(o,"mark",identity->mark)) { cJSON_Delete(o); return NULL; }
-    return o;
-}
 static const char *str_of(const cJSON *o, const char *key);
-static bool companion_parse(const cJSON *o,ui_companion_t *identity)
-{
-    memset(identity,0,sizeof *identity);
-    const char *keys[]={"id","uid","name","version"};
-    char *values[]={identity->id,identity->uid,identity->name,identity->version};
-    const size_t caps[]={sizeof identity->id,sizeof identity->uid,sizeof identity->name,sizeof identity->version};
-    for (unsigned i=0;i<4;i++) {
-        const cJSON *v=cJSON_GetObjectItemCaseSensitive(o,keys[i]);
-        if (!cJSON_IsString(v) || !v->valuestring || !v->valuestring[0] || strlen(v->valuestring)>=caps[i]) return false;
-        for (const unsigned char *p=(const unsigned char *)v->valuestring;*p;p++) if (*p<32 || *p>126) return false;
-        if (i==1) for (const char *p=v->valuestring;*p;p++)
-            if (!((*p>='A' && *p<='Z') || (*p>='a' && *p<='z') || (*p>='0' && *p<='9') || *p=='_' || *p=='-')) return false;
-        memcpy(values[i],v->valuestring,strlen(v->valuestring)+1);
-    }
-    if (strcmp(identity->version,"0.1") && strcmp(identity->version,"1.0") && strcmp(identity->version,"2.0")) return false;
-    const cJSON *seed=cJSON_GetObjectItemCaseSensitive(o,"seed"),*colour=cJSON_GetObjectItemCaseSensitive(o,"colour"),*mark=cJSON_GetObjectItemCaseSensitive(o,"mark");
-    if (!cJSON_IsNumber(seed) || !isfinite(seed->valuedouble) || seed->valuedouble<0 || seed->valuedouble>4294967295.0 || seed->valuedouble!=(uint32_t)seed->valuedouble ||
-        !cJSON_IsNumber(colour) || colour->valuedouble < -1 || colour->valuedouble>5 || colour->valuedouble!=colour->valueint ||
-        !cJSON_IsNumber(mark) || mark->valuedouble<0 || mark->valuedouble>4 || mark->valuedouble!=mark->valueint) return false;
-    identity->seed=(uint32_t)seed->valuedouble;identity->colour=colour->valueint;identity->mark=mark->valueint;
-    return true;
-}
 static void msg_settings(cJSON **root)
 {
     ui_settings_t now;
@@ -218,13 +186,7 @@ static void msg_settings(cJSON **root)
               cJSON_AddBoolToObject(held, "focusFace", now.focus_face) &&
               cJSON_AddBoolToObject(held, "scrollReversed", now.scroll_reversed) &&
               cJSON_AddBoolToObject(held, "round", now.round) &&
-              cJSON_AddBoolToObject(held, "followCompanion", now.follow_companion) &&
-              (now.companion[0] ? cJSON_AddStringToObject(held, "companion", now.companion)
-                                : cJSON_AddNullToObject(held, "companion")) &&
-              cJSON_AddStringToObject(held, "voiceLang", now.voicelang) &&
-              cJSON_AddNumberToObject(held,"companionProtocol",2);
-    cJSON *identity=companion_json(&now.companion_details);
-    if (!identity || !cJSON_AddItemToObject(held,"companionDetails",identity)) { cJSON_Delete(identity);ok=false; }
+              cJSON_AddStringToObject(held, "voiceLang", now.voicelang);
     msg_check(root, ok);
 }
 void cable_client_report_settings(void)
@@ -251,7 +213,6 @@ static void handle_settings_set(const cJSON *p)
         {"straightTitle", UI_SETTING_STRAIGHT_TITLE, &want.straight_title},
         {"focusFace", UI_SETTING_FOCUS_FACE, &want.focus_face},
         {"scrollReversed", UI_SETTING_SCROLL, &want.scroll_reversed},
-        {"followCompanion", UI_SETTING_FOLLOW_COMPANION, &want.follow_companion},
     };
     for (unsigned i = 0; i < sizeof flags / sizeof flags[0]; i++) {
         item = cJSON_GetObjectItemCaseSensitive(p, flags[i].key);
@@ -283,31 +244,6 @@ static void handle_settings_set(const cJSON *p)
     if (!ok) msg_string(&root, "error", error);
     msg_settings(&root);   // always the values read back, never the ones asked for
     send_json(root);
-}
-static void handle_companion_set(const cJSON *p)
-{
-    const cJSON *id = cJSON_GetObjectItemCaseSensitive(p, "id");
-    bool valid = cJSON_IsNull(id) || (cJSON_IsString(id) && id->valuestring);
-    ui_companion_t identity;
-    const cJSON *details=cJSON_GetObjectItemCaseSensitive(p,"identity");
-    bool ok = details ? valid && !cJSON_IsNull(id) && companion_parse(details,&identity) &&
-        !strcmp(identity.id,id->valuestring) && ui_set_companion_identity(&identity) :
-        valid && ui_set_companion(cJSON_IsNull(id) ? NULL : id->valuestring);
-    cJSON *root = msg("settings.state");
-    if (!root) return;
-    msg_bool(&root, "ok", ok);
-    if (!ok) msg_string(&root, "error", "Unknown companion.");
-    msg_settings(&root);
-    send_json(root);
-}
-static void handle_companion_celebrate(const cJSON *p)
-{
-    ui_companion_t identity;
-    const char *kind=str_of(p,"kind"),*token=str_of(p,"token");
-    bool ok=companion_parse(cJSON_GetObjectItemCaseSensitive(p,"identity"),&identity) &&
-        ui_companion_celebrate(&identity,kind,token);
-    cJSON *root=msg("companion.event");
-    msg_bool(&root,"ok",ok);if (token) msg_string(&root,"token",token);send_json(root);
 }
 static void send_hello(void)
 {
@@ -1415,8 +1351,6 @@ static void handle_message(const cJSON *root)
         ui_machine_select_error(str_of(p, "machineId"), str_of(p, "code"), str_of(p, "message"));
         return;
     }
-    if (strcmp(t, "companion.set") == 0) { handle_companion_set(p); return; }
-    if (strcmp(t, "companion.celebrate") == 0) { handle_companion_celebrate(p); return; }
     if (strcmp(t, "settings.set") == 0) { handle_settings_set(p); return; }
     if (strcmp(t, "models") == 0) { handle_models(p); return; }
     if (strcmp(t, "swarms") == 0) { handle_swarms(p); return; }
@@ -1665,7 +1599,9 @@ bool cable_client_start(void)
     if (s_started) return true;
     TaskHandle_t hello_task = NULL;
     cable_machines_init(&s_machines);
-    s_agents = calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t));
+    // The roster is read a few times per frame at most and never from an ISR: PSRAM, with internal RAM as the fallback.
+    s_agents = heap_caps_calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_agents) s_agents = calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t));
     s_agents_lock = xSemaphoreCreateMutex();
     s_models_sem = xSemaphoreCreateBinary();
     if (!s_agents || !s_agents_lock || !s_models_sem) {

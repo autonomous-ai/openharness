@@ -19,7 +19,7 @@ static int imax(int a, int b) { return a > b ? a : b; }
  * framebuffer in the SoC's own little-endian order, and it swaps nothing.
  *
  * Getting this wrong is not subtle and it is not a crash: #181818 read the other way round is
- * rgb(192,96,192), so the whole face comes up bright purple with a yellow-green octopus on it. That is
+ * rgb(192,96,192), so the whole face comes up bright purple with a yellow-green face on it. That is
  * exactly what the first Pro build did. The function was called panel16() then, which is why this one is
  * not — a name that promises a swap it no longer always performs is worse than no name at all.
  */
@@ -322,7 +322,7 @@ void ht_center(ht_scene_t *s, int y, const ht_font_t *font, uint16_t fg, const c
     ht_text(s, (HT_WIDTH - w) / 2, y, w, font, fg, s->background, visible);
 }
 // ── PROPORTIONAL TEXT ──────────────────────────────────────────────────────────────────────────
-// The Focus skin's faces carry a glyph per codepoint with its own advance. Everything below is the
+// The Focus faces carry a glyph per codepoint with its own advance. Everything below is the
 // fixed-cell code's counterpart measured in pixels; nothing above changes for a mono atlas.
 // One looked-up glyph: which face drew it (the run's, or its fallback) and its index there.
 typedef struct { const ht_pfont_t *face; const ht_glyph_t *g; int index; } pglyph_t;
@@ -343,6 +343,23 @@ static bool plookup(const ht_pfont_t *f, uint32_t cp, pglyph_t *out)
     if (f->fallback && (i = pindex(f->fallback, cp)) >= 0) {
         *out = (pglyph_t){f->fallback, &f->fallback->glyphs[i], i};
         return true;
+    }
+    // A letter the face was cut without (Latin Extended-A outside Vietnamese): its ASCII base letter, when
+    // the display fallback table has exactly one and the face carries it.
+    if (cp >= 0x80) {
+        char base[12];
+        // Strokes the display table (a decomposition) has no entry for: L-stroke, H-stroke, dotless i, T-stroke, n preceded by apostrophe.
+        static const struct { uint16_t cp; char ch; } stroked[] = {
+            {0x126,'H'},{0x127,'h'},{0x131,'i'},{0x141,'L'},{0x142,'l'},{0x149,'n'},{0x166,'T'},{0x167,'t'}};
+        const char *text = NULL;
+        for (unsigned k = 0; k < sizeof stroked / sizeof *stroked && !text; k++)
+            if (stroked[k].cp == cp) { base[0] = stroked[k].ch; base[1] = 0; text = base; }
+        if (!text) text = display_fallback(cp, base);
+        if (text[0] && !text[1] && (unsigned char)text[0] < 0x80) {
+            const ht_pfont_t *face = f;
+            if ((i = pindex(f, (unsigned char)text[0])) < 0 && f->fallback) { face = f->fallback; i = pindex(face, (unsigned char)text[0]); }
+            if (i >= 0) { *out = (pglyph_t){face, &face->glyphs[i], i}; return true; }
+        }
     }
     if (cp != '?' && (i = pindex(f, '?')) >= 0) { *out = (pglyph_t){f, &f->glyphs[i], i}; return true; }
     return false;
@@ -1048,7 +1065,7 @@ static ht_rect_t united(ht_rect_t a, ht_rect_t b)
 // and fits a byte exactly — which is why this was a byte array and why the comment used to say so. At
 // 720 the same values reach 360: the right edge of any damage band past x=510 wrapped to a small
 // number, damage_rows_finish() emitted a band far narrower than the change, and the right of the
-// screen simply never repainted. On the glass that is an octopus drawn on top of the last octopus and
+// screen simply never repainted. On the glass that is one face drawn on top of the last face and
 // a menu with the old screen still behind it — not a crash, and nothing in the logs.
 //
 // The dial keeps its byte array: 360 entries of uint16_t is 1,440 bytes of render-task stack, and the
@@ -1244,12 +1261,12 @@ static uint16_t blend(uint16_t fg, uint16_t bg, unsigned alpha)
 /*
  * THE CACHE HAS TO BE BIG ENOUGH FOR THE BIGGEST CELL IT IS MEANT TO SERVE.
  *
- * 50 pixels is font_10 exactly — 5 x 10 — which was the largest octopus atlas while there was only a
+ * 50 pixels is font_10 exactly — 5 x 10 — which was the largest cell atlas while there was only a
  * round dial. The Pro draws its companion in font_16 (8 x 16 = 128 px) and its carrying state in
  * font_14 (98), so BOTH were rejected by the size guard below and the cache sat idle over the one
  * surface on that board that redraws sixty-three times a loop.
  *
- * The creature's alphabet is ten symbols and there are twenty-four slots, so every cell of it is a
+ * The cell art's alphabet is ten symbols and there are twenty-four slots, so every cell of it is a
  * hit once the size fits. The dial keeps 50: it has no atlas that needs more, and 24 x 128 x 2 is
  * 6 KB of internal RAM against its 2.4.
  */

@@ -11,7 +11,6 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type VoiceTranscription } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { logger } from '../src/utils/logger.js'
-import { FIELDS, preview, row } from '../src/superTabs/read/inbox.js'
 import { readBy } from '../src/superTabs/parts/indexed.js'
 import { VOICE_READ_MS } from '../src/superTabs/voiceMessages.js'
 import { voiceInflightBytes } from '../src/lib/voiceBudget.js'
@@ -225,7 +224,7 @@ describe('sending a voice message', () => {
   })
 })
 
-describe('what agents and previews read of a voice message', () => {
+describe('what agents read of a voice message', () => {
   async function sent(words: string, quota: 'ok' | 'limit' = 'ok') {
     const voice = fakeVoice(words)
     voice.quota = quota
@@ -252,11 +251,4 @@ describe('what agents and previews read of a voice message', () => {
     expect((await claim(f, messageId))!.text).toBe('Voice message (1:21), not transcribed.')
   })
 
-  it('previews it as "Voice message (1:21)", and a plain message as its text', async () => {
-    const { f, messageId } = await sent('hello team')
-    const plain = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Typed words', replyTo: null, recipientIds: [] })).result.messageId)
-    const rows = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: [messageId, plain] }, tabId: f.tab } },
-      { $project: { ...FIELDS, conversationId: 1 } }])).map(row)
-    expect(Object.fromEntries(rows.map(r => [r.id, preview(r).text]))).toEqual({ [messageId]: 'Voice message (1:21)', [plain]: 'Typed words' })
-  })
 })

@@ -14,15 +14,69 @@ import { z } from 'zod'
 export const RETIRED_COMMANDS = [
   'process.confirm', 'project.digest', 'machine.projects', 'machine.ownAccountWork', 'machine.access',
   'member.status', 'member.timeZone', 'member.username', 'member.name',
+  // Decisions (2026-11-10): an agent reaches its person in their 1:1 chat.
+  'decision.ask', 'decision.answer',
+  // Tags (2026-11-10): an older app's Done on a tag.
+  'mention.done',
+  // Review steps, check verdicts and merge records (2026-11-10): a task is the project's GitHub issue, and its pull request is GitHub's.
+  'work.check', 'conversation.merged',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
 const retired: ReadonlySet<unknown> = new Set(RETIRED_COMMANDS)
 export const isRetiredCommand = (type: unknown): type is RetiredCommand => retired.has(type)
 
+/** A step or a linked task an older CLI's agent opens: conversation.create naming `reviewOf` or `step` (2026-11-10). It is answered
+ *  and counted as a retired command, under this type; the fields go from conversation.create's schema with this file. */
+export const RETIRED_STEP = 'conversation.create.step'
+export const opensRetiredStep = (command: { type?: unknown; reviewOf?: unknown; step?: unknown } | undefined): boolean =>
+  command?.type === 'conversation.create' && (command.reviewOf !== undefined || command.step !== undefined)
+
+/** A check verdict a person records in an older Desktop's work details (work.check) is refused in these words, which it shows
+ *  where the verdict was typed, rather than answered as ignored: the app takes an ok answer for a saved verdict and closes the
+ *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
+export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; status: number; message: string }>> = {
+  'work.check': { code: 'CHECKS_RETIRED', status: 410, message: 'Checks can’t be recorded any more.' },
+}
+
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or
  *  logged, and the route's body limit bounds it as it does every command. */
 export const retiredCommandSchemas = RETIRED_COMMANDS.map(type => z.object({ type: z.literal(type) }))
+
+/** Reads of Swarm v1-v3 that an older Desktop, phone or host still makes, each with the empty answer it takes as "nothing here".
+ *  As a retired command's, one constant answer for everyone, whatever Swarm and query it names: nothing is read, so nothing is
+ *  shown that the caller may not see. Each goes with this file's commands, not before 2026-12-09. */
+export const RETIRED_READS: Readonly<Record<string, object>> = {
+  // The daily scorecard (2026-11-09): an older Desktop's Scorecard tab.
+  '/api/super-tabs/:tabId/scorecard': { days: [] },
+  // Decisions (2026-11-10): an older Desktop's and phone's Decisions, and an older host's or Buddy's own asks.
+  '/api/super-tabs/:tabId/decisions': { more: false, decisions: [] },
+  // Tags, Activity, reminders, followed threads, the inbox and catch-up (2026-11-10): an older Desktop's and phone's.
+  '/api/super-tabs/:tabId/mentions': { mentions: [] },
+  '/api/super-tabs/:tabId/activity': { items: [], more: false },
+  '/api/super-tabs/:tabId/reminders': { due: [], next: null },
+  '/api/super-tabs/:tabId/threads': { unread: [], read: [], more: false },
+  '/api/super-tabs/:tabId/inbox': { threads: [], latest: [], more: false },
+}
+
+/** An older Desktop's catch-up of a chat since its mark (GET .../conversations/:conversationId/catch-up?after=N): nothing missed,
+ *  its span ending where it started, so it never reads back past the mark it sent. Goes with the reads above. */
+export const retiredCatchUp = (after: unknown): object => {
+  const at = Number.isSafeInteger(Number(after)) && Number(after) >= 0 ? Number(after) : 0
+  const none = { total: 0, items: [] }
+  return { after: at, through: at, unread: 0, more: false, decisions: 0, landed: none, blocked: none, needsYou: none }
+}
+
+/** Writes of the same reads an older app still sends, each answered as done and changing nothing: Activity read up to a time, and a
+ *  thread followed or unfollowed. As the reads, one constant answer for everyone; they go with them, not before 2026-12-09. */
+export const RETIRED_WRITES: Readonly<Record<string, object>> = {
+  '/api/super-tabs/:tabId/activity/read': { marked: 0 },
+  '/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow': { follow: null },
+}
+
+/** An older Desktop's Remind me sets a reminder (POST .../messages/:messageId/reminder): refused in these words rather than answered
+ *  as kept, since the app would show one that never comes. Clearing one answers that none was cleared. Goes with the reads above. */
+export const REMINDERS_RETIRED = { code: 'REMINDERS_RETIRED', status: 410, message: 'Reminders are gone. Nothing was set.' } as const
 
 /** What a retired command's result says, where an agent or an older app prints a command's answer. */
 export const RETIRED_NOTE = 'Swarm no longer has this. Nothing was done.'

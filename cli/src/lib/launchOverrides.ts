@@ -13,7 +13,7 @@ import type { SwarmSkill } from './savedSkill.js'
  * backend's capabilities and the config directory writer) are exactly the parts worth stubbing in a spec.
  */
 
-import { agentTmpLaunch, buddyTmpEnv } from './agentTmp.js'
+import { agentTmpLaunch } from './agentTmp.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../engines/nativeLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
@@ -303,7 +303,8 @@ export async function prepareLaunchOverrides(
     if (!current()) return changed
     const scmEnv = scmLaunchEnv(source.scmLaunch)
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
-    // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
+    // A session started for another person's project before the App's removal keeps git and gh on it at every relaunch, until
+    // its task token stops (backend #3723, 2026-12-10; lib/swarmGitHub.ts).
     if (source.swarmSkill?.github) {
       let github: ReturnType<NonNullable<LaunchOverridesDeps['swarm']>['github']>
       try { github = swarm!.github(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
@@ -350,8 +351,7 @@ export async function prepareLaunchOverrides(
     if (told.length) overrides = { ...overrides, extraArgs: joinedInstructions(engine, [...overrides.extraArgs, ...told]) }
     // The private temporary folder, as at agent_create: a relaunch rebuilds the engine's arguments, so a Swarm agent's folder is
     // added again (lib/agentTmp.ts, task #4395). The launch's own variables win over it.
-    const tmp = source.swarmSkill?.role === 'buddy' && source.cwd ? { env: buddyTmpEnv(engine, source.cwd), args: [] }
-      : agentTmpLaunch(engine, source.swarmSkill)
+    const tmp = agentTmpLaunch(engine, source.swarmSkill)
     if (tmp.args.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...tmp.args] }
     const launchEnv = { ...tmp.env, ...overrides.env, ...native?.environment }
     return { ok: true, overrides: { ...overrides, ...(native ? { native } : {}), env: launchEnv, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }

@@ -10,9 +10,10 @@ import { PRODUCT_USAGE_ADD_PHONE_METRICS, PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS
  * 5: first-arrival episodes and shared-tab invitation outcomes.
  * 6: returning-account phone offers, offer skip reasons and Add Phone pairing sources.
  * 7: Import an agent running on this Mac (`ui_desktop_agent_import_*`, task #2379).
- * 8: an agent's Browser panel opened (`agent_browser_opened`).
+ * 8: How a Team account's removal from the computer ended (`ui_desktop_team_account_removal_*`, 2026-11-10).
+ * 9: an agent's Browser panel opened (`agent_browser_opened`).
  * Raise it with each name the Desktop gates on it (`ProductHealthMeasure.vocabulary`, `ProductFlow.vocabulary`). */
-export const APP_USAGE_VOCABULARY = 8
+export const APP_USAGE_VOCABULARY = 9
 export const APP_USAGE_VOCABULARY_HEADER = 'x-harness-usage-vocabulary'
 
 // hn's counts reach the daemon's own queue only through hn's `product_observe`; no app can file them.

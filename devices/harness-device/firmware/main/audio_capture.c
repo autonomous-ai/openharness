@@ -121,11 +121,6 @@ static void notify_init_failed(const char *why)
 
 void audio_notify_init(void)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    atomic_store_explicit(&s_muted, true, memory_order_relaxed);
-    ESP_LOGI(TAG, "notifications muted (local ASCII gallery)");
-    return; // No speaker initialization or beep task in the visual-only study.
-#endif
     if (s_beep_task) return;
     atomic_store_explicit(&s_muted, config_load_muted(), memory_order_relaxed);
     if (audio_notify_is_muted()) config_save_muted(true);

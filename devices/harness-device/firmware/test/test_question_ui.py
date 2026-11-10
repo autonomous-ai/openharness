@@ -97,7 +97,7 @@ static bool cable_client_answer_reviewed(const char *id,const char *fetch,const 
     snprintf(sent_draft,sizeof sent_draft,"%s",drafts[0]); memcpy(sent_choices,choices,(size_t)n);sent_answers++;return transport_ok;
 }
 #include "theme.h"
-#define BG ht_rgb(HT_THEME_CANVAS)
+#define BG ht_rgb(HT_THEME_FOCUS_CANVAS)
 #define FG ht_rgb(HT_THEME_TEXT)
 #define DIM ht_rgb(HT_THEME_SECONDARY)
 #define ACCENT ht_rgb(HT_THEME_ACCENT)
@@ -105,16 +105,10 @@ static bool cable_client_answer_reviewed(const char *id,const char *fetch,const 
 #define SEL ht_rgb(HT_THEME_SELECTION)
 #define COPY(dst,src) copy(dst,sizeof(dst),src)
 '''
-# The production helpers are skin-aware; this harness has no Focus skin, so they are the mono calls.
-code += '''
-static bool focus_skin(void){return false;}
-static const ht_font_t *focus_face_for(const ht_font_t *m){return m;}
-static void focus_put(ht_scene_t *f,int x,int y,int w,const ht_font_t *font,uint16_t ink,uint16_t bg,const char *t,bool c){(void)c;ht_text(f,x,y,w,font,ink,bg,t);}
-static void text_in(ht_scene_t *f,int x,int y,int w,const ht_font_t *m,const char *t,uint16_t c,bool centred){(void)centred;ht_text(f,x,y,w,m,c,BG,t);}
-static int ui_rows(const char *t,const ht_font_t *f,int w){return ht_text_rows(t,f,w);}
-static bool ui_can_display(const char *t,const ht_font_t *f,int w,int l){return ht_can_display(t,f,w,l);}
-static int ui_wrap(ht_scene_t *s,int x,int y,int w,int n,int skip,const ht_font_t *f,uint16_t fg,const char *t){return ht_wrap(s,x,y,w,n,skip,f,fg,t);}
-'''
+# The production helpers set every page in Inter (focus_skin is gone: Focus is the only character).
+code += '#include <limits.h>\n#include "focus_faces.h"\n'
+for name in ['focus_face_for','focus_chord','focus_put','focus_span','focus_take','focus_rows','ui_rows','ui_can_display','ui_wrap','text_in']:
+    code += function(name)
 for name in ['notice_sync_view','copy','control','text','center','heading','question_view','question_rows',
              'question_text','render_question','render_choices','render_answer_review',
              'open_question','question_answer','question_move','send_answer',
@@ -279,7 +273,7 @@ with tempfile.TemporaryDirectory(prefix='harness-question-ui-') as tmp:
     out=Path(tmp);(out/'question_ui.c').write_text(code)
     subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g',
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),'-I',str(native),
-        str(out/'question_ui.c'),str(native/'terminal.c'),str(native/'fonts.c'),'-o',str(out/'test')],check=True)
+        str(out/'question_ui.c'),str(native/'terminal.c'),str(native/'fonts.c'),str(native/'focus_faces.c'),str(native/'lvgl_fonts.c'),'-o',str(out/'test')],check=True)
     args=[str(out/'test')]
     if os.environ.get('HABITAT_PREVIEW_DIR'):
         dest=Path(os.environ['HABITAT_PREVIEW_DIR']);dest.mkdir(parents=True,exist_ok=True);args.append(str(dest))

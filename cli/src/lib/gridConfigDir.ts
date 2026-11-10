@@ -14,6 +14,7 @@
 import { lstat, mkdir, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { removeLink } from './removePath.js'
 import type { GridConfigFile, GridConfigLink } from './gridLaunchWire.js'
 
 /** Everything this module owns lives under one root, so pruning can be confident about what it is. */
@@ -66,7 +67,7 @@ async function linkInto(dir: string, name: string, target: string): Promise<void
   const existing = await lstat(path).catch(() => null)
   if (existing?.isSymbolicLink()) {
     if (await readlink(path).catch(() => null) === target) return
-    await rm(path, { force: true }).catch(() => {})
+    try { removeLink(path) } catch { /* never fatal: the symlink below fails too, and the agent still starts */ }
   } else if (existing) {
     return
   }

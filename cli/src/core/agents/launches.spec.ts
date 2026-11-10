@@ -362,6 +362,17 @@ describe('agent_create, refused before any pane exists', () => {
     expect(deps.receipts.has(`${CREATION}-new`, creationFingerprint({ ...before, swarmRole: 'dev' }))).toBe(true)
   })
 
+  // A start asked with the Harness GitHub App before this machine's update still finds the receipt its first ask got.
+  it('finds the receipt a start got with the GitHub App before the update when it is asked again', async () => {
+    const { ask, create, deps, replies } = setup()
+    const before = { engine: 'claude', cwd: '/w', bypassPermission: true, permissionMode: null, grid: null, codexHome: null, dsh: null, prompt: null,
+      swarmRole: 'dev', swarmGitHub: true, name: null, agent: null, resumeSessionId: null, takeOver: null }
+    await deps.receipts.run(CREATION, creationFingerprint(before), async () => ({ state: 'created', agentId: 'new-agent' }))
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
     const { ask, create } = setup()
     for (const swarmSkillMode of ['default', 'orchestration']) {
@@ -378,23 +389,23 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })
 
-  it('passes the GitHub App flag with a Swarm role only, and refuses anything else before dispatch', async () => {
+  // The Harness GitHub App is gone: a start that still sends its flag is not refused, and the flag goes no further.
+  it('takes a start that still sends the GitHub App flag as any other, and passes the flag on to nothing', async () => {
     const { ask, create } = setup()
-    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub: true })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent', swarmGitHub: true })
-    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev' })
-    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
-    const calls = vi.mocked(create!).mock.calls.length
-    for (const payload of [{ swarmRole: 'dev', swarmGitHub: false }, { swarmRole: 'dev', swarmGitHub: 'yes' }, { swarmGitHub: true }]) {
-      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    for (const swarmGitHub of [true, false, 'yes']) {
+      await ask({ engine: 'codex', cwd: '/w', swarmRole: 'dev', swarmGitHub })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'agent' })
+      expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmGitHub')
     }
-    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+    const calls = vi.mocked(create!).mock.calls.length
+    expect(await ask({ engine: 'claude', cwd: '/w', swarmGitHub: true })).not.toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls + 1)
   })
 
   // HARNESS_SWARM=off: nothing of the Swarm's is asked of a launch, and a start that asks for it is refused at the wire.
   it('refuses every Swarm field while the Swarm is off, before dispatch, and starts everything else as before', async () => {
     const { ask, create } = setup({ swarmLaunch: undefined })
-    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmGitHub: true }, { swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true }]) {
+    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmRole: 'lead', swarmSkillMode: 'orchestration' }]) {
       expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toStrictEqual({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     }
     expect(create).not.toHaveBeenCalled()
@@ -715,18 +726,13 @@ describe('agent_create with a receipt', () => {
     expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ cwd: '/projects/prepared', scmLaunchRecord: { kind: 'git' } })
   })
 
-  it('fetches nothing with this machine\'s login for another person\'s Swarm worktree: its host already fetched with the app\'s token', async () => {
+  it('fetches a Swarm worktree as any other, whatever its start says of the GitHub App', async () => {
     const { ask, replies } = setup()
     await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1', branchBase: 'default',
       swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
     expect(prepareProjectFolder).toHaveBeenLastCalledWith({ source: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-1',
-      fromDefaultBranch: true, offline: true }, expect.anything())
-    // A Swarm start that is the machine owner's own fetches as before.
-    await ask({ engine: 'codex', projectSource: 'worktree', gitSource: '/swarm/project', branchName: 'super-tab/start-2', branchBase: 'default',
-      swarmRole: 'dev', creationId: `${CREATION}-own` })
-    await vi.waitFor(() => expect(replies).toHaveLength(2))
-    expect(vi.mocked(prepareProjectFolder).mock.calls.at(-1)![0]).not.toHaveProperty('offline')
+      fromDefaultBranch: true }, expect.anything())
   })
 
   it('records a folder it could not prepare as failed, in the folder\'s own words when it has them', async () => {

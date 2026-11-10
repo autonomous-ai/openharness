@@ -446,7 +446,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       prompt = trimmed || null
     }
     const swarmRole = payload.swarmRole
-    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
+    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
     // Project instructions, phase 4 (decision 1): a coordinator, an agent or a Buddy. An older Harness sends lead, dev or review
@@ -461,15 +461,6 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (swarmSkillMode !== undefined && !swarmLaunch?.mode(swarmSkillMode)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
     }
-    // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
-    // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
-    const swarmGitHub = payload.swarmGitHub
-    if (swarmGitHub !== undefined && (swarmGitHub !== true || !swarm)) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
-    }
-    // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
-    // (superTabs/projectFolder.ts), or, started by a Lead on its own machine, it starts from what the checkout has.
-    if (swarmGitHub === true && projectFolder?.source === 'worktree') projectFolder = { ...projectFolder, offline: true }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -538,8 +529,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}),
-        ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
+      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}) } : {}),
       name,
       agent,
       resumeSessionId,
@@ -554,7 +544,10 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
     // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.
     const { swarmFallback: _fallback, ...stable } = input
-    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm) } : input
+    // A start asked with the Harness GitHub App before this machine's update named it, and its worktree offline, in its receipt:
+    // asked again, it finds that receipt (and launches on this machine's own login). Delete on or after 2026-12-10.
+    const app = swarm && payload.swarmGitHub === true
+    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm), ...(app ? { swarmGitHub: true } : {}) } : input
     const fingerprintInput = model.state === 'ok' ? { ...recorded, modelSelection: model.selection } : recorded
     if (creationId !== undefined) {
       // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
@@ -562,7 +555,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // on this connection, just as engines_probe is detached above.
       const create = onCreateAgent
       try {
-        const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
+        const fingerprint = creationFingerprint(projectFolder
+          ? { ...fingerprintInput, projectFolder: app && projectFolder.source === 'worktree' ? { ...projectFolder, offline: true } : projectFolder } : fingerprintInput)
         // A new project too, which waits for its engine as any other create does (above).
         const durableNative = !!prepareCreate && !resumeSessionId
         // A new project is refused at once for a harness or named agent it cannot have, as it always was, rather than

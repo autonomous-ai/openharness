@@ -1,7 +1,6 @@
 // A Swarm tab whose first read fails, and one with no projects, behind the
 // web's WorkspaceChrome.superTabRecovers. Audit findings S12 and P5. Desktop
 // passes no chrome and keeps both as they were.
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,9 +38,7 @@ void main() {
           chrome: chrome,
           child: Scaffold(
             body: SuperTabView(
-              board: false,
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewProject: onNewProject,
@@ -74,61 +71,6 @@ void main() {
       expect(composer(tester).enabled, isFalse);
       expect(tester.getSize(retry).height, greaterThanOrEqualTo(44));
     });
-
-    testWidgets('Retry shows loading, then the conversation', (tester) async {
-      final server = await show(
-        tester,
-        chrome: _recovers,
-        server: ConversationServer()..failReads = true,
-      );
-      server
-        ..failReads = false
-        ..holdReads = Completer<void>();
-      await tester.tap(retry);
-      await tester.pump();
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      expect(find.text(error), findsNothing);
-      server.holdReads!.complete();
-      server.holdReads = null;
-      await tester.pumpAndSettle();
-      expect(find.byType(CircularProgressIndicator), findsNothing);
-      expect(find.text(error), findsNothing);
-      expect(retry, findsNothing);
-      expect(composer(tester).enabled, isTrue);
-    });
-
-    testWidgets('no projects: New project under the sentence', (tester) async {
-      final server = ConversationServer();
-      server.state['projects'] = <dynamic>[];
-      var made = 0;
-      await show(
-        tester,
-        chrome: _recovers,
-        server: server,
-        onNewProject: () => made++,
-      );
-      final sentence = find.text('Create a project to get started.');
-      final button = find.widgetWithText(TextButton, 'New project');
-      expect(sentence, findsOneWidget);
-      expect(button, findsOneWidget);
-      expect(
-        tester.getTopLeft(button).dy,
-        greaterThan(tester.getBottomLeft(sentence).dy),
-      );
-      expect(tester.getSize(button).height, greaterThanOrEqualTo(44));
-      await tester.tap(button);
-      expect(made, 1);
-    });
-
-    testWidgets('no projects and no way to make one: no button', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['projects'] = <dynamic>[];
-      await show(tester, chrome: _recovers, server: server);
-      expect(find.text('Create a project to get started.'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'New project'), findsNothing);
-    });
   });
 
   test(
@@ -157,14 +99,6 @@ void main() {
       expect(find.text(error), findsOneWidget);
       expect(retry, findsOneWidget);
       expect(loading, findsWidgets);
-    });
-
-    testWidgets('no projects: the sentence alone', (tester) async {
-      final server = ConversationServer();
-      server.state['projects'] = <dynamic>[];
-      await show(tester, chrome: null, server: server, onNewProject: () {});
-      expect(find.text('Create a project to get started.'), findsOneWidget);
-      expect(find.widgetWithText(TextButton, 'New project'), findsNothing);
     });
   });
 }

@@ -69,7 +69,6 @@ class _ReviewState extends State<_Review> {
   Widget build(BuildContext context) => Scaffold(
     body: SuperTabView(
       controller: widget.controller,
-      onInvite: () {},
       onAddAgent: (_) {},
       onOpenTerminal: (_) {},
       onNewProject: () {},

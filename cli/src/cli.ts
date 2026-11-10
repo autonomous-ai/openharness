@@ -2882,7 +2882,8 @@ switch (cmd) {
     import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
-    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
+    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
+    // started with the App before its removal name it; delete on or after 2026-12-10 (lib/swarmGitHub.ts).
     import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
@@ -3118,14 +3119,13 @@ switch (cmd) {
       }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
-  case 'team':
-    // An old Team account's boot job (set up before 2026-11-07, on macOS, Linux and Windows) still runs `team __start <file>`
-    // before its daemon, which then stops itself once no agent runs (superTabs/inCore/teamRetire.ts). It does nothing and
-    // exits 0, quietly: the job's next step, the daemon, starts as before, and its log gets no usage text. Any other `team`
-    // is an unknown command (the command was removed, anh Dee, 2026-11-10).
-    if (rest[0] === '__start') break
-    console.error(`Unknown command: ${cmd}`)
-    usage(1)
+  case '__remove-team-account': // internal: Desktop asks the person, then runs this hidden (team/remove.ts)
+    import('./team/remove.js')
+      .then(async ({ removeTeamAccount, teamRemovalDeps }) => {
+        const result = await removeTeamAccount(teamRemovalDeps())
+        console.log(JSON.stringify(result))
+        process.exitCode = result.ok ? 0 : 1
+      }).catch(onError)
     break
   case 'reset':
     resetCommand().catch(onError)

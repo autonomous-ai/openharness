@@ -1,10 +1,9 @@
-import { projectPm } from './crewNeeds.js'
+import { crewNeedOf, projectPm } from './crewNeeds.js'
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { activeWork, isLeads, stableId, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
 import { isStep } from './steps.js'
-import { WINDOWS_OWED } from './osSteps.js'
 import { usernameOf } from './usernames.js'
 
 /** A task's ordinary opening message in the project chat. Its details and progress are replies; the root is never edited. */
@@ -64,14 +63,6 @@ const notBuilding = (assignment: Assignment) => `Not building this: ${sentence(a
 
 /** The thread's reply for what changed in [group] in this command, in the words Dee approved (2026-11-03), or none. */
 function progress(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, pm: string): string | null {
-  const cards = group.cards?.pullRequests
-  const merged = cards?.length ? cards.filter(card => card.mergedAt !== undefined
-    && previous?.cards?.pullRequests?.find(was => was.url === card.url)?.mergedAt === undefined).map(card => card.url) : []
-  // A merge while its Windows test step waits for a Windows machine says the check is owed (osSteps.ts, task #4410).
-  const owed = group.waitingWindowsStep ? ` ${WINDOWS_OWED}` : ''
-  if (merged.length) return `Merged: ${pullRequests(merged)}. Ships in the next release.${owed}`
-  // A merge with no card to mark is still the merge: its row has no other way to say it shipped.
-  if (group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) return `Merged: ${pullRequests(group.pullRequestUrls ?? [])}. Ships in the next release.${owed}`
   const assignment = group.assignment
   const was = previous?.assignment
   // Most tasks did not move in this command: they say nothing, and nothing more is read for them.
@@ -81,14 +72,13 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
   if (was?.id !== assignment.id) return null
   switch (assignment.status) {
     case 'needs_human': {
-      const decision = effects.decisions?.find(d => d.conversationId === group.id && d.assignmentId === assignment.id)
-      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): with a PM, a question that opened no decision for a person is
-      // the PM's crew need, so its line tells nobody it is their call. The line follows the decision, as commands.ts routes by
-      // who asked (review of #3223).
-      if (projectPm(state, group) && !decision) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): a question routed to the PM is its crew need, so its line tells
+      // nobody it is their call; the PM's own question still tags the person (review of #3223). No decision opens (2026-11-10).
+      // Its needs_human's crew need is the one about this task that carries a question (work.status); a tag's or a line's has none.
+      const routed = effects.messages.some(m => { const need = crewNeedOf(m.source); return need?.conversationId === group.id && need.question !== undefined })
+      if (projectPm(state, group) && (routed || !assignment.askedOf)) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
       const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
-      const fallback = decision && decision.options[decision.recommended]
-      return `${asked ? `@${asked} ` : ''}Your call: ${sentence(assignment.result) || 'a decision is needed.'}${fallback ? ` Default: ${sentence(fallback)}` : ''}`
+      return `${asked ? `@${asked} ` : ''}Your call: ${sentence(assignment.result) || 'a decision is needed.'}`
     }
     case 'review': {
       const linked = [...new Set([...assignment.result?.match(PULL_REQUEST) ?? [], ...group.pullRequestUrls ?? []])]

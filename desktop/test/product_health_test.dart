@@ -620,13 +620,13 @@ void main() {
   );
 
   test('an opened agent Browser counts its name alone, once a CLI forwards '
-      'it, at 8', () async {
+      'it, at 9', () async {
     await usage.flush();
     usage.agentBrowserOpened();
-    usage.proxyVocabulary = 7;
+    usage.proxyVocabulary = 8;
     await usage.flush();
     expect(totals()['agent_browser_opened'], isNull);
-    usage.proxyVocabulary = 8;
+    usage.proxyVocabulary = 9;
     usage.agentBrowserOpened();
     await usage.flush();
     expect(totals()['agent_browser_opened'], 2);

@@ -25,10 +25,10 @@ import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/channel_feed.dart';
 import 'package:harness/super_tabs/channel_feed_widgets.dart';
 import 'package:harness/super_tabs/channel_talk.dart';
+import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/github_row.dart';
@@ -194,7 +194,7 @@ Future<List<SuperTabController>> _show(
         child: _Gallery(
           brightness,
           faces: faces,
-          // The decision cards read their answers' state from a reader's Decisions.
+          // The task board reads its project from a Swarm.
           swarm: c,
           instructions: computer.link,
           browserApp: browserApp,

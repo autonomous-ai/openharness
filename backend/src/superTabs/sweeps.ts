@@ -1,6 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AgentStart, Conversation } from './model.js'
-import { stepSleeps } from './steps.js'
 import { clock, guardedWrite, PartConflict, type HeadData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { deletedSwarms } from './deletion.js'
@@ -11,9 +10,8 @@ import { listNamedIndexes, readBy } from './parts/indexed.js'
 import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
 import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
-import { sweepActivity } from './activity.js'
 import { sweepChatSettings } from './chatSettings.js'
-import { sweepReminders } from './reminders.js'
+import { sweepActivity, sweepReminders } from './retiredRows.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
@@ -79,12 +77,6 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
     }
     return leads.get(tabId)!
   }
-  const tasks = new Map<string, { archived: boolean; dormant: boolean } | null>()
-  const taskOf = async (tabId: string, key: string) => {
-    const id = `${tabId}:${key}`
-    if (!tasks.has(id)) tasks.set(id, await db.swarmGroup.findUnique({ where: { tabId_key: { tabId, key } }, select: { archived: true, dormant: true } }))
-    return tasks.get(id)!
-  }
   // A deleted Swarm's groups stay as they are for its restore (deletion.ts).
   const isDeleted = deletedSwarms(db)
   let slept = 0, after: { at: Date; id: string } | null = null
@@ -97,8 +89,6 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
       const quiet = row.lastActivityAt.getTime() < now - DORMANT_AFTER_MS && ['done', 'cancelled'].includes(group.assignment?.status ?? '')
       if (!group.archived && !quiet) continue
       if ((await leadsOf(row.tabId)).has(group.id)) continue
-      // A step sleeps with its task (task steps design): read once per task in this pass.
-      if (group.reviewOf && !stepSleeps(await taskOf(row.tabId, group.reviewOf))) continue
       if (await guarded(db, { tabId: row.tabId, op: 'update', kind: 'group', key: row.key, seen: row.version, data: { ...group, dormant: true } })) slept++
     }
     if (rows.length < BATCH) return slept
@@ -164,7 +154,8 @@ export async function threadMarks(db: PrismaClient, now: number) {
   }
 }
 
-/** The Activity and chat setting sweeps (activity.ts, chatSettings.ts), each failure said and kept to itself, as thread marks. */
+/** The sweep of Activity Swarm v4 no longer writes (retiredRows.ts), and the chat settings' (chatSettings.ts), each failure said
+ *  and kept to itself, as thread marks. */
 export async function activityRows(db: PrismaClient, now: number) {
   try {
     return { expired: await sweepActivity(db, now) }
@@ -182,7 +173,7 @@ export async function chatSettings(db: PrismaClient, now: number) {
   }
 }
 
-/** The reminder sweep (reminders.ts), its failure said and kept to itself, as Activity's. */
+/** The sweep of reminders Swarm v4 no longer writes (retiredRows.ts), its failure said and kept to itself, as Activity's. */
 export async function reminderRows(db: PrismaClient, now: number) {
   try {
     return { expired: await sweepReminders(db, now) }

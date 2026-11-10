@@ -5,7 +5,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type SuperTabState } from './model.js'
-import { STUCK_DOWN_MS } from './stuck.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
 const HEAD = 'abc1234def5678abc1234def5678abc1234def56'
