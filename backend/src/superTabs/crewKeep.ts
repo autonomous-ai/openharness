@@ -8,7 +8,6 @@
 import { machineRuleRefusal } from './machineRules.js'
 import type { MachineRule } from './policy.js'
 import { activeWork, actorKey, stableId, type Agent, type AgentStart, type AgentStartRequest, type CrewTrouble, type MessageDraft, type SuperTabState } from './model.js'
-import { isBuddy } from './buddies.js'
 import { isCrew } from './crew.js'
 import { roleNameOf } from './instructions.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
@@ -135,7 +134,7 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
   }
   return (state.machines ?? [])
     // Team-written work stays where it is (security review 2 of #3229). A machine that just refused its start waits.
-    .filter(pool => !team && pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId)
+    .filter(pool => !team && pool.machineId !== agent.machineId && standingPool(state, pool.machineId)
       && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS)
       && !machineRuleRefusal(rules, { machineId: pool.machineId, engine, review: reviews }, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
@@ -151,7 +150,7 @@ export function crewNeedsMachine(state: SuperTabState, now: number): boolean {
 /** What the keeper does now for the Swarm's crew: one action per member at most, and one low-disk drop per machine. */
 export function crewKeep(state: SuperTabState, now: number, deps: CrewDeps): CrewAction[] {
   const actions: CrewAction[] = []
-  const members = state.agents.filter(a => isCrew(a) && !isBuddy(a) && !isLead(state, a) && !a.movedTo)
+  const members = state.agents.filter(a => isCrew(a) && !isLead(state, a) && !a.movedTo)
   for (const agent of members) {
     const trouble = crewTrouble(state, standingPool(state, agent.machineId), agent.configuration.engine, now) ?? (unstable(agent, now) ? 'unstable' : null)
     // An asleep member, or an awake one with no work on a machine gone offline (a laptop closed for the night), stays where it

@@ -42,19 +42,6 @@ export const OLD_PAYLOADS = {
   'proposal.answer': { conversationId: 'card-1', questionId: 'q-1', text: 'Phones too' },
   'proposal.merge': { conversationId: 'card-1', intoConversationId: 'card-2', reason: 'Same ask' },
   'proposal.close': { projectId: 'lead', messageId: 'm-3', reason: 'Built already' },
-  'buddy.propose': { conversationId: 'buddy-chat', ownerMessageId: 'm-4', projectId: 'lead', text: 'Sync my edits', title: 'Sync edits',
-    goal: 'Edits sync', scope: 'Desktop and phone', priority: 'normal', attachmentIds: ['file-1'] },
-  'buddy.create': { machineId: 'mac-1', engine: 'claude', model: 'opus', name: 'Theo', mainProjectId: 'lead',
-    setup: { name: 'MacBook', cwd: '/Users/minh/Harness', engines: ['claude'] } },
-  'buddy.remove': { conversationId: 'buddy-chat' },
-  'buddy.default': { conversationId: 'buddy-chat' },
-  'buddy.chat': { projectId: 'lead' },
-  'buddy.rename': { conversationId: 'buddy-chat', name: 'Theo' },
-  'buddy.engine': { engine: 'codex', conversationId: 'buddy-chat' },
-  'buddy.model': { gridModel: 'qwen3-coder', conversationId: 'buddy-chat' },
-  'buddy.modelResult': { agentId: 'agent-1', requestId: 'm-5', ok: false, fresh: true, error: 'Context too long', stayed: ['harness-2'] },
-  'buddy.sessionEnd': { conversationId: 'buddy-chat', thread: 'm-6', reason: 'idle' },
-  'tab.buddyCap': { cap: 8 },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

@@ -23,7 +23,7 @@ export interface PersonalTask {
   /** Its newest linked pull request. */
   pullRequestUrl?: string
   status: import('../model.js').WorkStatus | 'proposal' | 'rejected'
-  /** A verified release holds it (task #4547): its card says shipped, where its person once got a line in their Buddy chat. */
+  /** A verified release holds it (task #4547): its card says shipped. */
   shipped?: true
   suggested: boolean
   canApprove: boolean
@@ -40,14 +40,14 @@ export interface PersonalTasks {
 }
 
 /** Who reads a feed: the person and their own agents, those running under their login (Desktop's My agents), never by
- *  machine owner and never another person's Buddy; the newest FEED_IDS − 2 of them, after the person's own two keys. */
+ *  machine owner; the newest FEED_IDS − 2 of them, after the person's own two keys. */
 interface Reader { actor: Actor; member: Person; agents: Set<string>; view: ReaderView }
 
 function readerOf(view: ReaderView, actor: Actor): Reader | undefined {
   if (actor.kind !== 'person') return undefined
   const member = view.state.people.find(p => p.id === actor.userId)
   if (!member) return undefined
-  const own = view.state.agents.filter(a => a.contributorId === member.id && (!a.buddyOf || a.buddyOf.personId === member.id))
+  const own = view.state.agents.filter(a => a.contributorId === member.id)
   return { actor, member, view, agents: new Set(own.slice(-(FEED_IDS - 2)).map(a => a.id)) }
 }
 

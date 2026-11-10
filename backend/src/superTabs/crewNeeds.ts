@@ -7,7 +7,6 @@
  *  A crew need is either its own row (source kind `crew-need`: a tag or a line to a person) or the needs_human
  *  status row the agent already writes to the PM (`source.crewNeed`). `crewNeedOf` reads both; the PM's inbox (#3403) lists
  *  them. Neither is gathered into the notice digest (noticeDigest.ts DIGEST_KINDS). */
-import { isBuddyChat } from './buddies.js'
 import type { Actor, Conversation, SuperTabState } from './model.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { groupProject, isAgentChat } from './projects.js'
@@ -44,10 +43,10 @@ export function projectPm(state: SuperTabState, group: Conversation): string | n
 }
 
 /** The PM [actor]'s words to people in [group] go to instead, or null when they reach people as before: a person, the PM
- *  itself, a Buddy chat, a project with no PM. */
+ *  itself, a 1:1 chat, a project with no PM. */
 export function routesToPm(state: SuperTabState, actor: Actor, group: Conversation): string | null {
   // An agent talks to its person straight in their 1:1 chat (Swarm v4), which is in no project and so has no PM.
-  if (actor.kind !== 'agent' || isBuddyChat(group) || isAgentChat(group)) return null
+  if (actor.kind !== 'agent' || isAgentChat(group)) return null
   const pm = projectPm(state, group)
   return pm && pm !== actor.agentId ? pm : null
 }

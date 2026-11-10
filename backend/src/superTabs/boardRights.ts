@@ -39,7 +39,7 @@ export function canChat(state: SuperTabState, project: SwarmProject, userId: str
  *  and a delivery's resend. Agents and task chats are unchanged. */
 export function requireCanChat(state: SuperTabState, actor: Actor, group: Conversation): void {
   if (actor.kind !== 'person') return
-  // Only a project's own chat: never groupProject, which refuses a person's Buddy chat (it belongs to no project).
+  // Only a project's own chat.
   const project = projectsOf(state).find(p => p.leadConversationId === group.id)
   if (!project || !switched(project) || canChat(state, project, actor.userId)) return
   fail('CHAT_NOT_ALLOWED', 'Only the project owner and the people they allow write in this project\'s chat. Ask the owner for Can chat.', 403)

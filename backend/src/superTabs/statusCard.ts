@@ -12,7 +12,6 @@ import { agentDisplayName } from './agentNames.js'
 import { holdOf, pulseIndex, type PulseIndex } from './pulse.js'
 import { pullRequestLinks, type Conversation, type SuperTabState } from './model.js'
 import { groupRepositoryUrl, type SwarmProject } from './projects.js'
-import { isBuddyChat } from './buddies.js'
 import { usernameOf } from './usernames.js'
 
 /** A task's own line as it keeps it (Conversation.statusLine): its text without its time, and when it last changed. An empty text
@@ -116,7 +115,7 @@ export function projectCard(state: SuperTabState, project: SwarmProject, now: nu
   const today = new Date(now).toISOString().slice(0, 10)
   const lines: CardLine[] = state.conversations
     .filter(task => (task.projectId ?? 'lead') === project.id && task.id !== project.leadConversationId
-      && !task.reviewOf && !task.kind && !task.audience && !isBuddyChat(task) && !task.archived && !task.dormant)
+      && !task.reviewOf && !task.kind && !task.audience && !task.archived && !task.dormant)
     .sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity))
     .flatMap(task => {
       const text = lineOf(state, task, today)

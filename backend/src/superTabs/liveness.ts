@@ -6,7 +6,7 @@ import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPickupSuffix, REFUSED_INFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
-import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
+import { MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
 import { staleSwitches } from './tidy.js'
 import { pmsToDefaultAccount } from './pmAccount.js'
@@ -273,16 +273,9 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
  *  removed confidential session whose data is not deleted say so once; a PM on another account of its machine is moved back to
  *  the default one (pmAccount.ts). Swarm v4 loses no task and nudges no worker. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...failStalledStarts(state, now), ...staleSwitches(state, now), ...pmsToDefaultAccount(state, now)]
-  // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
-  dropIdleBuddyMachines(state, now)
-  return drafts
+  return [...failStalledStarts(state, now), ...staleSwitches(state, now), ...pmsToDefaultAccount(state, now)]
 }
 
-/** What a project's conversation heard, before Harness Team accounts went, of a removed confidential session still held on
- *  [machine]: written by nothing now; store.ts still hides the machine of the stored ones from a Buddy. */
-export const unpurgedNotice = (machine: string) =>
-  `The saved session of a removed agent that held people's private chats, on ${machine}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`
 
 
 
@@ -319,7 +312,7 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
     return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : null
   }
   // Only unfinished starts are loaded, with those that ended in this same write.
-  const start = state.starts?.findLast(s => s.request.conversationId === group.id && !s.request.buddyOf)
+  const start = state.starts?.findLast(s => s.request.conversationId === group.id)
   if (start && !start.harnessId && !start.error) {
     if (start.dispatched) return { state: 'waiting', why: 'starting', since: start.dispatchedAt ?? now }
     // A start from before requestedAt runs from when it was first recorded queued.
@@ -400,13 +393,11 @@ export function failRefusedStarts(state: SuperTabState, machineId: string, now: 
   })
 }
 
-/** Who hears that [start] failed, and what they read: its Lead, its Buddy's person, or its task's coordinator and the agent
+/** Who hears that [start] failed, and what they read: its Lead, or its task's coordinator and the agent
  *  that made it. [suspended]: the line saying its engine is now suspended there, if this failure suspended it. */
 function failedStartNotices(state: SuperTabState, start: AgentStart, now: number, suspended: string | null): MessageDraft[] {
   if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error!))
   // Never a lookup that throws: these checks run inside every machine's report.
-  // A Buddy's start fails with the Buddy conversion (buddyConversion.ts), which tells nobody: its person's chat becomes their agent's.
-  if (start.request.buddyOf) return []
   const group = state.conversations.find(c => c.id === start.request.conversationId)
   // Recorded in this write: once the start has ended, no later poll loads it.
   if (group) recordTaskState(state, group, now)

@@ -9,7 +9,6 @@ import { attributedRules, budgetParts, droppedRules, INSTRUCTIONS_BUDGET, ITEM_C
   type DroppedRule, type InstructionsBudget, type RulePlace } from './instructionsDiff.js'
 import { fail, type Author, type Conversation, type SuperTabState } from './model.js'
 import { canReadProject, projectRules, type SwarmProject } from './projects.js'
-import { isSwarmBuddyChat } from './buddies.js'
 import type { ProjectRules } from './policy.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { swarmUsernames } from './usernames.js'
@@ -97,7 +96,7 @@ export function tasksHoldingMoves(state: SuperTabState, project: SwarmProject, b
 /**
  * The rules [after] drops from [before] that their people allowed, by the person to tell, and those rules: refused with the
  * list when any is not allowed. A person allows their rule by making the save themselves (no notice: they know) or by a
- * message of their own among [approvals] (the store's rows) that [named] lists: a person's, not relayed by a Buddy or the Swarm
+ * message of their own among [approvals] (the store's rows) that [named] lists: a person's, not relayed by the Swarm
  * (source), written after [since] (when the revision being replaced was saved) in a conversation of this project. A rule of
  * several people needs each of them. A name that is no member is the project owner's to allow.
  */
@@ -110,9 +109,9 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
   if (!dropped.length) return { told, rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review
-  // of #3112). A person's one Buddy chat belongs to no project.
+  // of #3112).
   const here = (conversationId: string) => conversationId === project.leadConversationId || state.conversations.some(c => c.id === conversationId
-    && !isSwarmBuddyChat(c) && (c.projectId ?? 'lead') === project.id)
+    && (c.projectId ?? 'lead') === project.id)
   const eligible = (id: string) => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const approvers = new Set(approvals.filter(a => named.includes(a.id) && a.author.kind === 'person' && !a.source && a.createdAt >= since
     && here(a.conversationId)).map(a => a.author.id)

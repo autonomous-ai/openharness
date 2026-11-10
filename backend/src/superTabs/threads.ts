@@ -12,16 +12,6 @@ export interface ThreadSummary {
   authors: Author[]
   /** People who wrote in the thread or were tagged in it, in order of first appearance. */
   people: string[]
-  /** A Buddy's proposal nobody has answered yet: the row's tag in the chat (Dee, 2026-11-04). A task's state is no tag: its
-   *  agent reacts 👀 and ✅ on the row instead (taskLine.ts; Dee, 11-04, 'bot messages'). */
-  ask?: 'proposal'
-}
-
-/** A Buddy's proposal is an ask until the PM has answered it, or a task took it (any task mark, taskLine.ts). */
-function askOf(group: Conversation, root: string, thread: ThreadReply[]): ThreadSummary['ask'] {
-  if (thread.some(row => row.ask)) return undefined
-  const asked = thread.some(row => row.id === root && row.kind === 'buddy-proposal')
-  return asked && !thread.some(row => row.id !== root && row.author.kind === 'agent' && row.author.id === group.leadId) ? 'proposal' : undefined
 }
 
 /** Summaries of the threads in `rows` (pageThreads, oldest first), roots with no reply left out; a row counts as `count`
@@ -46,8 +36,6 @@ export function threadSummaries(state: SuperTabState, group: Conversation, rows:
       .filter(person => readable({ kind: 'person', id: person }))
     const authors = [...new Map(replies.toReversed().map(row => [`${row.author.kind}:${row.author.id}`, row.author])).values()]
       .filter(readable).slice(0, 3)
-    const ask = askOf(group, id, thread)
-    return [{ id, replies: replies.reduce((sum, row) => sum + (row.count ?? 1), 0), lastSequence: last.sequence, lastAt: last.createdAt, authors, people,
-      ...(ask ? { ask } : {}) }]
+    return [{ id, replies: replies.reduce((sum, row) => sum + (row.count ?? 1), 0), lastSequence: last.sequence, lastAt: last.createdAt, authors, people }]
   })
 }

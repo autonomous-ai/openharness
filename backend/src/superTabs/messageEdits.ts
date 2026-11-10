@@ -11,8 +11,6 @@ export interface MessageChangeTarget {
   author: { kind: string; id: string }
   /** A person's own post: no system source (parts/commit.ts counts the same rows as a person's). */
   plain: boolean
-  /** Only a stored Buddy proposal supplies this: the person it was posted for. Delete only, never edit. */
-  proposalOwnerId?: string
   deleted: boolean
   hasFiles: boolean
   /** For a delete: some other row replies in its thread, so it stays as DELETED_TEXT. */
@@ -26,13 +24,11 @@ export interface MessageChangeTarget {
 
 type Counters = { reactionSeq?: number; lastMessageSequence: number; lastMainSequence?: number; lastPersonSequence?: number }
 
-/** Only the author changes a message: a person, on their own plain post, or deleting their own Buddy proposal (#3322).
- *  Its source owner must agree with its attribution. An agent (a Buddy too) never does, for anyone.
+/** Only the author changes a message: a person, on their own plain post. An agent never does, for anyone.
  *  A message the actor cannot see reads as unavailable, so a refusal tells nothing about it. */
 function changeable(actor: Actor, messageId: string, target: MessageChangeTarget | undefined, operation: 'edit' | 'delete'): MessageChangeTarget {
   if (target?.messageId !== messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
-  if (actor.kind !== 'person' || target.author.kind !== 'person' || target.author.id !== actor.userId
-    || (!target.plain && !(operation === 'delete' && target.proposalOwnerId === actor.userId))) {
+  if (actor.kind !== 'person' || target.author.kind !== 'person' || target.author.id !== actor.userId || !target.plain) {
     fail('FORBIDDEN', 'Only its author can change this message.', 403)
   }
   if (target.deleted) fail('MESSAGE_DELETED', 'This message was deleted.', 409)

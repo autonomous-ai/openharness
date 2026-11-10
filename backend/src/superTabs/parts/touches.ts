@@ -69,10 +69,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
-    // A Buddy's name is claimed against every other name in the Swarm, some of them in chats a command does not load: the
-    // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
-    // (review of #2094).
-    case 'buddy.rename':
     // A new agent's free name is picked against every name in the Swarm (agentRename.ts newAgentName, review of #3560).
     case 'agent.new':
       head()
@@ -123,15 +119,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'message.send': {
       if (command.handoff) leadCheck(projectOfGroup(command.conversationId)?.id)
-      // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
-      // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it
-      // runs beside: a Remove racing it can never leave it running (security review 2 of #2435).
+      // Every start a post makes counts its machine's slots.
       const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
       if (start) {
         slots(start.request.machineId)
         head()
-        const person = start.request.buddyOf?.personId
-        for (const main of before.agents.filter(a => person && a.buddyOf?.personId === person && !a.buddySession)) agent(main.id)
       }
       // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
       // that is meets the answer here.

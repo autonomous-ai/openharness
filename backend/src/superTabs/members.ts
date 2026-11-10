@@ -41,9 +41,9 @@ export function memberOf(state: SuperTabState, personId: string, projectId: stri
 }
 
 /** The computer [personId]'s Member runs on: their own, listed, reporting and running Regular agents, never
- *  a Buddy-only record or one shared with them (v3: an agent starts only on its own person's computer). */
+ *  one shared with them (v3: an agent starts only on its own person's computer). */
 export function memberMachine(state: SuperTabState, personId: string, capability: string): ContributedMachine | undefined {
-  return (state.machines ?? []).find(m => m.contributorId === personId && !m.buddyOnly && !m.removal && !m.paused
+  return (state.machines ?? []).find(m => m.contributorId === personId && !m.removal && !m.paused
     && !!m.observation && !!m.observation.capabilities?.includes(capability))
 }
 

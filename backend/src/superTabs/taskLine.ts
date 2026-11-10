@@ -1,6 +1,5 @@
 import { crewNeedOf, projectPm } from './crewNeeds.js'
 import { agentDisplayName } from './agentNames.js'
-import { isBuddyChat } from './buddies.js'
 import { activeWork, isLeads, stableId, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
 import { isStep } from './steps.js'
@@ -13,10 +12,10 @@ export const TASK_LINE_KIND = 'task-line'
  *  this note can go once no open task predates 2026-11-03. */
 export interface TaskLine { messageId: string; conversationId: string }
 
-/** A task of a project with work of its own: never a step, the project chat, a Buddy chat, the Leads chat, or a private
+/** A task of a project with work of its own: never a step, the project chat, the Leads chat, or a private
  *  conversation (chat only: it holds no work, and its words are its own). */
 function lined(chats: ReadonlySet<string>, group: Conversation): boolean {
-  return !group.kind && !isLeads(group) && !isBuddyChat(group) && !isStep(group) && !group.audience && !chats.has(group.id)
+  return !group.kind && !isLeads(group) && !isStep(group) && !group.audience && !chats.has(group.id)
 }
 
 /** Only stable linkage is on the root. State belongs to replies, never its text or visible source. */
@@ -123,7 +122,7 @@ export function syncTaskLines(before: SuperTabState, effects: CommandEffects, se
   }
 }
 
-/** [group] is new, or moved in this command. A task some message asked for (a person's own, or their Buddy's proposal) replies
+/** [group] is new, or moved in this command. A task some message asked for (a person's own) replies
  *  in that message's thread; one nobody's message asked for posts nothing in the chat (Dee, 11-04, 'bot messages': a person sees
  *  only rows they wrote), and lives in Backlog and its own conversation. */
 function moved(state: SuperTabState, effects: CommandEffects, group: Conversation, previous: Conversation | undefined, sender: Author | undefined,

@@ -16,7 +16,7 @@ export const queueKey = (task: Pick<Conversation, 'number' | 'queueRank'>): numb
 export const queueOrder = <T extends Queued>(tasks: readonly T[]): T[] =>
   [...tasks].sort((a, b) => queueKey(a) - queueKey(b) || (a.number ?? 0) - (b.number ?? 0))
 
-/** The tasks a project's Next up orders: open, never its chat, a Buddy chat, a private chat, a step or a stored proposal card. */
+/** The tasks a project's Next up orders: open, never its chat, a private chat, a step or a stored proposal card. */
 export function queueSiblings(state: SuperTabState, project: SwarmProject): Conversation[] {
   return state.conversations.filter(c => (!c.taskApproval || c.taskApproval.state === 'approved') && !undecidedProposal(c) && !c.archived && !c.kind && !c.audience && !c.reviewOf && c.id !== project.leadConversationId
     && groupProject(state, c).id === project.id)

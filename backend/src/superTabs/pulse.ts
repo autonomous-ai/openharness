@@ -8,7 +8,6 @@
  * A project agent explicitly entrusted with an ask by the PM may also settle that ask by replying in its thread.
  * Nothing here refuses anything: a settle that finds nothing does nothing.
  */
-import { isBuddy, isBuddyChat } from './buddies.js'
 import { heldView, type HeldReason } from './heldReason.js'
 import { fail, isLeads, type Author, type Conversation, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, type SwarmProject } from './projects.js'
@@ -22,10 +21,10 @@ export interface OwedAsk { id: string; personId: string; at: number; thread: str
 /** At most this many asks are kept per conversation, the newest: a growth bound, far above what a PM leaves unanswered. */
 export const MAX_OWED = 50
 
-/** The project [group] belongs to, or none for a conversation outside every project (the removed Leads chat, a person's one
- *  Buddy chat). Never throws: the pulse is never a reason for a command to fail. */
+/** The project [group] belongs to, or none for a conversation outside every project (the removed Leads chat). Never
+ *  throws: the pulse is never a reason for a command to fail. */
 function projectOfGroup(state: SuperTabState, group: Conversation): SwarmProject | undefined {
-  if (isLeads(group) || group.kind === 'swarm-buddy') return undefined
+  if (isLeads(group)) return undefined
   try { return groupProject(state, group) } catch { return undefined }
 }
 
@@ -34,13 +33,13 @@ export function pmOf(state: SuperTabState, project: SwarmProject): string | null
   return state.conversations.find(c => c.id === project.leadConversationId)?.leadId ?? null
 }
 
-/** Whether asks in [group] count: a project's chat or task, never a private chat or a Buddy chat, whose words and people only
+/** Whether asks in [group] count: a project's chat or task, never a private chat, whose words and people only
  *  their audience reads (the pulse is shown to every reader of the project). */
-const counted = (group: Conversation): boolean => !group.audience && !group.kind && !isBuddyChat(group)
+const counted = (group: Conversation): boolean => !group.audience && !group.kind
 
 /** Records [message] as owed when a person wrote it and it reached [group]'s PM. */
 export function owe(state: SuperTabState, group: Conversation, message: { id: string; author: Author; recipients: readonly string[]; thread: string | null; source?: unknown }, now: number): void {
-  if (message.author.kind !== 'person' || (message.source && (message.source as { kind?: string }).kind !== 'buddy-proposal') || !counted(group)) return
+  if (message.author.kind !== 'person' || message.source || !counted(group)) return
   const project = projectOfGroup(state, group)
   const pm = project && pmOf(state, project)
   // A project switched to the Board way of working owes its PM no chat messages (boardRights.ts, task #3819).
@@ -68,7 +67,7 @@ export function handoffAsk(state: SuperTabState, group: Conversation, agentId: s
   const project = projectOfGroup(state, group)
   if (!project || !agentId || pmOf(state, project) !== agentId) fail('ASK_HANDOFF_PM', 'Only the project PM can hand off an owed ask.', 403)
   const target = recipients.length === 1 ? state.agents.find(a => a.id === recipients[0]) : undefined
-  if (!target || target.id === agentId || isBuddy(target) || agentProjectId(state, target) !== project.id) {
+  if (!target || target.id === agentId || agentProjectId(state, target) !== project.id) {
     fail('ASK_HANDOFF_AGENT', 'Name exactly one project agent for the handoff.', 400)
   }
   const chat = state.conversations.find(c => c.id === project.leadConversationId)
@@ -85,7 +84,7 @@ export function settleReply(state: SuperTabState, group: Conversation, agentId: 
     settle(group, ask => ask.id === place.answers || (!!place.thread && ask.thread === place.thread))
   } else if (place.thread && group.owed.some(ask => ask.delegatedTo === agentId && ask.thread === place.thread)) {
     const target = state.agents.find(a => a.id === agentId)
-    if (target && !isBuddy(target) && agentProjectId(state, target) === projectOfGroup(state, group)?.id) {
+    if (target && agentProjectId(state, target) === projectOfGroup(state, group)?.id) {
       settle(group, ask => ask.delegatedTo === agentId && ask.thread === place.thread)
     }
   }
@@ -177,11 +176,11 @@ export const agentProjects = (state: SuperTabState): Map<string, string> => new 
 /** The Swarm's open conversations and agents by project, sorted out in one pass, so a pulse for every project costs one walk of
  *  the Swarm rather than one per project: recordPulse runs after every command (ENGINEERING 4). */
 export interface PulseIndex {
-  /** Each project's open tasks and steps, never its chat, a private chat or a Buddy chat. */
+  /** Each project's open tasks and steps, never its chat or a private chat. */
   work: Map<string, Conversation[]>
   /** Each project's open conversations that hold owed asks. */
   owing: Map<string, Conversation[]>
-  /** Each project's agents but Buddies. */
+  /** Each project's agents. */
   agents: Map<string, string[]>
 }
 export function pulseIndex(state: SuperTabState, projectOfAgent = agentProjects(state), only?: string): PulseIndex {
@@ -195,7 +194,7 @@ export function pulseIndex(state: SuperTabState, projectOfAgent = agentProjects(
     if (group.owed?.length) add(index.owing, projectId, group)
     if (!chats.has(group.id)) add(index.work, projectId, group)
   }
-  for (const agent of state.agents) if (!isBuddy(agent)) add(index.agents, projectOfAgent.get(agent.id) ?? agentProjectId(state, agent), agent.id)
+  for (const agent of state.agents) add(index.agents, projectOfAgent.get(agent.id) ?? agentProjectId(state, agent), agent.id)
   return index
 }
 

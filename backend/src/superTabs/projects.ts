@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
-import { buddyReads, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat } from './buddies.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
@@ -166,8 +165,6 @@ export function projectOf(state: SuperTabState, projectId: string): SwarmProject
 
 export function groupProject(state: SuperTabState, group: Conversation): SwarmProject {
   if (isLeads(group)) leadsRemoved()
-  // Never the project 'lead' by default: a person's one Buddy chat belongs to no project (Dee, 10-31).
-  if (isSwarmBuddyChat(group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
   return projectOf(state, group.projectId ?? 'lead')
 }
 
@@ -175,17 +172,14 @@ export function groupProject(state: SuperTabState, group: Conversation): SwarmPr
 export const groupRepositoryUrl = (state: SuperTabState, group: Conversation): string | null =>
   projectsOf(state).find(p => p.id === (group.projectId ?? 'lead'))?.repository?.repositoryUrl ?? null
 
-/** The project a start works in: a project session's own, none for a Swarm-wide Buddy's (Dee, 10-31), else its conversation's. */
-export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId' | 'buddySession'>): SwarmProject | undefined {
-  if (request.buddySession?.projectId) return projectOf(state, request.buddySession.projectId)
+/** The project a start works in: its conversation's. */
+export function startProject(state: SuperTabState, request: Pick<AgentStartRequest, 'conversationId'>): SwarmProject | undefined {
   const group = conversation(state, request.conversationId)
-  // A person's Buddy chat and an agent's own chat belong to no project (a Regular agent's start waits in the second).
-  return isSwarmBuddyChat(group) || isAgentChat(group) ? undefined : groupProject(state, group)
+  // An agent's own chat belongs to no project (a Regular agent's start waits in it).
+  return isAgentChat(group) ? undefined : groupProject(state, group)
 }
 
 export function agentProjectId(state: SuperTabState, target: Agent): string {
-  // A Swarm-wide Buddy has no project (Dee, 10-31): never the project 'lead' by default, so it matches none.
-  if (isSwarmBuddy(target)) return NO_PROJECT
   // A Regular agent (task #4116: "the task decides where it works") is its active task's project's while it works, else none.
   if (target.regular) {
     const work = state.conversations.find(c => c.assignment?.agentId === target.id && activeWork(c))
@@ -275,8 +269,6 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
   if (actor.kind === 'agent') {
     const target = state.agents.find(a => a.id === actor.agentId)
     if (!target || target.machineOwnerId !== actor.machineOwnerId) return false
-    // A Swarm-wide Buddy reads every project its person reads now, at the membership it was added in (Dee, 10-31).
-    if (isSwarmBuddy(target)) return !!buddyPerson(state, target, project)
     const home = agentProjectId(state, target)
     // Swarm v4 (anh Dee, 2026-11-08): an agent acts for its person. In no project and holding no task (tasks are GitHub
     // issues), it reads the public projects its person reads, at the membership it was added in, so it talks in their
@@ -304,10 +296,10 @@ export function personReadsProject(member: Pick<Person, 'id' | 'generation'>,
 }
 
 /** Whether [target] is an agent of [project]'s channel (Swarm v4, anh Dee 2026-11-08): one that reads the project as an agent
- *  does (canReadProject), so an agent of the project or a v4 agent in no project, never a Buddy or one stopping. It joins the
+ *  does (canReadProject), so an agent of the project or a v4 agent in no project, never one stopping. It joins the
  *  channel by posting there or being named there, by --to or by @Name, and talks there with the others by name. */
 export function inChannelOf(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
-  return !isBuddy(target) && target.workDecision !== 'stop'
+  return target.workDecision !== 'stop'
     && canReadProject(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, project)
 }
 
@@ -344,13 +336,7 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
     author(state, actor)
     leadsRemoved()
   }
-  // A person's one Buddy chat has no project: its person and their Buddies read it, and anyone else finds no such chat.
-  if (isSwarmBuddyChat(group)) {
-    author(state, actor)
-    if (!readsSwarmBuddyChat(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
-    return group
-  }
-  // A person's chat with a Regular agent of theirs has no project either (agent.new, task #4116): its person and that agent.
+  // A person's chat with an agent of theirs has no project (agent.new, task #4116): its person and that agent.
   if (isAgentChat(group)) {
     author(state, actor)
     if (!readsAgentChat(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
@@ -367,14 +353,13 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
  *  (2026-10-26); this is the one place that decides it (design section 4.8). */
 export const PRIVATE_VISIBLE_TO_OWNERS = false
 
-/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat and no Regular agent's
+/** A Chat with PM from before Swarm v4: a private conversation that is no agent's 1:1
  *  chat (#4248: counted as one, a Regular agent's chat was never listed or delivered). Nobody opens one any more, and nobody reads
  *  one, the PM and its person included; its rows stay in the database. */
-export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group) && !isAgentChat(group)
+export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isAgentChat(group)
 
-/** Who reads a conversation: nobody the removed Leads conversation (model.ts leadsRemoved); a project conversation's readers; and a Buddy
- *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. A Buddy reads what its person
- *  reads of its project, no private conversation but its own chat (buddies.ts). */
+/** Who reads a conversation: nobody the removed Leads conversation (model.ts leadsRemoved); a project conversation's readers; and an agent's
+ *  1:1 chat's person and agent. A closed Chat with PM is nobody's. */
 export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   return !isClosedPmChat(group) && readsRecordsIn(state, actor, group)
 }
@@ -383,15 +368,11 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
  *  generation they were listed with, and the project's Lead, so what was asked there before stays theirs. */
 export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
-  if (isSwarmBuddyChat(group)) return readsSwarmBuddyChat(state, actor, group)
   if (isAgentChat(group)) return readsAgentChat(state, actor, group)
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
-  const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
-  if (buddy) return buddyReads(buddy, group, project.leadConversationId, buddyPerson(state, buddy, project))
   if (!group.audience) return true
-  // A Buddy chat has no private channel to the PM: only its owner and its Buddy read it (buddies.ts).
-  if (actor.kind === 'agent') return !isBuddyChat(group) && ledProject(state, actor.agentId)?.id === project.id
+  if (actor.kind === 'agent') return ledProject(state, actor.agentId)?.id === project.id
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
     || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))
@@ -401,7 +382,7 @@ export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conver
 export const isAgentChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'agent-chat'
 
 /** Whether [actor] reads agent chat [group]: its person at the membership it was opened in, and an agent in it that runs on that
- *  person's own account. Nobody else: not the Swarm's owner, a project's owner or PM, or another agent, as a Swarm Buddy chat. */
+ *  person's own account. Nobody else: not the Swarm's owner, a project's owner or PM, or another agent. */
 function readsAgentChat(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   const owner = group.audience?.people[0]
   if (!owner || !state.people.some(p => p.id === owner.id && p.generation === owner.generation)) return false
@@ -411,39 +392,7 @@ function readsAgentChat(state: SuperTabState, actor: Actor, group: Conversation)
     && target.contributorId === owner.id && target.machineOwnerId === owner.id
 }
 
-/** Whether [actor] reads Swarm Buddy chat [group] (Dee, 10-31): its person at the membership it was opened in, and a Buddy in it
- *  of that person and membership. Nobody else: not the Swarm's owner, a project's PM or another agent. */
-function readsSwarmBuddyChat(state: SuperTabState, actor: Actor, group: Conversation): boolean {
-  const owner = group.audience?.people[0]
-  if (!owner || !state.people.some(p => p.id === owner.id && p.generation === owner.generation)) return false
-  if (actor.kind === 'person') return actor.userId === owner.id
-  const target = state.agents.find(a => a.id === actor.agentId)
-  return !!target && target.machineOwnerId === actor.machineOwnerId && group.agentIds.includes(target.id) && isBuddy(target)
-    && target.buddyOf!.personId === owner.id && target.buddyOf!.generation === owner.generation
-}
-
-/** A Buddy's person, while they read [project] at the membership they added it in: a person who left, rejoined or lost a
- *  private project's membership takes their Buddy's reads with them, the instructions' included (review of phase 2). */
-export function buddyPerson(state: SuperTabState, buddy: Agent, project: SwarmProject): Person | undefined {
-  const person = state.people.find(p => p.id === buddy.buddyOf!.personId && p.generation === buddy.buddyOf!.generation)
-  return person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project) ? person : undefined
-}
-
-/** The project whose instructions [buddy] reads for its person (task #3024): any project its person reads now, at the
- *  membership they added it in, a Buddy of one project's included, so it can check a project's rules for them as they would
- *  (Leo, 11-05: his Buddy could not read lamp's). This read alone: its other reads stay with its project. Refused in the words
- *  of a project that does not exist. */
-export function buddyInstructionsProject(state: SuperTabState, actor: Actor, buddy: Agent, projectId: string): SwarmProject {
-  author(state, actor)
-  const project = projectOf(state, projectId)
-  if (actor.kind !== 'agent' || actor.agentId !== buddy.id || buddy.machineOwnerId !== actor.machineOwnerId || !isBuddy(buddy)
-    || !buddyPerson(state, buddy, project)) fail('NOT_FOUND', 'This project is unavailable.', 404)
-  return project
-}
-
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
-  // A Swarm-wide Buddy belongs to no project and writes only in its person's chat: its person reads it, and so does it.
-  if (isSwarmBuddy(target)) return actor.kind === 'person' ? actor.userId === target.buddyOf!.personId : actor.agentId === target.id
   // An idle Regular agent (task #4116): its person, itself, and the PM of a project its person reads, which may give it a task.
   if (target.regular && agentProjectId(state, target) === NO_PROJECT) {
     if (actor.kind === 'person') return actor.userId === target.contributorId
@@ -539,11 +488,6 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
   if (SERVER_WORDS.has(row?.kind)) return 'none'
   if (row?.kind === 'review-failed') return 'unknown'
   if (row?.kind === 'work-lost') return typeof row.agentId === 'string' ? { agentId: row.agentId } : 'unknown'
-  // A Buddy's proposal, posted as its owner: its Buddy wrote the goal and scope and picked the words (security review 2 of #3024).
-  if (row?.kind === 'buddy-proposal') {
-    const buddyId = (row as { buddyId?: unknown }).buddyId
-    return typeof buddyId === 'string' ? { agentId: buddyId } : 'unknown'
-  }
   return 'author'
 }
 
@@ -580,12 +524,11 @@ const accessInputs = (state: SuperTabState): string => JSON.stringify([state.own
   state.agents.map(a => [a.id, a.machineId, a.harnessId, a.machineOwnerId, a.projectId, a.confidential]),
   state.conversations.map(c => [c.id, c.kind, c.projectId, c.leadId, c.archived, c.agentIds, c.audience])])
 
-/** Whether [actor] is an agent working in [projectId], as its host speaks for it: any of the project's agents but a Buddy, which
- *  only talks with its owner. Which of them does what is the project's instructions' to say (project instructions, phase 4). */
+/** Whether [actor] is an agent working in [projectId], as its host speaks for it: any of the project's agents. Which of them does what is the project's instructions' to say (project instructions, phase 4). */
 export function projectAgent(state: SuperTabState, actor: Actor, projectId: string): actor is Extract<Actor, { kind: 'agent' }> {
   if (actor.kind !== 'agent') return false
   const self = state.agents.find(a => a.id === actor.agentId)
-  return !!self && !isBuddy(self) && self.machineOwnerId === actor.machineOwnerId && agentProjectId(state, self) === projectId
+  return !!self && self.machineOwnerId === actor.machineOwnerId && agentProjectId(state, self) === projectId
 }
 
 /** The only actors a confidential session admits: the person whose machine runs it, or the session itself. */
@@ -692,9 +635,8 @@ export function deleteProject(state: SuperTabState, actor: Actor, projectId: str
   // A project nobody owns is deleted by the Swarm's owner, who reads nothing of it: no refusal names what is in it, and its
   // work, which nobody can resolve, goes with it.
   const ownerless = isOwnerless(project)
-  // A person's one Buddy chat belongs to no project and stays; that project's sessions in it go with their agents. An agent's own
-  // chat belongs to no project either (a PM's too since Swarm v4): it stays, and goes with its agent.
-  const groups = state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && !isAgentChat(c) && groupProject(state, c).id === project.id)
+  // An agent's own chat belongs to no project (a PM's too since Swarm v4): it stays, and goes with its agent.
+  const groups = state.conversations.filter(c => !isLeads(c) && !isAgentChat(c) && groupProject(state, c).id === project.id)
   const groupIds = new Set(groups.map(c => c.id))
   // A queued start in an archived conversation can never be dispatched (commands.ts open() refuses it), so it no longer
   // blocks the delete; it goes with the project's other starts below. On 2026-11-03 one queued two days earlier kept an
