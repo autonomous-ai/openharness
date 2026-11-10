@@ -5,6 +5,9 @@
  *
  * The token goes to git through `harness git-credential` (superTabs/gitCredential.ts), which asks here over the local
  * socket, and to gh through the session's own `hosts.yml`. Nothing here logs a token.
+ *
+ * Only for sessions started with the App before its removal: no new agent uses it, and the backend issues their task
+ * tokens until 2026-12-10 (backend #3723), so they keep push and gh mid-work. Delete on or after that date.
  */
 import { readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'

@@ -2880,7 +2880,8 @@ switch (cmd) {
     import('./lib/buddyRecipes.js').then(({ buddyReadCommand }) => buddyReadCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
-    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
+    // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not. Only sessions
+    // started with the App before its removal name it; delete on or after 2026-12-10 (lib/swarmGitHub.ts).
     import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
