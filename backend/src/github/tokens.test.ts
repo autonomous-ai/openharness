@@ -18,32 +18,14 @@ const setup = (cacheOverride?: TokenCache) => {
 }
 const request = (assignmentId = 'attempt-1', agentId = 'agent-1') => ({ tabId: 'tab-1', agentId, assignmentId, repository })
 
-describe('preparation tokens', () => {
-  it('only read the repository, and are minted each time, never cached', async () => {
-    const { tokens, github } = setup()
-    expect(await tokens.prepare(repository)).toMatchObject({ token: 'ghs_fixture_1', repository: 'acme/app' })
-    expect((await tokens.prepare(repository)).token).toBe('ghs_fixture_2')
-    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens'))
-    expect(minted.map(c => c.body)).toEqual([0, 1].map(() => ({ repositories: ['app'], permissions: { contents: 'read', metadata: 'read' } })))
-  })
-
-  it('refuses a repository the app is not installed on', async () => {
-    const { tokens, github } = setup()
-    github.installed.clear()
-    await expect(tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
-  })
-})
-
-// Task #2755: an agent's task token carries workflows and issues where its installation granted them; preparation never does.
+// Task #2755: an agent's task token carries workflows and issues where its installation granted them.
 describe('agent tokens and the installation\'s grant', () => {
-  it('carry workflows and issues where granted, and the preparation token stays read-only', async () => {
+  it('carry workflows and issues where granted', async () => {
     const { tokens, github } = setup()
     github.grants.set(77, { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', workflows: 'write', issues: 'write' })
-    await tokens.prepare(repository)
     await tokens.issue(request())
     const minted = github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
-    expect(minted).toEqual([{ repositories: ['app'], permissions: { contents: 'read', metadata: 'read' } },
-      { repositories: ['app'], permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', workflows: 'write', issues: 'write' } }])
+    expect(minted).toEqual([{ repositories: ['app'], permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read', workflows: 'write', issues: 'write' } }])
   })
 })
 
@@ -61,12 +43,11 @@ describe('a repository renamed on GitHub', () => {
 
   it('gets its tokens under its name now, and the read-only token used to find that name is revoked at once', async () => {
     const { tokens, github } = renamedSetup()
-    expect(await tokens.prepare(repository)).toMatchObject({ repository: 'acme/app' })
-    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
-    expect(minted).toEqual([{ permissions: { metadata: 'read' } }, { repositories: ['app-next'], permissions: { contents: 'read', metadata: 'read' } }])
-    expect(github.revoked).toEqual(['ghs_fixture_1'])
     expect((await tokens.issue(request())).repository).toBe('acme/app')
-    expect(github.calls.filter(c => c.path.endsWith('/access_tokens')).at(-1)!.body).toMatchObject({ repositories: ['app-next'] })
+    const minted = github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
+    expect(minted[0]).toEqual({ permissions: { metadata: 'read' } })
+    expect(minted.at(-1)).toMatchObject({ repositories: ['app-next'] })
+    expect(github.revoked).toEqual(['ghs_fixture_1'])
     // Its name now is remembered: GitHub is not asked again for it.
     expect(github.calls.filter(c => c.path === '/orgs/acme/installation')).toHaveLength(1)
   })
@@ -74,18 +55,18 @@ describe('a repository renamed on GitHub', () => {
   it('is not installed when its owner has no installation, or the repository was never renamed', async () => {
     const none = renamedSetup()
     none.github.owners.clear()
-    await expect(none.tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
+    await expect(none.tokens.issue(request())).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
     expect(none.github.calls.map(c => c.path)).toContain('/users/acme/installation')
     const same = renamedSetup()
     same.github.renamed.clear()
-    await expect(same.tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
+    await expect(same.tokens.issue(request())).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
     expect(same.github.revoked).toEqual(['ghs_fixture_1'])
   })
 
   it('reads as not installed when GitHub cannot say, and wrong credentials still say so', async () => {
     const down = renamedSetup()
     down.github.control.tokenStatus = 500
-    await expect(down.tokens.prepare(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
+    await expect(down.tokens.issue(request())).rejects.toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED' })
     const app = fakeApp(throwawayKey().privateKey, down.github, { now: () => Date.parse('2026-10-24T12:00:00Z') })
     await expect(app.resolve(repository)).rejects.toMatchObject({ code: 'GITHUB_APP_MISCONFIGURED' })
   })
