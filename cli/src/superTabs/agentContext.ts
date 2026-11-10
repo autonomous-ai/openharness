@@ -43,7 +43,7 @@ export const isStep = (group: Json): boolean => typeof group.reviewOf === 'strin
 /** A step's name: the one it was opened with, else its title (a linked task opened without one is a step too, Ken
  *  2026-11-02; backend steps.ts stepName). */
 export const stepName = (group: Json): string => text(group.step) ?? String(group.title ?? '')
-/** Work an agent may hold: a group of a project that is not its Lead conversation, a Buddy chat or any other kind. */
+/** Work an agent may hold: a group of a project that is not its Lead conversation, nor a chat of another kind. */
 const isWork = (state: Json, group: Json): boolean => !group.kind && !leadConversations(state).includes(String(group.id))
 /** A task: work that is not a step. */
 const isTask = (state: Json, group: Json): boolean => isWork(state, group) && !isStep(group)

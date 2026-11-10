@@ -36,8 +36,9 @@ describe('the old Swarm state, rebuilt from parts', () => {
     const first = readFixture<FirstLoad>('parts-lead')
     first.progress[0].data = { since: 5, summarizedFloor: 213800, summarized: { [FIXTURE.workGroup]: 214020 },
       requestedFloor: 213700, requested: { [FIXTURE.workGroup]: 214030, [FIXTURE.doneGroup]: 213990 }, requestedAt: 6, requestMessageId: 'r1' }
+    // An older server's request message id is no longer read.
     expect(list(reassemble(storeOf(first)).projects)[0].progress)
-      .toEqual({ since: 5, dirtyRevision: 214033, summarizedRevision: 214020, requestedRevision: 214030, requestedAt: 6, requestMessageId: 'r1' })
+      .toEqual({ since: 5, dirtyRevision: 214033, summarizedRevision: 214020, requestedRevision: 214030, requestedAt: 6 })
   })
 
   it('shows a usage limit while it lasts', async () => {

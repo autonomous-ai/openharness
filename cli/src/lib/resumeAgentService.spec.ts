@@ -273,15 +273,15 @@ describe('production resume handler', () => {
     expect(registry.byAgent(saved.agentId)?.swarmSkill).toEqual(swarmSkill)
   })
 
-  // Security review 2 of #2255: opening an old Buddy after the Mac was offline over a week (a lapsed local roster) opened it
+  // Security review 2 of #2255: opening an old Swarm session after the Mac was offline over a week (a lapsed local roster) opened it
   // without its role, with no role read at all.
-  it('opens an old Buddy with its role after the local roster lapsed', async () => {
+  it('opens an old Swarm session with its role after the local roster lapsed', async () => {
     rewrite({ startedBy: 'agent' })
     retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: saved.agentId, machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
-    const role = vi.fn(async () => ({ role: 'buddy' as const }))
+    const role = vi.fn(async () => ({ role: 'agent' as const }))
     deps.adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(dir).has(id),
       authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: () => 0, cancelled: () => false }) })
-    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill: { role: 'buddy', key: saved.agentId } } })
+    expect(await start()).toMatchObject({ ok: true, session: { swarmSkill: { role: 'agent', key: saved.agentId } } })
     expect(role).toHaveBeenCalledOnce()
   })
 

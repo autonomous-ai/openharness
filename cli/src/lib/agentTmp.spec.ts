@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { agentTmpFolder, agentTmpLaunch, agentTmpRoot, buddyTmpFolder, buddyTmpParent, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, sweepTmpFolders, type AgentTmpDeps } from './agentTmp.js'
+import { agentTmpFolder, agentTmpLaunch, agentTmpRoot, prepareAgentTmp, resetAgentTmpSweep, sweepAgentTmp, sweepTmpFolders, type AgentTmpDeps } from './agentTmp.js'
 
 const made: string[] = []
 afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true }); resetAgentTmpSweep() })
@@ -47,9 +47,8 @@ describe('who gets the private temporary folder', () => {
     expect(launch.env.TMPDIR!.startsWith(`${realpathSync(agentTmpFolder(data))}/`)).toBe(true)
   })
 
-  it('nobody else gets an added folder: a Buddy, whose guard closes the data folder; a terminal; a person\'s own session; Windows', () => {
+  it('nobody else gets an added folder: a terminal; a person\'s own session; Windows', () => {
     const data = scratch()
-    expect(agentTmpLaunch('claude', { role: 'buddy', key: 'one' }, deps(data))).toEqual(none)
     expect(agentTmpLaunch('terminal', { role: 'agent', key: 'one' }, deps(data))).toEqual(none)
     expect(agentTmpLaunch('claude', undefined, deps(data))).toEqual(none)
     expect(agentTmpLaunch('claude', { role: 'agent', key: 'one' }, deps(data, { platform: 'win32' }))).toEqual(none)
@@ -156,7 +155,7 @@ describe('what deletes it', () => {
     await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
   })
 
-  // Task #4395: each agent's folder is its TMPDIR while it runs, however quiet, as a Buddy's is: what is in it goes after 7
+  // Task #4395: each agent's folder is its TMPDIR while it runs, however quiet: what is in it goes after 7
   // days, the folder itself only once it has been empty for 30.
   it('keeps a quiet agent\'s own folder, sweeping what is in it', async () => {
     const data = scratch()
@@ -194,63 +193,36 @@ describe('what deletes it', () => {
   })
 })
 
-// A Buddy had a folder of its own beside the data folder, made only beside a Harness Team account, which went (2026-11-10):
-// what one left is swept as an agent's is, and goes.
-describe('what a Buddy\'s old folder left', () => {
+describe('the folders in the agents\' folder', () => {
   const DAY = 24 * 60 * 60_000
-  /** A data folder in a scratch folder of its own, so the sibling `-buddy-tmp` is cleaned with it. */
-  const dataIn = () => join(scratch(), 'data')
   const leftFolder = (data: string): string => {
-    const folder = buddyTmpFolder('/work/one', data)
+    const folder = join(agentTmpFolder(data), 'one')
     mkdirSync(folder, { recursive: true, mode: 0o700 })
     return folder
   }
 
   it('deletes what nothing has changed in for 7 days inside each, keeping the folder until it is empty', async () => {
-    const data = dataIn(), folder = leftFolder(data)
+    const data = scratch(), folder = leftFolder(data)
     writeFileSync(join(folder, 'stale'), 'x')
     const later = Date.now() + 8 * DAY
     writeFileSync(join(folder, 'fresh'), 'x'); utimesSync(join(folder, 'fresh'), new Date(later), new Date(later))
-    expect(await sweepTmpFolders(buddyTmpParent(data), later)).toBe(1)
+    expect(await sweepTmpFolders(agentTmpFolder(data), later)).toBe(1)
     expect(existsSync(join(folder, 'stale'))).toBe(false)
     expect(existsSync(join(folder, 'fresh'))).toBe(true)
     expect(existsSync(folder)).toBe(true)
   })
 
-  it('removes a folder only when empty and idle for 30 days', async () => {
-    const data = dataIn(), folder = leftFolder(data)
-    await sweepTmpFolders(buddyTmpParent(data), Date.now() + 8 * DAY)
-    expect(existsSync(folder)).toBe(true)
-    await sweepTmpFolders(buddyTmpParent(data), Date.now() + 31 * DAY)
-    expect(existsSync(folder)).toBe(false)
-  })
-
   it('sweeps nothing through a link, in the parent\'s place or among the folders', async () => {
-    const data = dataIn(), target = scratch()
+    const data = scratch(), target = scratch()
     writeFileSync(join(target, 'kept'), 'x')
-    mkdirSync(buddyTmpParent(data), { recursive: true, mode: 0o700 })
-    symlinkSync(target, join(buddyTmpParent(data), 'link'))
-    await sweepTmpFolders(buddyTmpParent(data), Date.now() + 40 * DAY)
+    mkdirSync(agentTmpFolder(data), { recursive: true, mode: 0o700 })
+    symlinkSync(target, join(agentTmpFolder(data), 'link'))
+    await sweepTmpFolders(agentTmpFolder(data), Date.now() + 40 * DAY)
     expect(existsSync(join(target, 'kept'))).toBe(true)
     const other = join(scratch(), 'parent')
     symlinkSync(target, other)
     expect(await sweepTmpFolders(other, Date.now() + 40 * DAY)).toBe(0)
     expect(existsSync(join(target, 'kept'))).toBe(true)
-  })
-
-  it('is swept by a launch', async () => {
-    const data = dataIn(), folder = leftFolder(data)
-    writeFileSync(join(folder, 'stale'), 'x')
-    resetAgentTmpSweep()
-    agentTmpLaunch('claude', undefined, deps(data, { now: () => Date.now() + 8 * DAY }))
-    await vi.waitFor(() => expect(existsSync(join(folder, 'stale'))).toBe(false))
-  })
-
-  it('is named by the real path of the folder its Buddy ran in', () => {
-    const at = scratch(), real = join(at, 'real'), link = join(at, 'link')
-    mkdirSync(real); symlinkSync(real, link)
-    expect(buddyTmpFolder(link, '/data')).toBe(buddyTmpFolder(real, '/data'))
-    expect(buddyTmpFolder('/work/one', '/data')).not.toBe(buddyTmpFolder('/work/two', '/data'))
   })
 })
 

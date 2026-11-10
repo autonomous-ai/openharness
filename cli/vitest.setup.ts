@@ -72,8 +72,5 @@ vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
     agentTmpLaunch: vi.fn((engine: Parameters<typeof real.agentTmpLaunch>[0], skill: Parameters<typeof real.agentTmpLaunch>[1],
       deps?: Parameters<typeof real.agentTmpLaunch>[2]) => deps ? real.agentTmpLaunch(engine, skill, deps) : { env: {}, args: [] }),
     agentTmpRoot: vi.fn((deps?: Parameters<typeof real.agentTmpRoot>[0]) => deps ? real.agentTmpRoot(deps) : null),
-    buddyTmpEnv: vi.fn((engine: Parameters<typeof real.buddyTmpEnv>[0], root: string, deps?: Parameters<typeof real.buddyTmpEnv>[2]) =>
-      deps ? real.buddyTmpEnv(engine, root, deps) : {}),
-    buddyTmpOf: vi.fn((root: string, deps?: Parameters<typeof real.buddyTmpOf>[1]) => deps ? real.buddyTmpOf(root, deps) : null),
   }
 })
