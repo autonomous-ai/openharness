@@ -15,19 +15,6 @@ int? superTabSuggestedAgentSlots(MachineResources? resources) {
   return (total / (2 * _agentMemoryBytes)).floor().clamp(1, 16);
 }
 
-/// Whether [stored], on a machine row saved without its Agents setting, is
-/// the number joining suggested, which the server reads as As memory allows
-/// (backend superTabs/machines.ts agentLimit; Dee, 2026-11-04): 16, or the
-/// suggestion its measured memory gave (from 4 GiB, below which it was a
-/// floor of 1 rather than a figure from memory).
-bool superTabOldJoinSuggestion(int stored, MachineResources? resources) {
-  if (stored == 16) return true;
-  final total = resources?.memoryTotalBytes;
-  return total != null &&
-      total >= 2 * _agentMemoryBytes &&
-      stored == superTabSuggestedAgentSlots(resources);
-}
-
 /// Accepting a Swarm invitation from this computer. Each attempt has its own
 /// operation, kept only for that attempt's retries (a lost reply is asked
 /// again under it) and dropped once answered: the server replays an

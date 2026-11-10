@@ -100,7 +100,6 @@ import '../settings/config_store.dart';
 import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
-import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/image_cache.dart' show superTabImageCache;
@@ -294,16 +293,7 @@ class AgentProfile {
     required this.label,
     this.path,
     this.percentLeft,
-    this.offered = true,
-    this.canOffer = false,
   });
-
-  /// False when the machine's owner has not offered this account to the Swarm. Using it does not:
-  /// only Swarm accounts… does ([AppNotifier.setAccountOffered]).
-  final bool offered;
-
-  /// Not the default account, on a CLI that says what is offered: Swarm accounts… can list it.
-  final bool canOffer;
 
   /// The account's Swarm profile id ([swarmProfileId]): what `usage_read` and the current-account check use.
   final String id;
@@ -15669,78 +15659,6 @@ class AppNotifier extends ChangeNotifier {
 
   final _addingClaude = <String>{};
 
-  /// This computer's accounts its owner can offer to the Swarm or take back. Throws when it cannot
-  /// tell, so the screen says so and never reads a failure as "no accounts".
-  Future<List<SwarmAccount>> swarmAccounts(String machineId) async {
-    if (stateOf(machineId)?.isLocalMachine != true) {
-      throw StateError('not this computer');
-    }
-    final agents = stateOf(machineId)?.agents ?? const <Agent>[];
-    return [
-      for (final engine in const ['claude', 'codex'])
-        ...await () async {
-          final reply = engine == 'claude'
-              ? await listClaudeProfiles(
-                  machineId,
-                  observedPaths: {for (final a in agents) ?a.claudeHome},
-                )
-              : await listCodexProfiles(
-                  machineId,
-                  observedPaths: {for (final a in agents) ?a.codexHome},
-                );
-          final rows = reply['profiles'];
-          if (rows is! List) throw StateError('no list');
-          return [
-            for (final row in rows)
-              if (row is Map &&
-                  row['path'] is String &&
-                  row['offered'] is bool &&
-                  row['default'] != true)
-                SwarmAccount(
-                  engine: engine,
-                  path: row['path'] as String,
-                  label: row['label'] as String? ?? row['path'] as String,
-                  offered: row['offered'] as bool,
-                ),
-          ];
-        }(),
-    ];
-  }
-
-  /// Offers an account of this computer to the Swarm, or takes it back. Null when done, or what to
-  /// tell the owner.
-  Future<String?> setAccountOffered(
-    String machineId,
-    String engine,
-    String path,
-    bool offered,
-  ) async {
-    if (stateOf(machineId)?.isLocalMachine != true) {
-      return 'Accounts can be offered on their own computer only.';
-    }
-    String? code;
-    try {
-      final reply = await _conn(machineId).request(
-        'swarm_account_offer',
-        payload: {'engine': engine, 'path': path, 'offered': offered},
-        timeout: const Duration(seconds: 10),
-      );
-      code = reply['error'] as String?;
-    } on WsRequestFailure catch (failure) {
-      code = failure.code;
-    } catch (_) {
-      code = 'UNREACHABLE';
-    }
-    return switch (code) {
-      null => null,
-      'NOT_FOUND' => 'That account’s folder is gone.',
-      'UNSUPPORTED' ||
-      'UNKNOWN_TYPE' => 'Update Harness on this computer to offer accounts.',
-      'TOO_MANY' => 'Too many accounts are offered. Withdraw one first.',
-      _ => 'Couldn’t reach this computer. Try again.',
-    };
-  }
-
   /// What `usage_read` last said per account, kept so opening the picker again does not call the vendors again.
   final _usageCache = <(String, String, String), ({DateTime at, int? left})>{};
   static const _usageFresh = Duration(minutes: 5);
@@ -15792,8 +15710,6 @@ class AppNotifier extends ChangeNotifier {
                     path == _codexDefaultHome());
             return (
               path: path,
-              offered: row['offered'] != false,
-              canOffer: row['offered'] is bool && !isDefault,
               label: row['label'] as String? ?? path,
               id: isDefault
                   ? defaultId
@@ -15848,8 +15764,6 @@ class AppNotifier extends ChangeNotifier {
             label: p.label,
             path: p.path,
             percentLeft: cached?.left,
-            offered: p.offered,
-            canOffer: p.canOffer,
           );
         }(),
     ]);
