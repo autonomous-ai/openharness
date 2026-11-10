@@ -9,7 +9,6 @@ import { validateBody, validateParams } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { logger } from '../utils/logger.js'
-import { TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, teamMachineScope } from '../lib/teamSession.js'
 
 const params = z.object({ id: z.string().uuid() })
 const body = z.object({
@@ -123,12 +122,6 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
     '/api/harness-shares/:id', { preHandler: [validateParams(params), validateBody(body)] },
     async (req, reply) => {
       const input = req.body
-      // A Mac's team account (lib/teamSession.ts) shares only its own machine's harnesses, and only with a Swarm's
-      // members, whom the observer socket checks again on every connection.
-      const team = await teamMachineScope(req.user!)
-      if (team !== null && (input.machineId !== team || !input.superTabId)) {
-        return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
-      }
       const machine = await prisma.machine.findFirst({ where: {
         machineId: input.machineId, userId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, ...machineAlive,
       } })
@@ -171,9 +164,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: z.infer<typeof params> }>('/api/harness-shares/:id',
     { preHandler: [validateParams(params)] }, async (req, reply) => {
-      // A team session takes back only its own machine's shares.
-      const team = await teamMachineScope(req.user!)
-      const mine = { id: req.params.id, ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, ...(team === null ? {} : { machineId: team }) }
+      const mine = { id: req.params.id, ownerId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv }
       // Only a live invitation is taken back and told: taking one back again changes nothing, and is answered so.
       const changed = await prisma.harnessShare.updateMany({ where: { ...mine, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] },
         data: { revokedAt: new Date() } })

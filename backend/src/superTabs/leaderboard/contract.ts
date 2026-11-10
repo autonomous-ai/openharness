@@ -16,7 +16,7 @@ export interface PersonDetails {
   unblocked: Array<{ title: string; conversationId: string; kind: UnblockKind; waitedMinutes: number }>
   /** Each machine's busy agent-hours this week, to one decimal, busiest first. */
   lent: Array<{ machineName: string; busyHours: number }>
-  /** Every machine the person brought that the reader may see, a Harness Team account in its Mac's row: what it did this
+  /** Every machine the person brought that the reader may see: what it did this
    *  week (contributor view, #2444). Absent from a backend before it. Supersedes [lent] for clients that read it. */
   brought: BroughtMachine[]
 }

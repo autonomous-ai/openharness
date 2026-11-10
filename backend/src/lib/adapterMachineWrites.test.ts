@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Prisma, Redis and sign-in are faked, and every `machine.update` is counted.
 const m = vi.hoisted(() => ({
   auth: vi.fn(), upgrade: vi.fn(),
-  machineService: { resolveOrCreateForComputer: vi.fn(), resolveForTeamComputer: vi.fn() },
+  machineService: { resolveOrCreateForComputer: vi.fn() },
   machineUpdate: vi.fn(), userFindUnique: vi.fn(), nodeRole: vi.fn(), record: vi.fn(),
 }))
 vi.mock('./ssoAuth.js', async original => ({ ...await original<typeof import('./ssoAuth.js')>(), authenticateAccessToken: m.auth }))

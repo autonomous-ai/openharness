@@ -82,7 +82,7 @@ interface Rule {
   accept: (secret: string) => boolean | number
 }
 
-// A team session's tokens (lib/teamSession.ts) have their own prefixes; pasted, they are as live as any other sign-in.
+// A Harness Team account's old tokens have their own prefixes (harnessTokenFormat.ts); pasted, they are caught as any other.
 const HARNESS_PREFIXES = [HARNESS_ACCESS_PREFIX, HARNESS_REFRESH_PREFIX, HARNESS_TEAM_ACCESS_PREFIX, HARNESS_TEAM_REFRESH_PREFIX,
   HARNESS_HANDOFF_PREFIX, HARNESS_QR_PREFIX, HARNESS_QR_POLL_PREFIX]
 // Keys whose value is the secret: DB_PASSWORD, x-api-key, client_secret, access_token, "token": … Not `pwd` (a folder), and

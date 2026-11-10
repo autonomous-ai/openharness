@@ -202,9 +202,8 @@ class SuperTabGitHubRow extends StatelessWidget {
                     padding: grid.AppDesktop.bubbleNamePadding,
                     child: Text(
                       name,
-                      style: DesktopChrome.text(
-                        size: SwarmType.nameSize,
-                        height: SwarmType.bodyLine / SwarmType.nameSize,
+                      style: SwarmType.nameLine(
+                        context,
                         color: DesktopChrome.muted,
                       ),
                     ),

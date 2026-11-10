@@ -31,9 +31,8 @@ describe('autoJoin', () => {
     expect(await autoJoin(d, x)).toEqual(['a', 'b'])
   })
 
-  it('skips a public domain, an address with no domain and a team session before any read', async () => {
-    for (const user of [{ ...x, email: 'x@gmail.com' }, { ...x, email: 'y@privaterelay.appleid.com' }, { ...x, email: 'nobody' },
-      { ...x, harnessSessionKind: 'team' as const }]) {
+  it('skips a public domain and an address with no domain before any read', async () => {
+    for (const user of [{ ...x, email: 'x@gmail.com' }, { ...x, email: 'y@privaterelay.appleid.com' }, { ...x, email: 'nobody' }]) {
       const d = deps()
       expect(await autoJoin(d, user)).toEqual([])
       expect(d.memory.claim).not.toHaveBeenCalled()

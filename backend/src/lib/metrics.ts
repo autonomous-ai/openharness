@@ -42,6 +42,10 @@ export function createMetrics(hour: LastHour = createLastHour()) {
   const retiredCommands = new Counter({ name: 'swarm_retired_commands_total',
     help: 'Commands Swarm v4 no longer has that an older client sent and were ignored (superTabs/retired.ts), by type and kind of client',
     labelNames: ['type', 'client'] as const, registers: [registry] })
+  const githubCommentRecords = new Counter({ name: 'swarm_github_comment_records_total',
+    help: 'Records of which agent wrote a GitHub comment (superTabs/githubComments.ts), by outcome', labelNames: ['outcome'] as const, registers: [registry] })
+  const githubCommentReads = new Counter({ name: 'swarm_github_comment_ids_total',
+    help: 'Comment ids the merger and news asked about (superTabs/githubComments.ts), by whether a record answered', labelNames: ['found'] as const, registers: [registry] })
   const works = new Set<string>()
   const work = (kind: string) => {
     if (works.has(kind)) return kind
@@ -72,6 +76,13 @@ export function createMetrics(hour: LastHour = createLastHour()) {
     /** One command an older client sent that Swarm v4 no longer has: `type` is one of superTabs/retired.ts's few, `client` the kind a
      *  request declares (refusalLog.ts: cli, desktop, phone, web, app, agent or other). Zero once the last older client has updated. */
     retiredCommand(type: string, client: string) { retiredCommands.inc({ type, client }) },
+    /** One record of a GitHub comment's author: recorded, again (the same agent's), taken (another's), limited. */
+    githubCommentRecord(outcome: 'recorded' | 'again' | 'taken' | 'limited') { githubCommentRecords.inc({ outcome }) },
+    /** One read of comment authors: how many ids it asked about, and how many a record answered. */
+    githubCommentRead(asked: number, found: number) {
+      githubCommentReads.inc({ found: 'yes' }, found)
+      githubCommentReads.inc({ found: 'no' }, asked - found)
+    },
     /** A minute of `cpu by kind`, every kind of work's busy ms. */
     busyWindow(window: BusyWindow) {
       for (const [kind, ms] of window) workBusy.inc({ work: work(kind) }, ms / 1000)

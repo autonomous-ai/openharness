@@ -10,7 +10,7 @@ const NOW = 50_000_000
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
-const reading = { generation: 'g1', receivedAt: NOW, sessionKind: 'computer' as const, resources, tools: {}, quotas: [], runningHarnessIds: [],
+const reading = { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [],
   stoppedHarnessIds: [], capabilities: ['leadStart', 'regularAgent', 'swarmBuddy'] }
 const configuration = { engine: 'claude' as const, model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const own = (userId: string) => ({ contribution: { machineOwnerId: userId, contributorId: userId } })

@@ -4,7 +4,6 @@ import { prisma } from '../lib/prisma.js'
 import { dropPushDevice, registerPushDevice } from '../push/devices.js'
 import { validateBody } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
 
 /** A phone registers at each signed-in launch and when its token changes, and drops it at sign-out: a loop meets this, nothing else. */
@@ -19,13 +18,11 @@ const body = z.object({
 
 /**
  * A phone's push token for the signed-in person (push/devices.ts, task #2905): kept at sign-in, so a thread reply or a tag
- * reaches the phone while the app is closed, and dropped at sign-out, while the sign-in still works to say so. Never a team
- * session's (lib/teamSession.ts): a teammate's work on the person's Mac never gets the person's notices.
+ * reaches the phone while the app is closed, and dropped at sign-out, while the sign-in still works to say so.
  */
 export async function pushDeviceRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: z.infer<typeof body> }>('/api/push-devices', { preHandler: validateBody(body) }, async (req, reply) => {
     const user = req.user!
-    if (isTeamSession(user)) return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
     if (!(await allowChange.allows(user.sub))) return sendError(reply, 'Too many changes to this phone\'s notifications. Try again in a minute.', 'RATE_LIMITED', 429)
     await registerPushDevice(prisma, user.sub, req.body, Date.now())
     sendSuccess(reply, { ok: true })
