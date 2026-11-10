@@ -62,23 +62,17 @@ function fixture() {
 /** Makes [machineId] [contributorId]'s own contributed computer, reporting now, so its agents take any project [contributorId]
  *  reads, in their own account (machines.ts teamWorkCheck; Swarm v3 has no Team accounts, task #4120). */
 function ownMachine(f: ReturnType<typeof fixture>, contributorId: string, machineId = 'host') {
-  const own = { sessionKind: 'computer' as const }
-  const existing = f.state.machines?.find(m => m.machineId === machineId)
-  if (existing) return void Object.assign(existing.observation!, own)
+  if (f.state.machines?.some(m => m.machineId === machineId)) return
   f.state.machines = [...(f.state.machines ?? []), { machineId, name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
-    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, ...own,
+    generation: 'g1', cwd: '/repo', engines: ['claude'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000,
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
         deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] } }]
 }
 
-/** Puts [agentId] on a machine of its own: [contributorId]'s own computer, or with [team] a Harness Team account's entry on it,
- *  which Swarm v3 gives no new work (task #4120). */
-function placeOn(f: ReturnType<typeof fixture>, agentId: string, contributorId: string, machineId: string, team = false) {
-  if (!f.state.machines?.some(m => m.machineId === machineId)) {
-    ownMachine(f, contributorId, machineId)
-    const pool = f.state.machines!.find(m => m.machineId === machineId)!
-    if (team) Object.assign(pool, { hostMachineId: 'host' }, { observation: { ...pool.observation!, sessionKind: 'team' } })
-  }
+/** Puts [agentId] on [machineId], [contributorId]'s own computer: another person's computer when [contributorId] is not the
+ *  agent's person, which Swarm v3 gives none of its work (task #4120). */
+function placeOn(f: ReturnType<typeof fixture>, agentId: string, contributorId: string, machineId: string) {
+  ownMachine(f, contributorId, machineId)
   f.state.agents.find(a => a.id === agentId)!.machineId = machineId
 }
 
@@ -1991,17 +1985,6 @@ describe('any agent of the project', () => {
       expect(chat().agentIds).toContain(done.agentId)
     })
 
-    // Security review 1 of #2924: posting there is no joining, so a Team account's agent marks nothing Team-written there and
-    // no main-account member is told to stop.
-    it('marks nothing Team-written when a Team account\'s agent posts there', () => {
-      const { f, engineer, chat } = working()
-      f.state.agents.find(a => a.id === engineer)!.teamAccount = true
-      const effects = f.run(post('I am on it.'), actorOf(engineer))
-      expect(chat().teamWritten).toBeUndefined()
-      expect(effects.messages.map(m => m.conversationId === 'lead' ? m.text : null)).toEqual(['I am on it.'])
-      expect(effects.messages).toHaveLength(1)
-    })
-
     // River, 2026-11-04 (#2924): an agent with work in the project acknowledges there with a reaction, with no other right.
     it('lets it react there without joining', () => {
       const { f, engineer, reviewer, chat } = working()
@@ -2291,12 +2274,12 @@ describe('role kinds decide nothing', () => {
     const f = fixture()
     f.invite()
     const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), other = f.group()
-    // The teammate's own Mac takes another person's work in their own account; its Harness Team account takes none (task #4120).
+    // The teammate's own Mac takes another person's work in their own account; another person's computer takes none (task #4120).
     ownMachine(f, 'peer')
     const mate = f.add('mate', 'peer', group), own = f.add('own', 'peer', group)
-    placeOn(f, mate, 'peer', 'peer-team', true)
+    placeOn(f, mate, 'owner', 'owner-studio')
     expect(() => f.run({ type: 'conversation.agent', conversationId: other, agentId: mate, present: true, lead: false }, as(lead)))
-      .toThrow(expect.objectContaining({ code: 'TEAM_ACCOUNTS_REMOVED' }))
+      .toThrow(expect.objectContaining({ code: 'NOT_YOUR_COMPUTER' }))
     expect(f.state.conversations.find(c => c.id === other)!.agentIds).not.toContain(mate)
     f.run({ type: 'conversation.agent', conversationId: other, agentId: own, present: true, lead: false }, as(lead))
     expect(f.state.conversations.find(c => c.id === other)!.agentIds).toContain(own)
@@ -2315,7 +2298,7 @@ describe('role kinds decide nothing', () => {
 // The team-access check applies to every agent added to a task (spec, "Kept as access"): one named into it, one that posts
 // into it and one that opens it join it, as conversation.agent adds one (final review of the branch).
 describe('an agent joining a task by a post or by opening it', () => {
-  /** A teammate's agent (mate) in its Mac's Harness Team account, which Swarm v3 gives no new work (task #4120), and the project
+  /** A teammate's agent (mate) on another person's computer, which Swarm v3 gives none of its work (task #4120), and the project
    *  owner's own agent (mine) on the owner's own computer. */
   function teammate() {
     const f = fixture()
@@ -2323,11 +2306,11 @@ describe('an agent joining a task by a post or by opening it', () => {
     const lead = f.add('lead', 'owner', 'lead', true), group = f.group(), other = f.group()
     ownMachine(f, 'peer')
     const mate = f.add('mate', 'peer', group), mine = f.add('mine', 'owner', group)
-    placeOn(f, mate, 'peer', 'peer-team', true)
+    placeOn(f, mate, 'owner', 'owner-studio')
     placeOn(f, mine, 'owner', 'owner-mac')
     return { f, lead, group, other, mate, mine }
   }
-  const refused = expect.objectContaining({ code: 'TEAM_ACCOUNTS_REMOVED' })
+  const refused = expect.objectContaining({ code: 'NOT_YOUR_COMPUTER' })
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   const post = (conversationId: string, recipientIds: string[] = []) =>
     ({ type: 'message.send', conversationId, text: 'Look at this.', replyTo: null, recipientIds }) as Command
@@ -3224,25 +3207,21 @@ describe('machine.remove', () => {
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
-  // Review of #1986 (Minor 2, intended): the adds a host makes by itself, the owner's machine running its Lead and a Mac's
-  // Harness Team account joining where the Mac is, take an overdue cleanup's place like the owner's own add; a fresh one
-  // still holds them off without an error.
-  it('lets the automatic adds take an overdue cleanup\'s place, and leaves a fresh one waiting', () => {
+  // Review of #1986 (Minor 2, intended): the add a host makes by itself, the owner's machine running its Lead, takes an overdue
+  // cleanup's place like the owner's own add; a fresh one still holds it off without an error.
+  it('lets the automatic add take an overdue cleanup\'s place, and leaves a fresh one waiting', () => {
     const f = fixture()
     const fresh = new Date(1000 + 30 * 60_000 - 1).toISOString()
-    f.state.machineCleanups = [{ machineId: 'host', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh },
-      { machineId: 'team', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh }]
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh }]
     const add = (machineId: string) => ({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
       ifMissing: true }) as Command
-    const owners = (now: number, hostMachineId?: string) => ({ contribution: { machineOwnerId: 'owner', contributorId: 'owner', ...(hostMachineId ? { hostMachineId } : {}) }, now })
+    const owners = (now: number) => ({ contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now })
     // Fresh: the owner's host skips its automatic add and nothing changes.
     f.run(add('host'), owner, owners(1000 + 30 * 60_000 - 1))
-    expect([f.state.machines ?? [], f.state.machineCleanups!.map(c => c.machineId)]).toEqual([[], ['host', 'team']])
-    // Overdue: the owner's host adds its machine, then its Team account joins where that Mac is.
-    const later = 1000 + 60 * 60_000
-    f.run(add('host'), owner, owners(later))
-    f.run(add('team'), owner, owners(later, 'host'))
-    expect(f.state.machines!.map(m => [m.machineId, m.hostMachineId, m.removal])).toEqual([['host', undefined, undefined], ['team', 'host', undefined]])
+    expect([f.state.machines ?? [], f.state.machineCleanups!.map(c => c.machineId)]).toEqual([[], ['host']])
+    // Overdue: the owner's host adds its machine.
+    f.run(add('host'), owner, owners(1000 + 60 * 60_000))
+    expect(f.state.machines!.map(m => [m.machineId, m.removal])).toEqual([['host', undefined]])
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
@@ -4541,7 +4520,7 @@ describe('lead.switch', () => {
     const pm = f.add('pm', contributorId, 'lead', true)
     // Its person's own computer (Swarm v3 has no Team accounts, task #4120).
     f.state.machines = [{ machineId: 'host', name: 'Studio', contributorId, membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation,
-      generation: 'g1', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000, sessionKind: 'computer',
+      generation: 'g1', cwd: '/repo', engines: ['claude', 'codex'], maxAgents: 2, paused: false, observation: { generation: 'g1', receivedAt: 1000,
         ...(capabilities ? { capabilities } : {}),
         profiles: [{ engine: 'codex', id: WORK, label: 'Work', leftPercent: 80, resetsAt: null }],
         resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
@@ -4822,7 +4801,7 @@ describe('lead.switch', () => {
     expect(bad.agent().profileId).toBeUndefined()
   })
 
-  it('refuses a borrower of a lent machine, and lets the machine\'s lender and a Team account\'s owner switch', () => {
+  it('refuses a borrower of a lent machine, and lets the machine\'s lender switch', () => {
     // Tony (peer) borrowed Ken's Mac: the pool's contributor is Tony, the machine's owner is Ken.
     const lent = setup(['leadSwitch'], 'peer')
     lent.agent().machineOwnerId = 'ken'
@@ -4831,11 +4810,6 @@ describe('lead.switch', () => {
     lender.agent().machineOwnerId = 'peer'
     lender.f.run(lender.request, peer)
     expect(lender.agent().switchRequest).toMatchObject({ requestedBy: 'peer' })
-    const team = setup(['leadSwitch'], 'peer')
-    team.f.state.machines![0]!.observation!.sessionKind = 'team'
-    team.agent().machineOwnerId = 'peer'
-    team.f.run(team.request, peer)
-    expect(team.agent().switchRequest).toBeDefined()
   })
 
   it('serves a machine\'s accounts only to its owner and the owners of projects whose PM runs there', () => {
@@ -5203,7 +5177,7 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     expect(() => f.run(rename(agentId, 'Studio'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
   })
 
-  it('refuses a non-member and an agent of the machine owner\'s Team account, writing nothing', () => {
+  it('refuses a non-member and an agent of the machine owner, writing nothing', () => {
     const f = fixture()
     f.invite()
     const agentId = f.add('mine', 'peer')
@@ -5211,7 +5185,7 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     const before = JSON.stringify(f.state)
     // Not a member of this Swarm at all.
     expect(() => f.run(rename(agentId, 'Studio'), { kind: 'person', userId: 'stranger', email: 'stranger@example.com' }), 'non-member').toThrow()
-    // A Team account's session acts as an agent, here one the machine owner runs: never as the person.
+    // An agent the machine owner runs acts as an agent, never as the person.
     expect(() => f.run(rename(agentId, 'Studio'), { kind: 'agent', agentId: team, machineOwnerId: 'host-owner' }), 'team session').toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(JSON.stringify(f.state)).toBe(before)
   })

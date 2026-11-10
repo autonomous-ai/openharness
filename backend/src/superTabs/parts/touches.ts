@@ -1,6 +1,5 @@
 import type { Command, CommandContext } from '../commands.js'
 import type { Actor, CommandEffects, SuperTabState } from '../model.js'
-import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
@@ -27,13 +26,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   const leadCheck = (projectId: string | undefined) => { if (actor.kind === 'agent') group(leadGroupOf(projectId)) }
   const agentProject = (id: string) => { const a = before.agents.find(x => x.id === id); return a && agentProjectId(before, a) }
   /** Every slot `machineSlots` counts for a start on this machine: the Mac and its team account share them (machines.ts). */
-  const slots = (machineId: string) => {
-    const pool = before.machines?.find(m => m.machineId === machineId)
-    const mac: ContributedMachine | undefined = pool?.hostMachineId ? before.machines?.find(m => m.machineId === pool.hostMachineId) : pool
-    for (const id of new Set([machineId, mac?.machineId, ...(before.machines ?? []).filter(m => mac && m.hostMachineId === mac.machineId).map(m => m.machineId)])) {
-      if (id) machine(id)
-    }
-  }
+  const slots = (machineId: string) => machine(machineId)
 
   // D1: the actor's own part (spec ruling 2).
   if (actor.kind === 'person') member(actor.userId)

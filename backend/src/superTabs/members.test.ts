@@ -33,7 +33,7 @@ function swarm(quotas: Quota[] = [subscription()]) {
   const machine = (machineId: string, contributorId: string, extra: Partial<ContributedMachine> = {}): ContributedMachine => ({
     machineId, name: machineId, contributorId, membershipGeneration: state.people.find(p => p.id === contributorId)!.generation, generation: 'g1',
     cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-    observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources, tools: {}, quotas, runningHarnessIds: [], stoppedHarnessIds: [],
+    observation: { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas, runningHarnessIds: [], stoppedHarnessIds: [],
       capabilities: ['regularAgent'] }, ...extra })
   state.machines = [machine('kai-mac', 'kai'), machine('owner-mac', 'owner')]
   const project = (name: string) => run({ type: 'project.create', name, visibility: 'public', brief: '' }).result.projectId as string

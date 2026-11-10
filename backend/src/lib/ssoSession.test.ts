@@ -542,13 +542,6 @@ describe('signing out', () => {
     expect(fakes.sessions[0]!.ssoRefresh ?? null).toBeNull()
   })
 
-  it('a session naming no computer cannot turn one into a team machine without its machine key', async () => {
-    const { data } = await signIn(ASK_COMPUTER)
-    const res = await app.inject({ method: 'POST', url: '/api/auth/handoff', headers: { authorization: `Bearer ${String(data.token)}` },
-      payload: { kind: 'team', computerId: 'a1b2c3d4e5f60718' } })
-    expect(res.statusCode).toBe(403)
-    expect(res.json().error.code).toBe('HANDOFF_NOT_ALLOWED')
-  })
 })
 
 describe('billing, which still needs an SSO access token', () => {

@@ -49,7 +49,7 @@ describe('a project switched to the Board before Swarm v4, through the store', (
     const say = () => execute({ type: 'message.send', conversationId: web.conversationId, text: 'Hello', replyTo: null, recipientIds: [] }, peer)
 
     await storeBoardSettings(db, tab, web.projectId, { boardMode: true, canChat: [] })
-    await upload()
-    await say()
+    expect((await upload()).attachment.id).toEqual(expect.any(String))
+    expect((await say()).result.messageId).toEqual(expect.any(String))
   })
 })

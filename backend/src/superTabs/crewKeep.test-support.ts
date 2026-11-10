@@ -11,10 +11,10 @@ export type Pool = NonNullable<SuperTabState['machines']>[number]
 
 /** A fresh machine reading: online now, signed in, quota half used resetting in [resetIn], [diskFree] bytes free. */
 export function machine(machineId: string, options: { receivedAt?: number; signedIn?: boolean; usedPercent?: number; resetIn?: number; known?: boolean;
-  diskFree?: number; team?: boolean; hostMachineId?: string } = {}): Pool {
+  diskFree?: number } = {}): Pool {
   return {
     machineId, name: machineId, cwd: `/swarms/${machineId}`, engines: ['claude'], maxAgents: 8, contributorId: 'owner', membershipGeneration: 'g',
-    generation: `${machineId}-g`, paused: false, scope: 'swarm', ...(options.hostMachineId ? { hostMachineId: options.hostMachineId } : {}),
+    generation: `${machineId}-g`, paused: false, scope: 'swarm',
     observation: {
       receivedAt: options.receivedAt ?? NOW - 5_000, runningHarnessIds: [], stoppedHarnessIds: [],
       resources: { diskFreeBytes: options.diskFree ?? 200 * GB, diskTotalBytes: 500 * GB, memoryUsedBytes: 0, memoryTotalBytes: 64 * GB },

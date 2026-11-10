@@ -4,7 +4,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma, type PrismaClient } from '@prisma/client'
 
 // Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
-// stores, as routes/control.test.ts does, so the real authentication and team gate run.
+// stores, as routes/control.test.ts does, so the real authentication runs.
 const fakes = vi.hoisted(() => {
   const redis = new Map<string, string>()
   const sessions: Array<Record<string, unknown> & { id: string }> = []
@@ -30,12 +30,6 @@ const fakes = vi.hoisted(() => {
           const row = { id: `s${sessions.length + 1}`, ...data }; sessions.push(row); return row
         }),
         findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => pick(where)),
-      },
-      machine: {
-        findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-          ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
-        // Other accounts' Team machines on the redeeming computer (superTabs/computerMoves.ts teamCleanupPending): none here.
-        aggregateRaw: vi.fn(async () => []),
       },
     },
     user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },
@@ -433,15 +427,13 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
 })
 
 // The web calls Swarm routes straight from the browser with the person's own sign-in (docs/specs/2026-10-30-web-swarm-
-// direct.md): a viewer session reaches them as the person, through the real authentication; a team sign-in is still
-// refused as the person (the store refuses it on the routes the team gate admits for its agents, superTabBuddies).
+// direct.md): a viewer session reaches them as the person, through the real authentication.
 describe('the browser\'s own sign-in on Swarm routes', () => {
   let app: FastifyInstance
-  let viewer: string, team: string
+  let viewer: string
   const seen: Array<{ route: string; user: AuthUser }> = []
   beforeAll(async () => {
-    viewer = (await redeemHandoff((await startHandoff(fakes.user.id, 'viewer')).code, 'Safari on iPhone'))!.token
-    team = (await redeemHandoff((await startHandoff(fakes.user.id, 'team')).code, 'MacBook Pro · Team', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))!.token
+    viewer = (await redeemHandoff((await startHandoff(fakes.user.id)).code, 'Safari on iPhone'))!.token
     app = Fastify()
     app.setErrorHandler(errorHandler)
     registerAuthMiddleware(app)
@@ -467,16 +459,6 @@ describe('the browser\'s own sign-in on Swarm routes', () => {
     expect(post.statusCode).toBe(200)
     expect(seen.map(s => s.route)).toEqual(['parts', 'commands'])
     for (const { user } of seen) expect(user).toMatchObject({ sub: 'owner', harnessSessionKind: 'viewer' })
-  })
-
-  it('refuses a team sign-in as the person, before any Swarm is read', async () => {
-    const auth = { authorization: `Bearer ${team}` }
-    for (const url of ['/api/super-tabs/tab-1/parts', '/api/super-tabs/list']) {
-      const res = await app.inject({ method: 'GET', url, headers: auth })
-      expect(res.statusCode, url).toBe(403)
-      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
-    }
-    expect(seen).toEqual([])
   })
 
   it('refuses no sign-in at all', async () => {

@@ -20,6 +20,7 @@ import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startAccountNames } from './superTabs/migration/accountNamesJob.js'
+import { startTeamMachines } from './superTabs/migration/teamMachinesJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
@@ -72,6 +73,7 @@ async function start(): Promise<void> {
   let stopSweeps = (): void => {}
   let stopLegacyDrop = (): void => {}
   let stopAccountNames = (): void => {}
+  let stopTeamMachines = (): void => {}
   let stopTimeChecks = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
@@ -91,6 +93,7 @@ async function start(): Promise<void> {
     stopSweeps()
     stopLegacyDrop()
     stopAccountNames()
+    stopTeamMachines()
     stopTimeChecks()
     stopDeliveries()
     stopRepush()
@@ -137,6 +140,9 @@ async function start(): Promise<void> {
   stopLegacyDrop = startLegacyDrop(prisma, swarms)
   // Once after this release: each Swarm's people take their accounts' names (superTabs/migration/accountNamesJob.ts).
   stopAccountNames = startAccountNames(prisma, swarms)
+  // Once after this release: Harness Team accounts' machines leave every Swarm, and their account rows go
+  // (superTabs/migration/teamMachinesJob.ts).
+  stopTeamMachines = startTeamMachines(prisma, swarms)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
   // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
   stopTimeChecks = startTimeChecks(prisma, swarms)

@@ -1082,7 +1082,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
     f.edit(state => {
       const generation = state.people.find(p => p.id === owner.sub)!.generation
       const pool = state.machines!.find(m => m.machineId === 'host')!
-      pool.observation = { generation: pool.generation, receivedAt: MIGRATED, sessionKind: 'computer',
+      pool.observation = { generation: pool.generation, receivedAt: MIGRATED,
         resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
           deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [],
         runningHarnessIds: ['worker-harness'], stoppedHarnessIds: ['ghost-harness', 'secret-harness', 'stale-harness'] } as never
@@ -1277,7 +1277,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
           state.agents.find(a => a.id === buddy)!.buddyOf = { personId: peer.sub, generation: peerGeneration }
           const generation = state.people.find(p => p.id === owner.sub)!.generation
           const pool = state.machines!.find(m => m.machineId === 'host')!
-          pool.observation = { generation: pool.generation, receivedAt: MIGRATED, sessionKind: 'computer',
+          pool.observation = { generation: pool.generation, receivedAt: MIGRATED,
             resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
               deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [],
             runningHarnessIds: ['worker-harness'], stoppedHarnessIds: ['listed-harness', 'quiet-secret-harness'] } as never

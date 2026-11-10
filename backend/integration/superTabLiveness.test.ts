@@ -619,13 +619,6 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(held.map(row => row.messageId)).toEqual(page.map(row => row.id))
   })
 
-  it('never answers a team session from its person\'s held answer: the team session meets its own checks', async () => {
-    const f = await swarm()
-    await held(f)
-    f.clock.now += 1_000
-    const team: AuthUser = { ...host, harnessSessionId: 'team-elsewhere', harnessSessionKind: 'team', harnessComputerId: 'elsewhere' }
-    await expect(f.timed.deliveries(team, f.tab, f.lead)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
-  })
 })
 
 // Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
@@ -1142,19 +1135,6 @@ describe('a session reopened after its agent was removed', () => {
     await db.swarmMachine.update({ where: { id: row.id }, data: { data: { ...row.data as object, closingSessions: [] } } })
     await resume(f)
     expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
-  })
-
-  it('never past a hold: a session its Team account is held for stays out, and the hold stands', async () => {
-    const f = await removed()
-    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
-    const data = structuredClone(row.data) as { closingSessions: Array<Record<string, unknown>> }
-    for (const close of data.closingSessions) if (close.harnessId === f.harness.other) Object.assign(close, { heldFor: 'lead', since: f.clock.now })
-    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
-    await resume(f)
-    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
-    const after = (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })).data as { closingSessions: Array<Record<string, unknown>>; removedSessions?: unknown[] }
-    expect(after.closingSessions.find(c => c.harnessId === f.harness.other)).toMatchObject({ heldFor: 'lead' })
-    expect(after.removedSessions ?? []).toEqual([])
   })
 
   // Security review 1 of #2601: the record every Swarm registering this session writes (sessionScope.ts bindSession).
