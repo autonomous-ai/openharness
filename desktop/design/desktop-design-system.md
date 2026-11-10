@@ -438,9 +438,23 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Dee, 2026-11-09: some people keep it out of git). Its person reads it in
   `AppType.mono` and changes it here: `Edit` (a compact `DesktopPill`) turns
   the text into a field, and `Save` and `Cancel` take its place; Save waits for
-  a change. A save names the version it read, so a change the agent made
+  a change. Under the agent's own file, read only, is what else instructs it
+  in its folder (anh Dee, 2026-11-10: Faye's, in lampOS): the project's
+  `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each with its name
+  in 13 medium (its path when it sends one), its text in `AppType.mono`,
+  selectable, and `Cut at 64 KB.` in metadata grey after a text it cut, a
+  hairline between them. A file with the text of one above it (a `CLAUDE.md`
+  linked to `AGENTS.md`) says `Same as AGENTS.md.` instead of repeating it. A
+  file it did not show gets one metadata line (`CLAUDE.md is a link.`,
+  `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`). An older computer sends
+  none: the agent's own file alone. Edit, Save and the 64 KB limit are for the
+  agent's own file: while it is typed it has the pane to itself, and the
+  others are back after Save or Cancel. A read the computer refuses for the
+  agent's own file still shows them, under its one line. A save names the
+  version it read, so a change the agent made
   meanwhile is refused (`It changed on Mac 3. Close it and open it again.`)
-  and the typed text stays. No file yet: `No instructions yet. Tell Faye how
+  and the typed text stays. Nothing to show (no file of its own, and none of
+  the others has text): `No instructions yet. Tell Faye how
   you want it to work, and it writes them here.` A computer that cannot be
   asked says what to do in one line, with a retry icon: `Update Harness on
   Mac 3.`, `Update Harness on this computer.`, `Mac 3 is offline.`, `Faye isn't
@@ -625,7 +639,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Line, New task · #13), its first line or a review's verdict, and Read for
   the rest and Open in GitHub.
 - **Long messages.** Every message shows whole: nothing folds behind More
-  (anh Dee, 2026-11-09).
+  (anh Dee, 2026-11-09). So does a code block in it: every line, a line wider
+  than the column wrapped, never a scroll inside the chat, with its language
+  and Copy over it; a clipboard that refuses says `Couldn't copy it.`
 - **No reactions.** A message has no reaction chips under it and no reaction
   button in its actions, whatever the server sends with it (anh Dee,
   2026-11-09).
@@ -674,7 +690,7 @@ Top to bottom:
  ◌  Wren             offline  a grey face
  ◉  Docs bot   Mac Studio     your Personal Swarm only: a pane you run that is not in the Swarm yet, with its computer
  Projects              ⌄  +  quiet heading; ⌄ folds the list (open); + opens New project
- #  lampos                    a project's channel; bold: something new
+ #  lampos                    a project's channel; bold: something new; your Personal Swarm: each repo your panes work in
  Your Machines         ›     quiet heading, folded, but open by itself while a computer is off; each row a computer of this account, `offline` at its right when it is
                               (a click opens Manage's Machines)
  Top Teams             ›     quiet heading, folded, only once someone has points (in a Swarm of one, a board of one zero shows nothing)
@@ -687,9 +703,10 @@ Top to bottom:
 | Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
-| Agent state | `SwarmAgentStates` (`super_tabs/agent_state.dart`) | An agent's row ends with one state in the row's detail, in this order: `offline` (its machine reports its session gone, `SuperTabAgent.downSince`), `on #12` (its project's board has the open issue labelled `status:taken` and `builder:<its name>`), `free` (its latest post in its project's channel says `free: <name>`, as the Swarm's basics ask of an agent with no task); none of them shows nothing. An offline agent's face is grey (`SuperTabAvatar.agent` draws it so, `super-face-offline`) wherever it is drawn: its row, its 1:1 chat's header and its posts. Read only for the projects the person's own agents are in: a channel again when the Swarm says it moved, a board once a minute while the Swarm is on screen. |
+| Agent state | `SwarmAgentStates` (`super_tabs/agent_state.dart`) | An agent's row ends with one state in the row's detail, in this order: `offline` (its machine reports its session gone, `SuperTabAgent.downSince`), `on #12` (its project's board has the open issue labelled `status:taken` and `builder:<its name>`; in a Personal Swarm, whose projects name no repository, the board of the repo its own pane works in), `free` (its latest post in its project's channel says `free: <name>`, as the Swarm's basics ask of an agent with no task); none of them shows nothing. An offline agent's face is grey (`SuperTabAvatar.agent` draws it so, `super-face-offline`) wherever it is drawn: its row, its 1:1 chat's header and its posts. Read only for the projects the person's own agents are in: a channel again when the Swarm says it moved, a board once a minute while the Swarm is on screen. |
 | Quiet heading | `SuperTabQuietHeading` | 12 `textSecondary`, its text level with the faces' left edge. A group that folds shows `chevronDown` (`chevronRight` folded) beside its name, always; the org name's chevron shows only while hovered or focused. Your Team and Projects start open, Your Machines and Top Teams folded, except that Your Machines opens by itself while a computer is off, so why an agent is silent is in sight; the reader's choice is kept and then stands. `onAdd` puts the `plus` button at its right, as on every section heading: Your Team's opens New agent, Projects' New project. Your Team also has `onAttach`, the `link` button before the + (tooltip Attach agent; anh Dee 2026-11-09: "like ⌘P, while + is like ⌘N"): ⌘P's picker titled Attach agent, of the Claude Code and Codex sessions running on its person's own computers, those on the team left out and the rest unavailable with why; the one chosen joins with its own chat, which opens. |
 | Pane row | `SuperTabQuietRow` (`super_tabs/personal_agents.dart`) | In a person's own Personal Swarm, while they are alone in it, every Claude Code or Codex session they run in their tabs that is not in the Swarm yet (a running session on one of their own computers; a plain shell, a stopped session, a shared computer's and a Team account's are no agents of theirs) is a row after their agents, by name, each once. Its face is the one it wears once it joins (`swarmAgentId`, the Swarm's id for it), its name the one its pane shows (the folder it works in while that is still Untitled Pane), its computer the detail (`Mac laptop · offline` while that computer is). Nothing is sent for it: a click brings forward the tab where it was last focused (else the first that holds it) with the pane focused. |
+| Personal project | `PersonalProjects` (`super_tabs/personal_projects.dart`) | In a person's own Personal Swarm, while they are alone in it, Projects are the repos their panes work in: the same repo on two of their computers is one project, named after the repo (`api`; `api (acme/api)` beside another `api`). A pane with no repo is in no project and stays a row of Your Team. A project whose panes are all closed leaves the list until one opens again. Its Tasks board reads the repo's GitHub issues with this computer's `gh`; the server learns only the project's name. No project is named after a tab: the tab projects of v3 are closed once (an empty one goes, one with messages is kept read-only and out of the list). |
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 

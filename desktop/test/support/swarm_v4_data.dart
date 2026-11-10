@@ -400,6 +400,14 @@ class SwarmV4Computer {
   /// The next save is applied but its answer never comes, as when a link drops after the computer wrote the file.
   bool loseNextReply = false;
 
+  /// What else instructs the agent in its folder, as a read's answer carries it (`shared`, `skipped`), and beside the
+  /// code of a refused read. Null is a computer that sends none (an older one). Objects, so a test can send what the
+  /// app does not understand.
+  Object? shared, skipped;
+
+  /// Called as a read arrives, and the read is not answered until what it returns completes: a computer slow to answer.
+  Future<void> Function()? hold;
+
   static String versionOf(String? text) =>
       text == null ? '' : 'v${text.hashCode}';
 
@@ -409,13 +417,24 @@ class SwarmV4Computer {
     payload,
   ) async {
     requests.add((machineId, type, payload));
+    final around = {
+      if (type == 'agent_instructions_read') ...{
+        'shared': ?shared,
+        'skipped': ?skipped,
+      },
+    };
+    if (type == 'agent_instructions_read') await hold?.call();
     if (refuse case final code?) {
-      throw WsRequestFailure(responseType: '${type}_result', code: code);
+      throw WsRequestFailure(
+        responseType: '${type}_result',
+        code: code,
+        payload: {'error': code, ...around},
+      );
     }
     final key = '${payload['agentId']}/${payload['name']}';
     final text = files[key];
     if (type == 'agent_instructions_read') {
-      return {'text': text, 'version': versionOf(text)};
+      return {'text': text, 'version': versionOf(text), ...around};
     }
     if (payload['version'] != versionOf(text)) {
       throw WsRequestFailure(responseType: '${type}_result', code: 'CHANGED');

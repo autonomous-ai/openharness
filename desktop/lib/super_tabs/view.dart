@@ -418,6 +418,8 @@ class _SuperTabViewState extends State<SuperTabView>
       : SwarmAgentStates(
           controller: c,
           github: _github,
+          localRepository: (agent) =>
+              PersonalProjects.of(widget.app!).agentRepository(c, agent),
           // A test never waits for the next read of a board.
           boardEvery: kUnderTest ? null : const Duration(minutes: 1),
         );
@@ -1377,7 +1379,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// they read, sending to no PM, or one project, whose PM it alone sends to.
   /// A quiet menu beside New session, shown while it is on.
   Widget _chatSessionProject(bool writable) {
-    final projects = c.snapshot?.projects ?? const <SuperTabProject>[];
+    final projects = c.snapshot?.listedProjects ?? const <SuperTabProject>[];
     final chosen = projects
         .where((p) => p.id == _chosenSessionProject())
         .firstOrNull;
@@ -6564,6 +6566,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                   controller: c,
                                   conversationId: c.selectedId,
                                   github: _github,
+                                  app: widget.app,
                                   openNumber: _issue?.number,
                                   refreshEvery: kUnderTest
                                       ? null

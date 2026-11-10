@@ -87,7 +87,7 @@ describe('an agent\'s instructions file through the socket', () => {
     await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
     await vi.waitFor(() => expect(replied()).toHaveLength(1), SETTLED)
     const [{ payload: read }] = replied()
-    expect(read).toEqual({ text: 'SECRET words', version: expect.stringMatching(/^[0-9a-f]{64}$/), shared: [{ name: 'AGENTS.md', text: 'SECRET shared words', truncated: false }] })
+    expect(read).toEqual({ text: 'SECRET words', version: expect.stringMatching(/^[0-9a-f]{64}$/), shared: [{ name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex'], text: 'SECRET shared words', truncated: false }] })
     await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'SECRET rewrite', version: read.version })
     await vi.waitFor(() => expect(replied()).toHaveLength(2), SETTLED)
     expect(replied().map((reply) => reply.type)).toEqual(['agent_instructions_read_result', 'agent_instructions_write_result'])

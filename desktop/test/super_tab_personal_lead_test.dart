@@ -9,6 +9,7 @@ import 'package:harness/super_tabs/personal_projects.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'support/super_tab_fixture.dart';
 
 // Huy, 11-04 (task #2633): in his Personal Swarm, a message in # Games, which
 // had no Lead, said "Not sent, this chat has no Lead". Now Desktop starts the
@@ -31,13 +32,28 @@ Agent _agent(String id, {String? remote, required String cwd}) => Agent(
 var _paneIds = 7000;
 
 /// One desk tab of the person's on this Mac with one pane: in a checkout of
-/// [remote], or in a plain folder.
+/// [remote], or in a plain folder beside a project made by hand.
 void _desk(SuperTabLaunchFixture f, {String? remote, required String cwd}) {
   f.app.machineStates['m']!.agents = [_agent('n1', remote: remote, cwd: cwd)];
   f.app.swarms.add(
     Swarm(id: 'desk', name: 'Games')
       ..panes.add(TerminalPane(id: _paneIds++, machineId: 'm', agentId: 'n1')),
   );
+  if (remote == null) _byHand(f, 'Games');
+}
+
+/// A project the person made by hand, [name]: a pane with no repo is in no project (Swarm v4), so a project with no repo
+/// is one made so.
+void _byHand(SuperTabLaunchFixture f, String name) {
+  final server = f.connection.server.state;
+  (server['projects'] ??= [projectFixture('lead', 'Personal', 'lead')] as List)
+      .add(
+        projectFixture('by-hand', name, 'chat-by-hand', visibility: 'private'),
+      );
+  (server['conversations'] as List).add({
+    ...conversationFixture('chat-by-hand', 'Lead'),
+    'projectId': 'by-hand',
+  });
 }
 
 /// The fixture's Swarm, made the person's Personal one, with its projects made

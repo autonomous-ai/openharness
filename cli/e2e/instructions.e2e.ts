@@ -8,8 +8,10 @@
  * - A Product Manager in a repository with no `agents` folder reads as the project's two files, sealed: the relay holds not a
  *   word of them, and saving her own file leaves them as they were.
  * - Files made to break it: a file larger than any instructions, links that lead out of the project, bytes that are not text,
- *   a file that cannot be opened, a named pipe, a folder. What can be shown is shown, what cannot is left out, and the read
- *   neither fails nor waits.
+ *   a file that cannot be opened, a named pipe, a folder. What can be shown is shown, what cannot is left out and said to be
+ *   (`skipped`, with why), and the read neither fails nor waits.
+ * - An error of her own file (a name it cannot have, a file over the limit, not text) leaves the project's files beside it.
+ * - An agent in a subfolder of a repository is told of the files above its own, with the engines that load each.
  * - Writers at the same time, whichever way a file is replaced: every answer is whole.
  * - The machine offline: the read is refused at once, and answered with what its disk holds now when it is back.
  *
@@ -25,7 +27,10 @@ import { until } from './harness/daemon.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
 import { RelayPhone } from './harness/relayPhone.js'
 
-type Shared = Array<{ name: string; text: string; truncated: boolean }>
+type Shared = Array<{ name: string; path: string; loadedBy: string[]; text: string; truncated: boolean }>
+/** The two files of the agent's folder as they are told: where, and which engine loads each (Codex AGENTS.md, Claude Code CLAUDE.md). */
+const fine = (name: 'AGENTS.md' | 'CLAUDE.md', text: string, truncated = false) => ({ name, path: name, loadedBy: [name === 'AGENTS.md' ? 'codex' : 'claude'], text, truncated })
+const left = (name: 'AGENTS.md' | 'CLAUDE.md', why: string) => ({ name, path: name, loadedBy: [name === 'AGENTS.md' ? 'codex' : 'claude'], why })
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)
@@ -82,7 +87,7 @@ describe('an agent\'s instructions, as the owner reads them from another compute
     writeFileSync(join(folder, 'AGENTS.md'), agents)
     writeFileSync(join(folder, 'CLAUDE.md'), '@AGENTS.md\n')
     expect(existsSync(join(folder, 'agents'))).toBe(false)
-    const shared: Shared = [{ name: 'AGENTS.md', text: agents, truncated: false }, { name: 'CLAUDE.md', text: '@AGENTS.md\n', truncated: false }]
+    const shared: Shared = [fine('AGENTS.md', agents), fine('CLAUDE.md', '@AGENTS.md\n')]
     const first = await ask('agent_instructions_read')
     expect(first).toMatchObject({ text: null, version: '' })
     expect(first.shared).toEqual(shared)
@@ -108,38 +113,51 @@ describe('an agent\'s instructions, as the owner reads them from another compute
     mkdirSync(outside)
     writeFileSync(join(outside, 'secret.md'), 'SECRET-OUTSIDE-THE-PROJECT\n')
     const agentsFile = join(folder, 'AGENTS.md'), claudeFile = join(folder, 'CLAUDE.md')
-    const fine = (name: string, text: string): Shared[number] => ({ name, text, truncated: false })
-    const cases: Array<[string, () => void, Shared | undefined]> = [
+    // What is shown, and what is there and not shown, with why.
+    const cases: Array<[string, () => void, Shared | undefined, Array<{ name: string; why: string }> | undefined]> = [
       // 6 MB: the limit falls inside the character after the 21 845th (three bytes each), so the text ends before it.
-      ['a file far over the limit, cut at a whole character', () => writeFileSync(agentsFile, euro.repeat(2_000_000)), [{ name: 'AGENTS.md', text: euro.repeat(21_845), truncated: true }]],
-      ['an empty file', () => writeFileSync(agentsFile, ''), [fine('AGENTS.md', '')]],
+      ['a file far over the limit, cut at a whole character', () => writeFileSync(agentsFile, euro.repeat(2_000_000)), [fine('AGENTS.md', euro.repeat(21_845), true)], undefined],
+      // Codex loads no empty file, so nothing loads this one.
+      ['an empty file', () => writeFileSync(agentsFile, ''), [{ ...fine('AGENTS.md', ''), loadedBy: [] }], undefined],
       ['links that lead out of the project, and a link to such a link', () => {
         symlinkSync(join(outside, 'secret.md'), agentsFile)
         symlinkSync('AGENTS.md', claudeFile)
-      }, undefined],
-      ['a link to nothing', () => symlinkSync(join(outside, 'missing.md'), claudeFile), undefined],
-      ['one file that is a link to the other: the real one, once', () => {
+      }, undefined, [left('AGENTS.md', 'link'), left('CLAUDE.md', 'link')]],
+      ['a link to nothing', () => symlinkSync(join(outside, 'missing.md'), claudeFile), undefined, [left('CLAUDE.md', 'link')]],
+      ['one file that is a link to the other: both, the one text', () => {
         writeFileSync(agentsFile, 'Real.\n')
         symlinkSync('AGENTS.md', claudeFile)
-      }, [fine('AGENTS.md', 'Real.\n')]],
+      }, [fine('AGENTS.md', 'Real.\n'), fine('CLAUDE.md', 'Real.\n')], undefined],
+      ['a link to a file in a subfolder of the project, and one to a folder', () => {
+        mkdirSync(join(folder, 'docs'))
+        writeFileSync(join(folder, 'docs', 'rules.md'), 'Rules.\n')
+        symlinkSync('docs/rules.md', agentsFile)
+        symlinkSync('docs', claudeFile)
+      }, [fine('AGENTS.md', 'Rules.\n')], [left('CLAUDE.md', 'not_a_file')]],
+      ['links out of the project, through a folder that is a link out and by a way up', () => {
+        symlinkSync(outside, join(folder, 'docs'))
+        symlinkSync('docs/secret.md', agentsFile)
+        symlinkSync('../../outside/secret.md', claudeFile)
+      }, undefined, [left('AGENTS.md', 'link'), left('CLAUDE.md', 'link')]],
       ['bytes that are not text beside text', () => {
         writeFileSync(agentsFile, 'Fine.\n')
         writeFileSync(claudeFile, Buffer.from([0x41, 0xe9, 0x42]))
-      }, [fine('AGENTS.md', 'Fine.\n')]],
-      ['text with a byte-order mark and two kinds of line ending, as it is', () => writeFileSync(agentsFile, '\u{feff}one\r\ntwo\n'), [fine('AGENTS.md', '\u{feff}one\r\ntwo\n')]],
-      ['folders by those names', () => { mkdirSync(agentsFile); mkdirSync(claudeFile) }, undefined],
+      }, [fine('AGENTS.md', 'Fine.\n')], [left('CLAUDE.md', 'not_text')]],
+      ['text with a byte-order mark and two kinds of line ending, as it is', () => writeFileSync(agentsFile, '\u{feff}one\r\ntwo\n'), [fine('AGENTS.md', '\u{feff}one\r\ntwo\n')], undefined],
+      ['folders by those names', () => { mkdirSync(agentsFile); mkdirSync(claudeFile) }, undefined, [left('AGENTS.md', 'not_a_file'), left('CLAUDE.md', 'not_a_file')]],
     ]
-    if (canBeRefused) cases.push(['a file this user may not open', () => { writeFileSync(claudeFile, 'Private.\n'); chmodSync(claudeFile, 0) }, undefined])
+    if (canBeRefused) cases.push(['a file this user may not open', () => { writeFileSync(claudeFile, 'Private.\n'); chmodSync(claudeFile, 0) }, undefined, [left('CLAUDE.md', 'unreadable')]])
     if (process.platform !== 'win32') {
-      cases.push(['a named pipe, which an open would wait on for ever', () => { writeFileSync(agentsFile, 'Before the pipe.\n'); execFileSync('mkfifo', [claudeFile]) }, [fine('AGENTS.md', 'Before the pipe.\n')]])
+      cases.push(['a named pipe, which an open would wait on for ever', () => { writeFileSync(agentsFile, 'Before the pipe.\n'); execFileSync('mkfifo', [claudeFile]) }, [fine('AGENTS.md', 'Before the pipe.\n')], [left('CLAUDE.md', 'not_a_file')]])
     }
-    for (const [what, set, expected] of cases) {
-      for (const file of [agentsFile, claudeFile]) clear(file)
+    for (const [what, set, shown, skipped] of cases) {
+      for (const file of [agentsFile, claudeFile, join(folder, 'docs')]) clear(file)
       set()
       const answer = await ask('agent_instructions_read')
       expect(answer, what).not.toHaveProperty('error')
       expect(answer, what).toMatchObject({ text: null, version: '' })
-      expect(answer.shared, what).toEqual(expected)
+      expect(answer.shared, what).toEqual(shown)
+      expect(answer.skipped, what).toEqual(skipped)
       expect(JSON.stringify(answer), what).not.toContain('SECRET-OUTSIDE')
     }
     // What was left out for a reason that is not the person's own doing is said in the log, by name and code and nothing more.
@@ -155,6 +173,67 @@ describe('an agent\'s instructions, as the owner reads them from another compute
     const worst = await ask('agent_instructions_read')
     expect(worst.text).toHaveLength(65_536)
     expect((worst.shared as Shared).map((one) => [one.name, one.text.length, one.truncated])).toEqual([['AGENTS.md', 65_536, false], ['CLAUDE.md', 65_536, false]])
+  })
+
+  // The owner reads her instructions to see what the agent is told: a name the agent's own file cannot have, or that file being
+  // too large or not text, must not hide what its project tells it.
+  it('an error of her own file does not hide the project\'s: a name it cannot have, a file over the limit, a file that is not text', async () => {
+    const { phone, folder, ask } = await fresh()
+    writeFileSync(join(folder, 'AGENTS.md'), 'Ship it.\n')
+    if (process.platform !== 'win32') symlinkSync('nowhere.md', join(folder, 'CLAUDE.md'))
+    const shared = [fine('AGENTS.md', 'Ship it.\n')]
+    const skipped = process.platform === 'win32' ? undefined : [left('CLAUDE.md', 'link')]
+    const refused = await ask('agent_instructions_read', { name: 'Faye:Ken' })
+    expect(refused.error).toBe('BAD_NAME')
+    expect(refused.shared).toEqual(shared)
+    expect(refused.skipped).toEqual(skipped)
+    mkdirSync(join(folder, 'agents'))
+    for (const [what, bytes, error] of [['over the limit', Buffer.alloc(65_537, 97), 'TOO_LARGE'], ['not text', Buffer.from([0x66, 0xff, 0xfe, 0x66]), 'NOT_UTF8']] as const) {
+      writeFileSync(join(folder, 'agents', 'Faye.md'), bytes)
+      const answer = await ask('agent_instructions_read')
+      expect(answer.error, what).toBe(error)
+      expect(answer.shared, what).toEqual(shared)
+      expect(answer.skipped, what).toEqual(skipped)
+    }
+    // Where the folder is not known there is nothing to read beside it.
+    const nobody = await phone.request('agent_instructions_read', { agentId: 'no-such-agent', name: 'Faye' }, 30_000)
+    expect(nobody.error).toBe('AGENT_NOT_FOUND')
+    expect(nobody).not.toHaveProperty('shared')
+    expect(nobody).not.toHaveProperty('skipped')
+  })
+
+  // What an agent really gets is more than its folder's two files: an agent in a folder of a repository is told what its engines load
+  // in the folders above its own, up to the repository's root, each with where it is and which engines load it.
+  it('a subfolder agent is told of the files above its own folder, with the engines that load each, and of no more than 256 KiB', async () => {
+    const { desk, phone, folder } = await fresh()
+    // lampOS is the repository (its `.git` makes it the project's root) and the agent works in packages/app of it.
+    execFileSync('git', ['init', '-q'], { cwd: folder })
+    const app = join(folder, 'packages', 'app')
+    mkdirSync(app, { recursive: true })
+    writeFileSync(join(folder, 'AGENTS.md'), 'Root rules.\n')
+    writeFileSync(join(folder, 'CLAUDE.md'), '@AGENTS.md\n')
+    writeFileSync(join(folder, 'packages', 'CLAUDE.md'), 'Packages.\n')
+    writeFileSync(join(app, 'AGENTS.override.md'), 'Override.\n')
+    const created = await desk.request('agent_create', { engine: 'claude', cwd: app, bypassPermission: true }, 60_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const agentId: string = created.agent.id
+    await until('the agent to bind its conversation', async () => (await row(desk, agentId))?.sessionId || null, 45_000, 500)
+    const ask = () => phone.request('agent_instructions_read', { agentId, name: 'Nina' }, 30_000)
+    const told = await ask()
+    expect((told.shared as Shared).map((one) => [one.path, one.name, one.loadedBy, one.text])).toEqual([
+      ['AGENTS.override.md', 'AGENTS.override.md', ['codex'], 'Override.\n'],
+      ['../CLAUDE.md', 'CLAUDE.md', ['claude'], 'Packages.\n'],
+      ['../../AGENTS.md', 'AGENTS.md', ['codex'], 'Root rules.\n'],
+      ['../../CLAUDE.md', 'CLAUDE.md', ['claude'], '@AGENTS.md\n'],
+    ])
+    expect(told.skipped).toBeUndefined()
+    // However much the folders hold, one read carries 256 KiB of it: the files after that are there, and said to be.
+    for (const file of [join(app, 'AGENTS.md'), join(app, 'CLAUDE.md'), join(app, 'CLAUDE.local.md'), join(folder, 'packages', 'AGENTS.md')]) writeFileSync(file, '\x01'.repeat(100_000))
+    const much = await ask()
+    const texts = (much.shared as Shared).map((one) => one.text.length)
+    expect(texts.reduce((all, one) => all + one, 0)).toBeLessThanOrEqual(256 * 1024 + 65_536)
+    expect((much.skipped as Array<{ why: string }>).every((one) => one.why === 'too_much')).toBe(true)
+    expect(JSON.stringify(much).length).toBeLessThan(2 * 1024 * 1024)
   })
 
   it('written while it is read, whichever way a file is replaced: every answer is whole, and the last is what the disk holds', async () => {
@@ -205,7 +284,7 @@ describe('an agent\'s instructions, as the owner reads them from another compute
   it('the machine offline: the read is refused at once, and answered with what its disk holds now when it is back', async () => {
     const { w, machine, desk, phone, agentId, folder, ask } = await fresh()
     writeFileSync(join(folder, 'AGENTS.md'), 'Before.\n')
-    expect((await ask('agent_instructions_read')).shared).toEqual([{ name: 'AGENTS.md', text: 'Before.\n', truncated: false }])
+    expect((await ask('agent_instructions_read')).shared).toEqual([fine('AGENTS.md', 'Before.\n')])
     desk.close()
     const offline = phone.next((frame) => frame.type === 'node_status' && frame.payload?.online === false, 30_000, 'node_status offline on the phone')
     await machine.daemon.stop()
@@ -224,6 +303,6 @@ describe('an agent\'s instructions, as the owner reads them from another compute
     } finally { back.close() }
     await until('the machine to be back on the relay', () => w.backend.nodeUp(machine.machineId) || null, 60_000, 200)
     await until('the phone to open a new session', async () => { await phone.open(10_000); return true }, 60_000, 500)
-    expect((await ask('agent_instructions_read')).shared).toEqual([{ name: 'AGENTS.md', text: 'While it was off.\n', truncated: false }])
+    expect((await ask('agent_instructions_read')).shared).toEqual([fine('AGENTS.md', 'While it was off.\n')])
   })
 })

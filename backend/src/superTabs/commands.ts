@@ -18,7 +18,7 @@ import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { githubRelaySchema, relayGitHub } from './githubRelay.js'
 import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
 import { keepUsernames, swarmUsernames, usernameOf } from './usernames.js'
-import { agentWrittenNameOf, shownNameOf } from './personNames.js'
+import { agentWrittenNameOf, nameFromAccount, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -59,14 +59,14 @@ import { cloneData } from './cloneData.js'
 import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordReportedModel, recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
-import { react, reactionSchema, type ReactionTarget } from './reactions.js'
+import { reactionSchema, type ReactionTarget } from './reactions.js'
 import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
 import { githubRepository } from '../github/repository.js'
 import { shippedAt } from './ship.js'
 import { syncTaskLines } from './taskLine.js'
 import { assignedNotice, tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard, recordCardMerged } from './cards.js'
-import { avatarChoice, setAgentAvatar, setMemberAvatar, type AvatarUpload } from './profile.js'
+import { avatarChoice, setAgentAvatar, setMemberAvatar } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
 import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, audienceOf, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, regularCodeLine, requestedByLine, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
@@ -91,7 +91,7 @@ import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES, priorityLine, pr
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { inThread, leadsGroup, recordAnswered, requireUnanswered } from './answers.js'
 import { laneNamed, pinBuilder, spokenList, stampLane } from './dispatch.js'
-import { retiredCommandSchemas } from './retired.js'
+import { retiredCommandSchemas, retiredAnswer } from './retired.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none, on a decision whose chosen candidate was not a pick (a person's choice, or an older record). */
@@ -453,6 +453,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // from before it, until 2026-12-07.
   z.object({ type: z.literal('task.approve'), conversationId: id, suggestedAgentId: id.nullable().optional() }).strict(),
   z.object({ type: z.literal('task.reject'), conversationId: id, reason: z.string().trim().min(1).max(2000) }).strict(),
+  // Clear-only since 2026-11-09 (profile.ts): an older app's new picture is refused in words.
   z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
   z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
@@ -729,9 +730,9 @@ export interface CommandContext {
   attachments?: Attachment[]
   /** The words of each voice message's file among [attachments], by its id, read by the store (store.ts readVoice). */
   voiceWords?: Record<string, string>
-  /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
-  avatarUpload?: AvatarUpload
-  /** The message `message.react` names, read by the store (reactions.ts). */
+  /** `invite.accept`'s person's account name, which their name in the Swarm follows (personNames.ts nameFromAccount). */
+  accountName?: string | null
+  /** The message an agent's `message.react` names, read by the store (reactions.ts). */
   reaction?: ReactionTarget
   /** The message `message.edit` or `message.delete` names, read by the store (messageEdits.ts). */
   messageChange?: MessageChangeTarget
@@ -1186,7 +1187,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const existing = state.people.find(p => p.id === actor.userId)
     if (!existing) {
       // A project from before ownerGeneration whose owner left is settled before they come back, never matched to them again.
-      admitPerson(state, { id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
+      const person: Person = { id: actor.userId, email: invite.email, role: invite.role, generation: invite.id }
+      nameFromAccount(person, context.accountName)
+      admitPerson(state, person)
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
     // Back on purpose: auto-join may add them again if they leave and the owner invites them once more (spec, Leaving is final).
@@ -4430,17 +4433,25 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
       break
     case 'message.react': {
-      // A reaction joins nobody to a task: only where the agent already is (project instructions, phase 4), or in its project's
-      // chat while it works in the project, joining nothing there either (River, 2026-11-04, #2924).
+      // Nothing of a reaction is kept or shown (reactions.ts). A person's is answered as a retired command (the store answers
+      // it before this).
+      if (actor.kind !== 'agent') {
+        Object.assign(result, retiredAnswer().result)
+        break
+      }
+      // An agent's joins it to nothing: only where it already is (project instructions, phase 4), or in its project's chat while it
+      // works in the project (River, 2026-11-04, #2924).
       const group = open(state, command.conversationId)
-      if (actor.kind === 'agent' && !group.agentIds.includes(actor.agentId)
+      if (!group.agentIds.includes(actor.agentId)
         && !(projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId))) {
         fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
       }
-      result.changed = react(group, command.messageId, command.on, context.reaction)
-      if (actor.kind === 'agent') settleReaction(state, group, actor.agentId, command.messageId, command.on)
-      // A reaction is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
-      if (actor.kind === 'agent' && command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
+      if (context.reaction?.messageId !== command.messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
+      // It changes nothing anyone sees; it settles what it acknowledges.
+      result.changed = command.on
+      settleReaction(state, group, actor.agentId, command.messageId, command.on)
+      // It is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
+      if (command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
       break
     }
     case 'message.edit':
@@ -4454,10 +4465,10 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       settleDeleted(open(state, command.conversationId), command.messageId)
       break
     case 'member.avatar':
-      setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
+      setMemberAvatar(state, actor, command.avatar)
       break
     case 'agent.avatar':
-      setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
+      setAgentAvatar(state, actor, command.agentId, command.avatar)
       break
     case 'member.remove': {
       if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== command.userId)) {
