@@ -974,6 +974,16 @@ describe('creating an agent', () => {
       expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
     })
 
+    it('browser:true gives Codex its own args, and an engine with no browser MCP form nothing', async () => {
+      const { create } = setup()
+      await create(request({ engine: 'codex', browser: true }))
+      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual(expect.arrayContaining([
+        '-c', 'mcp_servers.browser.command="harness"', '-c', 'mcp_servers.browser.args=["browser-mcp"]']))
+      vi.mocked(buildEngineLaunchArgv).mockClear()
+      await create(request({ engine: 'opencode', browser: true }))
+      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
+    })
+
     it('gives a Buddy the machine MCP servers, as its owner\'s own session has them (task #2832)', async () => {
       const { writeMachineMcp } = await import('../../lib/machineMcp.js')
       const { rmSync } = await import('node:fs')

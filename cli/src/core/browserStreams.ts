@@ -16,7 +16,7 @@
  *   closes the stream (`backlog`), a route that went away closes it (`route`), and a relay that refused a frame closes
  *   every stream on the relay (`rate`). The panel then shows why, and reconnects.
  */
-import { spawn as spawnChild, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mayOpenBrowser, type AgentBrowserPort, type Asker, type BrowserRoute } from './api.js'
 import { RfbShaper, type StreamProfile } from './rfbShaper.js'
@@ -86,7 +86,6 @@ interface BrowserStreamDeps {
   asker: (connId: string) => Asker
   sendTarget: (connId: string, type: string, payload: Record<string, unknown>) => boolean
   sendBinaryTarget: (connId: string, frame: TerminalBinaryClear) => boolean
-  spawn?: typeof spawnChild
   measure: (metric: ProductUsageMetric) => void
   pacing: { bytesPerSecond: number }
   window: { pauseBytes: number; resumeBytes: number }
@@ -116,7 +115,7 @@ export class BrowserStreamManager {
     const [file, ...args] = command.argv
     // The daemon was started by launchd or systemd: the login shell's environment is what the person's own `podman`
     // sees (its machine connections), as every other Podman call has (services/agentBrowser/podman.ts).
-    const child = (this.deps.spawn ?? spawnChild)(file, args, { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
+    const child = spawn(file, args, { env: oneShotParentEnv(), stdio: 'pipe', ...ownProcessGroup() })
     const local = asker.local
     const stream: Stream = {
       id: randomUUID(), connId, agentId, local, route: local ? 'direct' : null, child,
@@ -312,7 +311,7 @@ export class BrowserStreamManager {
     if (child.exitCode !== null || child.signalCode !== null) return
     child.kill('SIGTERM')
     // `podman exec` hands SIGTERM on to socat; one that does not end in a second is killed outright.
-    const force = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }, KILL_GRACE_MS)
+    const force = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS)
     force.unref?.()
     child.once('exit', () => clearTimeout(force))
   }

@@ -7,6 +7,10 @@ import { sealTerminalBinary } from '../lib/e2ee/terminalSeal.js'
 import { BROWSER_CHUNK_BYTES, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
 
+// The exec the manager starts: a fake child per open, as the harness below makes them.
+const spawn = vi.hoisted(() => vi.fn())
+vi.mock('node:child_process', async (real) => ({ ...await real<object>(), spawn }))
+
 const KiB = 1024
 const ARGV = ['/opt/podman/bin/podman', 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
 const LOCAL: Asker = { local: true, owner: true }
@@ -15,7 +19,7 @@ const SHARE_GUEST: Asker = { local: false, owner: true, accountOwner: true, gues
 const PLAIN_OWNER: Asker = { local: false, owner: true }
 const ASKERS: Record<string, Asker> = { 'local:w': LOCAL, 'mac-2': OTHER_DESKTOP, 'mac-3': OTHER_DESKTOP, 'mac-4': OTHER_DESKTOP, guest: SHARE_GUEST, share: PLAIN_OWNER }
 
-type FakeChild = EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kill: ReturnType<typeof vi.fn>; exitCode: number | null; signalCode: string | null; written: () => Uint8Array }
+type FakeChild = EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kill: ReturnType<typeof vi.fn>; exitCode: number | null; signalCode: string | null; written: () => Uint8Array; exit: (code: number | null, signal: string | null) => void }
 
 /** A child that ends when it is killed, unless told to ignore SIGTERM. */
 function fakeChild(ignoresTerm = false): FakeChild {
@@ -28,10 +32,15 @@ function fakeChild(ignoresTerm = false): FakeChild {
   const chunks: Uint8Array[] = []
   child.stdin.on('data', (chunk: Buffer) => chunks.push(new Uint8Array(chunk)))
   child.written = () => Buffer.concat(chunks)
+  // As Node does: the exit code or signal is set as 'exit' is emitted.
+  child.exit = (code, signal) => {
+    child.exitCode = code
+    child.signalCode = signal
+    child.emit('exit', code, signal)
+  }
   child.kill = vi.fn((signal: string = 'SIGTERM') => {
     if (ignoresTerm && signal === 'SIGTERM') return true
-    child.signalCode = signal
-    queueMicrotask(() => child.emit('exit', null, signal))
+    queueMicrotask(() => child.exit(null, signal))
     return true
   })
   return child
@@ -39,7 +48,7 @@ function fakeChild(ignoresTerm = false): FakeChild {
 
 function harness(opts: { pauseBytes?: number; resumeBytes?: number; ignoresTerm?: boolean } = {}) {
   const children: FakeChild[] = []
-  const spawn = vi.fn(() => { const child = fakeChild(opts.ignoresTerm); children.push(child); return child })
+  spawn.mockReset().mockImplementation(() => { const child = fakeChild(opts.ignoresTerm); children.push(child); return child })
   const frames: Array<{ connId: string; type: string; payload: Record<string, unknown> }> = []
   const binary: Array<{ connId: string; frame: TerminalBinaryClear }> = []
   const measures: string[] = []
@@ -49,7 +58,6 @@ function harness(opts: { pauseBytes?: number; resumeBytes?: number; ignoresTerm?
     asker: (connId) => ASKERS[connId] ?? { local: false, owner: false },
     sendTarget: (connId, type, payload) => { frames.push({ connId, type, payload }); return true },
     sendBinaryTarget: (connId, frame) => { binary.push({ connId, frame }); return binaryOk },
-    spawn: spawn as never,
     measure: (metric) => { measures.push(metric) },
     pacing: { bytesPerSecond: 512 * KiB },
     window: { pauseBytes: opts.pauseBytes ?? 256 * KiB, resumeBytes: opts.resumeBytes ?? 128 * KiB },
@@ -261,13 +269,13 @@ describe('the bytes of a browser stream', () => {
         else windows[windows.length - 1] += sealed
         return true
       },
-      spawn: (() => { const child = fakeChild(); children.push(child); return child }) as never,
       measure: () => {},
       pacing: { bytesPerSecond: BROWSER_PACING_BYTES_PER_SECOND },
       // The viewers draw at once: only the pace holds the bytes back.
       window: { pauseBytes: 1024 * 1024 * KiB, resumeBytes: 512 * 1024 * KiB },
       chunkBytes: BROWSER_CHUNK_BYTES,
     })
+    spawn.mockReset().mockImplementation(() => { const child = fakeChild(); children.push(child); return child })
     // Neither route is known yet: both are paced as relayed.
     for (const connId of ['mac-2', 'mac-3']) manager.open(connId, { requestId: `r-${connId}`, agentId: 'a1' })
     // Idle first, so the pace's bucket is full when the scrolling starts.
@@ -384,8 +392,59 @@ describe('what a browser stream ignores and how it fails', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     h.open('local:w')
     h.children[0].stderr.emit('data', Buffer.from('Error: no container with name or ID "harness-browser-a1" found\n'))
-    h.children[0].emit('exit', 125, null)
+    h.children[0].exit(125, null)
     expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (125): Error: no container with name or ID "harness-browser-a1" found')
+    // An exec ended by a signal (the OOM killer's) names it.
+    h.open('local:w')
+    h.children[1].exit(null, 'SIGKILL')
+    expect(warn.mock.calls.flat().join(' ')).toContain('exec exited (SIGKILL)')
+  })
+
+  it('an ack or a close that names no stream changes nothing', () => {
+    const h = harness()
+    const streamId = h.open('local:w')
+    h.children[0].stdout.emit('data', bytes(256 * KiB))
+    h.manager.ack('local:w', { bytes: 256 * KiB })
+    h.manager.close('local:w', { streamId: 7 })
+    expect(h.children[0].stdout.isPaused()).toBe(true)
+    expect(h.closes()).toEqual([])
+    expect(streamId).toBeTruthy()
+  })
+
+  it('an exec that fails after its stream closed closes it once', () => {
+    const h = harness()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const streamId = h.open('local:w')
+    h.manager.close('local:w', { streamId })
+    h.children[0].emit('error', new Error('kill EPERM'))
+    expect(h.closes()).toEqual([['local:w', streamId, 'closed']])
+    expect(warn.mock.calls.flat().join(' ')).toContain('exec failed: kill EPERM')
+  })
+
+  it('a child that dies under a write to its stdin ends the stream only by its exit', () => {
+    const h = harness()
+    const streamId = h.open('local:w')
+    h.children[0].stdin.emit('error', new Error('write EPIPE'))
+    expect(h.closes()).toEqual([])
+    h.children[0].exit(1, null)
+    expect(h.closes()).toEqual([['local:w', streamId, 'agent']])
+  })
+
+  it('a frame request held for its pace is dropped when the stream closes', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const streamId = h.open('local:w')
+    h.manager.input('local:w', streamId, new TextEncoder().encode('RFB 003.008\n'))
+    h.manager.input('local:w', streamId, Uint8Array.of(1, 1))
+    const update = Uint8Array.of(3, 1, 0, 0, 0, 0, 0, 1, 0, 1)
+    h.manager.input('local:w', streamId, update)
+    // The second inside one frame of the first is held for the direct profile's 15 fps.
+    h.manager.input('local:w', streamId, update)
+    const write = vi.spyOn(h.children[0].stdin, 'write')
+    h.manager.close('local:w', { streamId })
+    await vi.advanceTimersByTimeAsync(1_000)
+    // Its stdin is ended: a write would be a write after end.
+    expect(write).not.toHaveBeenCalled()
   })
 
   it('a route or a lost route for no stream, and a route for a local stream, change nothing', () => {
@@ -420,6 +479,20 @@ describe('what a browser stream ignores and how it fails', () => {
     h.manager.route(flushed, 'direct')
     await vi.advanceTimersByTimeAsync(1_000)
     expect(h.closes()).toEqual([['mac-3', flushed, 'backlog'], ['mac-2', paced, 'backlog']])
+  })
+
+  it('a refused send of bytes the pace lets through at once closes the stream with reason backlog', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const streamId = h.open('mac-2')
+    // A full bucket: the first chunk leaves as it is read.
+    await vi.advanceTimersByTimeAsync(1_000)
+    h.failBinary()
+    h.children[0].stdout.emit('data', bytes(256 * KiB))
+    expect(h.binary).toHaveLength(1)
+    expect(h.closes()).toEqual([['mac-2', streamId, 'backlog']])
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(h.closes()).toEqual([['mac-2', streamId, 'backlog']])
   })
 })
 
@@ -457,11 +530,13 @@ describe('closing a browser stream', () => {
     const exited = h.open('local:w')
     const stopped = h.open('mac-2', 'a2')
     const closed = h.open('mac-3')
-    h.children[0].emit('exit', 1, null)
+    h.children[0].exit(1, null)
     h.manager.closeAgent('a2')
     h.manager.close('mac-2', { streamId: closed }) // not that connection's stream
     h.manager.close('mac-3', { streamId: closed })
     expect(h.closes()).toEqual([['local:w', exited, 'agent'], ['mac-2', stopped, 'agent'], ['mac-3', closed, 'closed']])
+    // An exec that already exited is not killed.
+    expect(h.children[0].kill).not.toHaveBeenCalled()
   })
 
   it('child exit sends agent_browser_close', () => {
