@@ -19,7 +19,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
 import { agentOnly, isLeads, stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { SESSION_ENDED_KIND } from './buddySessions.js'
-import { canReadGroup, isProjectChannel, projectOf } from './projects.js'
+import { canReadGroup, projectChannels, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import type { ThreadFacet } from './pageReads.js'
 import type { ReplyRow } from '../push/notices.js'
@@ -77,7 +77,7 @@ export interface ReplyFanout { state: SuperTabState; threads: ReadonlyMap<string
  *  `fanout`); a Swarm notice in a thread (a row with a source) tells only the starter and the author of the message it quotes,
  *  as before; without `fanout` every reply tells only those two. Never the reply's author, nor a person tagged in the reply
  *  itself (the tag tells them, mentions.ts), nor one who unfollowed the thread (readMarks.ts writeThreadFollow) or muted the
- *  chat (chatSettings.ts; with `fanout`, a project's channel's mute does not hold, projects.ts isProjectChannel); with
+ *  chat (chatSettings.ts; with `fanout`, a project's channel's mute does not hold, projects.ts projectChannels); with
  *  `fanout`, never a person no longer in the Swarm or who cannot read the chat now, and a chat its state does not hold tells
  *  only those two. A notice for agents alone, or a Buddy session's ended line, is nobody's activity. A root or quoted message counts only in the reply's own
  *  chat. Each row keeps its message's `sequence` (from `sequences`) and whether it is also in the chat, so a thread or chat mark
@@ -85,7 +85,7 @@ export interface ReplyFanout { state: SuperTabState; threads: ReadonlyMap<string
  *  (rangThreads): the phone's push and its own notice are for that row alone.
  *
  *  Reads: the roots and quoted messages by id, the people's thread marks by id and their chat settings by id: three reads
- *  whatever the thread's length, the last two only when someone is told; and when a person's reply tells its starter, their
+ *  whatever the thread's length, the last two only when someone is told, the settings only outside projects' channels; and when a person's reply tells its starter, their
  *  rows of the thread by the thread index. Writes: one row per person told, in one createMany. */
 export async function writeReplyActivity(tx: Tx, tabId: string, messages: MessageDraft[], sequences: ReadonlyMap<string, number>, now: number,
   fanout?: ReplyFanout): Promise<ReplyRow[]> {
@@ -127,7 +127,8 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
   const unfollowed = new Set(marks.filter(mark => mark.follow === false).map(mark => mark._id))
   // Muted chats: by the setting rows' ids, as the marks above (chatSettings.ts writeChatSetting names them); none read for a
   // chat whose mute does not hold.
-  const settingIds = [...new Set(recipients.flatMap(({ message, people }) => !fanout || !isProjectChannel(fanout.state, message.conversationId)
+  const channels = fanout ? projectChannels(fanout.state) : null
+  const settingIds = [...new Set(recipients.flatMap(({ message, people }) => !channels?.has(message.conversationId)
     ? people.map(personId => stableId(tabId, message.conversationId, personId, 'notify')) : []))]
   const settings = settingIds.length ? await tx.superTabChatSetting.aggregateRaw({ pipeline: [
     { $match: { _id: { $in: settingIds } } }, { $project: { _id: 1, notify: 1 } },
