@@ -17,8 +17,7 @@
 import { parse as parseToml } from 'smol-toml'
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
-import type { HookReviewRecord, SessionHook, SessionHookName } from '../facets/hooks.js'
-import { codexShellGuardSessionHook } from '../../lib/agentShellGuard.js'
+import type { HookReviewRecord } from '../facets/hooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import { isMessagesBlock } from './messagesHook.js'
 import { isOurs, type HookBlock, type Settings } from './notifyHooks.js'
@@ -45,19 +44,6 @@ export function reviewHash(record: HookReviewRecord, event: string, matcher: str
     ...(record.matcherEvents.includes(event) && matcher !== undefined ? { matcher } : {}),
     hooks: [{ type: 'command', command: hook.command, timeout: Math.max(1, hook.timeout ?? record.defaultTimeout), async: hook.async === true }],
   })
-}
-
-/** The engine's hash of a session flag's hook: its matcher counts (codex-cli 0.166.0, `pre_tool_use`, measured). */
-export function sessionHookHash(hook: SessionHook): string {
-  return identityHash({ event_name: hook.label, matcher: hook.matcher, hooks: [{ type: 'command', command: hook.command, timeout: Math.max(1, hook.timeout), async: false }] })
-}
-
-/** Each session hook a contract names, built for the platform it launches on. */
-const sessionHook: Record<SessionHookName, (platform: NodeJS.Platform) => SessionHook> = { 'shell-guard': codexShellGuardSessionHook }
-
-/** The records the session flags' hooks Harness gives need, as this machine launches them: key → hash. */
-export function sessionReviewRecords(record: HookReviewRecord, platform: NodeJS.Platform = process.platform): Map<string, string> {
-  return new Map((record.sessionHooks ?? []).map((name) => sessionHook[name](platform)).map((hook) => [hook.key, sessionHookHash(hook)]))
 }
 
 /** The records Harness's own blocks in `settings` need: key → hash. */
@@ -228,9 +214,6 @@ export function prepareReviewed(record: HookReviewRecord, home: string, settings
   // leaf is an alias. The config's own leaf alias does not change that home.
   const records = reviewRecords(record, join(observed.directory, basename(settingsFile)), settings, platform)
   if (records.size === 0) throw new HookPreparationHeld('the hooks have no verifiable approval records')
-  // In the same write as Harness's own, so a Swarm session's guard (lib/agentShellGuard.ts) is trusted in every home
-  // Harness prepares: the default one at each hook refresh, an agent's own profile before it starts.
-  for (const [key, hash] of sessionReviewRecords(record, platform)) records.set(key, hash)
   const text = observed.content ?? ''
   try { parseToml(text, { integersAsBigInt: true, maxDepth: 64 }) }
   catch { throw new HookPreparationHeld('the hook review configuration is not complete TOML') }

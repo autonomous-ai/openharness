@@ -99,8 +99,6 @@ const IN_PROCESS_ONLY = 'services/inline.ts'
  * them, so a process with the Swarm off loads none of its code; a static import of the same file is walked.
  */
 const SWARM_DOORS: Readonly<Record<string, readonly string[]>> = {
-  // The Swarm's internal pre-command hook: loaded only for that command, without starting any daemon.
-  'entry.ts': ['superTabs/shellGuardHook.ts'],
   // Its side of the core's process, and of the services that act on it when they run there.
   'core/main.ts': ['superTabs/inCore.ts', 'superTabs/inServices.ts'],
   // Its side of the services that act on it, in their own processes, and its own service's process, which the master
