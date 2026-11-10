@@ -49,11 +49,10 @@ export function updateDismissKeys(capture: string): string[] | null {
 }
 
 /**
- * The key that opens an untrusted folder restricted, or null unless the capture is exactly Codex's screen for it. For a
- * Swarm start or resume, whose engine home names its checkout untrusted (superTabs/start.ts): in
- * a home that names nothing, codex-cli 0.165 asks "Trust this folder?" instead, nobody answers it, and every such start
- * timed out at 3 minutes (task #3009). "Open restricted" keeps the folder's config, hooks and exec policies off and saves no
- * trust, which is what that home is for. It is Enter on the highlighted first row, so the screen must say so word for word:
+ * The key that opens an untrusted folder restricted, or null unless the capture is exactly Codex's screen for it: a Swarm
+ * agent's resume in a folder its Codex config names untrusted, which nobody at its pane answers (superTabs/terminal.ts,
+ * #3904; task #3009). "Open restricted" keeps the folder's config, hooks and exec policies off and saves no trust. It is
+ * Enter on the highlighted first row, so the screen must say so word for word:
  * its sentence that untrusted folders stay disabled, exactly these two rows with the first highlighted, its footer, and no
  * trust question anywhere ("Trust and continue" is also a first row, and it trusts the branch).
  */

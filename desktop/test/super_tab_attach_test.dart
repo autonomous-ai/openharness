@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,13 +23,16 @@ void main() {
     f.connection.journaled = false;
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
     f.app.machineStates['m']!.agents = [
-      const Agent(
+      Agent(
         id: 'docs-session',
         name: 'Docs bot',
         nameChosen: true,
         engine: 'claude',
         modelName: 'Opus 5.5',
         terminalAvailable: true,
+        sessionId: 'docs-conversation',
+        createdAt: DateTime.utc(2026, 11, 10, 8),
+        closeSupported: true,
       ),
       const Agent(
         id: 'shell',
@@ -169,6 +173,103 @@ void main() {
     expect(f.app.superTabs.peek(tabId)!.selectedId, join['conversationId']);
     await tester.pumpWidget(const SizedBox());
     await f.app.superTabs.peek(tabId)!.flush();
+    f.app.superTabs.dispose();
+  });
+
+  // anh Dee 2026-11-09: Delete means "its computer stops its session"; the Swarm's own removal stops nothing there (#3791).
+  testWidgets(
+    'Delete stops the session on its computer, then the Swarm lets go of it',
+    (tester) async {
+      final f = await open(tester);
+      await tester.tap(key('project-sidebar-agents-attach'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-search-input')),
+        'Docs bot',
+      );
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      final c = f.app.superTabs.peek(tabId)!;
+      final member = c.snapshot!.agents.singleWhere(
+        (a) => a.harnessId == 'docs-session',
+      );
+
+      await tester.tap(
+        key('super-agent-${member.id}'),
+        buttons: kSecondaryButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('delete-agent-confirm'));
+      await tester.pumpAndSettle();
+
+      final closes = f.connection.calls.where(
+        (call) => call.$1 == 'agent_close',
+      );
+      expect(closes, hasLength(1));
+      expect(closes.single.$2, containsPair('agentId', 'docs-session'));
+      expect(closes.single.$2, containsPair('mode', 'now'));
+      final removal = f.connection.server.posts
+          .map((post) => post['command'] as Map)
+          .singleWhere((command) => command['type'] == 'agent.remove');
+      expect(removal, containsPair('agentId', member.id));
+      expect(
+        f.app
+            .stateOf('m')!
+            .agents
+            .firstWhere((a) => a.id == 'docs-session')
+            .isStopped,
+        isTrue,
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+    },
+  );
+
+  testWidgets('a Stop its computer refuses keeps the agent, and says why', (
+    tester,
+  ) async {
+    final f = await open(tester);
+    f.connection.refuseClose = true;
+    await tester.tap(key('project-sidebar-agents-attach'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      'Docs bot',
+    );
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    final c = f.app.superTabs.peek(tabId)!;
+    final member = c.snapshot!.agents.singleWhere(
+      (a) => a.harnessId == 'docs-session',
+    );
+    await tester.tap(
+      key('super-agent-${member.id}'),
+      buttons: kSecondaryButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('delete-agent-confirm'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('This computer would not stop it.'), findsOneWidget);
+    expect(key('delete-agent-confirm'), findsOneWidget);
+    expect(
+      f.connection.server.posts.where(
+        (post) => (post['command'] as Map)['type'] == 'agent.remove',
+      ),
+      isEmpty,
+    );
+    expect(c.snapshot!.agents.any((a) => a.id == member.id), isTrue);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
     f.app.superTabs.dispose();
   });
 }

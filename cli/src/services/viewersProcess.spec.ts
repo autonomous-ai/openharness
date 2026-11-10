@@ -137,7 +137,7 @@ describe('the viewers in their own process', () => {
       { agentId: 'a1', context: viewers.contexts.get('a1'), forwardingUrl: 'http://127.0.0.1:7001/' },
     ])
     // A verdict: the frame changes, and the core hears it.
-    viewers.contexts.set('a1', { ...viewers.contexts.get('a1')!, verdict: { ready: true, summary: null, errors: 0, warnings: 0, artifact: null, phases: [], updatedAt: null } })
+    viewers.contexts.set('a1', { ...viewers.contexts.get('a1')!, verdict: { ready: true, summary: null, errors: 0, warnings: 0, artifact: null, preview: null, phases: [], updatedAt: null } })
     api.agents.sync(agent())
     expect(core.told()).toHaveLength(3)
     // Said again on every attach, changed or not: a core that restarted keeps nothing until it attaches.

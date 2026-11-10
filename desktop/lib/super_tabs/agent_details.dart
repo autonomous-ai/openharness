@@ -19,7 +19,6 @@ import 'controller.dart';
 import 'detail_dialog.dart';
 import 'identity.dart';
 import 'model.dart';
-import 'profile_sheet.dart';
 import 'pull_requests.dart';
 
 /// The task [agent] holds now. A task the Swarm lost is that task's history: it names the agent's state only when the
@@ -311,10 +310,6 @@ Future<void> showSuperTabAgentDetails(
         final group = info.taskGroup;
         final pr = info.latestGroupPr;
         final name = controller.snapshot?.agentName(agent.id) ?? agent.name;
-        // Its contributor dresses it; its Lead may too, from the CLI.
-        final dresses =
-            controller.canWrite &&
-            current.contributorId == controller.accountId;
         final blocked = superTabOpenTerminalBlocked(controller, current.id);
         return AlertDialog(
           title: Row(
@@ -376,13 +371,6 @@ Future<void> showSuperTabAgentDetails(
             ),
           ),
           actions: [
-            if (dresses)
-              TextButton(
-                onPressed: () => unawaited(
-                  showSuperTabProfile(context, controller, agentId: agent.id),
-                ),
-                child: const Text('Change avatar'),
-              ),
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'),
