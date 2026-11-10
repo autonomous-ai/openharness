@@ -3284,7 +3284,6 @@ describe('notices of failed work', () => {
     const effects = f.run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused.' }, { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' })
     expect(effects.messages).toEqual([expect.objectContaining({ conversationId: group, recipients: [f.lead, engineer],
       text: 'Could not start Builder on moonshotai/kimi-k3: its machine could not prepare or launch it. Whoever started it, the Product Manager and the machine owner can read why.' })])
-    expect(g().stepUp).toBeUndefined()
     // A person's start: the coordinator alone, with the model it asked for; an agent of the project not in the task is not told.
     expect(f.run({ type: 'agent.startFailed', startId: 's2', error: 'Launch refused.' }).messages).toEqual([expect.objectContaining({ recipients: [f.lead],
       text: expect.stringContaining('Could not start Builder on opus:') })])

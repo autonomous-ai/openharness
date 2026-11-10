@@ -376,10 +376,6 @@ export interface Conversation {
   released?: { at: number; tags: string[] }
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
-  /** Its last step up from a cheaper model: written when a grid attempt's first review fails (commands.ts reviewFailed, goals
-   *  piece 4; before project instructions also by the server's step up). Nothing is cancelled: the route reads it to leave the
-   *  grid out of the next attempt, and the leaderboard reads it. */
-  stepUp?: StepUp
   /** The last start or assignment on its task by an agent of its project, or its coordinator's post there (commands.ts). */
   leadAction?: { kind: 'assign' | 'start' | 'post'; at: number }
   /** The day (YYYY-MM-DD) its work should not start before, a promise the PM marks with work.queue. */
@@ -393,9 +389,6 @@ export interface Conversation {
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
 }
-/** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
- *  the next one's brief; the failed start that caused it, if one did. */
-export interface StepUp { attempt: number; floor: number; reason: string; at: number; carry: string; startId?: string }
 /** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
  *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
  *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes
@@ -561,7 +554,7 @@ export interface MessageDraft {
   /** Explicit answer in main chat, without a thread. */
   answers?: string
   recipients: string[]
-  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by its routing. */
+  /** Structured row kind for clients; `native` rows were written by the terminal recording Swarm v4 removed, `route`/`route-override` by its routing, removed 2026-11-11. */
   source?: Record<string, unknown>
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */

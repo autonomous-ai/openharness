@@ -22,8 +22,8 @@ waiting on a permission, quietly, for five days.
 3. **One index per query, checked with explain.** Each new or changed query gets an integration test that reads its plan:
    `IXSCAN` on the index meant for it, and documents examined close to documents returned
    (`integration/plans.test-support.ts`, `integration/workerIndexPlans.test.ts`). Prisma sends `in` and some filters as
-   `$expr`, which no index bounds. Use a plain `aggregateRaw` `$match` for those (`superTabs/routeDecisions.ts
-   recentDecisions`).
+   `$expr`, which no index bounds. Use a plain `aggregateRaw` `$match` for those (`superTabs/deliverySettle.ts
+   openDeliveries`).
 4. **A maintenance job that cannot run says so, loudly and every time it tries.** Log an error with what it waits on and
    what happens if nobody acts (`lib/productUsageReceiptSweep.ts`: every hour, with the date the receipts expire by
    themselves). A single warning at start is missed. A job that can never finish stops itself once its work is gone.

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
-import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, occupiesAgent, fail, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
 import { startFinished } from './parts/write.js'
 import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, type SwarmProject } from './projects.js'
@@ -120,9 +119,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
    *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
   harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
-  /** Each running Swarm agent's token counts by model (costs/tokens.ts), which today's CLI sends on every report: taken and
-   *  ignored until a CLI without it ships, as refusing it would refuse every report. Never stored. */
-  harnessTokens: z.record(z.string().max(160), tokensByModelSchema).refine(v => Object.keys(v).length <= MAX_HARNESSES).optional(),
+  /** Each running Swarm agent's token counts by model, which today's CLI sends on every report: taken unread until a CLI
+   *  without it ships, as refusing it would send every report twice. Never stored; the route's body limit bounds it. */
+  harnessTokens: z.record(z.string().max(160), z.unknown()).refine(v => Object.keys(v).length <= 1000).optional(),
   /** Whether each running Swarm session's folder has uncommitted changes (git status), for those its host could read.
    *  Only a session reported clean is ever stopped for being idle (tidy.ts). Absent from hosts before it. */
   harnessUncommitted: z.record(z.string().max(160), z.boolean()).refine(v => Object.keys(v).length <= 1000).optional(),
