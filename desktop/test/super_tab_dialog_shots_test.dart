@@ -11,7 +11,6 @@ import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'swarm_sharing_test.dart' show SwarmSharingServer;
@@ -237,25 +236,15 @@ void main() {
         Align(
           alignment: Alignment.topLeft,
           child: SizedBox(
-            width: 280,
-            child: SuperTabMachines(
-              controller: c,
-              embedded: true,
-              onAddAgent: (_) {},
-            ),
+            width: 900,
+            child: SuperTabMachines(controller: c, onAddAgent: (_) {}),
           ),
         ),
       );
       final row = find.byKey(const ValueKey('super-machine-mbp'));
       await tester.longPress(row);
       await tester.pumpAndSettle();
-      // Codex's mark is a picture decoded off the frame: wait for it before photographing, as the app shows it.
-      await tester.runAsync(
-        () => precacheImage(
-          AssetImage(engineIdentity('codex').asset!),
-          tester.element(find.byType(EngineMark).first),
-        ).timeout(const Duration(seconds: 10)),
-      );
+      await tester.tap(find.text('Details'));
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, '1-machine-details-$theme');
       await tester.pumpWidget(const SizedBox());
@@ -364,7 +353,7 @@ void main() {
         tester,
         brightness,
         SizedBox(
-          width: 300,
+          width: 900,
           height: 400,
           child: SuperTabMachines(
             controller: c,
@@ -373,7 +362,7 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.byTooltip('Add machine'));
+      await tester.tap(find.byKey(const ValueKey('super-manage-add-machine')));
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, '6-add-machine-$theme');
       await tester.pumpWidget(const SizedBox());

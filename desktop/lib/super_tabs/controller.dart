@@ -796,13 +796,6 @@ class SuperTabController extends ChangeNotifier {
       _refreshFailing && !accessRevoked && !updateRequired;
   bool _refreshFailing = false;
 
-  /// Since when the reads have been failing, while [backendUnreachable]: the first failure of this run of them.
-  DateTime? unreachableSince;
-
-  /// While [backendUnreachable], no read has been answered yet since this Swarm opened: nothing was
-  /// lost, so it says Connecting rather than Reconnecting.
-  bool get stillConnecting => backendUnreachable && stateReads == 0;
-
   /// How many reads of the Swarm's state have been answered. A sidebar that is waiting for a new reading (back from
   /// the background) knows it has one when this moves.
   int stateReads = 0;
@@ -3380,7 +3373,6 @@ class SuperTabController extends ChangeNotifier {
       final stateMs = took.elapsedMilliseconds;
       final parts = _parts!;
       _refreshFailing = false;
-      unreachableSince = null;
       _waitingForMachine = false;
       _graceEnd?.cancel();
       _firstReadRetry?.cancel();
@@ -3550,7 +3542,6 @@ class SuperTabController extends ChangeNotifier {
       }
       if (!_disposed && !accessRevoked) {
         _refreshFailing = true;
-        unreachableSince ??= DateTime.now();
       }
       // The kind and code of the failure, never its message: a refusal can quote what was sent.
       appLog.warn(

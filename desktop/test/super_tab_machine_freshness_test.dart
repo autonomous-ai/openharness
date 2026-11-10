@@ -9,8 +9,8 @@ import 'package:harness/core/models.dart';
 import 'package:harness/logging/app_log.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/shared/theme/machines_style.dart';
 import 'package:harness/super_tabs/machines.dart';
-import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/super_tab_fixture.dart';
@@ -66,7 +66,7 @@ void main() {
       ),
       home: Scaffold(
         body: SizedBox(
-          width: 300,
+          width: 900,
           height: 600,
           child: SuperTabMachines(
             controller: controller,
@@ -87,11 +87,6 @@ void main() {
   }
 
   Finder rowOf(String id) => find.byKey(ValueKey('super-machine-$id'));
-  Finder inRow(String id, Finder finder) =>
-      find.descendant(of: rowOf(id), matching: finder);
-  SuperTabMachineStatus statusOf(WidgetTester tester, String id) => tester
-      .widget<SuperTabMachineDot>(inRow(id, find.byType(SuperTabMachineDot)))
-      .status;
 
   /// What hovering or focusing the row says: its state and age, then its numbers.
   String tipOf(WidgetTester tester, String id) => tester
@@ -99,24 +94,24 @@ void main() {
         find.ancestor(of: rowOf(id), matching: find.byType(Tooltip)).first,
       )
       .message!;
-  Color? nameInkOf(WidgetTester tester, String id) => tester
-      .widget<Text>(find.byKey(ValueKey('super-machine-name-$id')))
-      .style
-      ?.color;
+
+  /// The row's state: offline, unknown and refreshing as its tooltip says them, live and late by its dot.
+  SuperTabMachineStatus statusOf(WidgetTester tester, String id) {
+    final tip = tipOf(tester, id);
+    if (tip.startsWith('Offline')) return SuperTabMachineStatus.offline;
+    if (tip.startsWith("Can't reach")) return SuperTabMachineStatus.unknown;
+    if (tip.startsWith('Refreshing')) return SuperTabMachineStatus.refreshing;
+    final dot = tester.widget<Container>(
+      find.byKey(ValueKey('machines-dot-$id')),
+    );
+    return (dot.decoration! as BoxDecoration).color == MachinesStyle.online
+        ? SuperTabMachineStatus.live
+        : SuperTabMachineStatus.late;
+  }
 
   /// What a screen reader is told of the row, first: the label, then the row's own words (its agents).
   String labelOf(WidgetTester tester, String id) =>
       tester.getSemantics(rowOf(id)).label.split('\n').first;
-
-  /// The list's own text, which never carries a number or an age.
-  Iterable<String> textsOf(String id) => inRow(
-    id,
-    find.byType(Text),
-  ).evaluate().map((e) => (e.widget as Text).data!);
-  Finder pill(String text) => find.descendant(
-    of: find.byType(SuperTabMachinesPill),
-    matching: find.text(text),
-  );
 
   group('the words and the rules', () {
     test('how long ago, as the tooltip of a row says it', () {
@@ -132,14 +127,6 @@ void main() {
       expect(ago(const Duration(minutes: 59, seconds: 59)), '59 min ago');
       expect(ago(const Duration(hours: 2)), '2 h ago');
       expect(ago(const Duration(days: 3)), '3 d ago');
-    });
-
-    test('and shortest, for the heading pill', () {
-      expect(superTabAgoShort(const Duration(seconds: 6)), '6s');
-      expect(superTabAgoShort(const Duration(seconds: 70)), '1m');
-      expect(superTabAgoShort(const Duration(minutes: 59)), '59m');
-      expect(superTabAgoShort(const Duration(hours: 2)), '2h');
-      expect(superTabAgoShort(const Duration(days: 3)), '3d');
     });
 
     test(
@@ -231,18 +218,10 @@ void main() {
       await show(tester, c);
 
       expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
-      expect(
-        find.byKey(const ValueKey('super-machine-state-m-live')),
-        findsOneWidget,
-      );
       const tip =
           'Owned by owner · CPU 80% free · RAM 16 GB free · SSD 500 GB free';
       expect(tipOf(tester, 'm'), tip);
-      expect(labelOf(tester, 'm'), 'Studio Mac, Live, $tip');
-      // Collapsed: name and owner avatar, with readings reserved for disclosure.
-      expect(textsOf('m'), ['Studio Mac', 'O']);
-      expect(nameInkOf(tester, 'm'), isNot(DesktopChrome.muted));
-      expect(find.byType(SuperTabMachinesPill), findsNothing);
+      expect(labelOf(tester, 'm'), 'Studio Mac, online, $tip');
 
       semantics.dispose();
       await tester.pumpWidget(const SizedBox());
@@ -262,9 +241,8 @@ void main() {
       expect(tipOf(tester, 'm'), startsWith('Owned by owner · CPU 80% free'));
       expect(
         labelOf(tester, 'm'),
-        startsWith('Studio Mac, Late, Owned by owner'),
+        startsWith('Studio Mac, asleep, Owned by owner'),
       );
-      expect(textsOf('m'), ['Studio Mac', 'O']);
 
       semantics.dispose();
       await tester.pumpWidget(const SizedBox());
@@ -294,7 +272,7 @@ void main() {
     );
 
     testWidgets(
-      'offline: a direct row with a hollow ring, muted name, and only its last allowances, said to be old',
+      'offline: a direct row that opens to no old readings',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [
@@ -307,35 +285,19 @@ void main() {
         expect(rowOf('m'), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('super-machine-m')));
         await tester.pump();
-        // Opened offline, only Subscriptions shows: the last figures, said to be old; no Hardware.
-        final readings = find.byKey(const ValueKey('super-machine-readings-m'));
+        // Opened offline: no readings box, only the state below.
         expect(
-          find.descendant(of: readings, matching: find.text('Hardware')),
+          find.byKey(const ValueKey('super-machine-readings-m')),
           findsNothing,
         );
-        expect(
-          find.descendant(
-            of: readings,
-            matching: find.textContaining('offline, read 3 min ago'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(
-            of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
-            matching: find.text('90%'),
-          ),
-          findsOneWidget,
-        );
+        expect(find.text('Hardware'), findsNothing);
+        expect(find.text('Offline'), findsWidgets);
 
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);
-        expect(nameInkOf(tester, 'm'), DesktopChrome.muted);
-        // Old capacity and allowances are absent while offline.
+        // Old capacity is absent while offline.
         const tip = 'Offline · Owned by owner';
         expect(tipOf(tester, 'm'), tip);
-        expect(labelOf(tester, 'm'), 'Studio Mac, Offline, $tip');
-        expect(textsOf('m'), ['Studio Mac', 'O']);
-        expect(find.byType(SuperTabMachinesPill), findsNothing);
+        expect(labelOf(tester, 'm'), 'Studio Mac, offline, $tip');
 
         // Opened, it stays open: saved with the Swarm's other sidebar state.
         await c.flush();
@@ -364,19 +326,14 @@ void main() {
         await show(tester, c);
 
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.unknown);
+        // Not offline, so not in the Offline group.
         expect(
-          find.byKey(const ValueKey('super-machine-state-m-unknown')),
-          findsOneWidget,
-        );
-        expect(nameInkOf(tester, 'm'), DesktopChrome.muted);
-        // Not offline, so not under the disclosure.
-        expect(
-          find.byKey(const ValueKey('super-machines-offline')),
+          find.byKey(const ValueKey('super-machines-group-offline')),
           findsNothing,
         );
         const tip = "Can't reach Harness · Owned by owner";
         expect(tipOf(tester, 'm'), tip);
-        expect(labelOf(tester, 'm'), 'Studio Mac, Status unknown, $tip');
+        expect(labelOf(tester, 'm'), 'Studio Mac, status unknown, $tip');
 
         // Read again, what the machine reports decides again: this one was silent.
         server.failReads = false;
@@ -444,8 +401,7 @@ void main() {
         expect(statusOf(tester, 'far'), SuperTabMachineStatus.refreshing);
         const tip = 'Refreshing… · Owned by owner';
         expect(tipOf(tester, 'far'), tip);
-        expect(labelOf(tester, 'far'), 'Far Mac, Refreshing, $tip');
-        expect(textsOf('far'), ['Far Mac', 'O']);
+        expect(labelOf(tester, 'far'), 'Far Mac, status unknown, $tip');
 
         gate.complete();
         await landed(tester);
@@ -459,40 +415,6 @@ void main() {
         c.dispose();
         f.app.superTabs.dispose();
         await tester.pump();
-      },
-    );
-  });
-
-  group('the heading pill', () {
-    testWidgets(
-      'is absent while the Swarm is read, and says Reconnecting with how long when it is not',
-      (tester) async {
-        final server = ConversationServer();
-        server.state['machines'] = [
-          contributed('m', Duration.zero, at: DateTime.now()),
-        ];
-        final c = server.controller();
-        await c.refresh();
-        await show(tester, c);
-        expect(find.byType(SuperTabMachinesPill), findsNothing);
-
-        server.failReads = true;
-        await c.refresh();
-        expect(c.unreachableSince, isNotNull);
-        now = c.unreachableSince!.add(const Duration(seconds: 70));
-        await show(tester, c);
-        expect(pill('Reconnecting · 1m'), findsOneWidget);
-        expect(pill('Live'), findsNothing);
-        now = c.unreachableSince!.add(const Duration(seconds: 6));
-        await show(tester, c);
-        expect(pill('Reconnecting · 6s'), findsOneWidget);
-
-        server.failReads = false;
-        await c.refresh();
-        expect(c.unreachableSince, isNull);
-        await show(tester, c);
-        expect(find.byType(SuperTabMachinesPill), findsNothing);
-        await tester.pumpWidget(const SizedBox());
       },
     );
   });
@@ -534,97 +456,6 @@ void main() {
       expect(find.text(tip), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     });
-  });
-
-  group('the dot moves, unless the platform asks it not to', () {
-    testWidgets('a live dot pings once when a newer reading arrives', (
-      tester,
-    ) async {
-      final server = ConversationServer();
-      server.state['machines'] = [
-        contributed('m', const Duration(seconds: 10)),
-      ];
-      final c = server.controller();
-      await c.refresh();
-      await show(tester, c);
-      await tester.pump();
-      expect(tester.hasRunningAnimations, isFalse);
-
-      server.state['machines'] = [contributed('m', const Duration(seconds: 2))];
-      await c.refresh();
-      await show(tester, c);
-      expect(tester.hasRunningAnimations, isTrue);
-      await tester.pump(const Duration(milliseconds: 1300));
-      expect(tester.hasRunningAnimations, isFalse);
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    testWidgets('and not with reduced motion', (tester) async {
-      final server = ConversationServer();
-      server.state['machines'] = [
-        contributed('m', const Duration(seconds: 10)),
-      ];
-      final c = server.controller();
-      await c.refresh();
-      await show(tester, c, reduceMotion: true);
-      server.state['machines'] = [contributed('m', const Duration(seconds: 2))];
-      await c.refresh();
-      await show(tester, c, reduceMotion: true);
-      expect(tester.hasRunningAnimations, isFalse);
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    for (final reduceMotion in [false, true]) {
-      testWidgets(
-        'a refreshing dot ${reduceMotion ? 'stays still with reduced motion' : 'breathes'}',
-        (tester) async {
-          final f = SuperTabLaunchFixture();
-          f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-          f.connection.server.state['agents'] = [
-            {
-              'id': 'agent-m',
-              'name': 'Builder',
-              'machineId': 'm',
-              'harnessId': 'native-m',
-              'contributorId': 'owner',
-              'configuration': {'engine': 'codex'},
-            },
-          ];
-          final c = await f.app.superTabs.open(tabId);
-          await c.refresh();
-          final reads = <Completer<MachineResources?>>[];
-          Future<MachineResources?> read(String id) {
-            final answer = Completer<MachineResources?>();
-            reads.add(answer);
-            return answer.future;
-          }
-
-          await show(
-            tester,
-            c,
-            app: f.app,
-            readLocal: read,
-            reduceMotion: reduceMotion,
-          );
-          reads.single.complete(const MachineResources(cpuPercent: 30));
-          await landed(tester);
-          f.app.foreground.value = false;
-          await tester.pump();
-          f.app.foreground.value = true;
-          await tester.pump();
-          expect(statusOf(tester, 'm'), SuperTabMachineStatus.refreshing);
-          await tester.pump(const Duration(milliseconds: 100));
-          expect(tester.hasRunningAnimations, !reduceMotion);
-
-          reads.last.complete(const MachineResources(cpuPercent: 30));
-          await landed(tester);
-          await tester.pumpWidget(const SizedBox());
-          await c.flush();
-          f.app.superTabs.dispose();
-          await tester.pump();
-        },
-      );
-    }
   });
 
   group('the computer this Desktop reads itself', () {
@@ -817,8 +648,6 @@ void main() {
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.live);
         expect(tipOf(tester, 'm'), startsWith('Owned by owner · CPU 70% free'));
         expect(statusOf(tester, 'far'), SuperTabMachineStatus.unknown);
-        expect(find.byType(SuperTabMachinesPill), findsOneWidget);
-        expect(pill('Live'), findsNothing);
 
         await done(tester, f, c);
       },
