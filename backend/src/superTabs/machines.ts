@@ -2,10 +2,9 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
-import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, occupiesAgent, fail, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
 import { startFinished } from './parts/write.js'
 import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, type SwarmProject } from './projects.js'
-import { isSwarmBuddyChat } from './buddies.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -34,11 +33,6 @@ export interface ContributedMachine {
    *  off it: its person's own agents take any project they read (teamWorkCheck; #4248, finding 8 of #4212). Kept, and kept
    *  when the contribution is saved again, only because Desktop's launch.dart still reads it; gone with the machine. */
   teamAccountOnly?: true
-  /** One of its person's own machines that is not in the Swarm, recorded only so its host starts and watches their Buddies
-   *  there (Dee, 10-29: "I don't want to add my machine to the swarm"). It takes no other start, is no route or Product
-   *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
-   *  (commands.ts dropIdleBuddyMachines), or becomes an ordinary machine when its person adds it with Add machine. */
-  buddyOnly?: true
   /** Who had this computer's entry before the account signed in on it now (commands.ts machine.moved, #3122), and until when:
    *  Machines says "Was kelvin until 5 Nov". Only the last one; gone with the entry. */
   previousOwner?: { personId: string; until: string }
@@ -61,10 +55,7 @@ export interface ContributedMachine {
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
-export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string
-  /** Left by a Buddy-only machine (ContributedMachine.buddyOnly): like the record, no reader but its person learns of it, nor of
-   *  the part's removal once its host confirms (read/changes.ts; security review 1 of #2234). */
-  buddyOnly?: true }
+export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string }
 /** Was a day, until a host that kept reporting but never confirmed held Diego's Mac 'Cleaning up' for it (2026-10-28). */
 export const REMOVAL_FALLBACK_MS = 30 * 60_000
 /** A cleanup that has waited REMOVAL_FALLBACK_MS since its removal, or one too old to say when: it no longer holds its
@@ -121,8 +112,6 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   quotaReasons: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), z.string().min(1).max(300)).refine(v => Object.keys(v).length <= 8).optional(),
   runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
-  /** Running Buddy sessions positively idle in this reading; absent is unknown, never idle (#3824). */
-  idleBuddyHarnessIds: z.array(z.string().max(160)).max(1000).optional(),
   /** Of the stopped ones, those this machine's idle cleanup closed (cli superTabs/cleanupCloses.ts): only such a session is
    *  refused new work (closedAgents.ts sessionClosed), never one stopped by Change agent or a restart (review of #2953).
    *  Absent from hosts before it. */
@@ -193,7 +182,7 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
-  const { harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
+  const { harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
@@ -202,7 +191,6 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
   const refused = refusedStarts?.filter(r => opts.refusable?.(r.startId) ?? false)
   const engines = contributedEngines(pool, observation)
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
-    ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
     // Each engine's default account alone: a PM runs on no other (pmAccount.ts), whatever a CLI of the last 30 days reports.
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine) && p.id === defaultProfileId(pool.machineId, p.engine)) } : {}),
     ...(progress ? { harnessProgress: progress } : {}),
@@ -226,8 +214,7 @@ export function readingOnly(previous: StoredReading | undefined, next: StoredRea
   if (!previous || next.stoppedReservations?.length || next.refusedStarts?.length) return false
   if (!sameSet(previous.runningHarnessIds, next.runningHarnessIds) || !sameSet(previous.stoppedHarnessIds, next.stoppedHarnessIds)
     || !sameSet(previous.closedHarnessIds ?? [], next.closedHarnessIds ?? [])
-    || !sameSet(previous.preparingStartIds, next.preparingStartIds)
-    || !sameSet(previous.idleBuddyHarnessIds, next.idleBuddyHarnessIds)) return false
+    || !sameSet(previous.preparingStartIds, next.preparingStartIds)) return false
   if (!previous.harnessProgress || !next.harnessProgress) return !previous.harnessProgress && !next.harnessProgress
   const before = previous.harnessProgress, after = next.harnessProgress
   return sameSet(Object.keys(before), Object.keys(after)) && Object.entries(before).every(([id, at]) => after[id]! >= at)
@@ -241,7 +228,7 @@ export function startPreparing(state: SuperTabState, start: AgentStart, now: num
   return !!report?.preparingStartIds?.includes(start.id) && now - report.receivedAt <= MACHINE_FRESH_MS
 }
 
-export type TeamWorkCode = 'NOT_SWARM_MACHINE' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
+export type TeamWorkCode = 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 
 /**
@@ -266,9 +253,6 @@ export const RETIRED_MACHINE_FIELDS = ['ownAccountChoice', 'othersToldWeek', 'pr
  */
 export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject): TeamWorkRefusal | null {
   const pool = state.machines?.find(m => m.machineId === machineId)
-  // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's
-  // (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
-  if (pool?.buddyOnly) return ownsProject(state, pool.contributorId, project) ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
   if (pool && pool.contributorId !== contributorId) return { code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER }
   const person = state.people.find(p => p.id === contributorId)
   // Reading is not working: a viewer's agent takes no work (security review 1 of #3446).
@@ -318,29 +302,10 @@ export function noRepositoryStart(pool: ContributedMachine | undefined, project:
   return { ...rest, worktree: false }
 }
 
-/** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
-export const SWARM_BUDDY_CAPABILITY = 'swarmBuddy'
-/** At most this many projects' worktrees in a Swarm-wide Buddy's folder (spec: Staying within one context). */
-export const MAX_BUDDY_PROJECTS = 50
-
-/** A Swarm-wide Buddy's own folder on [pool] (spec: Folder): its host makes it, with one read-only worktree per project in it. It
- *  is no project's checkout, so nothing of one project is ever another's. */
-export function buddyHomeFolder(pool: ContributedMachine, owner: { id: string }): string {
+/** An agent's own folder on [pool] that is no project's checkout (spec: Folder), so nothing of one project is ever another's:
+ *  a Regular agent's (agent.new). */
+export function homeFolder(pool: ContributedMachine, owner: { id: string }): string {
   return `${pool.cwd.replace(/\/+$/, '')}/.buddy-${owner.id}`
-}
-
-/** The projects [owner] reads, as a Swarm-wide Buddy's folder on [pool] holds them: each project's own folder there, the oldest
- *  first, at most MAX_BUDDY_PROJECTS. Ids, names and folders only (starts are listed to the PM). */
-export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, owner: { id: string; email: string }): Array<{ id: string; name: string; cwd: string }> {
-  const readable = projectsOf(state).filter(p => canReadProject(state, { kind: 'person', userId: owner.id, email: owner.email }, p))
-    // A machine shared for one project only has that project's folder alone (projectFolder answers its folder for any project):
-    // never list another project at it (security review 1 of #2435).
-    .filter(p => pool.scope === 'swarm' || p.id === 'lead')
-    .map(p => ({ id: p.id, name: p.name, cwd: projectFolder(pool, p) }))
-  // Only projects with a folder of their own: two that answer the same folder would show one project's code as the other's.
-  const counts = new Map<string, number>()
-  for (const p of readable) counts.set(p.cwd, (counts.get(p.cwd) ?? 0) + 1)
-  return readable.filter(p => counts.get(p.cwd) === 1).slice(0, MAX_BUDDY_PROJECTS)
 }
 
 /** Refuses with the refusal's code and sentence: 403. */
@@ -375,45 +340,16 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
   }
 }
 
-/** Why a start other than its own person's Buddy is refused on a Buddy-only machine: worded as for any machine outside the
- *  Swarm, so the refusal says nothing about whose it is or what runs there. */
-/** A host that can tell a Buddy's window from another agent's on Windows (CLI callerPane.ts `windowsRunningPane`). An older one
- *  cannot: a Buddy there refused every agent's Swarm command on that computer (security review of #2093). */
-export const WINDOWS_BUDDY_CAPABILITY = 'windowsBuddy'
-export const BUDDY_WINDOWS_REFUSAL = 'Update Harness on this Windows machine to run a Buddy on it, or pick another of your machines.'
-export const refusesWindowsBuddy = (pool: ContributedMachine): boolean => pool.observation?.resources.os === 'Windows'
-  && !pool.observation.capabilities?.includes(WINDOWS_BUDDY_CAPABILITY)
-export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
 /** The most machines one person adds to one Swarm (#2637, Ken, 2026-11-04). The Swarm-wide 32 dated from one 16 MB
  *  document; each machine is its own part now. Review again when one Swarm passes 100 entries (plan 2026-11-04). */
 export const MACHINES_PER_PERSON = 20
 export const MACHINE_LIMIT_MESSAGE = `You have ${MACHINES_PER_PERSON} machines in this Swarm, the most one person can add. Remove one before adding another.`
-/** How many more machines [contributorId] may add to [state]. Buddy-only records count as the person's machines. The command's
+/** How many more machines [contributorId] may add to [state]. The command's
  *  check and the host's join rows both read this, so they never disagree. */
 export const machineRoom = (state: SuperTabState, contributorId: string): number =>
   Math.max(0, MACHINES_PER_PERSON - (state.machines ?? []).filter(m => m.contributorId === contributorId).length)
 export const machineLimitReached = (state: SuperTabState, contributorId: string): boolean =>
   machineRoom(state, contributorId) === 0
-
-/** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
- *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
- *  and every liveness sweep (liveness.ts), so each way a Buddy goes (removed, failed or timed out, its person or project
- *  gone) ends it, as expireRemovals does for removals. Written as a machine part change, guarded by its version. */
-export function dropIdleBuddyMachines(state: SuperTabState, now: number): void {
-  for (const pool of state.machines?.filter(m => m.buddyOnly) ?? []) {
-    if (state.agents.some(a => a.machineId === pool.machineId)
-      || state.starts?.some(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error)) continue
-    state.machines = state.machines!.filter(m => m !== pool)
-    ;(state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: stableId('buddy-machine', pool.machineId, pool.generation),
-      machineOwnerId: pool.contributorId, requestedAt: new Date(now).toISOString(), buddyOnly: true })
-    state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
-    state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
-    state.removedSessions = state.removedSessions?.filter(r => r.machineId !== pool.machineId)
-  }
-}
-
-/** The Swarm's own machines: every contribution but a Buddy-only one (ContributedMachine.buddyOnly). */
-const swarmMachines = (state: Pick<SuperTabState, 'machines'>): ContributedMachine[] => (state.machines ?? []).filter(m => !m.buddyOnly)
 
 export function machineContribution(state: SuperTabState, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
@@ -433,8 +369,6 @@ export function machineContribution(state: SuperTabState, machineId: string) {
  *  contributed all of them. Not the Swarm owner (spec 2026-10-23-remove-machine.md, decision 1). */
 export function ownedMachine(state: SuperTabState, actor: Actor, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
-  // Not listed to anyone: it goes with its last Buddy (commands.ts dropIdleBuddyMachines), never by a removal that tells chats.
-  if (pool?.buddyOnly) fail('NOT_FOUND', 'This machine is not in the Swarm.', 404)
   const members = state.agents.filter(a => a.machineId === machineId)
   if (!pool && !members.length) fail('NOT_FOUND', 'This machine is not in the Swarm.', 404)
   const ownerId = pool?.contributorId ?? (members.every(a => a.contributorId === members[0]!.contributorId) ? members[0]!.contributorId : null)
@@ -558,7 +492,7 @@ export const hostLocalGrid = (state: SuperTabState) => state.localModels?.enable
 export function servedLocalModels(state: SuperTabState, now: number) {
   const grid = state.localModels?.enabled ? state.localModels.grid : null
   if (!grid) return []
-  return swarmMachines(state).flatMap(m => !m.observation || now - m.observation.receivedAt > MACHINE_FRESH_MS ? []
+  return (state.machines ?? []).flatMap(m => !m.observation || now - m.observation.receivedAt > MACHINE_FRESH_MS ? []
     : (m.observation.localModels ?? []).filter(l => l.grid === grid && !l.starting).map(l => ({ ...l, machineId: m.machineId })))
 }
 
@@ -579,25 +513,18 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
-  if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
-  // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
-  if (request.buddyOf && refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
-  // A person's one Buddy chat has no project (Dee, 10-31): its project session works in the one it names, and its main Buddy
-  // and plain sessions in none, in their own folder (buddyHomeFolder).
   const group = forProject ? undefined : conversation(state, request.conversationId)
   // A Regular agent's own chat has none either (agent.new, task #4116): it starts in its person's home folder. A Member's start
   // names its project (members.ts, task #4697), and starts in that project's folder as any project agent does (#4698).
-  const project = forProject ?? (request.member ? projectOf(state, request.member.projectId) : isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
-    : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
+  const project = forProject ?? (request.member ? projectOf(state, request.member.projectId) : isAgentChat(group!) ? undefined : groupProject(state, group!))
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
-  // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
-  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
-  // a Product Manager: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
-  if (!request.buddyOf && !request.leadFor && !request.regular) requireTeamWork(state, pool.machineId, pool.contributorId, project!)
-  const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf?.personId ?? pool.contributorId })
+  // Before the request's own fields: a machine that takes none of this project's work says so first. Not for a Product
+  // Manager: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
+  if (!request.leadFor && !request.regular) requireTeamWork(state, pool.machineId, pool.contributorId, project!)
+  const cwd = project ? projectFolder(pool, project) : homeFolder(pool, { id: pool.contributorId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
   const refused: string[] = []
@@ -615,9 +542,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (refused.length) {
     fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings. Refused: ${refused.join('; ')}.`, 403)
   }
-  // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
-  if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start) admitByRoom(state, pool, machineSlots(state, pool), request.requirements.memoryBytes, request.buddyOf ? 'a Buddy' : 'an agent')
+  if (machineOffline(pool, now)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
+  if (!start) admitByRoom(state, pool, machineSlots(state, pool), request.requirements.memoryBytes, 'an agent')
   const machineReason = !start ? machineSuspensionReason(pool, now) : null
   if (machineReason) fail('MACHINE_UNAVAILABLE', machineReason)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.

@@ -451,7 +451,10 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   At the right three icons: Info (`AppIcons.info`) opens what the app knows of
   it, Instructions (`AppIcons.fileText`) opens `agents/<name>.md`, and
   Terminal opens its terminal, each with its own header and ×, beside the chat
-  or in its place (Panes beside the chat). In a window under 720 the list of
+  or in its place (Panes beside the chat). A browser agent on one of the
+  person's own computers has a fourth after Terminal, Browser
+  (`BrowserButton`, `AppIcons.globe`), selected while its panel is open; a
+  computer shared with them, the web build and Windows draw none. In a window under 720 the list of
   conversations is behind a Conversations button that starts the bar, as a
   project's bar has it.
 - **Panes beside the chat.** An agent's Instructions, a project's Tasks and
@@ -525,7 +528,69 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   A row the app has no value for is not drawn; a board that cannot be read
   puts GitHub's reason in the Task row, under the tasks it held when last
   read, so they never read as current. Its text can be selected. Info,
-  Instructions and Terminal are one at a time: each closes the other two.
+  Instructions, Terminal and Browser are one at a time: each closes the others.
+- **Browser in New agent** (`BrowserPill`, `browser/browser_pill.dart`). Swarm
+  New agent alone, and never on the web build or on Windows, has a `Browser`
+  pill after
+  Worktree, drawn as Worktree is (a quiet compact `DesktopPill` with a square
+  that is ticked when on, 12 muted), off by default, with the tooltip `A
+  sandboxed Chrome the agent drives`. The form asks the chosen machine whether
+  it can run one: when this computer has no Podman, one line in 12 faint sits
+  under the pill, level with its square, `Needs setup · about 15 min`, and the
+  pill still works. When it cannot be ticked the pill is dimmed and its tooltip
+  says why: `Set up Browser on Ken Mac first` (another computer with no
+  Podman), `Update Harness on Ken Mac first`, `Browser isn't available on Ken
+  Mac right now`.
+- **Set up Browser** (`BrowserSetupPrompt`, `browser/browser_setup_dialog.dart`).
+  Start with Browser ticked on a computer with no Podman asks once, before the
+  agent is made, in the shared prompt (`DesktopPromptSurface`): the title in the
+  dialog heading, then `Installs Podman on this computer to run the agent's
+  Chrome. Asks for your password once. About 15 minutes, 3 GB.` in 13 body,
+  `Podman on this computer won't start. Harness will set up its own.` on its
+  own line when its Podman machine will not start. `Cancel` and the blue
+  `Install`: Install starts the setup and makes the agent at once; Cancel makes
+  nothing.
+- **Browser panel** (`BrowserPanel`, `browser/browser_panel.dart`). The agent's
+  own Chrome, beside its chat or in its place as the other panes. Its header is
+  `Browser` in 13 medium, then the gear (`Browser settings`, which opens them
+  in the panel), Paste (`AppIcons.clipboardPaste`, which sends the clipboard's
+  text, only while the screen shows) and ×. Ready, the screen fills the panel,
+  scaled to fit: the bundled noVNC page in the native webview, which the
+  person uses as the agent does. While it sets up, four lines in 13, `Podman
+  installed`, `Starting Podman…`, `Building browser`, `Starting browser`, each
+  after a mark as Import's steps have: ticked when done, a small spinner on the
+  current one, an empty circle (and the line muted) for those to come.
+  Starting, the spinner over `Starting browser…`. Otherwise one centred line in
+  13 with at most one blue button under it: the failed states' words (`Podman
+  is not running` and Retry, `Browser isn't set up` and Install on that
+  computer, `Set up Browser on Ken Mac first` from another, `Browser data
+  can't be read` alone) and the panel's own: `Browser is slow here` and Retry,
+  `Browser lost its connection` and Retry (after the panel's one silent
+  reconnect), `Browser is open in too many places`, `Only its owner can open
+  this browser`, `Reconnect this machine to open its browser`, `This computer
+  can't show the browser`. A request the computer did not take adds one 12
+  grey line under it. The gallery draws the button closed and open, the setup,
+  and a failed state.
+- **Browser settings** (`BrowserSettingsPage`, `browser/browser_settings_page.dart`).
+  Inside the agent's Browser panel, read from and saved to the agent's
+  computer only. `‹ Browser settings` (a compact quiet `DesktopPill` with a
+  left chevron) leads back. Under `Proxy`, 12 grey: the scheme (HTTP, HTTPS,
+  SOCKS5) in an `AppSelectField`, host and port, username and password
+  fields, then `Remove`, `Test` and the blue `Save` at the right. A saved
+  password is never sent back: its field is empty, with dots as its hint,
+  and it is sent only once a new one is typed. Test's answer is one 12 grey
+  line under the buttons, `Proxy works · 203.0.113.7 · Asia/Ho_Chi_Minh` or
+  `Proxy is not reachable`, gone at the next proxy edit. Then rows, a 12 grey
+  label in a 96 column and its control: `Time zone` (a field, `Auto` when
+  empty), `Language`, `Screen` (the five sizes, `1920 × 1080`), `Human input`
+  (a ticked square, as Worktree's, never a blue switch: blue is Save's, and
+  the speed beside it, dimmed while off). `Advanced` (a quiet pill with a
+  right chevron, down when open) holds `Device`, off by default, `GPU, CPU,
+  memory` beside it in faint, and when on four fields for what to report.
+  Save waits for a change and for every field to be valid. A failure is one
+  12 grey line under the header: `Only its owner can open this browser`,
+  `Reconnect this machine to open its browser`, or for a save the machine
+  refused, `Browser settings weren't saved. Check them and save again.`
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards and chat:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.

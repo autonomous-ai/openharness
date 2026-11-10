@@ -1,11 +1,8 @@
 import type { Prisma } from '@prisma/client'
 import { fail, stableId, type Agent, type SuperTabState } from './model.js'
 import { agentProjectId, projectOf } from './projects.js'
-import { isSwarmBuddy } from './buddies.js'
 
 const scopeId = (state: SuperTabState, projectId: string) => stableId(state.id, projectId)
-/** The scope of a Swarm-wide Buddy's session: no project's id. */
-const SWARM_BUDDY_SCOPE = 'swarm-buddy'
 const REGULAR_SCOPE = 'regular-agent'
 
 /** The record every Swarm registering one native session writes. */
@@ -15,10 +12,8 @@ export const sessionRecordId = (state: SuperTabState, target: Agent) => stableId
  *  close fences guard new contributions, not that mark: a stopping agent that joined a private chat (Swarm v4 gave every agent
  *  one, 11-09) refused every command of its Swarm, people's messages to the PM included, until its host closed it. */
 export async function bindSession(tx: Prisma.TransactionClient, state: SuperTabState, target: Agent, now = Date.now(), marking = false) {
-  // A Swarm-wide Buddy is in no project (Dee, 10-31): its session is bound to the Swarm's Buddy scope, which no project shares.
-  // So is a Regular agent, whose task decides its project (task #4116): its session keeps one scope of its own whatever task it holds.
-  const project = isSwarmBuddy(target) ? { id: SWARM_BUDDY_SCOPE, visibility: 'public' as const }
-    : target.regular ? { id: REGULAR_SCOPE, visibility: 'public' as const } : projectOf(state, agentProjectId(state, target))
+  // A Regular agent's task decides its project (task #4116): its session keeps one scope of its own whatever task it holds.
+  const project = target.regular ? { id: REGULAR_SCOPE, visibility: 'public' as const } : projectOf(state, agentProjectId(state, target))
   const scope = scopeId(state, project.id)
   const id = sessionRecordId(state, target)
   const prior = await tx.superTabSessionScope.findUnique({ where: { id } })

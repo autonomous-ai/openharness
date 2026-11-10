@@ -31,7 +31,7 @@ function harness(over: Partial<RetainExitedSessionDeps> = {}) {
     announceSession: session => { calls.push(`announce:${session.agentId}`) },
     invalidateTerminalControl: agentId => calls.push(`control:${agentId}`),
     forgetInput: agentId => calls.push(`input:${agentId}`),
-    detachDsh: agentId => calls.push(`dsh:${agentId}`),
+    ended: agentId => calls.push(`dsh:${agentId}`),
     syncRecapPool: () => calls.push('recap'),
     warn: () => {},
     ...over,

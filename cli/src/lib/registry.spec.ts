@@ -2054,6 +2054,35 @@ describe('registry across a reboot and pane loss', () => {
     void registry; void strictPersistedRow
   })
 
+  // The agent browser (services/agentBrowser.ts) starts only for an agent created with Browser ticked.
+  it('browser:true survives persist, parse and rebind; cleared on separate shell', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%51' }], cwd: '/tmp/demo', browser: true })!
+    expect(pending.browser).toBe(true)
+    const plain = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%52' }], cwd: '/tmp/demo' })!
+    expect(plain).not.toHaveProperty('browser')
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.browser).toBe(true)
+    expect(reloaded.byAgent(plain.agentId)).not.toHaveProperty('browser')
+    const transcriptPath = join(dataDir, 'session-browser.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    expect(reloaded.register({ sessionId: 'session-browser', transcriptPath, tmuxPane: '%51', cwd: '/tmp/demo' })?.entry.browser).toBe(true)
+    const row = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')).find((r: { agentId: string }) => r.agentId === pending.agentId)
+    expect(strictPersistedRow(row)?.browser).toBe(true)
+    expect(strictPersistedRow({ ...row, browser: 'yes' })).not.toHaveProperty('browser')
+    // A hand-edited value on disk loads without the field.
+    const file = join(dataDir, 'registry.json')
+    const rows = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>
+    writeFileSync(file, JSON.stringify(rows.map(r => ({ ...r, browser: 1 }))), { mode: 0o600 })
+    const { registry: hand } = await loadRegistryModule()
+    hand.load()
+    expect(hand.byAgent(pending.agentId)).not.toHaveProperty('browser')
+    // The shell left under a new identity is the person's: the agent's browser stays the agent's.
+    expect(reloaded.releaseEngine(pending.agentId, true)).not.toHaveProperty('browser')
+  })
+
   // The conversation a fresh move onto a grid left (core/agents/retarget.ts): the way home reopens it.
   it('keeps the remembered subscription session across a reload and the binds on the grid', async () => {
     const { registry } = await loadRegistryModule()

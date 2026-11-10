@@ -7,7 +7,7 @@ import type { HeadData, MachineData, Part, PartKind, ProgressData, SwarmParts } 
 /** The legacy report progress (`SuperTab.state`), in tab revisions. */
 interface LegacyProgress { dirtyRevision: number; summarizedRevision: number; requestedRevision: number; since: number; requestedAt?: number; requestMessageId?: string }
 
-// The kinds this release knows are listed once (model.ts knownKind): a second list here once set Buddy chats aside, so no host or change read saw them.
+// The kinds this release knows are listed once (model.ts knownKind).
 export { knownKind }
 const PART_ONLY_GROUP_FIELDS = ['messageSeq', 'reportSeq', 'dormant', 'lastActivityAt'] as const
 /** Optional lists of `SuperTab.state` an empty one of which differs from an absent one (`[]` after the last machine left). */

@@ -571,7 +571,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 | No progress notes or acks to the PM | instructionsTemplate.ts:87-88 | code | acknowledgements.ts ACK_ONLY; chatLimits.ts `requireChatContent` CHAT_STATUS (project chat main) |
 | No progress notes to the PM in task chats | instructionsTemplate.ts:87-88 | new | Extend chatLimits.ts CHAT_STATUS to worker posts addressed to the Lead in task chats |
 | PM checks CI, merges passed PRs | instructionsTemplate.ts:89 | building | Merge train (mergeTrain/plan.ts, ci/required + reads at head) |
-| Tell the people who asked once merged | instructionsTemplate.ts:89 | building | #4533 (issue closes on merge, GitHub tells its author); buddyNews.ts `shippedNotice` covers release only |
+| Tell the people who asked once merged | instructionsTemplate.ts:89 | building | #4533 (issue closes on merge, GitHub tells its author) |
 | Needing a person or a down machine goes to the PM | instructionsTemplate.ts:90 | code | crewNeeds.ts `routesToPm` for needs_human; stuck.ts/liveness.ts for machines down |
 | Idle Engineers stopped; Reviewers/Testers kept | instructionsTemplate.ts:91 | code | tidy.ts idle stop; steps.ts `checksOpenWork` keeps checkers |
 | After a pause, run `mine` first | instructionsTemplate.ts:92 | new | Daemon: answer the engine's compaction/resume hook (engines/*/hookContract.ts) with the agent's `mine` output, beside #4537's re-send |
@@ -617,7 +617,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 |---|---|---|---|
 | Read the instructions before any project work | swarmInstructionsSkill.ts:26 | building | #4537: the daemon sends the parts when first needed instead of asking the agent to read a skill |
 | Read both skills before your next step and work by them | swarmInstructionsSkill.ts:106 | building | #4537 (sent once, re-sent on version change); the notice itself is code (`noticeOf`, `refreshProjectSkills`) |
-| A Buddy's read doesn't change its limits | swarmInstructionsSkill.ts:107 | code | Buddy limits enforced server-side: commands.ts BUDDY_NOT_ASSIGNABLE, BUDDY_CHAT_ONLY, buddyContract.ts |
+| A Buddy's read doesn't change its limits | swarmInstructionsSkill.ts:107 | remove | the backend has no Buddy since S17 (2026-11-10): the line goes with the CLI's Buddy skill |
 | On change, read the files again and work by them | swarmInstructionsSkill.ts:120 | building | #4537 (re-send on version change and compaction) |
 
 ### Counts

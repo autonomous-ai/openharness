@@ -17,6 +17,8 @@ export const enum TerminalBinaryKind {
   paste = 5,
   imagePaste = 6,
   pasteFile = 7,
+  // An agent browser stream's bytes: VNC up, the viewer's keys, pointer and clipboard down.
+  browser = 8,
 }
 
 export const enum TerminalHopDirection {
@@ -36,6 +38,7 @@ export const TERMINAL_BINARY_CLIENT_UP_KINDS: ReadonlySet<TerminalBinaryKind> = 
   TerminalBinaryKind.paste,
   TerminalBinaryKind.imagePaste,
   TerminalBinaryKind.pasteFile,
+  TerminalBinaryKind.browser,
 ])
 
 const CLIENT_MAGIC = Buffer.from('HTRM')
@@ -58,7 +61,7 @@ export function parseTerminalClientFrame(raw: Uint8Array): { kind: TerminalBinar
     || (bytes[5] !== TerminalBinaryKind.input && bytes[5] !== TerminalBinaryKind.output
       && bytes[5] !== TerminalBinaryKind.keyframe && bytes[5] !== TerminalBinaryKind.sync
       && bytes[5] !== TerminalBinaryKind.paste && bytes[5] !== TerminalBinaryKind.imagePaste
-      && bytes[5] !== TerminalBinaryKind.pasteFile)
+      && bytes[5] !== TerminalBinaryKind.pasteFile && bytes[5] !== TerminalBinaryKind.browser)
     || bytes[7] !== 0) return null
   const ciphertextLength = bytes.readUInt32BE(16)
   if (ciphertextLength < 16 || ciphertextLength !== bytes.length - TERMINAL_BINARY_HEADER_BYTES) return null

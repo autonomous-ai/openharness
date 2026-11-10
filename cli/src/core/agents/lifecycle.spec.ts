@@ -3,7 +3,8 @@ import type { PurgeDeps } from '../../lib/purgeAgentService.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService } from '../../lib/resumeAgentService.js'
 import { AgentStopError, createStopAgentService } from '../../lib/stopAgentService.js'
-import { createAgentLifecycle, createPurgeRequest, createStopRequest, LeadProtectedError, type LifecycleDeps } from './lifecycle.js'
+import { createRetainExitedSession } from '../../lib/retainExitedSession.js'
+import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest, LeadProtectedError, type LifecycleDeps } from './lifecycle.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 import { moveHeldLine } from '../../lib/hostMove/moveAgent.js'
@@ -77,6 +78,12 @@ describe('stopping, purging and resuming an agent', () => {
       refreshGridWebSearch: deps.refreshGridWebSearch, clearDeleted: deps.clearDeleted, attachDsh: deps.attachDsh,
       attachSession: deps.attachSession,
     })
+  })
+
+  it('hands the resume the agent browser\'s attach, so a resumed agent gets its browser back', () => {
+    const attachBrowser = vi.fn()
+    setup({ attachBrowser })
+    expect(vi.mocked(createResumeAgentService).mock.calls[0]![0]).toMatchObject({ attachBrowser })
   })
 
   it('stops through the stop service, then tells the cleanup the agent was stopped, never while the stop can fail', async () => {
@@ -185,6 +192,16 @@ describe('stopping, purging and resuming an agent', () => {
       expect(deps.mirror.deleteHistory).toHaveBeenCalledTimes(1)
       expect(deps.registry.deleteSavedNames).toHaveBeenLastCalledWith(['a1'])
     })
+
+    // The agent browser's profile volume holds the agent's logins: only a purge deletes it, never a stop.
+    it('purge calls agentBrowser.deleted; a plain stop does not', async () => {
+      const purged = vi.fn()
+      const { lifecycle, purge } = setup({ purged })
+      await lifecycle.stopAgent('a1')
+      expect(purged).not.toHaveBeenCalled()
+      purge.deleted(row())
+      expect(purged).toHaveBeenCalledWith('a1')
+    })
   })
 
   describe('resume', () => {
@@ -240,6 +257,48 @@ describe('stopping, purging and resuming an agent', () => {
       expect(blocks).toHaveBeenCalledWith('/work/tree')
       expect(vi.mocked(createResumeAgentService).mock.results[1].value).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('the agent browser, as its agent starts and ends', () => {
+  const withBrowser = row({ browser: true })
+  const browsers = (port: { attached: (session: RegisteredSession) => void; stopped: (agentId: string) => void } | null = { attached: vi.fn(), stopped: vi.fn() }) =>
+    ({ port, lifecycle: createAgentBrowserLifecycle(() => port) })
+
+  it('stops the browser of an agent whose engine exits by itself', () => {
+    const { port, lifecycle } = browsers()
+    lifecycle.attached(withBrowser)
+    expect(port!.attached).toHaveBeenCalledWith(withBrowser)
+    const archive = new Map<string, RegisteredSession>()
+    const retain = createRetainExitedSession({
+      stoppedAgents: { save: (s) => { archive.set(s.agentId, s) }, get: (id) => archive.get(id) ?? null },
+      registry: { releaseEngine: () => null, removeAgent: () => true },
+      send: () => {}, publishStoppedAgent: async () => {}, announceSession: () => {}, invalidateTerminalControl: () => {},
+      forgetInput: () => {}, ended: lifecycle.ended, syncRecapPool: () => {}, warn: () => {},
+    })
+    retain(withBrowser, false)
+    expect(port!.stopped).toHaveBeenCalledWith('a1')
+  })
+
+  it('tells it once however many times the end is seen, and again after a resume', () => {
+    const { port, lifecycle } = browsers()
+    lifecycle.attached(withBrowser)
+    lifecycle.ended('a1')
+    lifecycle.ended('a1')
+    expect(port!.stopped).toHaveBeenCalledTimes(1)
+    lifecycle.attached(withBrowser)
+    lifecycle.ended('a1')
+    expect(port!.stopped).toHaveBeenCalledTimes(2)
+  })
+
+  it('tells nothing of an agent created without Browser, and nothing while the service is down', () => {
+    const { port, lifecycle } = browsers()
+    lifecycle.attached(row())
+    lifecycle.ended('a1')
+    expect(port!.stopped).not.toHaveBeenCalled()
+    const down = browsers(null).lifecycle
+    down.attached(withBrowser)
+    expect(() => down.ended('a1')).not.toThrow()
   })
 })
 

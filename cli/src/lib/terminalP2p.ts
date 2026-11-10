@@ -4,6 +4,7 @@ import type { RTCPeerConnection, RTCDataChannel, RTCIceCandidateInit } from 'wer
 import { env } from '../config/env.js'
 import { pickTurnUrl, selectStunUrls, type StunSelector } from './stunSelect.js'
 import { armTurnTls } from './turnTlsGuard.js'
+import { AGENT_BROWSER_DOWN_TYPES, AGENT_BROWSER_UP_TYPES } from './e2ee/applicationFrames.js'
 
 export const TERMINAL_P2P_PROTOCOL_VERSION = 1
 export const TERMINAL_P2P_CHANNEL = 'terminal-v1'
@@ -57,6 +58,8 @@ export const TERMINAL_P2P_DOWN_TYPES = new Set([
   // dropping every begin/cancel for a pane already on a direct p2p connection: no reply, no log,
   // indistinguishable from the wire itself being stuck.
   'terminal_chunked_upload_begin', 'terminal_chunked_upload_cancel',
+  // An agent browser's stream rides the same direct link as a terminal's (its bytes are binary kind `browser`).
+  ...AGENT_BROWSER_DOWN_TYPES,
 ])
 
 export const TERMINAL_P2P_UP_TYPES = new Set([
@@ -67,6 +70,7 @@ export const TERMINAL_P2P_UP_TYPES = new Set([
   // even after the daemon itself did everything right.
   'terminal_chunked_upload_begin_result', 'terminal_chunked_upload_progress',
   'terminal_paste_image_result', 'terminal_paste_file_result',
+  ...AGENT_BROWSER_UP_TYPES,
 ])
 
 export type TerminalP2pState = 'connecting' | 'direct' | 'failed' | 'closed'
@@ -629,6 +633,19 @@ export class TerminalP2pResponderPool {
       }
     }
     return true
+  }
+
+  /** Which path ICE nominated for this connection's channel, as the initiator's `transport` reads it: 'relay' is
+   *  Cloudflare TURN, billed per GB. Null while it negotiates, or when werift exposes no pair. */
+  transport(connId: string): 'direct' | 'relay' | null {
+    const entry = this.entries.get(connId)
+    if (!entry?.ready) return null
+    for (const iceTransport of entry.pc.iceTransports) {
+      const pair = iceTransport.getSelectedCandidatePair?.()
+      if (!pair?.local?.candidate) continue
+      return isRelayedPair(pair.local.candidate, pair.remote?.candidate) ? 'relay' : 'direct'
+    }
+    return null
   }
 
   send(connId: string, data: TerminalP2pData): boolean {

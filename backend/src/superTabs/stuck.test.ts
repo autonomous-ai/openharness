@@ -13,7 +13,7 @@ const person = (userId: string): Actor => ({ kind: 'person', userId, email: `${u
 
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 
-/** A public project App with its PM and a worker, and people p (its owner), c and d (as boardRights.test.ts). */
+/** A public project App with its PM and a worker, and people p (its owner), c and d. */
 function swarm() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.people.push({ id: 'p', email: 'p@example.com', role: 'collaborator', generation: 'p1' },

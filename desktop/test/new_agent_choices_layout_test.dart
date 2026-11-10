@@ -78,6 +78,7 @@ class _ChoicesApp extends AppNotifier {
     String? agent,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     createCalls++;
     return null;

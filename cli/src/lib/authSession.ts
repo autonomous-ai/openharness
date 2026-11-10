@@ -15,9 +15,6 @@ export interface AuthSession {
    *  billing's Autonomous service does not take; grid does, through the Harness backend —
    *  autonomous-grid ADR 0046); absent or `sso` — the browser. */
   method?: 'sso' | 'qr'
-  /** `team`: a Harness Team sign-in (cli/src/team/), which runs this computer's own daemon and its Swarm agents and
-   *  reaches none of the account's other computers. Absent: a computer's ordinary sign-in. */
-  kind?: 'team'
   /** The auth-service client these tokens were issued to, as the backend's exchange reported it.
    *  A refresh has to name the same one. Absent is the backend's configured client. */
   clientId?: SsoClientId
@@ -76,7 +73,6 @@ function parse(raw: string): AuthSession | null {
       computerId: value.computerId,
       ...(typeof value.machineId === 'string' && value.machineId ? { machineId: value.machineId } : {}),
       ...(value.method === 'qr' || value.method === 'sso' ? { method: value.method } : {}),
-      ...(value.kind === 'team' ? { kind: 'team' as const } : {}),
       ...(knownSsoClientId(value.clientId) ? { clientId: knownSsoClientId(value.clientId) } : {}),
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
       ...(typeof value.signInEpoch === 'string' && value.signInEpoch ? { signInEpoch: value.signInEpoch } : {}),
@@ -89,15 +85,9 @@ function parse(raw: string): AuthSession | null {
  *  made (ms) — the device key log lets a sign-in start its file over only shortly after it was made. */
 export const newSignInEpoch = (now = Date.now()): string => `${randomBytes(16).toString('hex')}@${now}`
 
-/** How a `signInEpoch` given to a session from before epochs existed starts, and a Team sign-in's ([teamSignInEpoch]): nobody
- *  saw that sign-in made by hand here, so the device key log may take its file over for it but never starts one over. */
+/** How a `signInEpoch` given to a session from before epochs existed starts: nobody saw that sign-in made by hand here, so
+ *  the device key log may take its file over for it but never starts one over. */
 export const ADOPTED_SIGN_IN = 'adopted:'
-
-/** A Team sign-in's epoch, made as it signs in. Adopted, so the device key log treats it as it always has (a Team session was
- *  given an adopted epoch at its first read), and can never start over for another account on it; and its own form, as it is a
- *  new sign-in, never an old session given an epoch meanwhile ([sameSignIn]). */
-const TEAM_SIGN_IN = `${ADOPTED_SIGN_IN}team:`
-export const teamSignInEpoch = (now = Date.now()): string => TEAM_SIGN_IN + newSignInEpoch(now)
 
 /** Give a session from before epochs existed one (`ADOPTED_SIGN_IN`), under the refresh lock so a
  *  rotated refresh token is never written back over. The session's epoch; null when signed out. */
@@ -233,7 +223,7 @@ export function recordMachineId(machineId: string, startedUnder: string | undefi
 /** Whether [latest] is still the sign-in a lookup started under ([recordMachineId]). */
 export function sameSignIn(latest: AuthSession, startedUnder: string | undefined): boolean {
   if (latest.signInEpoch === startedUnder) return true
-  return startedUnder === undefined && signInOf(latest.signInEpoch)?.adopted === true && !latest.signInEpoch?.startsWith(TEAM_SIGN_IN)
+  return startedUnder === undefined && signInOf(latest.signInEpoch)?.adopted === true
 }
 
 /** The first wait before a refused refresh is tried again, and the longest. The app asks `auth status` often,
@@ -327,9 +317,9 @@ type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number 
 export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: hostname().slice(0, 80) })
 
 /** Whether renewing [session] asks to move it to a Harness session: an SSO sign-in's does. One that is a Harness
- *  session already (`hnr_`, `htr_`) renews as one, and a QR or team sign-in is a session of its own kind. */
+ *  session already (`hnr_`) renews as one, and a QR sign-in is a session of its own kind. */
 export function asksForHarnessSession(session: AuthSession): boolean {
-  return session.kind !== 'team' && session.method !== 'qr' && !/^(hnr|htr)_/.test(session.refreshToken ?? '')
+  return session.method !== 'qr' && !session.refreshToken?.startsWith('hnr_')
 }
 
 /**

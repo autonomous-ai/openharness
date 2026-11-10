@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ContributedMachine } from '../machines.js'
-import { createSuperTab, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { createSuperTab, type Conversation, type SuperTabState } from '../model.js'
 import { addLent } from './lent.js'
 import type { GroupLedger } from './record.js'
 import { HOUR_MS as HOUR, lentIn, periodSpans, reviewsIn, type PeriodName } from './rolling.js'
@@ -86,20 +86,6 @@ describe('All projects', () => {
     const one = leaderboard({ state: twoProjects(), groups, machines: [], projectId: 'lead', week: THIS_WEEK, now: NOW, period: '7d' })
     expect(one).not.toHaveProperty('allProjects')
     expect(dee(one)).toMatchObject({ points: 3, shipped: { count: 1 } })
-  })
-
-  it('lists a person\'s one Buddy once across the projects summed, and only if they read one of them', () => {
-    const state = twoProjects()
-    state.projects![0]!.visibility = 'private'
-    state.projects![1]!.visibility = 'private'
-    state.projects![2]!.visibility = 'private'
-    state.projects![1]!.members = [{ id: 'dee', generation: 'g' }]
-    state.projects![2]!.members = [{ id: 'dee', generation: 'g' }]
-    state.agents.push({ id: 'dee-buddy', machineId: 'mac', harnessId: 'h-b', machineOwnerId: 'dee', contributorId: 'dee', membershipGeneration: 'g', name: 'Dee Buddy',
-      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }, buddyOf: { personId: 'dee', generation: 'g' }, buddyScope: 'swarm' } as unknown as Agent)
-    const reading = (projects: string[]) => leaderboard({ state, groups: [], machines: [], projectId: 'lead', week: THIS_WEEK, now: NOW, period: '7d', allProjects: projects }).agents
-    expect(reading(['lead', 'other', 'secret']).filter(a => a.agentId === 'dee-buddy')).toHaveLength(1)
-    expect(reading(['lead']).filter(a => a.agentId === 'dee-buddy')).toEqual([])
   })
 
   it('counts nothing of a project the reader may not read, though its group is at hand', () => {

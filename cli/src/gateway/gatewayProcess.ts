@@ -70,6 +70,9 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     deviceRevoked: (identity) => notice('deviceRevoked', { identity }),
     toWindows: (frame) => notice('toWindows', { frame }),
     tabFrame: (event) => notice('tabFrame', { event }),
+    browserRoute: (streamId, route) => notice('browserRoute', { streamId, route }),
+    browserRouteLost: (streamId) => notice('browserRouteLost', { streamId }),
+    browserTransportError: () => notice('browserTransportError'),
   }
 
   /** The account's tokens, from the core (`core.account`, services/accountLink.ts): a refusal comes back as

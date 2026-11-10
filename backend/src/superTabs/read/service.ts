@@ -1,4 +1,3 @@
-import { personalTasksFor, personalTasksPage, type PersonalTasks } from './personalTasks.js'
 /**
  * The read API by parts (design section 4; shapes in contract.ts). Every read takes its time `T0` before any query and
  * makes the next cursor from it, so a write that commits late, inside the overlap, is still seen by the next poll.
@@ -6,7 +5,7 @@ import { personalTasksFor, personalTasksPage, type PersonalTasks } from './perso
 import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
-import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
+import { agentOnly, author, fail, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
 import { logger } from '../../utils/logger.js'
 import { lowerReadMark, readMarkRows, readThreadMarks, writeReadMark, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
 import { readChatSettings, writeChatSetting, type NotifyLevel } from '../chatSettings.js'
@@ -20,7 +19,6 @@ import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf, readConversation, readProject } from '../projects.js'
-import { isBuddyReader } from '../buddies.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
 import { profileNames, readableWeek, recentDormantGroups, weeklyBoard } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
@@ -31,6 +29,7 @@ import { derivedEtag, marksOf } from './derivedEtag.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { AvatarLinks } from '../avatarLinks.js'
 import { cursorFor, readCursor } from './cursor.js'
+import { NO_PERSONAL_TASKS } from '../retired.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
@@ -81,10 +80,6 @@ function stamped(derived: Derived, held?: string) {
   return held === etag ? { derived: marksOf(derived), derivedEtag: etag, derivedUnchanged: true as const } : { derived, derivedEtag: etag }
 }
 
-/** Tasks feed reads (parts/load.ts loadFeed) held at the Swarm's main stamp, which every conversation write moves: a first load of a
- *  Swarm that did not change asks Mongo for nothing. The rows are shared; each reader's own checks run on every read. */
-const feedRead = (tx: PrismaClient, cached: CacheView, tabId: string): Parameters<typeof personalTasksPage>[0] => (ids, projects, before) =>
-  cached.get(tabId, `feed:${JSON.stringify([ids, projects, before ?? null])}`, 'main', () => parts.loadFeed(tx, tabId, ids, projects, before))
 
 /** A change poll's light base (parts/light.ts): the same for every reader of a Swarm, so one load per stamp serves them all. */
 const LIGHT = { groups: 'working' } as const
@@ -129,8 +124,8 @@ export class SwarmReads {
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
         // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
         steps: true as const, ...view.parts,
-        // The feed's newest page (task #4203): its history is read by its own index, not from the loaded working set.
-        ...read.actor.kind === 'person' ? { personalTasks: await personalTasksPage(feedRead(tx, cached, tabId), view, read.actor) } : {},
+        // The Tasks feed Swarm v4 retired, empty and reset for a Desktop that kept its rows (retired.ts).
+        ...read.actor.kind === 'person' ? { personalTasks: NO_PERSONAL_TASKS } : {},
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -175,8 +170,7 @@ export class SwarmReads {
     return this.read(user, tabId, async (tx, cached) => {
       const base = await readLight(tx, cached, tabId, LIGHT)
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {}, async () => base)
-      // A Buddy reads no machines (read/changes.ts).
-      return { format: READ_FORMAT, serverTime: t0, machines: isBuddyReader(read.view.state, read.actor) ? [] : read.view.parts.machines }
+      return { format: READ_FORMAT, serverTime: t0, machines: read.view.parts.machines }
     })
   }
 
@@ -209,31 +203,15 @@ export class SwarmReads {
         ...marks.map(mark => mark.conversationId), ...threadMarks.keys(), ...settings.keys()])].filter(id => !held.has(id))
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
-      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined, from.since)
+      const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
       // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...sent,
-        ...read.actor.kind === 'person' ? { personalTasks: personalTasksFor(changed, read.view, read.actor) } : {},
+        epoch: read.parts.visibilityEpoch, ...sent, ...read.actor.kind === 'person' ? { personalTasks: NO_PERSONAL_TASKS } : {},
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
 
-  /** The person's Tasks feed page older than `before`, a first load's or an earlier page's `olderCursor` (task #4203). A person's
-   *  read only: an agent has no feed. */
-  async personalTasks(user: AuthUser, tabId: string, before?: string): Promise<PersonalTasks> {
-    const t0 = this.now()
-    return this.read(user, tabId, async (tx, cached) => {
-      const loaded = await readParts(tx, cached, tabId)
-      const state = parts.reassemble(loaded, { share: true })
-      const actor = await this.store.actor(tx, user, state)
-      author(state, actor)
-      const machineVersions = await this.machineLookups(state)
-      const view = readerView(loaded, actor, t0, { machineVersions })
-      return await personalTasksPage(feedRead(tx, cached, tabId), view, actor, before)
-        ?? fail('NOT_FOUND', 'Only a member has a Tasks feed.', 404)
-    })
-  }
 
   async dormant(user: AuthUser, tabId: string, page: { projectId?: string; before?: string }, asAgentId?: string): Promise<DormantGroups> {
     return this.read(user, tabId, async (tx, cached) => {
@@ -258,8 +236,7 @@ export class SwarmReads {
         before = { lastActivityAt: Date.parse(last.data!.lastActivityAt!), key: last.key }
       }
       const seen = readable.some(p => p.data!.task?.requires) ? seenMachineIds(visibleState(state, actor, this.now())) : new Set<string>()
-      const buddy = isBuddyReader(state, actor)
-      return { groups: readable.map(p => envelope(p, groupView({ ...buddy ? groupForBuddy(p.data!) : p.data!, dormant: true }, seen))),
+      return { groups: readable.map(p => envelope(p, groupView({ ...p.data!, dormant: true }, seen))),
         next: more ? encodeDormantPage(readable.at(-1)!) : null }
     })
   }
@@ -296,7 +273,7 @@ export class SwarmReads {
    * readAccess), and for an agent stored with no project its active conversations (agentProjectId). Never the whole Swarm: its
    * cached base and machines were refreshed from the Swarm's group, machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
    * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
-   * a Buddy chat an agent reads only as its Buddy. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
+   * an agent's 1:1 chat. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
    * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
    * on every agent's project; so does an awake group stored without a number, which a whole read numbers after every other.
    */
@@ -320,17 +297,16 @@ export class SwarmReads {
       author(state, actor)
       const unavailable = (): never => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
       if (!found) return unavailable()
-      const buddy = isBuddyReader(state, actor)
       // A quiet group passes the same read check as on the dormant list. No required machines here, so no reader's view of
       // machines changes what it shows (model.ts withSeenRequirement).
       if (found.dormant) {
         if (!canReadGroup(state, actor, found.data!)) return unavailable()
-        return { group: envelope(found, groupView({ ...buddy ? groupForBuddy(found.data!) : found.data!, dormant: true }, new Set())) }
+        return { group: envelope(found, groupView({ ...found.data!, dormant: true }, new Set())) }
       }
       // An awake one as a whole-Swarm read lists it (views.ts readerView): a kind this release knows, never the removed Leads.
       const group = state.conversations.find(c => c.id === conversationId)
       if (!group || isLeads(group) || !canReadGroup(state, actor, group)) return unavailable()
-      const one = envelope(found, groupView(buddy ? groupForBuddy(group) : group, new Set()))
+      const one = envelope(found, groupView(group, new Set()))
       return { group: actor.kind === 'person' ? (await this.servedTops.served(tabId, state, [one]))[0]! : one }
     })
     return answer ?? { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
@@ -346,8 +322,7 @@ export class SwarmReads {
       // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
       if (dormant && canReadGroup(view.state, actor, dormant.data!)) {
-        const data = isBuddyReader(view.state, actor) ? groupForBuddy(dormant.data!) : dormant.data!
-        return { group: envelope(dormant, groupView({ ...data, dormant: true }, seenIn(view.parts))), state: view.state }
+        return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true }, seenIn(view.parts))), state: view.state }
       }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
@@ -444,7 +419,7 @@ export class SwarmReads {
         // Names change rarely and show on a board: read on the secondary (task #2970).
         const names = await profileNames(this.store.replica, state.people.map(p => p.id))
         const visible = visibleState(state, actor, now)
-        // Count only agents this reader sees, keeping ownership before presentation redaction (Buddy rows).
+        // Count only agents this reader sees, keeping ownership before presentation redaction.
         const agentIds = new Set(visible.agents.map(a => a.id))
         const visibleAgents = state.agents.filter(a => agentIds.has(a.id))
         const machines = (visible.machines ?? [])

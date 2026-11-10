@@ -405,8 +405,6 @@ async function authStatusCommand(json: boolean): Promise<void> {
     autonomousEnv: latest?.autonomousEnv,
     expiresAt: latest?.expiresAt,
     method: latest?.method ?? 'sso',
-    // A Harness Team sign-in (team/): this computer runs its own Swarm agents and reaches no other computer.
-    ...(latest?.kind ? { kind: latest.kind } : {}),
     // Read-only: a machine that has not signed in yet has no key, and asking must not make one.
     ...(fingerprintNow ? { fingerprint: fingerprintNow } : {}),
   }
@@ -414,7 +412,7 @@ async function authStatusCommand(json: boolean): Promise<void> {
   else if (signInAgain) {
     console.log('\n  ✗ Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account for 7 days. Run: harness login\n')
   } else {
-    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.kind === 'team' ? ' — for team work only (harness login --force signs it in as you)' : payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
+    console.log(`\n  ${payload.loggedIn ? '✓ Signed in' : '✗ Not signed in'}${payload.machineId ? ` (machine ${payload.machineId})` : ''}${payload.loggedIn && payload.method === 'qr' ? ' — by your phone' : ''}\n`)
     // A session a phone approved is Harness's own, and billing's Autonomous service does not take it.
     // Say so where the person looks, not only when billing refuses. Grid is not named: it learns who
     // holds a Harness-issued sign-in from the Harness backend (autonomous-grid ADR 0046), and naming
@@ -2759,6 +2757,7 @@ import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
 import { computerUseCommand } from './agentClient/computerUse.js'
+import { browserMcpCommand } from './agentClient/browserMcp.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2835,6 +2834,10 @@ switch (cmd) {
     process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
+  case 'browser-mcp':
+    // A Browser agent's MCP server (lib/browserMcpArgs.ts): an engine starts it, never a person.
+    browserMcpCommand().then(code => { process.exitCode = code }).catch(onError)
+    break
   case 'mcp': {
     const pane = sendPane(process.env)
     mcpCommand({ run: harnessRunner(SCRIPT_PATH), inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) }).then(code => { process.exitCode = code }).catch(onError)

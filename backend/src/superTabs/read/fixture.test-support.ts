@@ -1,9 +1,6 @@
 /** Test support only: a Swarm built through real commands, for the read views and the migration tests. */
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type SuperTabState } from '../model.js'
-import { buddyChatId } from '../buddies.js'
-import { recordPulse } from '../pulse.js'
-import { linesOf } from '../statusCard.js'
 import { storedAssignment } from '../storedWork.test-support.js'
 
 export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000001', email: 'owner@example.com' }
@@ -45,10 +42,8 @@ export function richSwarm(now = NOW) {
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web)
-  // Stored as work.assign left it before Swarm v4, with the task's status line its command wrote after it (commands.ts recordPulse).
-  const lines = linesOf(s.state, now)
+  // Stored as work.assign left it before Swarm v4.
   const assignmentId = storedAssignment(s.state, web, worker, now).id
-  recordPulse(s.state, now, undefined, lines)
   const done = s.group('Done work')
   const secretGroup = s.group('Secret work', secret)
   // Not a spread: `state` stays a live getter.
@@ -56,7 +51,7 @@ export function richSwarm(now = NOW) {
 }
 
 /** `richSwarm`, plus everything `visibleState` filters or drops: peer in the private project, a machine whose reading lists a
- *  gone session and a failed privacy check, peer's Buddy and its chat, a dormant conversation, report progress, and the
+ *  gone session and a failed privacy check, a dormant conversation, report progress, and the
  *  owner-only and host-only records (sharing, reservations, released and closing sessions, overlap alerts). */
 export function fullSwarm(now = NOW) {
   const s = richSwarm(now)
@@ -72,14 +67,7 @@ export function fullSwarm(now = NOW) {
       tools: {}, quotas: [], runningHarnessIds: ['worker-harness', 'gone-harness'], stoppedHarnessIds: [],
       harnessTokens: { 'worker-harness': tokens(), 'gone-harness': tokens() } }
   })
-  const generation = s.state.people.find(p => p.id === peer.userId)!.generation
-  const projectId = s.state.projects![0]!.id
-  const buddy = 'buddy', buddyChat = buddyChatId(projectId, { id: peer.userId, generation })
   s.edit(state => {
-    state.agents.push({ id: buddy, projectId, machineId: 'host', harnessId: 'buddy-harness', machineOwnerId, contributorId: peer.userId,
-      membershipGeneration: generation, name: 'Buddy', configuration: config, buddyOf: { personId: peer.userId, generation } })
-    state.conversations.push({ id: buddyChat, kind: 'buddy', projectId, title: 'Buddy', leadId: null, agentIds: [buddy], archived: false,
-      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: peer.userId, generation }] } })
     Object.assign(state.conversations.find(c => c.id === s.done)!, { archived: true, dormant: true })
     for (const project of state.projects!) project.progress = { since: now, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {} }
     state.sharing = { revision: 1, generation: 'sharing-1', access: { mode: 'invited', role: 'collaborator' } }
@@ -88,6 +76,5 @@ export function fullSwarm(now = NOW) {
     state.overlapAlerts = ['a:b']
     state.closingSessions = [{ agentId: 'removed-agent', machineId: 'host', harnessId: 'old-harness', machineOwnerId }]
   })
-  // Not a spread: `state` stays a live getter.
-  return Object.assign(s, { buddy, buddyChat })
+  return s
 }

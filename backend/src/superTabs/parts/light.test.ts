@@ -27,19 +27,12 @@ const assignment: Required<Assignment> = {
 }
 const conversation: Required<Conversation> = {
   agentIds: [],
-  answered: [],
   archived: false,
   assignment,
   audience: { people: [] },
   brief: '',
   briefAt: 1,
-  buddyChats: ['other'],
-  buddyDefault: true,
-  buddyDownTold: true,
-  buddyName: 'Sparky',
-  buddySessions: [],
   cards: {},
-  chatLimits: { asks: [] },
   checks: [],
   dormant: false,
   foldedInto: ['f'],
@@ -58,31 +51,23 @@ const conversation: Required<Conversation> = {
   messageSeq: 0,
   notBefore: '2026-12-04',
   number: 1,
-  owed: [],
-  paused: { by: 'person:owner', at: 1, reason: 'Wait' },
   pin: { agentId: 'a', why: 'ci', at: 1 },
   priority: 'P0',
   process: 'full',
   projectId: 'p',
-  proposal: { senders: [], decision: { kind: 'accept', reason: 'r' }, mergedInto: 'g' },
-  proposals: [],
   pullRequestUrls: [],
-  pulse: {} as never,
   reactionSeq: 0,
   released: { at: 1, tags: [] },
   reportSeq: 0,
   requesterId: 'p',
   reviewOf: 'r',
   reviewStamp: { assignmentId: 'w', handoff: 1 },
-  statusLine: { text: '', since: 0 },
   step: 'Review',
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
   stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
   task: { goal: '', changes: '', constraints: '', owns: [] },
-  taskApproval: { personId: 'p', generation: 'g', state: 'proposal', createdAt: 1 },
   title: 't',
-  unlinkedPullRequests: [],
   writers: [],
 }
 
@@ -111,18 +96,18 @@ describe('the light conversation projection (parts/light.ts)', () => {
     s.join(outsider)
     const lead = s.add('lead-harness', 'lead', true)
     const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
-    const [web, hidden, closedChat, buddyChat] = [s.group('Web'), s.group('Secret work', secret), s.group('Peer and PM'), s.group('Peer\'s Buddy')]
+    const [web, hidden, closedChat, agentChat] = [s.group('Web'), s.group('Secret work', secret), s.group('Peer and PM'), s.group('Peer\'s agent')]
     s.edit(state => {
       const audience = { people: [{ id: peer.userId, generation: state.people.find(p => p.id === peer.userId)!.generation }] }
       state.conversations.find(c => c.id === closedChat)!.audience = audience
-      Object.assign(state.conversations.find(c => c.id === buddyChat)!, { kind: 'buddy', leadId: null, agentIds: [], audience })
+      Object.assign(state.conversations.find(c => c.id === agentChat)!, { kind: 'agent-chat', leadId: null, agentIds: [], audience })
     })
     const state = s.state
     const kept = GROUP_FIELDS.always.filter(field => !field.includes('.'))
     const light = (group: Conversation) => Object.fromEntries(kept.filter(field => field in group).map(field => [field, group[field as keyof Conversation]])) as unknown as Conversation
     const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: state.agents.find(a => a.id === lead)!.machineOwnerId }
     const readers: Actor[] = [owner, peer, outsider, leadActor]
-    const reads = readers.flatMap(actor => [web, hidden, closedChat, buddyChat].map(id => {
+    const reads = readers.flatMap(actor => [web, hidden, closedChat, agentChat].map(id => {
       const group = state.conversations.find(c => c.id === id)!
       expect(canReadGroup(state, actor, light(group)), `${actor.kind} ${id}`).toBe(canReadGroup(state, actor, group))
       return canReadGroup(state, actor, group)

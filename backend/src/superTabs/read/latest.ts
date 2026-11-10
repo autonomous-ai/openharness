@@ -1,14 +1,13 @@
 /**
  * Each chat's newest main row a person reads (servedTops.ts): the row at its stored main sequence, read alone, and the rows before
  * it only for a chat where that row is not one. The rows are those a page shows a person (store.ts messages): never an agent-only
- * notice, a delivered copy of a Lead's notice, or a row of a project they no longer read in their Buddy chat. Every read is
+ * notice, or a delivered copy of a Lead's notice. Every read is
  * bounded by an index range and a limit, and a range read since its chat last changed is not read again (rangeCache.ts). This is
  * what is left of the person's inbox read, gone with Swarm v4 (2026-11-10).
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
-import { agentOnly, type Author, type Conversation, type SuperTabState } from '../model.js'
+import { agentOnly, type Author, type Conversation } from '../model.js'
 import { deliveredCopies } from '../pageReads.js'
-import { sessionReadsRow } from '../buddySessions.js'
 import { READ_BATCH } from '../parts/indexed.js'
 import { chatTop, chatVersion, rangeCache, rangeKey } from './rangeCache.js'
 
@@ -16,13 +15,13 @@ import { chatTop, chatVersion, rangeCache, rangeKey } from './rangeCache.js'
  *  main stream's newest number (lastMainSequence), or one where an older backend stored a hidden copy there. */
 const LATEST_SCAN = 50
 /** What the read keeps of a row: what decides whether a person reads it, and where it is. Never its words. */
-const FIELDS = { sequence: 1, author: 1, thread: 1, alsoInChat: 1, source: 1, recipientIds: 1, buddyProject: 1 }
+const FIELDS = { sequence: 1, author: 1, thread: 1, alsoInChat: 1, source: 1, recipientIds: 1 }
 /** A row as the read keeps it. */
 interface Row { id: string; conversationId: string; sequence: number; author: Author; thread: string | null; alsoInChat: boolean; source: unknown
-  recipientIds: string[]; buddyProject: string | null }
+  recipientIds: string[] }
 const row = (raw: Record<string, unknown>): Row => ({ id: raw._id as string, conversationId: raw.conversationId as string, sequence: raw.sequence as number,
   author: raw.author as Author, thread: (raw.thread ?? null) as string | null, alsoInChat: raw.alsoInChat === true, source: raw.source ?? null,
-  recipientIds: (raw.recipientIds ?? []) as string[], buddyProject: typeof raw.buddyProject === 'string' ? raw.buddyProject : null })
+  recipientIds: (raw.recipientIds ?? []) as string[] })
 /** A thread reply: in a thread whose root is another row. */
 const isReply = (m: Row) => !!m.thread && m.thread !== m.id
 /** A row of the chat's main stream (parts/commit.ts numberMessages): a top-level message, or a reply also sent to the chat. */
@@ -39,22 +38,9 @@ function groupBy(rows: Row[], key: (m: Row) => string): Map<string, Row[]> {
 }
 
 /** The rows of `rows` a person reads, as a page filters them for a person (store.ts messages, readsRow): no agent-only notice,
- *  no row of a project they no longer read in their one Buddy chat (buddySessions.ts sessionReadsRow: its PM's lines and its
- *  sessions' threads; security review 1 of #2435, a lost private project's PM line showed as the chat's preview), and no task
- *  chat copy of a Lead's notice that reached the Lead (pageReads.ts deliveredCopies). */
-async function readable(db: PrismaClient, tabId: string, rows: Row[], state: SuperTabState): Promise<Row[]> {
-  const checks = new Map<string, (row: Row) => boolean>()
-  const sessionRead = (m: Row) => {
-    let check = checks.get(m.conversationId)
-    if (!check) {
-      const group = state.conversations.find(g => g.id === m.conversationId)
-      // A chat this read does not hold reads nothing: the rows come from the chats it chose.
-      check = group ? sessionReadsRow(undefined, group, state) : () => false
-      checks.set(m.conversationId, check)
-    }
-    return check(m)
-  }
-  const shown = rows.filter(m => !agentOnly(m.source, m.recipientIds) && sessionRead(m))
+ *  and no task chat copy of a Lead's notice that reached the Lead (pageReads.ts deliveredCopies). */
+async function readable(db: PrismaClient, tabId: string, rows: Row[]): Promise<Row[]> {
+  const shown = rows.filter(m => !agentOnly(m.source, m.recipientIds))
   const copies = shown.length ? await deliveredCopies(db, tabId, shown) : new Set<string>()
   return shown.filter(m => !copies.has(m.id))
 }
@@ -112,10 +98,10 @@ async function chatRanges(db: PrismaClient, tabId: string, of: ReadonlyArray<{ g
 /** Each chat's newest main message the person reads: the row at its stored main sequence, read alone; the LATEST_SCAN rows
  *  before it only for a chat where that row is not one (an older chat's newest row may be a thread reply or a hidden copy).
  *  `more` when such a chat has none in that range. */
-export async function latestIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[]): Promise<{ latest: Map<string, Row>; more: boolean }> {
+export async function latestIn(db: PrismaClient, tabId: string, chats: Conversation[]): Promise<{ latest: Map<string, Row>; more: boolean }> {
   const tops = chats.flatMap(g => { const top = g.lastMainSequence ?? g.lastMessageSequence; return top ? [{ id: g.id, top, group: g }] : [] })
   const pick = async (rows: Row[]) => {
-    const shown = (await readable(db, tabId, rows, state)).filter(isMain)
+    const shown = (await readable(db, tabId, rows)).filter(isMain)
     const newest = new Map<string, Row>()
     for (const m of shown) if (!newest.has(m.conversationId)) newest.set(m.conversationId, m)
     return newest

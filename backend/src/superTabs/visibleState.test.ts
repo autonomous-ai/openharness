@@ -7,7 +7,7 @@ const stranger: Actor = { kind: 'person', userId: '100000000000000000000009', em
 const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: `${owner.userId}-machine` })
 const s = fullSwarm()
 const readers: Array<[string, Actor]> = [['the owner', owner], ['a member of the private project', peer], ['a member outside it', outsider],
-  ['a Buddy', agentActor(s.buddy)], ['a worker', agentActor(s.worker)], ['a Lead', agentActor(s.lead)]]
+  ['a worker', agentActor(s.worker)], ['a Lead', agentActor(s.lead)]]
 /** Kept from every reader: visibleState leaves them out before it copies. */
 const withheld = ['sharing', 'harnessReservations', 'releasedHarnesses', 'overlapAlerts', 'closingSessions'] as const
 
@@ -27,7 +27,6 @@ describe('visibleState', () => {
     expect(visibleState(s.state, owner, NOW).projects!.some(p => p.progress)).toBe(true)
     expect(visibleState(s.state, peer, NOW).projects!.map(p => p.id)).toContain(s.secret)
     expect(visibleState(s.state, outsider, NOW).projects!.map(p => p.id)).not.toContain(s.secret)
-    expect(visibleState(s.state, agentActor(s.buddy), NOW).machines).toEqual([])
   })
 
   it('refuses someone outside the Swarm', () => {

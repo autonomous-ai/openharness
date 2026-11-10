@@ -4,8 +4,6 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { AgentStart } from './model.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
 import { admitPerson, ownerAccount, ownsProject, projectOf, projectsOf, readConversation, settleOwners } from './projects.js'
-import { teamWorkCheck } from './machines.js'
-import type { ContributedMachine } from './machines.js'
 import { visibilityChanged } from './parts/commit.js'
 import { storedAssignment } from './storedWork.test-support.js'
 
@@ -260,13 +258,5 @@ describe('every way in and out of the Swarm', () => {
       const source = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
       expect(source, file).not.toMatch(/state\.people\.push\(|state\.people = state\.people\.filter/)
     }
-  })
-
-  it('places work on a machine as its owner\'s own only for its owner now, not the same account at a later membership', () => {
-    const f = setup(), x = f.create(p)
-    f.state.machines = [{ machineId: 'p-mac', contributorId: 'p', buddyOnly: true } as unknown as ContributedMachine]
-    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId))).toBeNull()
-    f.state.people.find(person => person.id === 'p')!.generation = 'p-second'
-    expect(teamWorkCheck(f.state, 'p-mac', 'p', projectOf(f.state, x.projectId))).toMatchObject({ code: 'NOT_SWARM_MACHINE' })
   })
 })

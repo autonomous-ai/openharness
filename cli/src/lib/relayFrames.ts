@@ -37,8 +37,11 @@ export type DownTransport = 'relay' | 'local' | 'p2p'
  * `device_keys_changed` and `devlog_append_result` are the backend's own too (the device key log,
  * lib/e2ee/deviceLogSyncer.ts): forged, the first only makes this daemon re-read and verify the log,
  * the second could fake an answer to its own append — neither is anything a client should be sending.
+ *
+ * `agent_browser_transport_error` is the relay saying it dropped one of this machine's browser frames
+ * (core/browserStreams.ts): forged, it would close every relayed browser stream here.
  */
-export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'super_tab_deliveries', 'swarm_host_changed', 'swarm_changed', 'devlog_append_result'])
+export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'super_tab_deliveries', 'swarm_host_changed', 'swarm_changed', 'devlog_append_result', 'agent_browser_transport_error'])
 
 /** A frame type as the sender spelled it, fit for one log line: the relay chooses it, so it is bounded
  *  and escaped rather than trusted not to carry a newline that forges the next line. */
