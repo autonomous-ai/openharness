@@ -325,14 +325,6 @@ describe('personal approval enforced before work', () => {
     expect(JSON.stringify(clean)).not.toContain(token)
     expect(removed.length).toBeGreaterThan(0)
   })
-  it('blocks child review execution while the owning task is pending or rejected', () => {
-    const f = fixture(); f.mode('review'); const id = f.create()
-    const step = () => f.runCommand({ type: 'conversation.create', title: 'Review', brief: 'Review implementation', checks: [{ description: 'Review passed' }],
-      reviewOf: id, step: 'Review' }, f.pm)
-    expect(step).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-    f.runCommand({ type: 'task.reject', conversationId: id, reason: 'Do later' })
-    expect(step).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-  })
   it.each(['removed', 'stopping'])('recovers an approved, unassigned task when its chosen worker is %s, with fresh person approval', state => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)

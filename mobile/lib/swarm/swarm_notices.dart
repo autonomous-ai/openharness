@@ -69,9 +69,10 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need, {bool quiet = false}) {
   );
 }
 
-/// The notification one task's questions share (task #3607; backend
-/// `push/notices.ts` taskSlot): a decision asked of the person, and the
-/// task's "stuck" or "needs you". A later one replaces the earlier quietly.
+/// The notification one task's questions share (task #3607): the task's
+/// "stuck" or "needs you", and a decision asked of the person (the server
+/// pushed those in this slot until Swarm v4). A later one replaces the
+/// earlier quietly.
 String swarmTaskSlot(String swarmId, String conversationId) =>
     'task:$swarmId:$conversationId';
 
@@ -98,9 +99,18 @@ class SwarmAnnouncer {
     required this.quiet,
     this.muted = _neverMuted,
     SwarmTold? told,
-  }) : told = told ?? SwarmTold();
+    DateTime Function()? now,
+  }) : told = told ?? SwarmTold(),
+       _now = now ?? DateTime.now;
 
   final SwarmNotices notices;
+
+  /// How long an agent's 1:1 chat stays quiet once it sounded here, read or
+  /// not, as its push does (backend push/rings.ts CHAT_RING_EVERY_MS; Tony,
+  /// 2026-11-10: three or four agents rang at every read).
+  static const chatCooldown = Duration(minutes: 5);
+
+  final DateTime Function() _now;
 
   /// The person sees [need] where they are: no notice. Null asks for a
   /// chat's new messages ([announceChat]).
@@ -223,32 +233,50 @@ class SwarmAnnouncer {
     }
   }
 
-  /// The notices of chats set to All new messages ([SwarmChatNotices]):
+  /// The notices of chats ([SwarmChatNotices]), posted here or a push's:
   /// each key's Swarm, chat and how far it went.
   final _chats = <String, ({String swarmId, String chatId, int sequence})>{};
 
-  /// Posts or moves on chat [chatId]'s "New messages" notice: one per chat,
-  /// which a newer message replaces, as nothing waits to be answered. Names
-  /// the project only: a notice can be read on a locked phone, and the chat's
-  /// name is read in the app ([swarmNotice]).
+  /// When each agent's 1:1 chat last sounded here ([chatCooldown]).
+  final _chatRang = <String, DateTime>{};
+
+  /// Posts or moves on chat [chatId]'s notice: one per chat, which a newer
+  /// message replaces, as nothing waits to be answered. A chat set to All new
+  /// messages names the project only: a notice can be read on a locked phone,
+  /// and the chat's name is read in the app ([swarmNotice]). An agent's 1:1
+  /// chat names its [agent], with the words of its push (backend
+  /// push/notices.ts chatNotices), in the push's notification.
   void announceChat({
     required String swarmId,
     required String chatId,
     required String project,
     required int sequence,
+    String? agent,
   }) {
     if (quiet(null)) return;
     final key = 'chat:$swarmId:$chatId';
+    final now = _now();
+    final rang = _chatRang[key];
     // Sounds once until the person reads the chat; a newer message only
-    // replaces it (task #3248).
-    final up = _chats.containsKey(key);
+    // replaces it (task #3248). An agent's chat, once it sounded, also waits
+    // [chatCooldown], read or not, as its push does.
+    final up =
+        _chats.containsKey(key) ||
+        (agent != null && rang != null && now.difference(rang) < chatCooldown);
+    if (agent != null && !up) {
+      _chatRang
+        ..removeWhere((_, at) => now.difference(at) >= chatCooldown)
+        ..[key] = now;
+    }
     _chats[key] = (swarmId: swarmId, chatId: chatId, sequence: sequence);
     unawaited(
       notices.showSwarm((
         key: key,
-        title: 'New messages',
-        subtitle: project,
-        body: 'Open Harness to read them.',
+        title: agent == null ? 'New messages' : '$agent wrote to you',
+        subtitle: agent == null ? project : '',
+        body: agent == null
+            ? 'Open Harness to read them.'
+            : 'Open Harness to read it.',
         target: (
           swarmId: swarmId,
           conversationId: chatId,
@@ -259,6 +287,20 @@ class SwarmAnnouncer {
         quiet: up,
       )),
     );
+  }
+
+  /// Chat [chatId]'s notification shows the server's push
+  /// ([SwarmTold.pushed]), held to [sequence]: followed as one posted here, so
+  /// reading the chat takes it down (anh Dee's finding 14, 2026-11-10), and
+  /// the chat's next notice only replaces it.
+  void chatPushed({
+    required String swarmId,
+    required String chatId,
+    required int sequence,
+  }) {
+    final key = 'chat:$swarmId:$chatId';
+    if (_chats.containsKey(key) || !told.pushed(key)) return;
+    _chats[key] = (swarmId: swarmId, chatId: chatId, sequence: sequence);
   }
 
   /// Takes a chat's notice down once what it told is read, the chat is no
@@ -355,6 +397,7 @@ class SwarmAnnouncer {
 
   void _takeDownChat(String key) {
     _chats.remove(key);
+    told.pushGone(key);
     unawaited(notices.cancelSwarm(key));
   }
 
@@ -378,6 +421,7 @@ class SwarmAnnouncer {
     for (final key in _chats.keys.toList()) {
       _takeDownChat(key);
     }
+    _chatRang.clear();
     for (final key in _replies.keys.toList()) {
       _takeDownReply(key);
     }
@@ -476,6 +520,12 @@ void swarmBadgeOffWhileSignedOut(
 /// chat is not news; nor is a read under another hold of the Swarm (a first
 /// load again, or access moved), which starts over telling nothing. Muted and
 /// Mentions only chats tell nothing here: their tags are told as needs.
+///
+/// An agent's 1:1 chat tells of its agent's words in Mentions only too, as
+/// its push does (anh Dee, #3811: an agent reaches its person there), never
+/// muted, nor of the person's own words. The read holds no author: a newest
+/// message that is not a person's ([SuperTabConversation.lastPersonSequence])
+/// is the agent's.
 class SwarmChatNotices {
   SwarmChatNotices(this.announcer);
 
@@ -499,10 +549,18 @@ class SwarmChatNotices {
     for (final group in snapshot.conversations) {
       final top = group.mainSequence;
       tops[group.id] = top;
+      // A push of this chat in the notification centre goes once it is read.
+      announcer.chatPushed(swarmId: swarmId, chatId: group.id, sequence: top);
       if (first) continue;
       final before = held.tops[group.id];
       if (before == null || top <= before) continue;
-      if (reader.notifyOf(group.id) != SwarmNotify.all) continue;
+      final level = reader.notifyOf(group.id);
+      final agentChat = group.isAgentChat;
+      if (agentChat
+          ? level == SwarmNotify.muted || top == group.lastPersonSequence
+          : level != SwarmNotify.all) {
+        continue;
+      }
       final read = reader.readMarks?.readThrough(group.id);
       // Marks not back yet: nothing says it is unread.
       if (read == null || top <= read) continue;
@@ -511,6 +569,9 @@ class SwarmChatNotices {
         chatId: group.id,
         project: snapshot.projectById(group.projectId)?.name ?? '',
         sequence: top,
+        agent: agentChat
+            ? snapshot.agentName(group.agentIds.firstOrNull ?? '')
+            : null,
       );
     }
     _seen[swarmId] = (generation: reader.generation, tops: tops);

@@ -293,7 +293,7 @@ export interface AgentStart {
  * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts).
  * `lost`: its agent died, stalled or hit a limit (liveness.ts); no longer active, so the Lead assigns it again or cancels it. */
 export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling' | 'lost'
-/** The first line of the system row `work.status` writes for each status an agent sets (commands.ts); catchUp.ts reads it back. */
+/** The first line of the system row `work.status` writes for each status an agent sets (commands.ts). */
 export const STATUS_LABELS = { working: 'Working', needs_human: 'Needs a human', blocked: 'Stuck', review: 'Ready for review', done: 'Done',
   stopped: 'Stopped' } as const satisfies Partial<Record<WorkStatus, string>>
 export interface Check {
@@ -302,41 +302,7 @@ export interface Check {
   independent: boolean
   evidence: string | null
   passedBy: string | null
-  /** Each checker's latest verdict during this attempt (checkVerdicts.ts); `evidence` and `passedBy` are derived from them.
-   *  Absent until the first verdict recorded since verdicts were kept. */
-  verdicts?: CheckVerdict[]
 }
-/** One checker's verdict on a check: its actor key (`agent:ID` or `person:ID`), what it found and when. */
-export interface CheckVerdict { by: string; passed: boolean; evidence: string; at: number
-  /** The checker's name when it gave the verdict: once it leaves the Swarm, the line that clears its failure still names it
-   *  (#2656). Absent on verdicts given before. */
-  name?: string
-  /** The task's pull request it read and that pull request's head commit then (Dee, #3394): the whole commit id the checker
-   *  named; for a person who named none, the one the PR watch last read. It counts only while that is the head, or the head's
-   *  patch is the same (checkVerdicts.ts verdictCounts); with no head, only while no head of its pull request is watched. */
-  pullRequest?: string
-  head?: string
-  /** That head's patch id (pullRequestPatch.ts), once the watch has read it. */
-  patch?: string
-  /** The branch it read the pull request's diff against, as the checker named it (a person's, the one watched): the same head
-   *  against another branch is another diff (security review of #3218, round 4), and no base the server infers is known to
-   *  be the one read (review round 7). It counts only on this base. */
-  base?: string
-  /** The pull request's head it stopped counting at, while it does not count: empty while its own pull request's head is not
-   *  read yet. */
-  stale?: string }
-/** A linked pull request's head commit as the PR watch last read it, with its patch id (pullRequestPatch.ts): null when the
- *  patch could not be read, so only that exact head counts (#3394). */
-export interface PullRequestHead { head: string; patch: string | null; at: number
-  /** The branch it merges into as the watch read it: a new one is read again like a new head, as the patch id names it
-   *  (security review of #3218, round 3). Absent on a head recorded before. */
-  base?: string
-  /** The heads whose verdicts this one carries, newest first, at most CARRIES_KEPT: it is git's own merge of the first and
-   *  main, the first of the next, and so on (mergeCarry.ts, task #3553). Absent on any other head. */
-  carries?: string[]
-  /** Set by the PR watch once GitHub shows the pull request closed (merged or not): a task's checks never count at it while
-   *  another linked pull request is open (checkVerdicts.ts checkedPullRequest, task #3953). Cleared when it is open again. */
-  closed?: true }
 export interface Assignment {
   id: string
   agentId: string
@@ -361,17 +327,11 @@ export interface Assignment {
   /** When someone else's verdict found problems in a working hand-off of the older built-in skills, which then stops waiting
    *  for its review (liveness.ts waitingForReview). Its next status clears it. */
   reviewFoundAt?: number
-  /** On a linked task (reviewOf): when its own Reviewer's verdict in the build asked for changes. Its quiet time does not count
-   *  until the build's next Ready clears it (liveness.ts waitingForRevision). */
-  changesRequestedAt?: number
-  /** On a linked task: when its agent last wrote to the build's Engineer, as a verdict usually is. It holds the quiet time while
-   *  the Engineer isn't waiting on a review, until the build's next Ready clears it (liveness.ts waitingForRevision). */
-  toldEngineerAt?: number
   /** A two-review task's hand-overs and reviewers' verdicts, from the automatic reviews (#2382) before project instructions;
    *  never written since (phase 4: the server opens and counts no review), kept on older rows. */
   handoffs?: number
   verdicts?: ReviewVerdict[]
-  /** A handed task brought back to its Engineer (handed.ts reopenHanded): when, and why (a No verdict, red CI, a conflict).
+  /** A handed task brought back to its Engineer before Swarm v4, which no longer reopens one: when, and why (a No verdict, red CI, a conflict).
    *  Its Engineer's own status, check or post in the task picks it up and clears it; with none in REOPEN_OWNER_MS the task is
    *  lost, so anyone free takes it (liveness.ts). The next status clears it too. */
   reopened?: { at: number; why: string }
@@ -486,35 +446,15 @@ export interface Conversation {
   /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
    *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
   unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
-  /** 'server' on a step the server opened for a handed task (commands.ts openReviewSteps, task #3602): an agent's step of its
-   *  kind is then refused as a double. Absent on a step an agent or a person opened, and on older ones. */
-  openedBy?: 'server'
   /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
   briefAt?: number
-  /** What its Engineer was already told of each linked pull request, newest first (pullRequestEvents.ts): absent until read. */
-  pullRequestEvents?: Record<string, string[]>
-  /** Each linked pull request's head and patch id as the PR watch last read them (#3394): what check verdicts count against.
-   *  Absent until the watch reads one. */
-  pullRequestHeads?: Record<string, PullRequestHead>
-  /** Each linked pull request's check state as the PR watch last read it, `green`, `red` or `running` (pullRequestEvents.ts
-   *  checksStateOf, task #3827): what the board's Done cards say. Written only when it changes; absent until the watch reads one. */
-  pullRequestChecks?: Record<string, import('./pullRequestEvents.js').ChecksState>
   /** The people who posted here, newest last, at most four (stuck.ts noteWriter, task #3915): whom a stuck line tags. */
   writers?: string[]
   /** The stuck line this task's people were told, until it is fixed (stuck.ts, task #3915): its reason's key, the line, whom it
    *  tagged and what its fix says. */
   stuck?: { key: string; messageId: string; tagged: string[]; fixed: string }
-  /** Its steps and reviews (groups whose reviewOf is this one), newest last, at most 200 (production's most was 14): what a new
-   *  pull request head re-derives the checks of, dormant ones included (#3394). Empty from a task's start; absent on a task
-   *  from before, whose PR watch looks them up once (pullRequestEvents.ts listedSteps). */
-  stepIds?: string[]
-  /** Its Linux test step, waiting for a Linux machine the project can test on (osSteps.ts, task #4278): set by a Ready that
-   *  found none, gone once the step opens. */
-  waitingLinuxStep?: import('./osSteps.js').WaitingStep
-  /** Its Windows test step, waiting likewise for a Windows machine (osSteps.ts, task #4410). */
-  waitingWindowsStep?: import('./osSteps.js').WaitingStep
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -812,8 +752,6 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
-  /** Its tags wait until the group has had no worker and no Lead action for a while (mentions.ts NO_WORKER_GRACE_MS). */
-  holdMentions?: true
   /** Written by message.send: a post, not a notice the server writes under an agent's name. Never stored; an agent's post to its
    *  project's coordinator waits for its digest (noticeDigest.ts gatheredMessage). */
   post?: true
@@ -838,7 +776,7 @@ export const AGENT_ONLY = { kind: 'agent-only' }
  *  read can still be one row's recipients' alone (forRecipients): a cancel told to its worker, a routing line in the project
  *  chat. A kind no code here knows, stored by a newer server, reads as `people`. */
 export const NOTICE_READERS = {
-  // Only its agent: a skill update (cli host.ts), a decision answered (decisions.ts).
+  // Only its agent: a skill update (cli host.ts), a decision answered (until Swarm v4's 2026-11-10).
   'agent-only': 'agent',
   // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
   github: 'people',
@@ -877,11 +815,11 @@ export const NOTICE_READERS = {
   // Proposal history, and the private Buddy notices stored before task #4558, are visible to the people who can read their card/chat.
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
-  // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
+  // Decisions, written until Swarm v4 removed them (2026-11-10), read still: an agent's question to a person in a switched
+  // project, in their default Buddy chat; a Buddy's question settled, in its owner's Buddy chat; a decision its person must
+  // agree to that reached its time, told to the PM alone. Delete them with the notice readers of v1-v3 (slice S18).
   'decision-asked': 'people',
-  // A Buddy's question settled in its owner's Decisions, in their Buddy chat (decisions.ts settleBuddyDecision).
   'decision-answered': 'people',
-  // A decision its person must agree to reached its time unanswered, told to the PM alone (decisions.ts mustAgreePassed).
   'decision-must-agree': 'recipients',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
   'computer-moved': 'people',
@@ -902,8 +840,8 @@ export const NOTICE_READERS = {
   release: 'people',
   // The nightly routing reflection, for the project's people; never a Buddy's (buddies.ts routingRow).
   'routing-reflection': 'people',
-  // No new agent can start, or soon none will, told to the coordinator; with none in the chat, people read it, tagging who can
-  // fix it (reviewCapacity.ts; final review). Older rows, written for no one, still read as people's. Older rows of kinds no
+  // No new agent can start, or soon none will, told to the coordinator before Swarm v4, which writes none; with none in the chat,
+  // people read it, tagging who could fix it. Older rows, written for no one, still read as people's. Older rows of kinds no
   // longer written (the automatic review's `auto-review`, a routing rule's `rule`) read as people's, as any kind not listed does.
   'review-capacity': 'recipients',
   // #2177's rulings: a failed start and a terminal's alert or typed input stay the people's to see.
@@ -982,13 +920,6 @@ export interface CommandEffects {
   terminal?: import('./terminal.js').TerminalEffect
   /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
   closedProposal?: { messageId: string; conversationId: string; reason: string }
-  /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
-  decisions?: import('./decisions.js').DecisionDraft[]
-  decisionAnswer?: import('./decisions.js').DecisionAnswer
-  /** A must-agree decision past its time, kept waiting for its person (decisions.ts keepWaiting). */
-  decisionKeptWaiting?: string
-  /** Decisions whose question was answered elsewhere, closed by the store (decisions.ts closeDecisions; task #4547). */
-  closedDecisions?: string[]
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>

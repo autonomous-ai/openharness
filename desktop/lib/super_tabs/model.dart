@@ -5,7 +5,6 @@ import 'package:cryptography/dart.dart' show DartSha256;
 import 'identity.dart' show superTabPersonName;
 import 'live_card_model.dart';
 import 'profile_model.dart';
-import 'pulse.dart';
 
 export 'profile_model.dart';
 
@@ -205,22 +204,6 @@ class SuperTabAgent {
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       workDecision = row['workDecision'] as String?,
-      crewRole = switch (row['crew']) {
-        {'role': final String role} when role.isNotEmpty => role,
-        _ => null,
-      },
-      crewLane = switch (row['crew']) {
-        {'lane': final String lane} => lane,
-        _ => null,
-      },
-      crewAsleep = row['asleep'] != null,
-      crewAsleepSince = switch (row['asleep']) {
-        {'since': final num since} => DateTime.fromMillisecondsSinceEpoch(
-          since.toInt(),
-        ),
-        _ => null,
-      },
-      crewMoving = row['movedTo'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -267,22 +250,6 @@ class SuperTabAgent {
 
   /// What its coordinator or a person chose for it once its work ended: `keep` or `stop`; `awaiting` while nobody has.
   final String? workDecision;
-
-  /// Its role in its project's crew, the agents the Swarm keeps alive (backend crew.ts, task #3397); null when not crew.
-  final String? crewRole;
-
-  /// The lane a crew member works in (backend, cli, desktop, mobile or docs); null for none.
-  final String? crewLane;
-
-  /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
-  final bool crewAsleep;
-
-  /// Since when it sleeps (backend crewKeep.ts `asleep.since`): its idle hours on its machine's row (task #3412). Null
-  /// when awake, or when the server sent no time.
-  final DateTime? crewAsleepSince;
-
-  /// A crew member on its way to another machine (backend `movedTo`, task #3398): its new session takes over there.
-  final bool crewMoving;
 
   /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
   /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
@@ -398,8 +365,6 @@ class SuperTabConversation {
       buddyOwnerId = row['buddyOwnerId'] as String?,
       buddyName = row['buddyName'] as String?,
       buddyDefault = row['buddyDefault'] == true,
-      paused = SuperTabPause.read(row['paused']),
-      proposal = SuperTabProposalCard.read(row['proposal']),
       buddySessions = List.unmodifiable(
         (row['buddySessions'] is List ? row['buddySessions'] as List : const [])
             .whereType<Map>()
@@ -441,32 +406,7 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       requesterId = row['requesterId'] as String?,
-      releasing = row['releasing'] is List
-          ? List.unmodifiable((row['releasing'] as List).whereType<String>())
-          : null,
-      pullRequestChecks = row['pullRequestChecks'] is Map
-          ? Map.unmodifiable({
-              for (final MapEntry(:key, :value)
-                  in (row['pullRequestChecks'] as Map).entries)
-                if (key is String && value is String) key: value,
-            })
-          : const {},
-      releasedTags = row['released'] is Map && row['released']['tags'] is List
-          ? List.unmodifiable(
-              (row['released']['tags'] as List).whereType<String>(),
-            )
-          : const [],
-      shippedAt = row['shippedAt'] is num
-          ? DateTime.fromMillisecondsSinceEpoch(
-              (row['shippedAt'] as num).toInt(),
-            )
-          : null,
-      queueRank = (row['queueRank'] as num?)?.toDouble(),
       priority = row['priority'] as String?,
-      handOutLane = row['handOutLane'] is String
-          ? row['handOutLane'] as String
-          : null,
-      notBefore = DateTime.tryParse(row['notBefore'] as String? ?? ''),
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
@@ -476,9 +416,6 @@ class SuperTabConversation {
           : Map.unmodifiable(superTabMap(row['assignment'])),
       liveness = row['liveness'] is Map
           ? Map.unmodifiable(superTabMap(row['liveness']))
-          : null,
-      leadAction = row['leadAction'] is Map
-          ? Map.unmodifiable(superTabMap(row['leadAction']))
           : null;
   final String id, projectId, title, brief;
 
@@ -506,20 +443,9 @@ class SuperTabConversation {
   /// addressed to the person. False from a backend before several Buddies, where the first chat is the default.
   final bool buddyDefault;
 
-  /// While its task is paused (#3819, a project on the Board): who paused it, when and why; null otherwise.
-  final SuperTabPause? paused;
-
-  /// The proposal this card began as, with the PM's decision and its questions (#3817, a project on the Board);
-  /// null for a card that was never a proposal, and from an older backend.
-  final SuperTabProposalCard? proposal;
-
   /// A Buddy chat's thread sessions, live or starting (at most 3); empty on
   /// every other conversation and from older backends.
   final List<SuperTabBuddySession> buddySessions;
-
-  /// The live or starting session answering [thread], if any.
-  SuperTabBuddySession? sessionFor(String thread) =>
-      buddySessions.where((s) => s.thread == thread).firstOrNull;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -577,61 +503,20 @@ class SuperTabConversation {
   /// task, and from a server that does not say.
   final String? requesterId;
 
-  /// The parts (`backend`, `cli`, `desktop`, `web`, in that order) a merged
-  /// task still waits on for a verified release (backend releases.ts, task
-  /// #3452). Present from the merge until the release, and shrinking as each
-  /// part's release lands; empty for a few minutes after the merge, while the
-  /// server reads the pull request's files. Null before a merge, once
-  /// released, for work merged before the server recorded releases, and from
-  /// an older server: each reads as released, as it did.
-  final List<String>? releasing;
-
-  /// Each linked pull request's check state as the server's PR watch last read it, by URL: `green`, `red` or `running`
-  /// (backend pullRequestEvents.ts checksStateOf, task #3827). Empty before the watch reads one, and from an older server.
-  final Map<String, String> pullRequestChecks;
-
-  /// The release tags (`v1.3.84_desktop`) that carried it to people, once they
-  /// have (backend releases.ts `released`): what Shipped names. Empty before,
-  /// for work merged before the server recorded releases, and from an older
-  /// server.
-  final List<String> releasedTags;
-
-  /// Its first Done, or its merge once one is recorded: not proof that it merged
-  /// (a pull request card's `merged` is); null until then, and from a server
-  /// that does not say.
-  final DateTime? shippedAt;
-
-  /// Its place in its project's shared Next up, set by a person or the PM
-  /// (backend taskQueue.ts); null until someone moves it, when its number
-  /// places it (task_groups.dart).
-  final double? queueRank;
-
   /// A task's priority as the server keeps it, `P0` to `P3` (backend
   /// taskPriority.ts); null on a step, a chat, and a task from before it,
-  /// whose title may still mark one (`superTabTaskPriority`, backlog.dart).
+  /// whose title may still mark one (`superTabTaskPriority`, task_priority.dart).
   final String? priority;
-
-  /// The lane the crew dispatch hands this task out in (backend read/views.ts
-  /// `handOutLane`, task #3400): its PM's, else its owned paths'. Null when
-  /// no lane owns it, on a chat or a step, and from an older server.
-  final String? handOutLane;
-
-  /// The day before which its work may not start, a promise the PM keeps
-  /// ("remove the preview route after Dec 4"); null when there is none.
-  final DateTime? notBefore;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
   /// it (`state`, `why`, `since`, `personId`); absent while it is working,
-  /// and from older backends (task_status.dart).
+  /// and from older backends.
   final Map<String, dynamic>? liveness;
-
-  /// The Product Manager's last action on its task (`kind`, `at`).
-  final Map<String, dynamic>? leadAction;
 }
 
 /// The zone a project's day is read in when its digest names none (backend
-/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+/// superTabs/localTime.ts `DEFAULT_TIME_ZONE`).
 const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
 
 class SuperTabProject {
@@ -670,14 +555,11 @@ class SuperTabProject {
       ),
       boardMode = row['boardMode'] == true,
       archived = row['archived'] == true,
-      canChatIds = List.unmodifiable(
-        (row['canChat'] as List? ?? const []).whereType<String>(),
-      ),
       deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
 
   /// Whether its owner switched it to the Board way of working (#3819, spec 2026-11-06-buddy-board-final-spec):
-  /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
+  /// people talk to their Buddies, work comes in as proposals.
   /// False when not switched and from an older backend: everything then works as today.
   final bool boardMode;
 
@@ -685,18 +567,8 @@ class SuperTabProject {
   /// commands.ts `project.closeTab`).
   final bool archived;
 
-  /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
-  final List<String> canChatIds;
-
   /// Its top decider (for openharness, Dee), who may set P0 and pause like its owner; null when none is set.
   final String? deciderId;
-
-  /// Whether [personId] may write in its chat: anyone who may write, while it is not on the Board.
-  bool canChat(String personId, {bool swarmOwner = false}) =>
-      !boardMode ||
-      swarmOwner ||
-      personId == ownerId ||
-      canChatIds.contains(personId);
 
   /// Whether [personId] may set P0 on any card and pause or resume any task: its owner, the Swarm's owner and its
   /// decider. The server enforces it; the app only offers what it would allow.
@@ -739,154 +611,6 @@ class SuperTabProject {
   /// sign-in made of it (task #3374); null when none was asked, and from a
   /// backend before it.
   final SuperTabRepositoryCreation? repositoryCreation;
-}
-
-DateTime? _epoch(Object? value) =>
-    value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
-
-String? _words(Object? value) =>
-    value is String && value.trim().isNotEmpty ? value : null;
-
-/// A Board card's proposal (#3817): what was proposed and by whom, the PM's decision, and its questions.
-class SuperTabProposalCard {
-  SuperTabProposalCard._(Map row)
-    : text = _words(row['text']) ?? '',
-      goal = _words(row['goal']),
-      why = _words(row['why']),
-      doneWhen = _words(row['doneWhen']),
-      createdAt = _epoch(row['createdAt']),
-      senderIds = List.unmodifiable([
-        for (final sender in row['senders'] as List? ?? const [])
-          if (sender is Map && sender['personId'] is String)
-            sender['personId'] as String,
-      ]),
-      decision = SuperTabProposalDecision.read(row['decision']),
-      questions = List.unmodifiable([
-        for (final q in row['questions'] as List? ?? const [])
-          ?SuperTabProposalQuestion.read(q),
-      ]),
-      mergedInto = _words(row['mergedInto']),
-      overdue = row['overdue'] == true;
-
-  static SuperTabProposalCard? read(Object? value) =>
-      value is Map ? SuperTabProposalCard._(value) : null;
-
-  final String text;
-  final String? goal, why, doneWhen;
-  final DateTime? createdAt;
-
-  /// The people who agreed to it, first the one who proposed it.
-  final List<String> senderIds;
-  final SuperTabProposalDecision? decision;
-  final List<SuperTabProposalQuestion> questions;
-
-  /// The card it was merged into as a duplicate: it is no longer on the Board.
-  final String? mergedInto;
-
-  /// Waiting on the PM longer than the project's limit (spec Design, Failure).
-  final bool overdue;
-
-  /// The question still waiting for its answer, if any.
-  SuperTabProposalQuestion? get openQuestion =>
-      questions.where((q) => !q.answered).firstOrNull;
-
-  /// Whether it became a task: accepted, or reshaped into the version the PM will do.
-  bool get becameTask => switch (decision?.kind) {
-    'accept' || 'reshape' => true,
-    _ => false,
-  };
-}
-
-/// The PM's decision on a proposal: `accept`, `reshape`, `later` (until [revisitAt]) or `no`, with its reason.
-class SuperTabProposalDecision {
-  const SuperTabProposalDecision({
-    required this.kind,
-    this.reason,
-    this.revisitAt,
-  });
-
-  static SuperTabProposalDecision? read(Object? value) {
-    if (value is! Map) return null;
-    final kind = value['kind'];
-    const kinds = {'accept', 'reshape', 'later', 'no'};
-    if (kind is! String || !kinds.contains(kind)) return null;
-    return SuperTabProposalDecision(
-      kind: kind,
-      reason: _words(value['reason']),
-      revisitAt: _epoch(value['revisitAt']),
-    );
-  }
-
-  final String kind;
-  final String? reason;
-  final DateTime? revisitAt;
-}
-
-/// A question the PM asked on a card, of one person, with the answer it takes by [deadline] if none comes.
-class SuperTabProposalQuestion {
-  const SuperTabProposalQuestion({
-    required this.id,
-    required this.personId,
-    required this.question,
-    required this.defaultAnswer,
-    required this.deadline,
-    required this.answered,
-    this.requiresConsent = false,
-  });
-
-  static SuperTabProposalQuestion? read(Object? value) {
-    if (value is! Map) return null;
-    final (id, person, question) = (
-      value['id'],
-      value['personId'],
-      value['question'],
-    );
-    final deadline = _epoch(value['deadline']);
-    if (id is! String ||
-        person is! String ||
-        question is! String ||
-        deadline == null) {
-      return null;
-    }
-    return SuperTabProposalQuestion(
-      id: id,
-      personId: person,
-      question: question,
-      defaultAnswer: _words(value['defaultAnswer']) ?? '',
-      deadline: deadline,
-      answered: value['answer'] is Map,
-      requiresConsent: value['requiresConsent'] == true,
-    );
-  }
-
-  final String id, personId, question, defaultAnswer;
-  final DateTime deadline;
-  final bool answered, requiresConsent;
-}
-
-/// A paused task (#3819): who paused it, when, and the reason they gave, if any.
-class SuperTabPause {
-  const SuperTabPause({required this.by, required this.at, this.reason});
-
-  static SuperTabPause? read(Object? value) {
-    if (value is! Map || value['by'] is! String) return null;
-    final at = switch (value['at']) {
-      final num ms => DateTime.fromMillisecondsSinceEpoch(ms.toInt()),
-      final String iso => DateTime.tryParse(iso)?.toLocal(),
-      _ => null,
-    };
-    if (at == null) return null;
-    final reason = value['reason'];
-    return SuperTabPause(
-      by: value['by'] as String,
-      at: at,
-      reason: reason is String && reason.trim().isNotEmpty ? reason : null,
-    );
-  }
-
-  final String by;
-  final DateTime at;
-  final String? reason;
 }
 
 /// A new repository asked for a project (backend projects.ts
@@ -983,43 +707,6 @@ class SuperTabProjectStatus {
   final String? by;
 }
 
-/// One task agent at a prompt in its terminal, waiting for the reader, as the
-/// backend lists it: no screen text, which the reader's app reads through the
-/// terminal read that checks who may (task #3029).
-class SuperTabPromptWait {
-  const SuperTabPromptWait({
-    required this.agentId,
-    required this.agentName,
-    required this.conversationId,
-    required this.conversationTitle,
-    required this.projectId,
-    required this.projectName,
-  });
-  final String agentId, agentName, conversationId, conversationTitle;
-  final String projectId, projectName;
-
-  /// Null for a row missing what it needs.
-  static SuperTabPromptWait? read(Map<String, dynamic> row) => switch (row) {
-    {
-      'agentId': final String agentId,
-      'agentName': final String agentName,
-      'conversationId': final String conversationId,
-      'conversationTitle': final String conversationTitle,
-      'projectId': final String projectId,
-      'projectName': final String projectName,
-    } =>
-      SuperTabPromptWait(
-        agentId: agentId,
-        agentName: agentName,
-        conversationId: conversationId,
-        conversationTitle: conversationTitle,
-        projectId: projectId,
-        projectName: projectName,
-      ),
-    _ => null,
-  };
-}
-
 class SuperTabSnapshot {
   SuperTabSnapshot.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -1074,26 +761,6 @@ class SuperTabSnapshot {
       swarmBuddy = row['swarmBuddy'] == true,
       buddyCap = (row['buddyCap'] as num?)?.toInt(),
       autoJoin = row['autoJoin'] == true,
-      mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
-      mentionsDigest = row['mentionsDigest'] as String?,
-      decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
-      decisionsDigest = row['decisionsDigest'] as String?,
-      promptsWaiting = List.unmodifiable([
-        for (final wait in row['promptsWaiting'] as List? ?? const [])
-          if (wait is Map) ?SuperTabPromptWait.read(superTabMap(wait)),
-      ]),
-      activityDigest = row['activityDigest'] as String?,
-      remindersDigest = row['remindersDigest'] as String?,
-      _pulses = SuperTabPulse.readAll(row['pulse']),
-      _releaseTimes = {
-        if (row['releaseTimes'] case final Map projects)
-          for (final MapEntry(key: project, value: times) in projects.entries)
-            if (project is String && times is Map)
-              project: {
-                for (final MapEntry(key: part, value: at) in times.entries)
-                  if (part is String && at is num) part: at.toInt(),
-              },
-      },
       chatSettings = Map.unmodifiable({
         if (row['chatSettings'] case final Map settings)
           for (final MapEntry(:key, :value) in settings.entries)
@@ -1224,43 +891,6 @@ class SuperTabSnapshot {
   /// People at the owner's email domain are added automatically (head
   /// `autoJoin`, every member reads it): someone who leaves is not added back.
   final bool autoJoin;
-  final int mentionsWaiting;
-
-  /// Which tags wait, as a digest that moves when they change though the
-  /// count may not; null from a backend before it (superTabs/mentions.ts).
-  final String? mentionsDigest;
-
-  /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
-  /// backend before decisions (backend superTabs/decisions.ts).
-  final int decisionsWaiting;
-
-  /// Which decisions wait, as a digest that moves when they change though the
-  /// count may not; null from a backend before it (superTabs/decisions.ts).
-  final String? decisionsDigest;
-
-  /// The task agents waiting at a prompt in their terminals for the reader
-  /// (backend superTabs/promptWaits.ts): under Decisions, counted with them.
-  /// Empty from a backend before it (task #3029).
-  final List<SuperTabPromptWait> promptsWaiting;
-
-  /// Which of the reader's Activity rows are unread (replies to them), as a digest that moves when one comes or is
-  /// read; null from a backend before Activity (superTabs/activity.ts).
-  final String? activityDigest;
-
-  /// Which reminders the reader has set and when each is due, as a digest that moves when one is set, replaced or
-  /// cleared; null from a backend before reminders (superTabs/reminders.ts).
-  final String? remindersDigest;
-
-  /// [projectId]'s board pulse (task #3384); null from a server before it,
-  /// or when its pulse could not be read.
-  SuperTabPulse? pulseOf(String projectId) => _pulses[projectId];
-  final Map<String, SuperTabPulse> _pulses;
-
-  /// When each release part (`desktop`, `cli`, `web`, `backend`) of [projectId] may next open, in ms: 0 is now, and a part
-  /// left to people has none (backend releases.ts nextReleaseAt, task #3827). Empty from an older server.
-  Map<String, int> releaseTimesOf(String projectId) =>
-      _releaseTimes[projectId] ?? const {};
-  final Map<String, Map<String, int>> _releaseTimes;
 
   /// The reader's own notification setting by conversation (backend chatSettings.ts); a chat not listed is at
   /// [SuperTabNotify.mentions]. Never another person's.
@@ -1594,57 +1224,6 @@ List<SuperTabProfile> superTabProfilesOf(Map<String, dynamic>? pool) {
   ];
 }
 
-class SuperTabRouteChoice {
-  const SuperTabRouteChoice(this.id, this.title);
-  final String id, title;
-}
-
-/// The routing decision a Lead message reports: who got the task and why.
-class SuperTabRoute {
-  SuperTabRoute._(
-    this.decisionId,
-    this.via,
-    this.p,
-    this.why,
-    this.pick,
-    this.alternatives,
-  );
-  static SuperTabRoute? fromSource(Map<String, dynamic> s) {
-    final pick = s['pick'];
-    final decisionId = s['decisionId'];
-    if (s['kind'] != 'route' ||
-        decisionId is! String ||
-        pick is! Map ||
-        pick['id'] is! String ||
-        pick['title'] is! String) {
-      return null;
-    }
-    final via = s['via'];
-    final why = s['why'];
-    final alternatives = s['alternatives'];
-    return SuperTabRoute._(
-      decisionId,
-      via is String ? via : 'order',
-      s['p'] is num ? (s['p'] as num).toDouble() : null,
-      why is String ? why : '',
-      SuperTabRouteChoice(pick['id'] as String, pick['title'] as String),
-      [
-        if (alternatives is List)
-          for (final a in alternatives)
-            if (a is Map && a['id'] is String && a['title'] is String)
-              SuperTabRouteChoice(a['id'] as String, a['title'] as String),
-      ],
-    );
-  }
-
-  /// The reason for the task. An older backend's quality-floor flag and
-  /// policy-order fallback are not read: nothing is refused for a floor.
-  final String decisionId, via, why;
-  final double? p;
-  final SuperTabRouteChoice pick;
-  final List<SuperTabRouteChoice> alternatives;
-}
-
 /// A file sent with a message. The chat never loads [url] by itself.
 class SuperTabAttachment {
   SuperTabAttachment.fromJson(Map<String, dynamic> row)
@@ -1895,15 +1474,6 @@ class SuperTabDelivery {
 /// What a page says about one thread (backend threads.ts): the line under its
 /// root, and who it marks unread for.
 class SuperTabThread {
-  /// A thread with no reply yet: a session's, started from the main chat.
-  SuperTabThread.empty(this.id)
-    : ask = null,
-      replies = 0,
-      lastSequence = 0,
-      lastAt = null,
-      authors = const [],
-      people = const [];
-
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       ask = row['ask'] as String?,
@@ -1994,17 +1564,10 @@ class SuperTabMessage {
   /// session (spec 2026-10-30-buddy-thread-sessions).
   final bool buddySession;
 
-  /// The line the server writes in a thread when its session ends.
-  bool get sessionEnded => source['kind'] == 'buddy-session-ended';
-
   /// A task's own message, the server keeps current as the task moves (Quiet
   /// Swarm 2/6): its text is the task's name.
   bool get isTaskLine => source['kind'] == 'task-line';
 
-  /// Why its session ended, for [sessionEnded] rows: `ended`, `idle`,
-  /// `stopped` or `failed`.
-  String? get sessionEndReason =>
-      sessionEnded ? source['reason'] as String? : null;
   bool get threadReply => thread != null && thread != id;
 
   /// A Buddy chat message that started its own thread's session from the
@@ -2057,8 +1620,6 @@ class SuperTabMessage {
   /// a person nothing to do (Dee 11-05, task #3127). The server keeps it for
   /// diagnosis, and a required recovery still reaches the coordinator.
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
-  SuperTabRoute? get route => SuperTabRoute.fromSource(source);
-  bool get routeOverride => source['kind'] == 'route-override';
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and
@@ -2094,7 +1655,7 @@ class SuperTabMessage {
 
   /// A line the chat draws as its own row, with no sender's header (view.dart):
   /// a message after it has no header to join (Diego, #2547).
-  bool get drawsOwnRow => shipLine || terminalEvent || route != null;
+  bool get drawsOwnRow => shipLine || terminalEvent;
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

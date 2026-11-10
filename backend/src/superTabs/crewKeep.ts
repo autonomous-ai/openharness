@@ -15,9 +15,17 @@ import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './ma
 import { agentProjectId, groupProject, projectsOf } from './projects.js'
 import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
-import { quotaOf, resetMs } from './reviewSeats.js'
 import { groupsOf, idleSince } from './tidy.js'
 import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, QUOTA_FLOOR_PERCENT, QUOTA_FLOOR_PM_PERCENT, SLEEP_IDLE_MS, UNSTABLE_STOPS, UNSTABLE_WINDOW_MS } from './crewRules.js'
+
+/** The engine's quota reading for [pool]. */
+const quotaOf = (pool: ContributedMachine, engine: string) => pool.observation?.quotas.find(q => q.engine === engine)
+
+function resetMs(value: string | number | null): number | null {
+  if (typeof value === 'number') return value > 1e10 ? value : value * 1000
+  if (typeof value === 'string') { const ms = Date.parse(value); return Number.isFinite(ms) ? ms : null }
+  return null
+}
 
 export type CrewAction =
   | { kind: 'sleep'; agentId: string }

@@ -13,9 +13,12 @@ import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
-import { readInbox } from '../src/superTabs/read/inbox.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { profiled } from './plans.test-support.js'
+import * as parts from '../src/superTabs/parts/index.js'
+import { swarmTransaction } from '../src/superTabs/cache.js'
+import { guardedWrite } from '../src/superTabs/parts/write.js'
+import type { Conversation } from '../src/superTabs/model.js'
 
 // One Buddy per person per Swarm (docs/specs/2026-10-31-one-buddy-per-swarm.md; Dee, 10-31): one chat at Swarm level, a main
 // Buddy that reads every project its person reads and writes nowhere but that chat, and project sessions, the only Buddies that
@@ -104,12 +107,20 @@ async function projectSession(f: Swarm, chat: string, projectId: string | undefi
   const thread = String(sent.result.messageId)
   return { thread, agentId: await f.launch(String(sent.result.startId)) }
 }
-/** A line of the secret project in peer's one Buddy chat, marked with that project: the secret PM's question to peer, which peer's
- *  own Buddy writes there, as only peer and their own agent post in it (task #4558; decisions.ts askedThroughBuddy). */
-async function secretLine(f: Swarm, text: string) {
-  await f.execute({ type: 'project.boardMode', projectId: f.secret.projectId, on: true })
-  await f.execute({ type: 'decision.ask', conversationId: f.secret.conversationId, personId: peer.sub, questions: [{ question: text,
-    options: ['Yes', 'No'], recommended: 0, unblocks: 'The release', defaultAt: new Date(f.clock.now + 60 * 60_000).toISOString() }] }, owner, f.pms.secret)
+/** A line of the secret project in peer's one Buddy chat, marked with that project, as one was stored there until Swarm v4: the
+ *  secret PM's question to peer, which peer's own Buddy [buddyId] wrote (task #4558; Decisions are gone since 2026-11-10). Stored
+ *  as the store stores a row, numbered after the chat's newest. */
+async function secretLine(f: Swarm, chat: string, buddyId: string, text: string) {
+  await swarmTransaction(db, async tx => {
+    const current = (await parts.loadActive(tx, f.tab, { groupIds: [chat] })).groups.find(g => g.key === chat)!
+    const data = structuredClone(current.data!) as Conversation
+    const sequence = (data.messageSeq ?? 0) + 1, id = randomUUID()
+    data.messageSeq = data.lastMessageSequence = data.lastMainSequence = sequence
+    await tx.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: chat, sequence, thread: id, text, recipientIds: [buddyId], mentions: [],
+      author: { kind: 'agent', id: buddyId, name: 'Buddy' } as never, source: { kind: 'decision-asked', projectId: f.secret.projectId } as never,
+      buddyProject: f.secret.projectId, createdAt: new Date(f.clock.now) } })
+    await guardedWrite(tx, f.tab, { op: 'update', kind: 'group', key: chat, seen: current.version, data }, f.clock.now)
+  })
 }
 const texts = async (f: Swarm, chat: string, user: AuthUser, as?: string, cursor: Record<string, unknown> = {}) =>
   (await f.store.messages(user, f.tab, chat, cursor, as)).messages.map(m => m.text)
@@ -474,7 +485,15 @@ describe('a project session', () => {
     expect(await db.superTabMessage.count({ where: { tabId: f.tab, replyTo: sentId } })).toBe(0)
   })
 
-  /** peer's session proposes in web, the PM opens the group from it and the group's PR merges; the session then ends. */
+  /** [group] shipped by its merge as a Swarm recorded one before Swarm v4 (leaderboard/brought.ts shippedByMerge), which records
+   *  none (2026-11-10): the kept leaderboard still reads the merges stored before. */
+  async function ship(f: Swarm, group: string, pr: string) {
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: group } })
+    const data = row.data as { ledger?: Record<string, unknown>; pullRequestUrls?: string[] }
+    await db.swarmGroup.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(),
+      data: { ...data, pullRequestUrls: [pr], ledger: { ...data.ledger, mergedAt: f.clock.now, shippedAt: f.clock.now } } as object } })
+  }
+  /** peer's session proposes in web, the PM opens the group from it and its PR merges; the session then ends. */
   async function shippedFromSession(f: Swarm, { endBeforeOpen = false } = {}) {
     const { chat, main } = await buddy(f)
     const { thread, agentId } = await projectSession(f, chat, f.web.projectId, 'Let us plan web offline sync')
@@ -485,7 +504,7 @@ describe('a project session', () => {
     if (endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'Offline sync', brief: 'Web keeps edits offline.',
       checks: [{ description: 'Done', independent: false }], proposalMessageId: proposal }, owner, f.pms.web)).result.conversationId)
-    await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
+    await ship(f, group, 'https://github.com/example/app/pull/7')
     if (!endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     return { chat, main, agentId, group }
   }
@@ -528,7 +547,7 @@ describe('a project session', () => {
     await f.execute({ type: 'project.sharing', projectId: f.web.projectId, visibility: 'private', memberIds: [owner.sub] })
     const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: proposal, requesterId: owner.sub },
       owner, f.pms.web)).result.conversationId)
-    await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/8' })
+    await ship(f, group, 'https://github.com/example/app/pull/8')
     const board = await new SwarmReads(f.store).leaderboard(owner, f.tab, f.web.projectId)
     expect(board.agents.filter(a => a.kind === 'buddy').map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([[main, 'Former Buddy', null, '']])
     expect(JSON.stringify(board)).not.toMatch(/Peer Mac|peer-mac/)
@@ -601,7 +620,7 @@ describe('the PM\'s lines and losing a project', () => {
     const f = await swarm()
     const { chat, main } = await buddy(f)
     const { thread, agentId } = await projectSession(f, chat, f.secret.projectId, 'SECRET SESSION SENTINEL')
-    await secretLine(f, 'SECRET PM LINE')
+    await secretLine(f, chat, main, 'SECRET PM LINE')
     expect((await texts(f, chat, peer)).join('\n')).toContain('SECRET PM LINE')
     await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
     const state = (await f.store.read(peer, f.tab)).state
@@ -613,21 +632,6 @@ describe('the PM\'s lines and losing a project', () => {
     await expect(f.store.messages(peer, f.tab, chat, { thread }, main)).resolves.toBeDefined()
     expect(JSON.stringify(await f.store.messages(peer, f.tab, chat, {}, main))).not.toContain('SECRET PM LINE')
     await expect(f.store.messages(peer, f.tab, f.secret.conversationId, {}, main)).rejects.toThrow(UNAVAILABLE)
-  })
-})
-
-describe('the inbox (security review 1 of #2435)', () => {
-  it('never previews a lost project\'s line in the one Buddy chat, nor its session threads', async () => {
-    const f = await swarm()
-    const { chat } = await buddy(f)
-    await send(f, chat, 'An earlier word of mine')
-    await secretLine(f, 'SECRET PM LINE')
-    const preview = async () => JSON.stringify((await readInbox(f.store, peer, f.tab)).latest.filter(l => l.conversationId === chat))
-    expect(await preview()).toContain('SECRET PM LINE')
-    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
-    const after = await preview()
-    expect(after).not.toContain('SECRET PM LINE')
-    expect(after).toContain('An earlier word of mine')
   })
 })
 
@@ -784,16 +788,6 @@ describe('security re-check 2 of #2435', () => {
     expect(JSON.stringify(await f.store.messages(peer, f.tab, chat, { thread }))).not.toContain('TYPED SENTINEL')
   })
 
-  it('counts nothing of a lost project in what the person missed in # buddy', async () => {
-    const f = await swarm()
-    const { chat } = await buddy(f)
-    await send(f, chat, 'Mine')
-    await secretLine(f, 'SECRET PM LINE')
-    // The secret project's line is the one row not theirs: it is what they missed.
-    expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 1 })
-    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
-    expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 0 })
-  })
 })
 
 // Review of #2447: a phone's message in an older Buddy chat that no Buddy can answer was kept, and its person heard nothing.

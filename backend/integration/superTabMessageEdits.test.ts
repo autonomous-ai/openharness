@@ -237,7 +237,6 @@ describe('message.delete', () => {
     expect((await f.remove(f.web.conversationId, reply)).result).toMatchObject({ changed: true, kept: false })
     expect(await db.superTabMessage.findUnique({ where: { id: reply } })).toBeNull()
     expect(await db.superTabReaction.count({ where: { messageId: reply } })).toBe(0)
-    expect(await db.superTabActivity.count({ where: { messageId: reply } })).toBe(0)
     expect(await db.superTabDelivery.count({ where: { messageId: reply, status: { in: ['queued', 'claimed', 'gathered'] } } })).toBe(0)
     // Its file goes to the hourly sweep, which removes the stored bytes (lib/attachmentSweep.ts).
     expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: fileId } })).usedBy).toBe(EXPIRED_UPLOAD)
@@ -248,17 +247,6 @@ describe('message.delete', () => {
     // Gone means gone: no edit, no second delete, no reply to it.
     await expect(f.edit(f.web.conversationId, reply, 'Back')).rejects.toThrow(refused('NOT_FOUND'))
     await expect(f.remove(f.web.conversationId, reply)).rejects.toThrow(refused('NOT_FOUND'))
-  })
-
-  it('removes the tags a deleted message gave, so nobody keeps a waiting tag to a message they cannot open', async () => {
-    const f = await swarm()
-    const tagged = await f.send(f.web.conversationId, '@other can you look?', peer, { mentions: [other.sub] })
-    const kept = await f.send(f.web.conversationId, '@other and this one', peer, { mentions: [other.sub] })
-    await f.send(f.web.conversationId, 'Looking.', owner, { replyTo: kept })
-    expect(await db.superTabMention.count({ where: { messageId: { in: [tagged, kept] } } })).toBe(2)
-    await f.remove(f.web.conversationId, tagged)
-    await f.remove(f.web.conversationId, kept)
-    expect(await db.superTabMention.count({ where: { messageId: { in: [tagged, kept] } } })).toBe(0)
   })
 
   it('keeps a root with replies as "This message was deleted." and its replies keep their thread', async () => {
@@ -288,10 +276,10 @@ describe('message.delete', () => {
     // A reaction stored before they were gone (2026-11-09): nothing makes one now, but a delete still takes it with the message.
     await db.superTabReaction.create({ data: { id: `${reply}-r`, tabId: f.tab, conversationId: f.web.conversationId, messageId: reply,
       actorKind: 'person', actorId: owner.sub, emoji: 'thumbs_up' } })
-    const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabActivity', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread', 'SuperTabMention']
+    const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread']
     const entries = await profiled(db, () => f.remove(f.web.conversationId, reply))
     // The profiler saw the delete's writes (so the check below is not empty by accident).
-    for (const c of ['SuperTabMessage', 'SuperTabDelivery', 'SuperTabActivity']) expect(entries.some(e => e.ns.endsWith(`.${c}`))).toBe(true)
+    for (const c of ['SuperTabMessage', 'SuperTabDelivery']) expect(entries.some(e => e.ns.endsWith(`.${c}`))).toBe(true)
     const scans = entries.filter(e => touched.some(c => e.ns.endsWith(`.${c}`)) && /COLLSCAN/.test(String(e.planSummary)))
     expect(scans.map(e => [e.ns, e.op, JSON.stringify(e.command?.filter ?? e.command?.q ?? e.command?.pipeline)])).toEqual([])
   })

@@ -34,7 +34,6 @@ void main() {
     expect(snapshot.conversation('aeef')!.lastMessageSequence, 219804);
     expect(snapshot.agents.map((a) => a.displayName), ['River', 'Hugo']);
     expect(snapshot.localModels!.grid, 'swarm-c514');
-    expect(snapshot.mentionsWaiting, 0);
     expect(state['githubApp'], true);
     // The machine and its values worked out at read time.
     expect(snapshot.pool('7835')!['teamWork'], {'allowed': true});

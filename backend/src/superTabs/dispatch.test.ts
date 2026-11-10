@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation, type MessageDraft } from './model.js'
-import { capacityLine, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, pinBuilder, pullRequestPin, returnReason } from './dispatch.js'
-import type { PullRequestWatch } from './pullRequestEvents.js'
+import { capacityLine, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, laneOf, returnReason } from './dispatch.js'
 import { loseTasks } from './liveness.js'
 import type { Agent } from './model.js'
 
@@ -177,9 +176,8 @@ describe('what a free crew member gets', () => {
     expect(freeCrew(s.state, 'lead', DISPATCH_RULES, NOW).map(a => a.name)).toEqual(['Cedar', 'Dune', 'Elm'])
   })
 
-  it('never picks a step, an archived task, a chat, a finished task or one not to start before a later day', () => {
+  it('never picks an archived task, a chat, a finished task or one not to start before a later day', () => {
     const s = crew(['Ash'], { Ash: 'backend' })
-    s.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: s.tasks.board, step: 'Review', checks: [] })
     s.run({ type: 'conversation.archive', conversationId: s.tasks.api, archived: true })
     s.run({ type: 'work.queue', conversationId: s.tasks.store, notBefore: '2026-11-06', hold: { kind: 'requester' } })
     expect(s.picks()).toEqual([])
@@ -370,70 +368,8 @@ describe('the capacity line per lane', () => {
     s.run({ type: 'work.lane', conversationId: server, lane: 'docs' })
     expect(groupView(s.group(server), new Set())).toMatchObject({ handOutLane: 'docs' })
     expect(groupView(s.group(elsewhere), new Set())).toMatchObject({ handOutLane: null })
-    // A chat or a step has none.
+    // A chat has none.
     expect(groupView(s.group('lead'), new Set())).not.toHaveProperty('handOutLane')
-    const step = s.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: server, step: 'Review', checks: [] }).result.conversationId as string
-    expect(groupView(s.group(step), new Set())).not.toHaveProperty('handOutLane')
-  })
-})
-
-describe('pins: a task without active work waits for its builder after findings, red CI or a conflict', () => {
-  const watch = (patch: Partial<PullRequestWatch> = {}): PullRequestWatch => ({ url: 'https://github.com/o/r/pull/1', number: 1, state: 'open', draft: false,
-    head: 'abc1234', base: 'main', mergeable: true, checkRuns: [{ name: 'ci/required', status: 'completed', conclusion: 'success', completedAt: 1 }],
-    checkSuites: [], ...patch } as PullRequestWatch)
-
-  it('reads red CI and a conflict from the pull request, and nothing from a green one', () => {
-    expect(pullRequestPin(watch())).toBeNull()
-    expect(pullRequestPin(watch({ mergeable: null }))).toBeNull()
-    expect(pullRequestPin(watch({ checkRuns: [{ name: 'ci/required', status: 'completed', conclusion: 'failure', completedAt: 1 }] }))).toBe('ci')
-    expect(pullRequestPin(watch({ mergeable: false }))).toBe('conflict')
-  })
-
-  /** Ash built Api and lost it; Birch reviews it in a step. */
-  function lostBuild() {
-    const s = crewSwarm(['Ash', 'Birch'])
-    const api = s.task('Api', ['backend/src/a.ts'])
-    s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Ash! }, s.as(s.pm))
-    const step = s.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: api, step: 'Review',
-      checks: [{ description: 'It reads right.', independent: true }] }).result.conversationId as string
-    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Birch! }, s.as(s.pm))
-    const build = s.group(api), assignment = build.assignment!
-    assignment.status = 'lost'
-    build.lostAttempt = { id: assignment.id, agentId: s.ids.Ash!, machineId: 'host', engine: 'claude' }
-    return { ...s, api, step, get state() { return s.state } }
-  }
-
-  it('pins its builder when a step\'s agent fails the step, and not while the build is in someone\'s hands', () => {
-    const s = lostBuild()
-    const check = s.group(s.step).checks[0]!.id
-    const assignmentId = s.group(s.step).assignment!.id
-    s.run({ type: 'work.check', conversationId: s.step, assignmentId, checkId: check, passed: false, evidence: 'The total is wrong.' }, s.as(s.ids.Birch!), { now: 5000 })
-    expect(s.group(s.api).pin).toEqual({ agentId: s.ids.Ash!, why: 'findings', at: 5000 })
-    // Its next assignment clears it.
-    s.run({ type: 'work.assign', conversationId: s.api, agentId: s.ids.Ash! }, s.as(s.pm))
-    expect(s.group(s.api)).not.toHaveProperty('pin')
-    s.run({ type: 'work.check', conversationId: s.step, assignmentId, checkId: check, passed: false, evidence: 'Still wrong.' }, s.as(s.ids.Birch!), { now: 6000 })
-    expect(s.group(s.api)).not.toHaveProperty('pin')
-  })
-
-  it('pins the agent of its last round, not an older one, when that round was stopped', () => {
-    const s = lostBuild()
-    const build = s.group(s.api)
-    build.assignment = { ...build.assignment!, agentId: s.ids.Birch!, status: 'stopped' }
-    pinBuilder(build, 'ci', 7000)
-    expect(build.pin).toEqual({ agentId: s.ids.Birch!, why: 'ci', at: 7000 })
-  })
-
-  it('pins as pinBuilder says: to the last attempt\'s agent, never over active work', () => {
-    const s = lostBuild()
-    pinBuilder(s.group(s.api), 'ci', 7000)
-    expect(s.group(s.api).pin).toEqual({ agentId: s.ids.Ash!, why: 'ci', at: 7000 })
-    // An older pin keeps its time: it has waited longer.
-    pinBuilder(s.group(s.api), 'conflict', 8000)
-    expect(s.group(s.api).pin).toEqual({ agentId: s.ids.Ash!, why: 'ci', at: 7000 })
-    const fresh = s.group(s.task('Fresh', ['backend/src/f.ts']))
-    pinBuilder(fresh, 'ci', 9000)
-    expect(fresh).not.toHaveProperty('pin')
   })
 })
 
@@ -459,7 +395,6 @@ describe('lost work goes to an ordinary project worker', () => {
     assignment.lost = { reason: 'its session stopped', at: NOW }
     group.lostAttempt = { id: assignment.id, agentId: s.ids.Old!, machineId: 'host', engine: 'claude' }
     group.pullRequestUrls = ['https://github.com/example/repo/pull/21']
-    group.pullRequestHeads = { [group.pullRequestUrls[0]!]: { head: 'a'.repeat(40), base: 'main', patch: null, at: NOW } }
     return { ...s, api, get state() { return s.state } }
   }
 
@@ -475,7 +410,7 @@ describe('lost work goes to an ordinary project worker', () => {
     expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
   })
 
-  it('delivers a prior-result pointer and pushed PR ref and head to the replacement', () => {
+  it('delivers a prior-result pointer and pushed PR ref to the replacement', () => {
     const s = lost()
     const effects = s.run({ type: 'work.assign', conversationId: s.api, agentId: s.ids.New! })
     const text = effects.messages.filter(m => m.recipients.includes(s.ids.New!)).map(m => m.text).join('\n')
@@ -483,14 +418,12 @@ describe('lost work goes to an ordinary project worker', () => {
     expect(text).not.toContain('Parser committed; continue with the writer.')
     expect(text).toContain('https://github.com/example/repo/pull/21')
     expect(text).toContain('refs/pull/21/head')
-    expect(text).toContain('a'.repeat(40))
     expect(s.group(s.api).assignment).toMatchObject({ agentId: s.ids.New, status: 'working' })
   })
 
   it('does not invent a pushed branch when the prior attempt recorded none', () => {
     const s = lost()
     delete s.group(s.api).pullRequestUrls
-    delete s.group(s.api).pullRequestHeads
     const text = s.run({ type: 'work.assign', conversationId: s.api, agentId: s.ids.New! }).messages
       .filter(m => m.recipients.includes(s.ids.New!)).map(m => m.text).join('\n')
     expect(text).toMatch(/last status.*task.s conversation/i)
@@ -509,51 +442,4 @@ describe('lost work goes to an ordinary project worker', () => {
     expect(brief.text).not.toContain(result)
     expect(brief.text).toMatch(/last status.*task.s conversation/i)
   })
-
-  it.each(['Review', 'Test'])('recovers a lost %s step with an independent worker of adequate strength', stepName => {
-    const s = crewSwarm(['Builder', 'Old', 'New'])
-    for (const agent of s.state.agents) agent.configuration = { ...config, model: 'opus' }
-    const api = s.task('API', ['backend/src/api.ts'])
-    s.run({ type: 'work.assign', conversationId: api, agentId: s.ids.Builder! })
-    s.group(api).assignment!.status = 'review'
-    const step = s.run({ type: 'conversation.create', title: stepName, brief: 'Check the API.', reviewOf: api,
-      step: stepName, checks: [] }).result.conversationId as string
-    for (const name of ['Old', 'New']) s.state.agents.find(a => a.id === s.ids[name])!.roleName = stepName === 'Test' ? 'Tester' : 'Reviewer'
-    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Old! })
-    s.group(step).assignment!.status = 'lost'
-    s.group(step).lostAttempt = { id: s.group(step).assignment!.id, agentId: s.ids.Old! }
-    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW).map(p => [p.conversationId, p.agentId])).toEqual([[step, s.ids.New]])
-    s.state.agents.find(a => a.id === s.ids.New)!.gridModel = 'grid-model'
-    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW)).toEqual([])
-  })
-
-  // Removing OS filtering from recovery must send the Windows check to the first free Mac Tester.
-  it.each(['Windows', 'Linux', null])('recovers a lost Windows test only on Windows (replacement reports %s)', os => {
-    const s = crewSwarm(['Builder', 'Old', 'MacTester', 'WinTester'])
-    for (const agent of s.state.agents) agent.configuration = { ...config, model: 'opus' }
-    const task = s.task('Desktop', ['desktop/lib/view.dart'])
-    s.run({ type: 'work.assign', conversationId: task, agentId: s.ids.Builder! })
-    s.group(task).assignment!.status = 'review'
-    const step = s.run({ type: 'conversation.create', title: 'Test on Windows', brief: 'Check the Windows flow.', reviewOf: task,
-      step: 'Test on Windows', checks: [] }).result.conversationId as string
-    const machines = (list: Array<[string, string | null]>) => list.map(([machineId, platform]) => ({ machineId, name: machineId, contributorId: 'owner',
-      membershipGeneration: 'g', generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 8, paused: false,
-      observation: { generation: 'g1', receivedAt: NOW, resources: { os: platform }, tools: {}, runningHarnessIds: [], stoppedHarnessIds: [],
-        readiness: { engines: [{ engine: 'claude', installed: true, signedIn: true }] },
-        quotas: [{ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent: 10, resetsAt: null }] }] } })) as never
-    // Old took the step on a Windows machine (a Windows step is assigned only there, #3926), then was lost.
-    s.state.machines = machines([['old-win', 'Windows']])
-    s.state.agents.find(a => a.id === s.ids.Old)!.machineId = 'old-win'
-    s.run({ type: 'work.assign', conversationId: step, agentId: s.ids.Old! })
-    s.group(step).assignment!.status = 'lost'
-    s.group(step).lostAttempt = { id: s.group(step).assignment!.id, agentId: s.ids.Old! }
-    for (const [name, machineId] of [['MacTester', 'mac'], ['WinTester', 'win']] as const) {
-      const agent = s.state.agents.find(a => a.id === s.ids[name])!
-      agent.roleName = 'Tester'; agent.machineId = machineId
-    }
-    s.state.machines = machines([['mac', 'macOS'], ['win', os]])
-    expect(dispatchPlan(s.state, 'lead', DISPATCH_RULES, NOW).map(p => [p.conversationId, p.agentId]))
-      .toEqual(os === 'Windows' ? [[step, s.ids.WinTester]] : [])
-  })
-
 })

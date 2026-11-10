@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { opensStep, storedStep } from './steps.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
@@ -26,6 +27,7 @@ function swarm() {
   state.people.push({ id: 'mate', email: 'mate@example.com', role: 'collaborator', generation: 'm1' })
   state.machines = [pool('mac'), pool('mate-mac', { contributorId: 'mate', membershipGeneration: 'm1' })]
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+    if (opensStep(command)) return storedStep(state, command, actor)
     const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`,
       contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }, ...context })
     state = effects.state

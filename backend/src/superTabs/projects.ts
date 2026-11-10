@@ -81,9 +81,6 @@ export interface SwarmProject {
   leadWaiting?: Array<{ id: string; at: number }>
   /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
   leadClaim?: { id: string; machineId: string; at: number }
-  /** What its chat was last told of new Reviewers (reviewCapacity.ts), under `any`: none can start, or they soon will not.
-   *  Absent once a machine is usable again, so the next shortage is told. Per engine before 2026-10-30, never read since. */
-  reviewCapacity?: Partial<Record<'any' | 'claude' | 'codex', 'out' | 'low'>>
   /** Its instructions' revision and short hash (instructions.ts): the text lives outside the state. Absent on a project
    *  from before instructions until the migration writes its document; it runs on the built-in template meanwhile. */
   instructionsRevision?: number
@@ -162,14 +159,6 @@ export function projectsOf(state: SuperTabState): SwarmProject[] {
     visibility: 'public', members: [], updateMinutes: 5,
     ...(state.project ? { repository: state.project } : {}),
   }]
-}
-
-/** The projects' channels, each project's own chat (Swarm v4). A person's stored mute of one silences nothing (2026-11-10):
- *  v4's project menu has no Notifications, so a channel muted before could never be unmuted. Desktop reads that mute as
- *  Mentions only (SuperTabController.notifyOf, #3768), and so do reply rows and phone pushes (activity.ts
- *  writeReplyActivity, push/notices.ts); the stored row stays as it is. */
-export function projectChannels(state: SuperTabState): Set<string> {
-  return new Set(projectsOf(state).map(p => p.leadConversationId))
 }
 
 export function projectOf(state: SuperTabState, projectId: string): SwarmProject {
@@ -414,8 +403,8 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
   return !isClosedPmChat(group) && readsRecordsIn(state, actor, group)
 }
 
-/** Whether [actor] reads what was asked in [group] (decisions.ts): as canReadGroup, and in a closed Chat with PM still its
- *  person, at the generation they were listed with, and the project's Lead, so a decision asked there before stays theirs. */
+/** Whether [actor] reads the records of [group]: as canReadGroup, and in a closed Chat with PM still its person, at the
+ *  generation they were listed with, and the project's Lead, so what was asked there before stays theirs. */
 export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
   if (isSwarmBuddyChat(group)) return readsSwarmBuddyChat(state, actor, group)

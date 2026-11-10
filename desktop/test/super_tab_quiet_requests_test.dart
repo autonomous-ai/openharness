@@ -36,8 +36,6 @@ class _Backend {
         ..state['id'] = id
         ..append('Hello');
     }
-    // A tag waiting in a Swarm not opened.
-    servers['t5']!.tag('message-1');
   }
 
   final servers = <String, ConversationServer>{};
@@ -52,18 +50,9 @@ class _Backend {
     final uri = Uri.parse(path);
     if (uri.path == '/api/super-tabs/list') {
       if (counting) counts.add('list');
-      final asked = uri.queryParameters['mentions'] == '1';
       return {
         'tabs': [
-          for (final id in _ids)
-            {
-              'id': id,
-              'name': id,
-              if (asked) ...{
-                'mentionsWaiting': servers[id]!.mentions.length,
-                'mentionsDigest': 'd${servers[id]!.mentions.length}',
-              },
-            },
+          for (final id in _ids) {'id': id, 'name': id},
         ],
         'next': null,
       };
@@ -131,7 +120,7 @@ _Counts _measure({required bool pushing, required bool foreground}) {
 
 void main() {
   // Pushes are on in production: most of main's polls were already gone, and
-  // what is left is the tag reads and the reads that found nothing new.
+  // what is left is the reads that found nothing new.
   test('the server pushes, the app in front: at most 55% of before', () {
     final counts = _measure(pushing: true, foreground: true);
     // ignore: avoid_print

@@ -109,7 +109,6 @@ describe('no card wake-up for the coordinator (#3593)', () => {
     const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: engineer }).result.assignmentId as string
     f.tick(5 * MINUTE)
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'PR #7' }, as)
-    f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     f.tick(15 * MINUTE)
     expect(f.state.conversations.find(c => c.id === group)!.reportSeq).toBeUndefined()
     expect(projectOf(f.state, 'lead').progress).toBeUndefined()

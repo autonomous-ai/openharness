@@ -117,8 +117,15 @@ it('forwards returning offers, every skip reason and every pairing source in voc
 })
 
 it('forwards Import agent outcomes in vocabulary 7 (task #2379)', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(7)
+  expect(APP_USAGE_VOCABULARY).toBeGreaterThanOrEqual(7)
   const report = { ...native, counters: Object.fromEntries(['started', 'ok', 'failed', 'cancelled', 'unknown', 'over_1m']
     .map(measure => [`ui_desktop_agent_import_${measure}`, 1])) }
+  expect(appProductUsageReport(report)).toBe(report)
+})
+
+it('forwards Team account removal outcomes in vocabulary 8 (2026-11-10)', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(8)
+  const report = { ...native, counters: Object.fromEntries(['started', 'ok', 'failed', 'cancelled', 'unknown', 'under_1s']
+    .map(measure => [`ui_desktop_team_account_removal_${measure}`, 1])) }
   expect(appProductUsageReport(report)).toBe(report)
 })

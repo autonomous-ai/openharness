@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { closeBus, redisSwarmStamps } from './lib/bus.js'
+import { closeBus, pub, redisSwarmStamps } from './lib/bus.js'
 import { configureSwarmStamps } from './superTabs/cache.js'
 import { reconcileCommunityLikeCounts } from './lib/db/communityLikeCounts.js'
 import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
@@ -33,6 +33,7 @@ import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
 import { announceSwarmChanges } from './lib/swarmClientPushes.js'
 import { env } from './config/env.js'
 import { phoneSendersFromEnv, sendPhoneNotices } from './push/send.js'
+import { redisRingMemory } from './push/rings.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
@@ -135,8 +136,9 @@ async function start(): Promise<void> {
   // they changed.
   // Their tags reach the tagged person's phones too (push/send.ts, task #2905).
   const phones = phoneSendersFromEnv(env)
+  const rings = redisRingMemory(pub)
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
-    swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) } })
+    swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices, rings) } })
   stopSweeps = startSwarmSweeps(prisma)
   // The collections of what Swarm v4 removed, the Leads conversations through the store's own write, and the dead old state of
   // migrated Swarms, go by themselves, a few rows at a time (superTabs/migration/dropLegacyJob.ts).

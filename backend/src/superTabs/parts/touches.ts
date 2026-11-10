@@ -156,19 +156,13 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.create': {
       const projectId = command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : 'lead')
       group(leadGroupOf(projectId))
-      group(command.reviewOf)
       member(command.requesterId)
       for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
       if (command.proposalMessageId) head()
       break
     }
-    case 'conversation.merged':
     case 'conversation.unlink':
       leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
-    case 'work.status':
-      // Ready decides whether to open steps from the project's preset; a concurrent switch must make it retry.
-      if (command.status === 'review') head()
       break
     // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
     case 'work.priority':
