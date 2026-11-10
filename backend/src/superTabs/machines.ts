@@ -1,4 +1,3 @@
-import { accessRefusal, taskAccess } from './machineAccess.js'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
@@ -28,9 +27,8 @@ export interface ContributedMachine {
   agents?: 'memory' | 'atMost'
   paused: boolean
   /** `sessionKind` is how the reporting machine is signed in, stamped from its session by the store, never taken from
-   *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings.
-   *  `privacy` is kept only from a team session's reading (observedPrivacy). */
-  observation?: Omit<MachineObservation, 'privacy'> & { receivedAt: number; sessionKind?: 'team' | 'computer'; privacy?: StoredPrivacy }
+   *  the report: `team` for a Mac's team account (lib/teamSession.ts), `computer` for any other. Absent on older readings. */
+  observation?: Omit<MachineObservation, 'privacy'> & { receivedAt: number; sessionKind?: 'team' | 'computer' }
   /** A Mac's Harness Team account: the machine of the Mac it lives on, stamped by the store from its account row
    *  (`Machine.hostMachineId`), never taken from the command. Such a pool is that Mac under the scenes ("One machine",
    *  docs/plans/2026-10-24-swarm-team-account.md): it shows the Mac's name, joins where the Mac was added, follows the
@@ -44,12 +42,6 @@ export interface ContributedMachine {
    *  off it: its person's own agents take any project they read (teamWorkCheck; #4248, finding 8 of #4212). Kept, and kept
    *  when the contribution is saved again, only because Desktop's launch.dart still reads it; gone with the machine. */
   teamAccountOnly?: true
-  /** Its owner's choice whether teammates' work may also run in their own account here (commands.ts machine.ownAccountWork,
-   *  Scholes 11-04): who chose (the owner, whose word it is) and when. `allowed` lets a teammate's start run on this entry,
-   *  as its owner, instead of moving to its Harness Team account (ownAccountWork); only the owner's own session turns it on.
-   *  `askedIn`: the owner's message a Lead passed on to turn it off. Kept when the contribution is saved again;
-   *  gone with the machine, so a Mac removed and added again starts Team-account-only. Never on a Team account's own entry. */
-  ownAccountChoice?: { allowed: boolean; by: string; at: string; askedIn?: { conversationId: string; messageId: string } }
   /** One of its person's own machines that is not in the Swarm, recorded only so its host starts and watches their Buddies
    *  there (Dee, 10-29: "I don't want to add my machine to the swarm"). It takes no other start, is no route or Product
    *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
@@ -62,16 +54,6 @@ export interface ContributedMachine {
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** The same by day, for the board's rolling periods. Only the leaderboard read gets it (model.ts visibleState). */
   lentDays?: import('./leaderboard/lent.js').LentDay[]
-  /** The leaderboard week (Monday 00:00 UTC) its owner was last told someone else's work started here (othersWork.ts): once
-   *  a week. On a Mac, for its Harness Team account too. Kept when the contribution is saved again. */
-  othersToldWeek?: number
-  /** The projects whose agents may run here, set by its owner (commands.ts machine.projects, Tony 11-03); absent: every
-   *  project, as before. A Mac's Harness Team account keeps none of its own: it follows its Mac's (machineProjectRefusal). */
-  projects?: string[]
-  /** What it can reach, by macOS account (machine.access, machineAccess.ts, task #3047): its own account's and its Harness
-   *  Team account's, both on the Mac's own entry; never on a Team account's. Kept when the contribution is saved again;
-   *  gone with the machine. At most MAX_ACCESS. */
-  access?: import('./machineAccess.js').AccessEntry[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
   engineFailures?: Record<string, number>
   /** Bounded repeat level (0–6) and cause of the current failure streak. Kept across expiry, removed by success/resume
@@ -117,7 +99,9 @@ export function contributedEngines(pool: ContributedMachine, observation: Machin
 const measure = z.number().finite().nonnegative().nullable()
 const percent = z.number().min(0).max(100).nullable()
 const resource = z.object({
-  cpuPercent: percent, memoryTotalBytes: measure, memoryUsedBytes: measure,
+  // The machine's logical cores, which the PM's Harness plans each machine's work against (cli/src/superTabs/assign/crew.ts).
+  // Optional: a daemon before it reports none, and is planned as an 8-core machine.
+  cpuPercent: percent, cpuCores: z.number().int().min(1).max(4096).nullable().optional(), memoryTotalBytes: measure, memoryUsedBytes: measure,
   diskFreeBytes: measure, diskTotalBytes: measure,
   projectDiskFreeBytes: measure, projectDiskTotalBytes: measure.optional(),
   deviceType: z.string().max(120).nullable(), chip: z.string().max(120).nullable(), os: z.string().max(120).nullable(),
@@ -133,7 +117,8 @@ const checkedAt = z.number().finite().nonnegative()
  * What a Harness Team daemon says about its privacy check with each reading (cli/src/team/privacy.ts, docs/plans/
  * 2026-10-24-swarm-team-account.md Task 2): `account`, it runs in a Mac's Harness Team account and the check passed, or
  * failed with the first failing item (`unchecked` when it could not run); `dedicated`, the whole machine is for agents
- * (`harness team on`). The owner's own daemon sends none. `item` is a short slug, so a newer CLI's item still reads.
+ * (`harness team on`). The owner's own daemon sends none. `item` is a short slug, so a newer CLI's item still reads. Swarm v4 keeps
+ * none of it: a reading is accepted with it and stored without (storedObservation).
  */
 export const machinePrivacySchema = z.union([
   z.object({ mode: z.literal('account'), passed: z.literal(true), checkedAt }).strict(),
@@ -141,8 +126,6 @@ export const machinePrivacySchema = z.union([
   z.object({ mode: z.literal('dedicated') }).strict(),
 ])
 export type MachinePrivacy = z.infer<typeof machinePrivacySchema>
-/** As a pool keeps it: `seenAt` is when this server first received that check's result, on the server's clock. */
-export type StoredPrivacy = MachinePrivacy & { seenAt: number }
 /** What the machine is ready for (cli/src/superTabs/machines.ts readiness), for the route to leave out one that cannot do
  *  the work: per engine whether it is installed and signed in, and per folder in its Swarm workspace (one per project)
  *  the repository it checks out (an address without credentials), whether it is a git checkout, and whether this
@@ -190,8 +173,8 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  agent (cli/src/lib/codingModel.ts), with why: so the route can tell a Lead asked for one why it is not offered. */
   refusedModels: z.array(z.object({ grid: z.string().min(1).max(160), model: z.string().min(1).max(200),
     name: z.string().max(200).optional(), why: z.string().min(1).max(300) }).strict()).max(16).optional(),
-  /** A Harness Team daemon's privacy check; absent from the owner's own daemon and from hosts before it. The store keeps
-   *  it only when a team session reported it (observedPrivacy). */
+  /** A Harness Team daemon's privacy check; absent from the owner's own daemon and from hosts before it. Swarm v4 accepts it and
+   *  keeps none (storedObservation). */
   privacy: machinePrivacySchema.optional(),
   readiness: readiness.optional(),
   /** The starts this machine launched and is still preparing (fetching the project, checking its worktree out, starting
@@ -230,25 +213,24 @@ export const refusableStart = (start: AgentStart, machineId: string): boolean =>
 
 /**
  * What a report stores of [observation] on [pool]: progress and tokens of running sessions only (leases and attempts read
- * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, the contributed engines' quotas, privacy only from a team session
- * (observedPrivacy), and how the machine is signed in, from the session and never from the report (lib/teamSession.ts).
+ * them), the preparing starts [preparable] allows, the refused starts [refusable] allows, the contributed engines' quotas, and how the
+ * machine is signed in, from the session and never from the report (lib/teamSession.ts).
  * A full report and a reading-only one (DB 2.5) store the same.
  */
 export function storedObservation(pool: ContributedMachine, observation: MachineObservation,
   opts: { team: boolean; now: number; preparable: (startId: string) => boolean; refusable?: (startId: string) => boolean }): StoredReading {
-  const { privacy: reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
+  const { privacy: _reported, harnessProgress, harnessTokens, preparingStartIds, refusedStarts, profiles, idleBuddyHarnessIds, ...reading } = observation
   const running = (id: string) => observation.runningHarnessIds.includes(id)
   const progress = harnessProgress && Object.fromEntries(Object.entries(harnessProgress).filter(([id]) => running(id)))
   const tokens = harnessTokens && Object.fromEntries(Object.entries(harnessTokens).filter(([id]) => running(id)))
   const preparing = preparingStartIds?.filter(opts.preparable)
   // None unless the caller can tell which starts this machine may name (refusableStart).
   const refused = refusedStarts?.filter(r => opts.refusable?.(r.startId) ?? false)
-  const privacy = observedPrivacy(pool.observation?.privacy, reported, opts.team, opts.now)
   const engines = contributedEngines(pool, observation)
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
     ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
     ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
-    sessionKind: opts.team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
+    sessionKind: opts.team ? 'team' : 'computer', ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
     ...(refused?.length ? { refusedStarts: refused } : {}) }
 }
@@ -286,96 +268,22 @@ export function startPreparing(state: SuperTabState, start: AgentStart, now: num
   return !!report?.preparingStartIds?.includes(start.id) && now - report.receivedAt <= MACHINE_FRESH_MS
 }
 
-// ── Teammates' work runs only on Team machines (docs/plans/2026-10-24-swarm-team-account.md, Task 3) ──────────────
-// A start or an assignment for a project whose owner is not the person whose grant runs the machine is a teammate's
-// work. It would run as that machine's owner, with their files, logins and subscriptions, so it is admitted only on a
-// Team machine — the Mac's Harness Team account, or a machine used only for agents — that shows its privacy now.
-// Everything else refuses it and says why; a person's own projects on their own machines are unchanged.
-// Swarm v3 (task #4120) runs a person's own agent on their own computer instead: this holds only on a Team account (#4218).
-
-/** How long a passed privacy check counts, from when this server first received it. The team account checks again
- *  every 5 minutes (cli/src/team/privacy.ts PRIVACY_RECHECK_MS) and reports within a 15-second beat, so a healthy
- *  machine's check is never older than about 5 minutes here. 15 minutes allows two missed rechecks (a slow check, a
- *  daemon restart) before routing stops, and bounds to 15 minutes how long a home folder opened again but no longer
- *  checked can still be trusted. A failing check counts at once, whatever its age. */
-export const PRIVACY_FRESH_MS = 15 * 60_000
-
-/**
- * The privacy a reading leaves on the pool: only a team session's, since an ordinary computer's says nothing about a
- * team account. The same check sent again keeps the date it first arrived, so a check that stops running goes stale on
- * the server's clock, whatever the reporting Mac's clock says.
- */
-export function observedPrivacy(previous: StoredPrivacy | undefined, reported: MachinePrivacy | undefined, team: boolean, now: number): StoredPrivacy | undefined {
-  if (!team || !reported) return undefined
-  const same = previous && previous.mode === reported.mode && (reported.mode === 'dedicated'
-    || (previous.mode === 'account' && previous.passed === reported.passed && previous.checkedAt === reported.checkedAt))
-  return { ...reported, seenAt: same ? previous.seenAt : now }
-}
-
-export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'NOT_SWARM_MACHINE' | 'MACHINE_PROJECTS' | 'ACCESS_MISSING' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
+export type TeamWorkCode = 'TEAM_WRITTEN_WORK' | 'NOT_SWARM_MACHINE' | 'TEAM_ACCOUNTS_REMOVED' | 'NOT_YOUR_COMPUTER' | 'READ_ONLY' | 'STEP_OS'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
-/** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
-export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED']
-
-/** What each item of the privacy check (cli/src/team/privacy.ts) could reach when it failed. */
-const PRIVACY_ITEMS: Record<string, string> = {
-  sentinel: 'it could read the privacy sentinel in its owner\'s home folder', 'home-listing': 'it could list its owner\'s home folder',
-  gitconfig: 'it could read its owner\'s ~/.gitconfig', ssh: 'it could list its owner\'s ~/.ssh', projects: 'it could list its owner\'s project folders',
-  keychain: 'it could list its owner\'s login Keychain folder', chrome: 'it could list its owner\'s Chrome profile', safari: 'it could list its owner\'s Safari folder',
-  // A Linux team account checks Firefox in place of Safari; a Windows one, Edge and the Credential Manager folders.
-  firefox: 'it could list its owner\'s Firefox profile', edge: 'it could list its owner\'s Edge profile',
-  credentials: 'it could list its owner\'s Windows Credential Manager folder',
-  'standard-user': 'the team account is an administrator', unchecked: 'the check did not run',
-}
-const ONLY_OWN = 'so it runs only its owner\'s projects'
 
 /**
- * Whether a teammate's work needs a Harness Team account on every machine of a Swarm (`SWARM_TEAM_ACCOUNT_REQUIRED=1`).
- * Without it, a machine without one takes a teammate's work as it did before team accounts, while a machine with one
- * already follows the rule. Read on every call, so a test can set it.
- *
- * Every Swarm alike (2026-11-02). It was held to the Swarms of the owners `SWARM_TEAM_ACCOUNT_OWNERS` listed while the
- * feature was tried on production (2026-10-27 to 11-02); that variable is no longer read.
+ * Whether this server asks a project's repository to be approved before its tokens are handed out (`SWARM_TEAM_ACCOUNT_REQUIRED=1`;
+ * the repository approvals in store.ts and routes/superTabs.ts). Read on every call, so a test can set it. It goes with the
+ * GitHub App's removal.
  */
 export function teamAccountRequired(): boolean {
   return process.env.SWARM_TEAM_ACCOUNT_REQUIRED === '1'
 }
 
-/** Why this contributed machine may not run a teammate's project now, or null when it may. `teamRow`: its account row
- *  says it is signed in as a team account (`Machine.sessionKind`), read by the store. A machine that is not a Team account
- *  runs its own person's agents, whatever they work on (teamWorkCheck), so it reads no rule: it read "has no Harness Team
- *  account yet" where the rule was required or it was added at join, and the route left those agents out (task #4218). */
-export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false): TeamWorkRefusal | null {
-  const reading = pool.observation, name = pool.name
-  // A Mac's Harness Team account whose machine is no longer a Team machine was removed (`harness team remove` deletes it).
-  // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
-  // named it (local Team account run, 2026-10-28).
-  if (pool.hostMachineId && !teamRow) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `The Harness Team account on ${name} was removed, ${ONLY_OWN}.` }
-  // Its owner let teammates' work run in their own account here: their explicit choice wins over the Swarm-wide rule, for
-  // this machine only (River, 11-04).
-  if (ownAccountWork(pool)) return null
-  if (!teamRow && reading?.sessionKind !== 'team') return null
-  if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
-    // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
-    return { code: 'MACHINE_OFFLINE', reason: pool.hostMachineId
-      ? `The Harness Team account on ${name} is offline, so it cannot show that it is private.`
-      : `${name} is offline, so it cannot show that its Harness Team account is private.` }
-  }
-  if (!teamRow && reading.sessionKind !== 'team') return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `${name} has no Harness Team account yet, ${ONLY_OWN}.` }
-  const privacy = reading.privacy
-  if (!privacy) return { code: 'PRIVACY_UNCHECKED', reason: `${name} has not reported a privacy check from its Harness Team account, ${ONLY_OWN}.` }
-  if (privacy.mode === 'dedicated') return null
-  if (!privacy.passed) {
-    const what = PRIVACY_ITEMS[privacy.item]
-    return { code: 'PRIVACY_CHECK_FAILED', reason: `The Harness Team account on ${name} is not private (${privacy.item}${what ? `: ${what}` : ''}), ${ONLY_OWN}.` }
-  }
-  if (now - privacy.seenAt > PRIVACY_FRESH_MS) {
-    const minutes = Math.floor((now - privacy.seenAt) / 60_000)
-    return { code: 'PRIVACY_CHECK_STALE', reason: `The privacy check on ${name} last passed ${minutes} minutes ago, ${ONLY_OWN} until it passes again.` }
-  }
-  return null
-}
+/** What a machine's record held before Swarm v4 retired it (machine.access, machine.projects, machine.ownAccountWork and the notice
+ *  to a machine's owner of others' work): stored until the contribution is saved again, and read by no one (model.ts visibleState).
+ *  Delete this list when the stored copies are cleaned from the Swarm collections (slice S19), and not before 2026-12-09. */
+export const RETIRED_MACHINE_FIELDS = ['ownAccountChoice', 'othersToldWeek', 'projects', 'access'] as const
 
 /**
  * Whether work for [project] may run on [machineId] under [contributorId]'s grant there: the pool's contributor for a start, the
@@ -384,9 +292,6 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
  * person and never as a machine owner it does not belong to.
  */
 export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject): TeamWorkRefusal | null {
-  // Its owner kept it for other projects (machine.projects): whoever's project and grant it is.
-  const kept = machineProjectRefusal(state, machineId, project)
-  if (kept) return kept
   const pool = state.machines?.find(m => m.machineId === machineId)
   // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's
   // (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
@@ -406,24 +311,6 @@ export const TEAM_ACCOUNTS_GONE: TeamWorkRefusal = { code: 'TEAM_ACCOUNTS_REMOVE
   reason: 'Harness Team accounts are gone: an agent runs on its own person\'s computer, in their own account.' }
 /** Why a new agent does not start on another person's computer (task #4120): it would run as that computer's person. */
 export const NOT_YOUR_COMPUTER = 'A new agent starts only on its own person\'s computer, in their own account, never on another person\'s.'
-
-/**
- * Why [machineId] takes no work of [project]: its owner kept it for other projects (commands.ts machine.projects, Tony
- * 11-03), or null. A Mac's Harness Team account follows its Mac's list. The sentence names only projects every member may
- * read and counts the rest, since it reaches the readers of [project] (a route's exclusions, a refused start).
- */
-export function machineProjectRefusal(state: SuperTabState, machineId: string, project: SwarmProject): TeamWorkRefusal | null {
-  const pool = state.machines?.find(m => m.machineId === machineId)
-  const mac = pool?.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) ?? pool : pool
-  const listed = mac?.projects
-  if (!mac || !listed || listed.includes(project.id)) return null
-  const kept = projectsOf(state).filter(p => listed.includes(p.id))
-  if (!kept.length) return { code: 'MACHINE_PROJECTS', reason: `${mac.name} runs no project now: its owner can choose its projects again.` }
-  const named = kept.filter(p => p.visibility === 'public').map(p => p.name), others = kept.length - named.length
-  const parts = [...named, ...(others ? [`${others} other project${others > 1 ? 's' : ''}`] : [])]
-  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]
-  return { code: 'MACHINE_PROJECTS', reason: `${mac.name} runs only ${list}.` }
-}
 
 // ── One machine: a Mac and its Harness Team account ─────────────────────────────────────────────────────────────────
 // The team account is how a Mac runs teammates' work without its owner's files, not a machine of its own to anyone: a
@@ -457,20 +344,9 @@ export function followAccountName(state: SuperTabState, pool: ContributedMachine
 }
 
 /** The one of them that runs teammates' work on the Mac: not being removed, and the last to report. Undefined when none. */
-export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?: readonly string[]): ContributedMachine | undefined {
-  // [live]: the account rows still signed in as team accounts (store.ts teamMachines). One removed since (`harness team
-  // remove` deletes its machine) leaves its pool behind, and the Mac goes back to what a Mac without one does.
-  return teamPoolsOf(state, pool).filter(m => !m.removal && (!live || live.includes(m.machineId)))
+export function teamPoolOf(state: SuperTabState, pool: ContributedMachine): ContributedMachine | undefined {
+  return teamPoolsOf(state, pool).filter(m => !m.removal)
     .reduce<ContributedMachine | undefined>((best, m) => !best || (m.observation?.receivedAt ?? -1) >= (best.observation?.receivedAt ?? -1) ? m : best, undefined)
-}
-
-/**
- * Whether [pool] takes teammates' work, as a Swarm's reads say it. Every machine reads as itself: a teammate's agent on a Mac
- * runs in its own person's account there, never in the Mac's Harness Team account (task #4120), so that account's privacy check
- * no longer speaks for the Mac (task #4218).
- */
-export function machineTeamWork(pool: ContributedMachine, now: number, teamMachines: readonly string[]): TeamWorkRefusal | null {
-  return teamWorkRefusal(pool, now, teamMachines.includes(pool.machineId))
 }
 
 /** The projects with work on [machineId]: its agents' and its pending starts'. */
@@ -492,17 +368,6 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
   if (closing) return closing.heldFor!
   return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
 }
-
-
-/** Whether [pool]'s owner lets teammates' work run in their own account there (machine.ownAccountWork): a Mac's own entry
- *  only, never its Team account's. */
-export const ownAccountWork = (pool: Pick<ContributedMachine, 'ownAccountChoice' | 'hostMachineId' | 'buddyOnly' | 'contributorId'> | undefined): boolean =>
-  !!pool && pool.ownAccountChoice?.allowed === true && pool.ownAccountChoice.by === pool.contributorId && !pool.hostMachineId && !pool.buddyOnly
-
-/** What the route and an agent's row say of a machine whose owner lets teammates' work run in their own account there, so
- *  whoever routes a teammate's task to it does so knowingly (River, 11-04). */
-export const ownAccountNote = (pool: Pick<ContributedMachine, 'name'>, ownerName: string | undefined): string =>
-  `${pool.name} runs teammates' work in ${ownerName ?? 'its owner'}'s own account.`
 
 /** The folder a start for [project] uses on [pool]: what admitMachineStart accepts there. */
 export function projectFolder(pool: ContributedMachine, project: SwarmProject): string {
@@ -548,9 +413,9 @@ export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, 
   return readable.filter(p => counts.get(p.cwd) === 1).slice(0, MAX_BUDDY_PROJECTS)
 }
 
-/** Refuses with the refusal's code and sentence: 403, or 409 like any start on an offline machine. */
+/** Refuses with the refusal's code and sentence: 403. */
 export function failTeamWork(refusal: TeamWorkRefusal, after = ''): never {
-  fail(refusal.code, `${refusal.reason}${after}`, refusal.code === 'MACHINE_OFFLINE' ? 409 : 403)
+  fail(refusal.code, `${refusal.reason}${after}`, 403)
 }
 
 export function requireTeamWork(...args: Parameters<typeof teamWorkCheck>): void {
@@ -790,14 +655,9 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
     && (pool.observation.localModels ?? []).some(l => l.grid === request.gridName && l.model === request.gridModel && !l.starting)
 }
 
-/** `teamMachines`: the tab's machines whose account row is signed in as a team account, read by the store. A start is
- *  admitted again when its host launches it, so a Team machine whose check failed or went stale since never launches it. */
 /** [forProject]: the project it is for when that is not yet its conversation's, as New Project's Product Manager before the
- *  project exists (leadStart.ts leadChoices). */
-export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
-  forProject?: SwarmProject,
-  /** A read that admits many machines against one state counts their slots once (leadStart.ts leadChoices). */
-  slots: (pool: ContributedMachine) => number = pool => machineSlots(state, pool)) {
+ *  project exists (leadStart.ts). */
+export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   // No new agent in a Harness Team account, whoever asks (task #4120): its agents keep what they hold until they are stopped.
@@ -816,9 +676,6 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   const project = forProject ?? (request.member ? projectOf(state, request.member.projectId) : isAgentChat(group!) ? undefined : !isSwarmBuddyChat(group!) ? groupProject(state, group!)
     : request.buddySession?.projectId ? projectOf(state, request.buddySession.projectId) : undefined)
   if (project && !pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
-  // Kept by its owner for other projects: a Product Manager too. A Buddy is its owner's own (commands.ts buddy.create).
-  const kept = project && !request.buddyOf ? machineProjectRefusal(state, pool.machineId, project) : null
-  if (kept) failTeamWork(kept)
   const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
   if (held && held !== project?.id) {
     fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
@@ -826,12 +683,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
   // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
   // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
-  // What the task needs to reach, checked here for every start whatever the route sent (an older CLI drops needs.access):
-  // a Buddy and a Product Manager need none (design section 3).
-  const needed = !request.buddyOf && !request.leadFor && !request.regular ? taskAccess(group) : []
   if (!request.buddyOf && !request.leadFor && !request.regular) requireTeamWork(state, pool.machineId, pool.contributorId, project!)
-  const missing = project ? accessRefusal(state, pool.machineId, project, needed) : null
-  if (missing) failTeamWork(missing)
   const cwd = project ? projectFolder(pool, project) : buddyHomeFolder(pool, { id: request.buddyOf?.personId ?? pool.contributorId })
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
@@ -852,7 +704,7 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
   if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
-  if (!start) admitByRoom(state, pool, slots(pool), request.requirements.memoryBytes, request.buddyOf ? 'a Buddy' : 'an agent')
+  if (!start) admitByRoom(state, pool, machineSlots(state, pool), request.requirements.memoryBytes, request.buddyOf ? 'a Buddy' : 'an agent')
   const machineReason = !start ? machineSuspensionReason(pool, now) : null
   if (machineReason) fail('MACHINE_UNAVAILABLE', machineReason)
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.

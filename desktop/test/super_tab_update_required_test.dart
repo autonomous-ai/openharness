@@ -36,7 +36,7 @@ void main() {
   }
 
   setUp(() {
-    server = ConversationServer();
+    server = ConversationServer.chat();
     refuse = false;
     hold = null;
   });

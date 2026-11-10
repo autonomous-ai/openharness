@@ -12,7 +12,7 @@ import { SuperTabStore } from './store.js'
 // says what each job is on its own.
 
 const user = { sub: owner.userId, email: owner.email } as AuthUser
-const lookups = (): HostLookups => ({ people: [{ id: owner.userId, email: owner.email }], confidential: new Set(), agentGrant: async () => {}, teams: [], githubApp: false })
+const lookups = (): HostLookups => ({ people: [{ id: owner.userId, email: owner.email }], confidential: new Set(), agentGrant: async () => {}, githubApp: false })
 
 function withLead() {
   const s = swarm()

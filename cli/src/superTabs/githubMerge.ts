@@ -16,15 +16,20 @@
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
+import { labelOf, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
-import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
+import { GitHubReads, GitHubStop, PAGE, Waits, waitWords } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
 import { identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
 
 export const MERGE_INTERVAL_MS = 30_000
-const MAX_PULLS = 30
+/** Open pull requests are read a hundred a page, the most recently updated first, up to this many pages each pass: a busy shared
+ *  repository has over a hundred open (lampOS and openharness about 110 each, 2026-11-10), and the team's own can be any of
+ *  them. The newest thirty alone left an older team pull request unread and unmerged for good. */
+export const PULL_PAGES = 3
+export const openPullsPath = (repo: string): string => `/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PAGE}`
 /** How often the projects whose PM runs here are asked again: each ask reads the PM's Swarm. */
 const PROJECTS_FRESH_MS = 60_000
 /** A verdict as lampOS's readers write it: `READ-OK <sha>` or `HOLD <sha>`, the sha at least 7 hex digits. */
@@ -33,29 +38,33 @@ const VERDICT = /(?<![\w-])(READ-OK|HOLD)\s+([0-9a-f]{7,40})(?![0-9a-f])/
 const SIGNATURE = /^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
 const SELF = 'Harness'
 
-/** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests. */
-export interface MergingProject { repo: string; pm: string }
+/** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
+ *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
+export interface LedProject { repo: string; pm: string; tabId: string; pmAgentId: string; projectId: string }
 
 /** The projects whose PM is one of this computer's person's agents running here, from the host's roster and the PM's read. */
-export async function mergingProjects(deps: { me: string | null; live: (harnessId: string) => boolean; roster: () => Promise<Json[]>
-  read: (tabId: string, agentId: string) => Promise<Json> }): Promise<MergingProject[]> {
+export async function ledProjects(deps: { me: string | null; live: (harnessId: string) => boolean | Promise<boolean>; roster: () => Promise<Json[]>
+  read: (tabId: string, agentId: string) => Promise<Json> }): Promise<LedProject[]> {
   if (!deps.me) return []
-  const found = new Map<string, MergingProject>()
+  const found = new Map<string, LedProject>()
   for (const row of await deps.roster()) {
     const agent = object(row.agent)
     if (row.lead !== true || !identifier(row.ledConversationId) || !identifier(row.tabId) || !identifier(agent.id) || row.closeSession === true) continue
-    if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !deps.live(agent.harnessId)) continue
+    if (agent.contributorId !== deps.me || agent.machineOwnerId !== deps.me || typeof agent.harnessId !== 'string' || !await deps.live(agent.harnessId)) continue
     const state = await deps.read(row.tabId, agent.id).catch(() => null)
     const project = (Array.isArray(state?.projects) ? state.projects.map(object) : []).find(p => p.leadConversationId === row.ledConversationId)
     const repo = repositorySlug(object(project?.repository).repositoryUrl)
-    if (repo && !found.has(repo)) found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM') })
+    if (repo && identifier(project?.id) && !found.has(repo)) {
+      found.set(repo, { repo, pm: String(agent.displayName ?? agent.name ?? 'PM'), tabId: row.tabId, pmAgentId: agent.id, projectId: project.id })
+    }
   }
   return [...found.values()]
 }
 
-/** What one pull request's comments say: each reader's last verdict, and whether it asks for two reads. */
-export function verdicts(comments: Json[], body: string): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string }>; twoReads: boolean } {
-  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; at: string }>()
+/** What one pull request's comments say: each reader's last verdict, by its name in lowercase, with the name as it signs,
+ *  and whether it asks for two reads. */
+export function verdicts(comments: Json[], body: string): { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string }>; twoReads: boolean } {
+  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
@@ -68,10 +77,15 @@ export function verdicts(comments: Json[], body: string): { readers: Map<string,
     const at = String(comment.created_at ?? '')
     const key = reader.toLowerCase()
     const last = readers.get(key)
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, at })
+    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, at })
   }
-  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha }])), twoReads }
+  return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name }])), twoReads }
 }
+
+/** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
+ *  otherwise. Without it, "pip two" and "pip-two" were two people, so an agent with a two-word name read its own pull request
+ *  and the merger merged it (found by the other session's Q3 tester, 2026-11-09; #3665 reads names more fully). */
+export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
 
 /** The pull request's author by name: its builder label, else its branch's first part (`pip/12`). */
 export function authorOf(pull: Json): string | null {
@@ -100,17 +114,18 @@ export class GitHubMerge {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly reads: GitHubReads
-  private readonly unreadable = new Map<string, number>()
+  /** How long each repository is left alone after it failed: one this login cannot read, or one whose pass failed. */
+  private readonly waits = new Waits()
   /** What each pull request was last told, by head and reason, so it is told once for each head. */
   private readonly told = new Map<string, string>()
-  private projects: { at: number; list: MergingProject[] } | null = null
+  private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
   private readonly now: () => number
   private readonly log: (line: string) => void
 
-  constructor(private readonly deps: { projects: () => Promise<MergingProject[]>; get: GitHubGet; send: GitHubSend; now?: () => number
-    log?: (line: string) => void; intervalMs?: number }) {
+  constructor(private readonly deps: { projects: () => Promise<LedProject[]>; crew: (project: LedProject) => Promise<Crew>; get: GitHubGet
+    send: GitHubSend; now?: () => number; log?: (line: string) => void; intervalMs?: number }) {
     this.now = deps.now ?? Date.now
     this.log = deps.log ?? (line => console.warn(line))
     this.reads = new GitHubReads(deps.get, this.now)
@@ -137,47 +152,58 @@ export class GitHubMerge {
   private async pass(): Promise<void> {
     if (!this.projects || this.now() - this.projects.at >= PROJECTS_FRESH_MS) this.projects = { at: this.now(), list: await this.deps.projects() }
     if (!this.projects.list.length || this.now() < this.offUntil) return
+    // Whether a repository is being left alone: the pass then says nothing of running again.
+    let held = false
     try {
       for (const project of this.projects.list) {
-        if ((this.unreadable.get(project.repo) ?? 0) > this.now()) continue
-        try { await this.mergeReady(project) } catch (error) {
+        if (this.waits.held(project.repo, this.now())) { held = true; continue }
+        try { await this.mergeReady(project); this.waits.ok(project.repo) } catch (error) {
           this.reads.forget(project.repo)
           if (error instanceof GitHubStop && error.everywhere) throw error
-          if (error instanceof GitHubStop) this.unreadable.set(project.repo, error.until)
-          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)}`)
+          held = true
+          // This repository waits, 30 seconds and doubling to 15 minutes (longer if GitHub says so).
+          const wait = this.waits.miss(project.repo, this.now(), error instanceof GitHubStop ? error.until - this.now() : 0)
+          this.note(error instanceof GitHubStop ? error.code : 'MERGE_FAILED', `${project.repo}: ${error instanceof Error ? error.message : String(error)} (again in ${waitWords(wait)})`)
         }
       }
-      this.note('', '')
+      this.waits.ran()
+      if (!held) this.note('', '')
     } catch (error) {
       if (!(error instanceof GitHubStop)) throw error
-      this.offUntil = error.until
-      this.note(error.code, error.message)
+      const wait = this.waits.stop(error.until - this.now())
+      this.offUntil = this.now() + wait
+      this.note(error.code, `${error.message} (again in ${waitWords(wait)})`)
     }
   }
 
-  private async mergeReady(project: MergingProject): Promise<void> {
+  private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
-    const pulls = (await this.reads.current(repo, `/repos/${repo}/pulls?state=open&per_page=${MAX_PULLS}`, 1))
+    const pulls = (await this.reads.current(repo, openPullsPath(repo), PULL_PAGES))
       .filter(pull => pull.draft !== true && object(pull.base).ref === base)
+    // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
+    if (!pulls.length) return
+    const team = teamOf(await this.deps.crew(project), project.pm)
     for (const pull of pulls) {
       const number = Number(pull.number), head = String(object(pull.head).sha ?? '')
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
+      // The team's own pull requests only (assign/crew.ts teamOf): a person's merges as that person's repository does it.
+      if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
-      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && reader !== author)
+      const reads = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && sameKey(reader) !== sameKey(author))
       if (reads.length < (twoReads ? 2 : 1)) continue
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
-      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed on ${head.slice(0, 7)}: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`); continue }
+      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
-      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`); continue }
-      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`); continue }
-      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`); continue }
+      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`, comments); continue }
+      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`, comments); continue }
+      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`, comments); continue }
       if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
       const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: head })
       if (merged.status !== 200) {
@@ -186,20 +212,25 @@ export class GitHubMerge {
         this.note('MERGE_REFUSED', `${repo}#${number}: GitHub answered ${merged.status}`)
         continue
       }
-      const by = reads.map(([reader]) => reader).join(' and ')
+      const by = reads.map(([, r]) => r.name).join(' and ')
       await this.comment(repo, number, `${SELF}, ${this.clock()}: merged. READ-OK on ${head.slice(0, 7)} by ${by}, checks green.`)
       this.log(`[super-tab] merged ${repo}#${number} on ${head.slice(0, 7)} (READ-OK by ${by})`)
       this.reads.forget(repo)
     }
   }
 
-  /** Tells the pull request's author, by name on the pull request itself, once for each head and reason. */
-  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string): Promise<void> {
+  /** Says once for a head why it is not merged. It names the head, and a restart finds it among the pull request's comments:
+   *  remembered only in memory, every release (each restarts the PM's daemon, seven on 2026-11-10) said it again. */
+  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string, comments: Json[]): Promise<void> {
     const key = `${repo}#${number}`, said = `${head}\n${what}`
     if (this.told.get(key) === said) return
+    const line = `not merged yet at ${head.slice(0, 7)}: ${what}`
+    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(line))) {
+      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${line}`)
+    }
+    // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
     this.told.set(key, said)
     if (this.told.size > 1_000) this.told.delete(this.told.keys().next().value!)
-    await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: not merged yet: ${what}`)
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {

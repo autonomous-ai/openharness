@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
-import { touchesFor } from './parts/touches.js'
 import { readerView } from './read/views.js'
-import { authorForAgent, lazyUsernames, MAX_NAME_LENGTH, namesPerson, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
+import { actorName } from './activity.js'
+import { authorForAgent, lazyUsernames, namesPerson, nameRefusal, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
@@ -30,11 +30,18 @@ function fixture() {
   join(peer)
   const name = (id: string) => state.people.find(p => p.id === id)!.name
   const shown = (id: string) => shownNameOf(state, id)
-  const setName = (value: string | null, actor: Actor = relay) => run({ type: 'member.name', name: value }, actor)
-  return { run, join, name, shown, setName, get state() { return state } }
+  // No command sets a name or a username any more (2026-11-09): people who set one before still have it stored, so these
+  // tests store it as it was.
+  const setName = (value: string | null, id = 'relay') => {
+    const stored = state.people.find(p => p.id === id)!
+    if (value === null) delete stored.name
+    else stored.name = value
+  }
+  const setUsername = (value: string, id = 'relay') => { state.people.find(p => p.id === id)!.username = value }
+  return { run, join, name, shown, setName, setUsername, get state() { return state } }
 }
 
-describe('member.name', () => {
+describe('the name a person set', () => {
   it('shows the username until a person sets a name, and again once they clear it', () => {
     const f = fixture()
     expect(f.shown('relay')).toBe('wkpnjjhbnm')
@@ -46,107 +53,34 @@ describe('member.name', () => {
     expect(f.shown('relay')).toBe('wkpnjjhbnm')
   })
 
-  it('trims the name and keeps one space between its words', () => {
+  // Activity and reminders name a person through actorName: the stored name first, else the username (end to end, an integration
+  // test set the name with the command that is gone).
+  it('is the name Activity and reminders show for a person', () => {
     const f = fixture()
-    f.setName('  Minh \t  Nguyen  ')
-    expect(f.name('relay')).toBe('Minh Nguyen')
-  })
-
-  it(`refuses an empty name, one over ${MAX_NAME_LENGTH} characters, and hidden characters`, () => {
-    const f = fixture()
-    for (const name of ['', '   ', 'a'.repeat(MAX_NAME_LENGTH + 1), 'Minh‮Nguyen', 'Mi​nh', 'Minh\nNguyen', 'Minh Nguyen']) {
-      expect(() => f.setName(name), JSON.stringify(name)).toThrow(expect.objectContaining({ code: 'INVALID_NAME', status: 400 }))
-    }
-    // Characters, not UTF-16 units: forty letters with accents or an emoji still fit.
-    f.setName('é'.repeat(MAX_NAME_LENGTH - 1) + '🦊')
-    expect([...f.name('relay')!]).toHaveLength(MAX_NAME_LENGTH)
-  })
-
-  it('refuses another member’s name, username or email, whatever its case, width, spacing or @', () => {
-    const f = fixture()
-    f.setName('Dee Tran', peer)
-    for (const name of ['dee tran', 'DEETRAN', 'Ｄｅｅ Ｔｒａｎ', 'dee', '@Dee', 'D E E', 'dee@autonomous.ai', 'DEE@AUTONOMOUS.AI', 'ken15', '@ken15']) {
-      expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'NAME_TAKEN', status: 409 }))
-    }
-    expect(f.name('relay')).toBeUndefined()
-  })
-
-  it('allows one’s own username or email, and a name close to but not another’s', () => {
-    const f = fixture()
-    f.setName('WKPNJJHBNM')
-    expect(f.name('relay')).toBe('WKPNJJHBNM')
-    f.setName('Dee’s friend')
-    expect(f.name('relay')).toBe('Dee’s friend')
-  })
-
-  it('refuses an agent’s name the person can see', () => {
-    const f = fixture()
-    f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
-      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
-    expect(() => f.setName('river')).toThrow(expect.objectContaining({ code: 'NAME_TAKEN' }))
-  })
-
-  it('changes only the person’s own name: an agent, or someone outside the Swarm, is refused', () => {
-    const f = fixture()
-    const lead = f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
-      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
-    expect(() => f.setName('Bot', { kind: 'agent', agentId: lead, machineOwnerId: 'owner' })).toThrow(expect.objectContaining({ code: 'HUMAN_REQUIRED' }))
-    expect(() => f.setName('Stranger', person('stranger', 'stranger@example.com'))).toThrow()
-    // The command names no one: it sets the actor's own, and nobody else's.
-    expect(() => f.run({ type: 'member.name', name: 'Minh', userId: 'relay' } as unknown as Command, owner)).toThrow()
-    f.setName('Owner name', owner)
-    expect([f.name('owner'), f.name('relay'), f.name('peer')]).toEqual(['Owner name', undefined, undefined])
-  })
-
-  it('lets a viewer set their own name, though they write nothing else', () => {
-    const f = fixture()
-    const viewer = person('viewer', 'viewer@example.com')
-    f.join(viewer, 'viewer')
-    f.setName('Watcher', viewer)
-    expect(f.name('viewer')).toBe('Watcher')
-    expect(() => f.run({ type: 'member.status', status: { text: 'Hi' } }, viewer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
-  })
-
-  it('refuses a username equal to another member’s name', () => {
-    const f = fixture()
-    f.setName('Minh')
-    expect(() => f.run({ type: 'member.username', username: 'minh' }, peer)).toThrow(expect.objectContaining({ code: 'USERNAME_TAKEN' }))
-    // One's own name is no conflict.
-    f.run({ type: 'member.username', username: 'minh' }, relay)
-    expect(f.state.people.find(p => p.id === 'relay')!.username).toBe('minh')
+    expect(actorName(f.state, 'person', 'relay')).toBe('wkpnjjhbnm')
+    f.setName('Minh Nguyen')
+    expect(actorName(f.state, 'person', 'relay')).toBe('Minh Nguyen')
+    expect(actorName(f.state, 'person', 'gone')).toBe('Someone')
   })
 
   it('reaches members with the rest of the person, and only members', () => {
     const f = fixture()
     f.setName('Minh Nguyen')
-    const view = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, { teamMachines: [] })
+    const view = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), peer, NOW, {})
     expect(view.parts.members.find(m => m.key === 'relay')!.data.name).toBe('Minh Nguyen')
     expect(visibleState(f.state, peer, NOW).people.find(p => p.id === 'relay')!.name).toBe('Minh Nguyen')
     expect(() => visibleState(f.state, person('stranger', 'stranger@example.com'), NOW)).toThrow()
   })
 
-  it('touches every person and the head, so two people choosing one name at once retry', () => {
-    const f = fixture()
-    const before = f.state
-    const command: Command = { type: 'member.name', name: 'Pilot' }
-    const effects = applyCommand(before, relay, command, { now: NOW, operationId: 'op-touch' })
-    expect(touchesFor(command, relay, before, effects)).toEqual(expect.arrayContaining([
-      { kind: 'member', key: 'owner' }, { kind: 'member', key: 'relay' }, { kind: 'member', key: 'peer' }, { kind: 'head', key: 'head' },
-    ]))
-  })
-
+  // The account name and an agent's name refuse what a Swarm name did (nameRefusal), so these stay.
   it('refuses a role’s or the Swarm’s own name, numbered too (review 1 of #2794)', () => {
-    const f = fixture()
     for (const name of ['Product Manager', 'PM', 'pm 2', 'Lead', 'Engineer', 'Reviewer', 'Tester', 'Harness', 'System', 'Admin',
       'Everyone', 'Swarm', 'You', 'Someone']) {
-      expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'NAME_RESERVED', status: 400 }))
+      expect(nameRefusal(name), name).toMatchObject({ code: 'NAME_RESERVED' })
     }
     // Width variants too, as every name compare reads them (review 2 of #2794).
-    for (const name of ['ＰＭ', 'Ｌｅａｄ', 'ｓｙｓｔｅｍ']) {
-      expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'NAME_RESERVED' }))
-    }
-    f.setName('Leading Light')
-    expect(f.name('relay')).toBe('Leading Light')
+    for (const name of ['ＰＭ', 'Ｌｅａｄ', 'ｓｙｓｔｅｍ']) expect(nameRefusal(name), name).toMatchObject({ code: 'NAME_RESERVED' })
+    expect(nameRefusal('Leading Light')).toBeNull()
   })
 
   it('numbers a later joiner’s default around a name someone set, never the person’s own (review 1 of #2794)', () => {
@@ -160,9 +94,8 @@ describe('member.name', () => {
   })
 
   it('refuses a web address as a name, which server lines would show as a link (review 2 of #2794)', () => {
-    const f = fixture()
     for (const name of ['https://ev.il/x', 'ev.il://x', 'www.ev.il', 'WWW.EV.IL', '//ev.il', '[Ken](//ev.il)']) {
-      expect(() => f.setName(name), name).toThrow(expect.objectContaining({ code: 'INVALID_NAME' }))
+      expect(nameRefusal(name), name).toMatchObject({ code: 'INVALID_NAME' })
     }
   })
 
@@ -192,7 +125,7 @@ describe('a person author as an agent reads it', () => {
       .toEqual({ kind: 'person', id: 'peer', name: 'dee', displayName: 'dee', membershipGeneration: 'g' })
   })
 
-  // A person may take their own email as their name (member.name): an agent still never reads it.
+  // A stored name may be the person's own email, which the old name editor allowed: an agent still never reads it.
   it('names a person whose name is their own email by username', () => {
     const f = fixture()
     f.setName(relay.email)
@@ -205,7 +138,7 @@ describe('a person author as an agent reads it', () => {
 
   it('reads every username as swarmUsernames gives it, working them out only for one not stored', () => {
     const f = fixture()
-    f.run({ type: 'member.username', username: 'minh' }, relay)
+    f.setUsername('minh')
     const lazy = lazyUsernames(f.state), all = swarmUsernames(f.state)
     for (const p of f.state.people) expect(lazy.get(p.id), p.id).toBe(all.get(p.id))
     expect(lazy.get('gone')).toBeUndefined()

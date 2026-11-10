@@ -6,6 +6,8 @@ import 'super_tab_fixture.dart';
 /// [voiceAnswers] are given in turn, the last one again; a [SuperTabFailure]
 /// in it is thrown.
 class VoiceServer extends ConversationServer {
+  VoiceServer() : super.chat();
+
   void Function()? onVoiceRead;
 
   final voiceReads = <String>[];

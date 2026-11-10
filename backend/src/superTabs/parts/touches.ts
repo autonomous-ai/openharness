@@ -119,11 +119,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
-    case 'member.username': case 'member.name':
-      // Unique in the Swarm: a concurrent choice of the same name writes another person's part, and a join writes the head.
-      for (const person of before.people) member(person.id)
-      head()
-      break
     // A Buddy's name is claimed against every other name in the Swarm, some of them in chats a command does not load: the
     // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
     // (review of #2094).

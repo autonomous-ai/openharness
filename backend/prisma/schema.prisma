@@ -1058,8 +1058,9 @@ model SuperTab {
   format         Int      @default(1)
   migratedAt     DateTime?
   legacyState    Json?
-  /// The Workspace (SwarmWorkspace) an earlier release put it in, also on its head part. Swarm v4 removed Workspaces: nothing writes
-  /// or reads it now, and a new Swarm has none. It goes with the Workspace collections (a production write, with the owner's go).
+  /// The Workspace an earlier release put it in, also on its head part. Swarm v4 removed Workspaces and their collections: nothing writes
+  /// or reads it, and a new Swarm has none. The column and its index go in the schema step for the shared collections (slice S19),
+  /// not before 2026-12-09.
   workspaceId          String?
   /// When its owner deleted it (superTabs/deletion.ts): from then every read and write answers as for a Swarm that does not
   /// exist, and its owner can restore it until `purgeAt`, when the sweep removes its records and files. Absent on a live Swarm.
@@ -1072,7 +1073,7 @@ model SuperTab {
 
   /// Deleted Swarms whose grace is over, oldest first: the purge sweep's read (superTabs/deletion.ts).
   @@index([purgeAt], map: "swarm_deleted_purge")
-  /// Read by the Workspace removal Swarm v4 removed; nothing reads it now.
+  /// Read by the Workspace removal Swarm v4 removed; nothing reads it now. It goes with the column above.
   @@index([autonomousEnv, workspaceId])
   /// An owner's Swarms in id order: the grid poll names it (superTabs/parts/indexed.ts NAMED_INDEX.SuperTab.owner).
   @@index([autonomousEnv, ownerId, id])
@@ -1477,23 +1478,6 @@ model SuperTabOperation {
   @@index([createdAt], map: "operation_expiry")
 }
 
-// A conversation-scoped provenance receipt of the terminal recording Swarm v4 removed. It granted no terminal access. Nothing
-// writes or reads it now: its rows go with a Swarm's purge (purge.ts), and the collection when the removed Swarm collections are
-// dropped (a production write, with the owner's go). `SuperTabDelivery.nativeContextId` names one of them on old delivery rows.
-model SuperTabNativeContext {
-  id              String   @id @map("_id")
-  tabId           String
-  conversationId  String
-  agentId         String
-  userId          String
-  binding         Json
-  lastEventId     String?
-  revoked         Boolean  @default(false)
-  createdAt       DateTime @default(now())
-
-  @@index([tabId, revoked])
-}
-
 model SuperTabDelivery {
   id                    String   @id @map("_id")
   tabId                 String
@@ -1620,23 +1604,6 @@ model SuperTabRouteDecision {
   @@index([tabId, createdAt])
   @@index([tabId, conversationId, outcome])
   @@index([tabId, assignmentId])
-}
-
-/// One project's scorecard for one local day, written by the nightly job Swarm v4 removed: counts and minutes only, never text,
-/// names or ids. One row per project and day, about 1 KB. Nothing writes or prunes them now: a Swarm's go with its purge
-/// (purge.ts), and the collection goes when the removed Swarm collections are dropped (a production write, with the owner's go).
-model SuperTabScorecard {
-  id         String   @id @map("_id")
-  tabId      String
-  projectId  String
-  /// The local date, YYYY-MM-DD, in timeZone.
-  on         String
-  timeZone   String
-  figures    Json
-  computedAt DateTime
-
-  /// A project's days.
-  @@index([tabId, projectId, on])
 }
 
 /// How one model did on one kind of job in one week of one project of a Swarm (superTabs/evidence/store.ts): counts and sums
@@ -1845,84 +1812,6 @@ model SuperTabTerminalRequest {
 // (`deleted`) until `purgeAt`, so readers learn it is gone. `data` keeps the record's shape from `SuperTab.state`.
 
 /// The Swarm's scalars and settings: projects (without progress), rules, invitations, sharing, routing, Local models.
-/// A Workspace, the level above Swarms that Swarm v4 removed (a Swarm is the org). Nothing writes or reads the four Workspace
-/// collections now: their rows expire by their TTL indexes (superTabs/sweeps.ts ensurePartExpiry), and the collections go when the
-/// removed Swarm collections are dropped (a production write, with the owner's go). Not the Harness Team account.
-model SwarmWorkspace {
-  id            String    @id @map("_id")
-  autonomousEnv String
-  name          String
-  ownerId       String
-  revision      Int       @default(0)
-  createdAt     DateTime  @default(now())
-  deletedAt     DateTime?
-  purgeAt       DateTime?
-  /// People this Workspace removed, whom Swarm auto-join never added again. Unread now: auto-join checks a Swarm's own `autoJoinDeclined`.
-  autoJoinDeclined String[]
-
-  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([purgeAt], map: "workspace_purge")
-}
-
-/// One person of a Workspace. A removal keeps the row with `removedAt` until it is purged; a rejoin writes a new generation.
-model SwarmWorkspaceMember {
-  /// `workspaceId:userId`
-  id         String    @id @map("_id")
-  workspaceId      String
-  userId     String
-  email      String
-  role       String
-  generation String
-  version    Int       @default(1)
-  addedBy    String
-  addedAt    DateTime  @default(now())
-  removedAt  DateTime?
-  removedBy  String?
-  purgeAt    DateTime?
-
-  @@index([workspaceId, removedAt])
-  @@index([userId, removedAt])
-  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([purgeAt], map: "workspace_purge")
-}
-
-/// One removal of one Workspace membership, open until the person had left every Swarm of the Workspace. The hourly sweep that
-/// finished them is gone with Workspaces.
-model SwarmWorkspaceRemoval {
-  /// `workspaceId:userId:generation`: the membership generation that was removed.
-  id            String    @id @map("_id")
-  workspaceId         String
-  userId        String
-  email         String
-  generation    String
-  autonomousEnv String
-  removedAt     DateTime
-  removedBy     String
-  finishedAt    DateTime?
-  purgeAt       DateTime?
-
-  @@index([finishedAt, id])
-  @@index([workspaceId, userId, finishedAt])
-  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([purgeAt], map: "workspace_purge")
-}
-
-/// An invitation to a Workspace, by email; deleted when accepted or revoked, purged when it expires.
-model SwarmWorkspaceInvitation {
-  /// `workspaceId:email`
-  id        String   @id @map("_id")
-  workspaceId     String
-  email     String
-  role      String
-  invitedBy String
-  expiresAt DateTime
-
-  @@index([email, expiresAt])
-  @@index([workspaceId])
-  /// An invitation goes when it expires (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([expiresAt], map: "workspace_invitation_expiry")
-}
-
 model SwarmHead {
   id              String    @id @map("_id")
   tabId           String
@@ -2074,7 +1963,8 @@ model SwarmMachine {
   ordinal         Float
   data            Json
   machineId       String
-  /// Told whether the machine was contributed, for the check that it served a Swarm of another Workspace (Swarm v4 removed it).
+  /// Told whether the machine was contributed, for the check that it served a Swarm of another Workspace (Swarm v4 removed it). Nothing
+  /// writes or reads it now; it goes with the schema step for the shared collections (slice S19), not before 2026-12-09.
   /// Nothing writes or reads it now.
   contributed     Boolean   @default(false)
   cleanupOwnerIds String[]
@@ -2145,6 +2035,41 @@ model SwarmProgress {
   @@index([tabId, deleted, key, version, changedAt])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
+}
+
+/// What each agent shipped, as its person's daemon read it from GitHub with that person's own gh (superTabs/shipping/), for the
+/// Swarm's leaderboard: counts only, never a title, branch, path or repository. One row per agent and week that shipped something
+/// (`week` is the week's Monday 00:00 UTC in epoch ms) and one all-time row per agent (`week` 0), which also holds how far its
+/// reading is settled and why its last one failed. A week's row goes five weeks on, in the next report that comes (delete on
+/// write, shipping/report.ts); the all-time row, about 150 bytes, is kept for the life of the Swarm (every week is in it, and it
+/// is the only place the old ones are) and goes with it (superTabs/purge.ts). At most 6 rows per agent that ever reported.
+model SwarmShipping {
+  /// `${tabId}:${agentId}:${week}`: a report sets a row, so a report sent twice changes nothing.
+  id              String  @id @map("_id")
+  tabId           String
+  agentId         String
+  week            Float
+  /// The agent's person when it was read (a machine that moved to another account keeps its old weeks with their person).
+  personId        String
+  /// Issues shipped, by priority label: P0, P1, P2, P3, none (shipping/score.ts PRIORITIES).
+  shipped         Int[]
+  /// All-time row only: the first week still open to a revert, where the next reading starts (Monday ms).
+  settled         Float?
+  /// All-time row only: the name its last reading found the agent's issues under (`builder:<name>`). A rename settles the weeks
+  /// before the current one, whose issues carry the old name, so they are not read again under the new one.
+  name            String?
+  /// All-time row only: why the last reading failed (shipping/contract.ts READ_FAILURES), and on which machine; cleared by the next one.
+  failed          String?
+  failedMachineId String?
+  /// All-time row only: when that failure was last reported (epoch ms): the board shows it for a few hours, so one nobody reports
+  /// any more (a deleted agent, a stopped daemon) goes by itself.
+  failedAt        Float?
+
+  /// A board is one week's rows, or the all-time rows (week 0), of a Swarm; a person's own all-time rows (their failed readings) are
+  /// the same index with their id.
+  @@index([tabId, week, personId])
+  /// An agent's old weeks, which its own report deletes (shipping/report.ts): a range on its weeks.
+  @@index([tabId, agentId, week])
 }
 
 model ExperimentalSettings {

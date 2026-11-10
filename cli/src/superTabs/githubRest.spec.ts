@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GitHubReads, githubRest, type GitHubGet } from './githubRest.js'
+import { GitHubReads, githubRest, retryIn, waitWords, type GitHubGet } from './githubRest.js'
 
 describe('GitHub\'s REST API as this computer\'s gh login (githubRest.ts)', () => {
   it('reads the token from gh once, asks with the ETag, and reads the token again after GitHub refuses it', async () => {
@@ -57,5 +57,40 @@ describe('reads with their ETags kept (GitHubReads)', () => {
     await expect(unreadable.current('acme/secret', '/repos/acme/secret/pulls')).rejects.toMatchObject({ code: 'UNREADABLE', everywhere: false })
     const out = new GitHubReads(async () => { throw Object.assign(new Error('signed out'), { code: 'GH_SIGNED_OUT' }) })
     await expect(out.one('acme/app', '/repos/acme/app')).rejects.toMatchObject({ code: 'GH_SIGNED_OUT', everywhere: true })
+  })
+})
+
+describe('a file of a repository (GitHubReads.file)', () => {
+  it('reads a file as text, again by its ETag, and a missing file as nothing without stopping its repository', async () => {
+    let now = 0
+    const asked: string[] = []
+    const get: GitHubGet = async (path, etag) => {
+      asked.push(path)
+      if (path.endsWith('/Pip.md')) return etag === '"p"' ? { status: 304, etag: '"p"', body: null, resetAt: null }
+        : { status: 200, etag: '"p"', body: { encoding: 'base64', content: Buffer.from('Works on: mobile\n').toString('base64') }, resetAt: null }
+      if (path === '/repos/acme/app/issues?state=open') return { status: 200, etag: null, body: [{ number: 1 }], resetAt: null }
+      return { status: 404, etag: null, body: null, resetAt: null }
+    }
+    const reads = new GitHubReads(get, () => now)
+    expect(await reads.file('acme/app', 'agents/Pip.md')).toBe('Works on: mobile\n')
+    expect(await reads.file('acme/app', 'agents/Pip.md')).toBe('Works on: mobile\n')
+    expect(await reads.file('acme/app', 'agents/First builder.md')).toBeNull()
+    expect(asked.at(-1)).toBe('/repos/acme/app/contents/agents/First%20builder.md')
+    // The repository still reads.
+    expect(await reads.current('acme/app', '/repos/acme/app/issues?state=open', 1)).toEqual([{ number: 1 }])
+    // A missing file is not asked for again for five minutes.
+    const before = asked.length
+    expect(await reads.file('acme/app', 'agents/First builder.md')).toBeNull()
+    expect(asked.length).toBe(before)
+    now += 5 * 60_000
+    await reads.file('acme/app', 'agents/First builder.md')
+    expect(asked.length).toBe(before + 1)
+  })
+})
+
+describe('how long a failing GitHub or server is left alone', () => {
+  it('waits 30 seconds, doubling to 15 minutes, and says the wait in words', () => {
+    expect([1, 2, 3, 4, 5, 6, 7, 20].map(retryIn)).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 900_000, 900_000, 900_000])
+    expect([0, 400, 30_000, 59_700, 90_000, 120_000, 900_000].map(waitWords)).toEqual(['1 s', '1 s', '30 s', '60 s', '2 min', '2 min', '15 min'])
   })
 })

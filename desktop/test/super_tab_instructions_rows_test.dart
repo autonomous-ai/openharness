@@ -27,6 +27,7 @@ void main() {
     final c = await showView(
       tester,
       project([row('m1', 1, 'A real update'), _saved(2), row('m3', 3, 'Next')]),
+      board: false,
     );
     await c.loadMessages('lead');
     await tester.pumpAndSettle();
@@ -42,6 +43,7 @@ void main() {
     final c = await showView(
       tester,
       project([row('m1', 1, 'A real update'), _saved(2), _saved(3)]),
+      board: false,
     );
     await c.loadMessages('lead');
     expect([for (final m in c.messages('lead')) m.id], ['m1']);

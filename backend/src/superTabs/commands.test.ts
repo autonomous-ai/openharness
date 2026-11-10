@@ -3,7 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, tasksNamedIn, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { readsRawReason } from './startFailure.js'
-import { sweepLiveness } from './liveness.js'
+import { loseTasks, sweepLiveness } from './liveness.js'
 import { REOPEN_OWNER_MS } from './handed.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -3100,7 +3100,7 @@ describe('Reviewer role', () => {
         evidence: passed ? 'Passed at abc1234' : 'Two findings at abc1234' }, reviewerActor, { now })
       const task = () => f.state.conversations.find(c => c.id === group)!.assignment!
       /** The task's status after the time checks ran at `now`, on a copy. */
-      const swept = (now: number) => { const copy = structuredClone(f.state); sweepLiveness(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
+      const swept = (now: number) => { const copy = structuredClone(f.state); loseTasks(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
       return { ...setup, built, builderActor, verdict, task, swept }
     }
 
@@ -4599,7 +4599,7 @@ describe('credentials in every command', () => {
     ['decision.ask', 'questions[].question'], ['decision.ask', 'questions[].options[]'], ['decision.ask', 'questions[].unblocks'],
     ['decision.answer', 'note'], ['work.status', 'ask.options[]'], ['work.status', 'ask.unblocks'], ['work.pause', 'reason'],
     ['person.tell', 'text'], ['agent.new', 'name'], ['agent.new', 'projectName'], ['buddy.create', 'name'], ['buddy.create', 'setup.name'],
-    ['member.name', 'name'], ['member.username', 'username'], ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
+    ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
     ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'], ['crew.add', 'lane'], ['work.lane', 'lane'],
     ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
     ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'], ['conversation.create', 'step'],
@@ -4643,17 +4643,15 @@ describe('credentials in every command', () => {
       'conversation.create task.requires.devices[]', 'work.define task.requires.devices[]', 'proposal.decide task.requires.devices[]',
       'conversation.merged pullRequestUrl', 'conversation.merged fixes', 'conversation.unlink pullRequestUrl', 'work.check head', 'work.check base']],
     ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
-      'machine.access entryId', 'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
+      'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
       'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'proposal.create projectId', 'route.override candidateId',
       'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account', 'work.assign roleId',
       'work.queue hold.personId', 'work.status hold.personId', 'rules.set rules.instructionApprovals.topDeciderId',
-      'rules.set rules.instructionApprovals.people[].accountIds[]', 'member.timeZone timeZone', 
+      'rules.set rules.instructionApprovals.people[].accountIds[]',
       'work.queue notBefore', 'rules.set rules.releaseWindow.start', 'rules.set rules.releaseWindow.end', 'rules.set rules.releaseWindow.timeZone',
       'rules.set rules.releasePace.backendPause.start', 'rules.set rules.releasePace.backendPause.end', 'rules.set rules.machines[].away.windows[][]',
       'rules.set rules.machines[].away.timeZone']],
     ['The address an invitation goes to, which its person signs in with', ['invite.create email']],
-    // Redacting first would hide the token from that refusal and store the marker instead.
-    ['Refused outright when it looks like a secret (machineAccess.ts ACCESS_SECRET)', ['machine.access name', 'machine.access note', 'machine.access check']],
     ['Written by the server; the command\'s value is dropped (route.record)', ['route.record decision.stepUp.reason', 'route.record decision.sameEngine']],
   ]
 
