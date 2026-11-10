@@ -51,8 +51,11 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     // githubMentions.ts signedBy: its own post is not brought back to it. githubMerge.ts authorOf: whose pull request it is.
     expect(SWARM_BASICS).toContain('open each post with your name')
     expect(SWARM_BASICS).toContain('Branch <your name>/<N>')
-    // githubMentions.ts: what is said on a pull request is brought to the agent whose builder label it carries.
-    expect(SWARM_BASICS).toContain('has your builder:<name> label')
+    // githubMentions.ts: what is said on a pull request is brought to the agent whose builder label it carries, matched whole:
+    // the agent copies the label its task carries, and never spells one from its name.
+    expect(SWARM_BASICS).toContain('Your tasks are GitHub issues labelled builder:<your name>')
+    expect(SWARM_BASICS).toContain('has that label')
+    expect(SWARM_BASICS).not.toContain('Harness tells you your tasks')
   })
   it('tells every agent where the team talks and how a post wakes someone', () => {
     for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'coordinator', key: 'lead' }] as const) {
@@ -62,6 +65,8 @@ describe('Swarm sessions without skill files (task #4673)', () => {
       expect(rules).toContain('Open with @Name to wake someone')
     }
   })
+  // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
+  // machines (an agent runs on its own person's computer), so every agent, the PM too, is told them once, in one plain line.
   it('tells every agent, the PM too, the rules about processes, privilege, temporary files and worktrees, in one line', () => {
     for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
       const rows = prepareSwarmSkill(saved).instructions.split('\n').filter(row => row.startsWith('- Stop only processes you started'))
