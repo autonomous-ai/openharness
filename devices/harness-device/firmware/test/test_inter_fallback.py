@@ -40,7 +40,7 @@ int main(void) {
     // Every Latin Extended-A letter draws something other than '?': its own glyph or a one-letter base.
     for (unsigned cp = 0x100; cp <= 0x17F; cp++) {
         char utf8[3] = {(char)(0xC0 | (cp >> 6)), (char)(0x80 | (cp & 0x3F)), 0};
-        if (cp == 0x149 || !same(utf8, "?")) continue;   // Inter has no U+0149 and the table gives it two letters
+        if (!same(utf8, "?")) continue;
         printf("U+%04X draws '?'\n", cp);
         assert(0);
     }
