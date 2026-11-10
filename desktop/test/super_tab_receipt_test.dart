@@ -418,47 +418,6 @@ void main() {
     },
   );
 
-  testWidgets(
-    'receipt: stored hold notices stay hidden while other agent messages stay',
-    (tester) async {
-      final f = ReceiptFixture(tester);
-      await f.show(
-        prepare: () {
-          f.delivery['holdReason'] = 'team_waiting_idle';
-          f.delivery['holdSince'] = f.now.toIso8601String();
-          final original = f.message['id'];
-          f.server.append('A message for Lead is waiting. It stays queued.');
-          f.message['author'] = {
-            'kind': 'agent',
-            'id': 'lead-agent',
-            'name': 'Lead',
-          };
-          f.message['source'] = {
-            'kind': 'delivery-hold',
-            'messageId': original,
-            'deliveryId': 'delivery',
-            'agentId': 'lead-agent',
-          };
-          f.server.append('A real update.');
-          f.message['author'] = {
-            'kind': 'agent',
-            'id': 'lead-agent',
-            'name': 'Lead',
-          };
-          // A newer own message: the old notice is no longer about the latest one.
-          f.server.append('My next question.');
-        },
-      );
-      expect(
-        find.textContaining('A message for Lead is waiting.'),
-        findsNothing,
-      );
-      expect(find.text('A real update.'), findsOneWidget);
-      expect(find.textContaining('Lead is busy'), findsNothing);
-      await f.close();
-    },
-  );
-
   // Not delivered yet: prod 10-30 (v1.3.71), claims failed for two hours while
   // every queued message looked delivered.
   const couldntTake =

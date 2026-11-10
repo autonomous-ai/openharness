@@ -343,7 +343,7 @@ describe('retargeting an agent', () => {
     })
   })
 
-  // Security review 1 of #2255: a model switch relaunched an old Buddy with no saved role without asking the Swarm, so it
+  // Security review 1 of #2255: a model switch relaunched an old Swarm session with no saved role without asking the Swarm, so it
   // came back without its guard.
   describe('an old Swarm session with no saved role', () => {
     const switchWith = (grant: SwarmSkillGrant | null | undefined) => {
@@ -353,25 +353,25 @@ describe('retargeting an agent', () => {
         save: (_id, skill) => { row.swarmSkill = skill; return true } })
       return { row, ...setup(row, { adoptSwarmSkill }) }
     }
-    it('switches its model with its Buddy role, saved on its row', async () => {
-      const run = switchWith({ role: 'buddy' })
+    it('switches its model with its role, saved on its row', async () => {
+      const run = switchWith({ role: 'agent' })
       expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'buddy', key: 'a1' } }),
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'a1' } }),
         expect.anything(), expect.any(Function), undefined)
-      expect(run.row.swarmSkill).toEqual({ role: 'buddy', key: 'a1' })
+      expect(run.row.swarmSkill).toEqual({ role: 'agent', key: 'a1' })
       expect(restartAgent).toHaveBeenCalledOnce()
     })
     it('does not switch a session that changed while its role was read', async () => {
       const row = agent({ startedBy: 'agent' })
       const adoptSwarmSkill = createSwarmSkillAdoption({ candidate: () => false, save: vi.fn(),
-        role: async () => { row.cwd = '/replacement'; return { role: 'buddy' as const } },
+        role: async () => { row.cwd = '/replacement'; return { role: 'agent' as const } },
         authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) })
       const run = setup(row, { adoptSwarmSkill })
       expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
       expect(restartAgent).not.toHaveBeenCalled()
     })
     it('switches the person\'s own session as before, with no role and no Swarm read', async () => {
-      const role = vi.fn(async () => ({ role: 'buddy' as const }))
+      const role = vi.fn(async () => ({ role: 'agent' as const }))
       const row = agent()
       const run = setup(row, { adoptSwarmSkill: createSwarmSkillAdoption({ role, candidate: () => false, save: vi.fn(),
         authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) }) })

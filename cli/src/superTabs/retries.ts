@@ -1,8 +1,8 @@
 import { SuperTabHostError } from './wire.js'
 
 /** Refusals no resend of the same command can change (Ken's prod scan, 11-04, #2675): an agent gone or to be shared again, a
- *  conversation gone or unreadable, a Buddy session's post outside its thread, a Buddy machine no longer listed. */
-export const PERMANENT_REFUSALS: ReadonlySet<string> = new Set(['AGENT_UNAVAILABLE', 'NOT_FOUND', 'BUDDY_SESSION_THREAD', 'BUDDY_MACHINE'])
+ *  conversation gone or unreadable. */
+export const PERMANENT_REFUSALS: ReadonlySet<string> = new Set(['AGENT_UNAVAILABLE', 'NOT_FOUND'])
 export const permanentRefusal = (error: unknown): boolean => error instanceof SuperTabHostError && PERMANENT_REFUSALS.has(error.code)
 
 const FIRST_WAIT_MS = 5_000

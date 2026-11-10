@@ -17,10 +17,7 @@ type Json = Record<string, unknown>
 export async function prepareSwarmStart(core: CoreApi, row: Json, start: Json,
   deps: { prepare?: typeof prepareProjectFolder; empty?: typeof prepareEmptyProjectFolder } = {}): Promise<void> {
   const request = object(start.request)
-  // A person's one Buddy has no project: its launch makes its folder from the checkouts already here and fetches nothing
-  // (buddyHome.ts).
-  if (request.buddyScope === 'swarm') return
-  // Nor does a Regular agent (backend agent.new, task #4116): it starts in no project, in a folder of its own (start.ts). A
+  // A Regular agent (backend agent.new, task #4116) starts in no project, in a folder of its own (start.ts). A
   // Member's start is a Regular agent's in its person's chat, but it sets its project up there (task #4698), so it is prepared.
   if (request.regular === true && !memberProject(request)) return
   if (object(row.machine).scope === 'swarm') await prepareSwarmProject(core, row, start, deps.prepare, deps.empty)
@@ -39,10 +36,10 @@ const memberProject = (request: Json): string | undefined => {
   return typeof id === 'string' && id ? id : undefined
 }
 
-/** The project a queued start is for, of those this machine was told of. A project session of a person's one Buddy chat and a
- *  Member's start name their project: those chats are in no project's list (backend hostRows.ts). */
+/** The project a queued start is for, of those this machine was told of. A Member's start names its project: its chat is in no
+ *  project's list (backend hostRows.ts). */
 function startProject(row: Json, request: Json): Json | undefined {
-  const named = object(request.buddySession).projectId ?? memberProject(request)
+  const named = memberProject(request)
   return (Array.isArray(row.projects) ? row.projects.map(object) : [])
     .find(p => named ? p.id === named : Array.isArray(p.conversationIds) && p.conversationIds.includes(request.conversationId))
 }
