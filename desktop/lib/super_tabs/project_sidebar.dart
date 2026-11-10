@@ -14,12 +14,14 @@ import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
+import 'agent_state.dart';
 import 'attention.dart';
 import 'controller.dart';
 import 'delete_agent.dart';
 import 'buddies.dart';
 import 'model.dart';
 import 'my_agents.dart';
+import 'personal_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
 import 'buddy_rows.dart';
@@ -70,11 +72,16 @@ class ProjectSidebar extends StatelessWidget {
     this.onNewAgent,
     this.onAttachAgent,
     this.onOpenAgentChat,
+    this.onOpenPane,
     this.boardProjectId,
     this.onOpenAgentTerminal,
     this.leaderboard,
+    this.agentStates,
   });
   final SuperTabController controller;
+
+  /// What each agent of Your Team is doing, its row's one line; without it a row says only that its agent is offline.
+  final SwarmAgentStates? agentStates;
 
   /// The board Humans lists on the Desktop (task #4466): the view's, which the right pane reads too. Without it, or
   /// before it is read, Humans is its heading alone.
@@ -99,6 +106,9 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
   final ValueChanged<String>? onOpenAgentChat;
+
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm; its row opens nothing without it.
+  final ValueChanged<PersonalAgent>? onOpenPane;
 
   /// The project whose Board holds the Desktop's middle, if one does. Its row is then the lit one, though the selected
   /// chat is the Buddy's on the right (task #4220).
@@ -651,8 +661,9 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  /// Your Machines (Swarm v4, anh Dee 2026-11-09): the computers of this account, folded until it is opened, each opening
-  /// Manage where it is managed. What the machine list says is up is up. A person with none sees no heading.
+  /// Your Machines (Swarm v4, anh Dee 2026-11-09): the computers of this account, each opening Manage where it is managed.
+  /// What the machine list says is up is up. A person with none sees no heading. Folded until it is opened, but open by itself
+  /// while a computer is off, so why an agent is silent is in sight; what its person chose stands.
   List<Widget> _yourMachines() {
     final machines =
         [
@@ -664,14 +675,17 @@ class ProjectSidebar extends StatelessWidget {
           ),
         );
     if (machines.isEmpty) return const [];
+    final open = controller.yourMachinesGroupChosen
+        ? controller.yourMachinesGroupOpen
+        : machines.any((m) => m.reportedOnline == false);
     return [
       SuperTabQuietHeading(
         'Your Machines',
         key: const ValueKey('project-sidebar-machines'),
-        collapsed: !controller.yourMachinesGroupOpen,
-        onTap: controller.toggleYourMachinesGroup,
+        collapsed: !open,
+        onTap: () => controller.setYourMachinesGroup(!open),
       ),
-      if (controller.yourMachinesGroupOpen)
+      if (open)
         for (final machine in machines)
           _iconRow(
             key: 'super-machine-${machine.machineId}',
@@ -845,12 +859,29 @@ class ProjectSidebar extends StatelessWidget {
         attachTooltip: 'Attach agent',
         attachKey: const ValueKey('project-sidebar-agents-attach'),
       ),
-      if (controller.agentsGroupOpen)
+      if (controller.agentsGroupOpen) ...[
         for (final (agent, chat) in reading.myAgents)
           _agentRow(snapshot, agent, chat),
+        for (final pane in reading.panes) _paneRow(pane),
+      ],
       const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }
+
+  /// A pane of the person's own in their Personal Swarm, an agent of theirs that has not joined it: its face as it will be,
+  /// its name and its computer.
+  Widget _paneRow(PersonalAgent pane) => SuperTabQuietRow(
+    key: ValueKey('super-pane-${pane.machineId}-${pane.agent.id}'),
+    leading: SuperTabAvatar(
+      identity: 'agent:${pane.swarmId}',
+      name: pane.name,
+      size: SuperTabQuietRow.faceSize,
+      face: true,
+    ),
+    name: pane.name,
+    detail: pane.place,
+    onTap: onOpenPane == null ? null : () => onOpenPane!(pane),
+  );
 
   Widget _agentRow(
     SuperTabSnapshot snapshot,
@@ -867,6 +898,7 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
+      detail: agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -1016,7 +1048,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?places, ?leaderboard]) {
+    child: switch ([?attention, ?places, ?leaderboard, ?agentStates]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -1029,7 +1061,7 @@ class ProjectSidebar extends StatelessWidget {
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
-    final reading = _SidebarReading(controller, attention);
+    final reading = _SidebarReading(controller, attention, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
         app: app,
@@ -1226,9 +1258,10 @@ Offset _besideTheRow(TooltipPositionContext context) {
 /// thousands of conversations were scanned again on every rebuild (Diego,
 /// 10-29).
 class _SidebarReading {
-  _SidebarReading(this.controller, this.attention);
+  _SidebarReading(this.controller, this.attention, this.app);
   final SuperTabController controller;
   final SuperTabAttention? attention;
+  final AppNotifier? app;
   final _projects = <String, _ProjectReading>{};
 
   _ProjectReading of(SuperTabProject project) =>
@@ -1244,6 +1277,14 @@ class _SidebarReading {
       for (final agent in superTabMyAgents(snapshot, controller.accountId))
         if (agent.buddyOf == null) (agent, superTabAgentChat(snapshot, agent)),
   ];
+
+  /// In the person's Personal Swarm, the panes they run that are not in it yet: more of Your Team.
+  late final List<PersonalAgent> panes = switch ((app, controller.snapshot)) {
+    (final app?, final snapshot?)
+        when PersonalProjects.of(app).eligible(controller) =>
+      personalAgents(app, snapshot),
+    _ => const [],
+  };
 }
 
 /// One build's reading of a project, each part asked once and only when a

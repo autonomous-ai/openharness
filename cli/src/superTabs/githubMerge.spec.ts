@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { authorOf, checksOf, GitHubMerge, ledProjects, verdicts } from './githubMerge.js'
+import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
 type Json = Record<string, unknown>
@@ -14,14 +15,18 @@ const pull = (extra: Json = {}): Json => ({ number: 4, draft: false, base: { ref
 function fakeGitHub() {
   const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
-    state: 'clean', mergeAnswer: 200, signedOut: false }
+    state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   const get: GitHubGet = async (path, etag) => {
     if (repo.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
+    if (repo.down) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' })
+    if (repo.status) return { status: repo.status, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`)
     const p = url.pathname
     const body = p === '/repos/acme/app' ? { default_branch: 'main' }
-      : p === '/repos/acme/app/pulls' ? repo.pulls
+      // A page of the list, as GitHub pages it.
+      : p === '/repos/acme/app/pulls' ? repo.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
+        Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
@@ -32,6 +37,7 @@ function fakeGitHub() {
     return etag === tag ? { status: 304, etag: tag, body: null, resetAt: null } : { status: 200, etag: tag, body, resetAt: null }
   }
   const send: GitHubSend = async (method, path, body) => {
+    if (method === 'POST' && repo.sendFails > 0) { repo.sendFails--; throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }) }
     sent.push({ method, path, body })
     if (method === 'PUT') return { status: repo.mergeAnswer, etag: null, body: { merged: repo.mergeAnswer === 200 }, resetAt: null }
     return { status: 201, etag: null, body: {}, resetAt: null }
@@ -42,11 +48,15 @@ function fakeGitHub() {
 function setup() {
   const github = fakeGitHub()
   const log = vi.fn()
-  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }], get: github.get, send: github.send,
-    now: () => Date.parse('2026-11-09T07:31:00Z'), log })
+  // Pip builds; Juno is the PM.
+  const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' }], machines: [] }
+  const team = vi.fn(async () => crew)
+  const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
+  const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+    crew: team, get: github.get, send: github.send, now: () => clock.now, log })
   const merges = () => github.sent.filter(s => s.method === 'PUT')
   const comments = () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body))
-  return { github, merger, log, merges, comments }
+  return { github, merger, log, merges, comments, clock, crew: team }
 }
 
 describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)', () => {
@@ -54,7 +64,43 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     const f = setup()
     await f.merger.tick()
     expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
-    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by juno, checks green\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: merged\. READ-OK on f6edb44 by Juno, checks green\.$/)])
+  })
+
+  it('never merges on its author\'s own READ-OK, however its two-word name is written', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }], machines: [] })
+    f.github.repo.pulls = [pull({ labels: [{ name: 'builder:pip-two' }], head: { sha: HEAD, ref: 'pip-two/2' } })]
+    f.github.repo.comments.set(4, [comment('Pip Two, 14:20, to **Juno**: READ-OK f6edb44')])
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+  })
+
+  it('merges the team\'s pull request wherever it is among a busy repository\'s hundred and more', async () => {
+    const f = setup()
+    const people = Array.from({ length: 119 }, (_, i) => pull({ number: 100 + i, labels: [], head: { sha: HEAD, ref: `fix-${i}` } }))
+    f.github.repo.pulls = [...people.slice(0, 110), pull(), ...people.slice(110)]
+    await f.merger.tick()
+    expect(f.merges()).toEqual([{ method: 'PUT', path: '/repos/acme/app/pulls/4/merge', body: { merge_method: 'squash', sha: HEAD } }])
+  })
+
+  it('reads the team only when a pull request is open', async () => {
+    const f = setup()
+    f.github.repo.pulls = [pull({ draft: true })]
+    await f.merger.tick()
+    expect(f.crew).not.toHaveBeenCalled()
+    f.github.repo.pulls = [pull()]
+    await f.merger.tick()
+    expect(f.crew).toHaveBeenCalledTimes(1)
+  })
+
+  it('merges only the team\'s own pull requests: a person\'s, or a branch no builder of the team made, is theirs to merge', async () => {
+    for (const other of [{ head: { sha: HEAD, ref: 'ken/fix-login' }, labels: [] }, { head: { sha: HEAD, ref: 'fix-login' }, labels: [] }]) {
+      const f = setup()
+      f.github.repo.pulls = [pull(other)]
+      await f.merger.tick()
+      expect(f.merges()).toEqual([])
+    }
   })
 
   it('merges nothing on a READ-OK of an older head, by its author, by a stranger, or while a HOLD stands', async () => {
@@ -97,7 +143,14 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.github.repo.runs.set(HEAD, [{ name: 'test (ubuntu)', status: 'completed', conclusion: 'failure' }])
     await f.merger.tick()
     await f.merger.tick()
-    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet: checks failed on f6edb44: test \(ubuntu\)\. Fix them and push\.$/)])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: checks failed: test \(ubuntu\)\. Fix them and push\.$/)])
+    // A restart (each release is one) finds it on the pull request, and says it no more.
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4) ?? [], comment(f.comments()[0]!, { author_association: 'OWNER' })])
+    const restarted = setup()
+    restarted.github.repo.runs.set(HEAD, [{ name: 'test (ubuntu)', status: 'completed', conclusion: 'failure' }])
+    restarted.github.repo.comments.set(4, f.github.repo.comments.get(4)!)
+    await restarted.merger.tick()
+    expect(restarted.comments()).toEqual([])
     for (const [state, words] of [['behind', 'it is behind main'], ['dirty', 'it conflicts with main'], ['blocked', 'GitHub\'s rules for main block the merge']]) {
       const g = setup()
       g.github.repo.state = state
@@ -118,6 +171,54 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.merges()).toHaveLength(2)
   })
 
+  it('waits longer after each pass GitHub did not answer, 30 seconds to 15 minutes, and a refused login 5 minutes, and says so once', async () => {
+    const down = setup()
+    const told = [] as number[]
+    down.github.repo.down = true
+    for (let seconds = 30; seconds <= 1_900; seconds += 30) {
+      down.clock.now = Date.parse('2026-11-09T07:31:00Z') + seconds * 1000
+      const before = down.log.mock.calls.length
+      await down.merger.tick()
+      if (down.log.mock.calls.length > before) told.push(seconds)
+    }
+    // A line each time its wait changes: 30 s, 1 min, 2, 4, 8, 15, and then the same 15 min, said once.
+    expect(told).toEqual([30, 60, 120, 240, 480, 960])
+    const out = setup()
+    out.github.repo.status = 401
+    await out.merger.tick()
+    expect(out.log).toHaveBeenCalledWith(expect.stringContaining('GH_SIGNED_OUT'))
+    out.github.repo.status = 0
+    out.clock.now += 4 * 60_000
+    await out.merger.tick()
+    expect(out.merges()).toEqual([])
+    out.clock.now += 61_000
+    await out.merger.tick()
+    expect(out.merges()).toHaveLength(1)
+    expect(out.log).toHaveBeenLastCalledWith('[super-tab] merging by rule runs again')
+  })
+
+  it('says a repository it cannot read once, for as long as it cannot, and not that it runs again meanwhile', async () => {
+    const f = setup()
+    f.github.repo.status = 404
+    for (let i = 0; i < 5; i++) { f.clock.now += 30_000; await f.merger.tick() }
+    expect(f.log.mock.calls.map(([line]) => String(line))).toEqual([expect.stringContaining('UNREADABLE acme/app')])
+  })
+
+  it('tells the author again when its pass failed before the comment went', async () => {
+    const f = setup()
+    f.github.repo.state = 'behind'
+    f.github.repo.sendFails = 1
+    await f.merger.tick()
+    expect(f.comments()).toEqual([])
+    expect(f.log).toHaveBeenCalledWith(expect.stringContaining('MERGE_FAILED acme/app'))
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringContaining('it is behind main')])
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.comments()).toHaveLength(1)
+  })
+
   it('stops while gh is signed out and says so once', async () => {
     const f = setup()
     f.github.repo.signedOut = true
@@ -133,8 +234,8 @@ describe('the rule\'s parts', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
       comment('Kai, 14:00: TWO READS for this one')], '')
-    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44' }, faye: { verdict: 'HOLD', sha: '1234567' },
-      kenmore: { verdict: 'READ-OK', sha: 'abcdef0' } })
+    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno' },
+      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye' }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore' } })
     expect(twoReads).toBe(true)
   })
 
@@ -159,5 +260,13 @@ describe('the rule\'s parts', () => {
     const found = await ledProjects({ me: 'dee', live: id => id === 'h-juno', read, roster: async () => [row({}), row({ id: 'ken', contributorId: 'ken' }),
       row({ id: 'pip' }, { lead: false }), row({ id: 'gone', harnessId: 'h-gone' })] })
     expect(found).toEqual([{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }])
+  })
+
+  it('counts a PM stopped here as leading, as the service asks the core whether it is stopped', async () => {
+    const row = { tabId: 'tab', lead: true, ledConversationId: 'lead', agent: { id: 'juno', harnessId: 'h-juno', name: 'Juno', contributorId: 'dee',
+      machineOwnerId: 'dee' } }
+    const read = async () => ({ projects: [{ id: 'app', leadConversationId: 'lead', repository: { repositoryUrl: 'https://github.com/acme/app' } }] })
+    expect(await ledProjects({ me: 'dee', live: async () => true, read, roster: async () => [row] })).toHaveLength(1)
+    expect(await ledProjects({ me: 'dee', live: async () => false, read, roster: async () => [row] })).toEqual([])
   })
 })

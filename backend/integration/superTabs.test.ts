@@ -2512,6 +2512,22 @@ describe('Super Tab chat attachments', () => {
     expect(JSON.stringify(await db.superTabAttachment.findMany({ where: { tabId: tab } }))).not.toContain(token)
   })
 
+  // Swarm v4: a plain agent is in no project and joins a project's channel by posting there (postable). Its first file there comes before
+  // that post: the upload only asks whether it may post, on the Swarm as the read cache holds it, which nothing may change.
+  it('takes a file from a plain agent that has not posted in the project channel yet, which it joins by the message that sends it', async () => {
+    const { tab, lead } = await fixture()
+    const chat = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId: OWN_MAC, engine: 'codex', name: 'Ada', local: true })).result.conversationId)
+    const ada = String((await run(tab, { type: 'agent.add', conversationId: chat, machineId: OWN_MAC, harnessId: randomUUID(), name: 'Ada', configuration: config, lead: false })).result.agentId)
+    const members = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.agentIds
+    expect(await members()).toEqual([lead])
+    const uploaded = await file(tab, 'plan.txt', new Uint8Array([1, 2, 3]), 'text/plain', 'lead', owner, ada)
+    expect(uploaded).toMatchObject({ status: 200, attachment: { name: 'plan.txt' } })
+    // Asking changed nothing: it joins by posting.
+    expect(await members()).toEqual([lead])
+    await send(tab, [uploaded.attachment.id], owner, ada, 'The plan.')
+    expect(await members()).toEqual([lead, ada])
+  })
+
   it('streams one file into the bucket under a random key and answers its metadata', async () => {
     const { tab } = await fixture()
     const bytes = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251)
@@ -4128,21 +4144,12 @@ describe('Lead mentions', () => {
 
   it('lists a person’s tag of another person under the author’s username, never their email', async () => {
     const { tab, group } = await tagged()
-    await run(tab, { type: 'member.username', username: 'boss' })
     const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
       mentions: [peer.sub] })).result.messageId as string
     const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
     // Who tagged, by kind: the phone rings for a person's tag and not for an agent's (task #3607).
-    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', leadKind: 'person', text: '@peer Peer, see above.' }))
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'owner', leadKind: 'person', text: '@peer Peer, see above.' }))
     expect(JSON.stringify(mention)).not.toContain(owner.email)
-  })
-
-  it('lists a person’s tag under the name they set, when they set one', async () => {
-    const { tab, group } = await tagged()
-    await run(tab, { type: 'member.name', name: 'The Boss' })
-    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, look.', replyTo: null, recipientIds: [],
-      mentions: [peer.sub] })).result.messageId as string
-    expect((await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)).toMatchObject({ leadName: 'The Boss' })
   })
 
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {

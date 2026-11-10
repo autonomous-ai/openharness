@@ -72,7 +72,6 @@ class SuperTabFixtureConnection extends WsConn {
 
   /// Refuses the next join as the backend would, before anything is written.
   SuperTabFailure? failJoin;
-  bool failNative = false;
   WsRequestFailure? backendFailure;
 
   /// [backendFailure] refuses only commands: an older backend still answers
@@ -208,26 +207,13 @@ class SuperTabFixtureConnection extends WsConn {
             'maxAvailableAgents': maxAvailableAgents,
         };
       }
-      if (payload['action'] == 'prepareNative' ||
-          payload['action'] == 'renewNative') {
-        if (native?['status'] == 'stopped') {
-          return {
-            'error': 'SUPER_TAB_UNAVAILABLE',
-            'detail': 'The exact contributed terminal is unavailable on this machine.',
-          };
-        }
-        return failNative
-            ? {
-                'error': 'NATIVE_UNAVAILABLE',
-                'detail': 'Fixture recording unavailable.',
-              }
-            : {'ok': true, 'inputContext': payload['contextId']};
-      }
+      // What the backend answers since terminal recording was removed
+      // (backend routes/superTabs.ts recordingGone, 1.4.51): ok, no context.
       if (payload['method'] == 'POST' &&
           (payload['path'] as String?)?.endsWith('/native') == true) {
         return {
           'ok': true,
-          'value': {'contextId': (payload['body'] as Map)['operationId']},
+          'value': {'ok': true, 'ignored': true},
         };
       }
       if (payload['path'] == '/api/super-tabs' && payload['method'] == 'POST') {
