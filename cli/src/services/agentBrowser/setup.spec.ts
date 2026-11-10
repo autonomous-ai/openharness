@@ -1,4 +1,8 @@
-import { existsSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Availability, Podman } from './podman.js'
 import { PodmanError } from './podman.js'
@@ -22,7 +26,11 @@ interface Rig {
   runCode?: (cmd: string) => number
   runStderr?: string
   runStdout?: string
+  /** Stands in for the privilege step: what the run of osascript or pkexec does instead. */
+  onRun?: (cmd: string, args: string[]) => { code: number; stdout: string; stderr: string }
   which?: string[]
+  /** Where `which` finds each tool; /usr/bin unless said. */
+  whichDir?: string
   interactive?: boolean
   hostMemoryBytes?: number
   hostCpus?: number
@@ -64,15 +72,53 @@ function rig(options: Rig = {}) {
     sha256: async () => options.checksum ?? Object.values(PODMAN_RELEASE.artifacts).find(a => a.url === downloads.at(-1)!.url)!.sha256,
     run: async (cmd, args, opts) => {
       runs.push({ cmd, args, timeoutMs: opts.timeoutMs })
+      if (options.onRun) return options.onRun(cmd, args)
       return { code: options.runCode?.(cmd) ?? 0, stdout: options.runStdout ?? '', stderr: options.runStderr ?? '' }
     },
-    which: async cmd => ((options.which ?? []).includes(cmd) ? `/usr/bin/${cmd}` : null),
+    which: async cmd => ((options.which ?? []).includes(cmd) ? `${options.whichDir ?? '/usr/bin'}/${cmd}` : null),
     interactive: () => options.interactive ?? true,
     hostMemoryBytes: options.hostMemoryBytes ?? 16 * GiB,
     hostCpus: options.hostCpus ?? 8,
     step: (s) => { steps.push(s) },
   })
   return { setup, podman, downloads, runs, steps, podmanRuns, startedOn }
+}
+
+/**
+ * Runs the shell command inside osascript's `do shell script "…"` as the test's own user, with a fake `installer`
+ * that records what it was given. Nothing here elevates or installs anything.
+ */
+function fakeRoot(before: () => void) {
+  const dir = mkdtempSync(join(tmpdir(), 'harness-setup-spec-'))
+  const bin = join(dir, 'bin')
+  const log = join(dir, 'log')
+  spawnSync('/bin/mkdir', [bin, log])
+  writeFileSync(join(bin, 'installer'), `#!/bin/sh
+printf '%s\\n' "$@" > '${log}/args'
+/bin/ls -ld "$(dirname "$2")" > '${log}/dir'
+/bin/cat "$2" > '${log}/bytes'
+`)
+  chmodSync(join(bin, 'installer'), 0o755)
+  const onRun = (cmd: string, args: string[]) => {
+    expect(cmd).toBe('osascript')
+    const quoted = /^do shell script "((?:[^"\\]|\\.)*)" with prompt /.exec(args[1]!)
+    expect(quoted).not.toBeNull()
+    const command = quoted![1]!.replace(/\\(.)/g, '$1').replaceAll('/usr/sbin/installer', join(bin, 'installer'))
+    before()
+    // A bare `installer` would find the fake too: the test never reaches a real one.
+    const result = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin` } })
+    return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr }
+  }
+  const read = (name: string) => (existsSync(join(log, name)) ? readFileSync(join(log, name), 'utf8') : null)
+  return { onRun, read, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+}
+
+/** The pinned digest, for the length of one test, is the digest of the bytes the fake download writes. */
+async function pinnedTo(bytes: string, work: () => Promise<void>): Promise<void> {
+  const artifact = PODMAN_RELEASE.artifacts['darwin-arm64']
+  const pinned = artifact.sha256
+  artifact.sha256 = createHash('sha256').update(bytes).digest('hex')
+  try { await work() } finally { artifact.sha256 = pinned }
 }
 
 const failure = async (work: Promise<unknown>): Promise<PodmanError> => {
@@ -99,10 +145,45 @@ describe('Setup', () => {
     expect(r.runs).toHaveLength(1)
     expect(r.runs[0]!.cmd).toBe('osascript')
     expect(r.runs[0]!.timeoutMs).toBe(TEN_MINUTES)
-    expect(r.runs[0]!.args).toEqual(['-e',
-      `do shell script "installer -pkg '${r.downloads[0]!.to}' -target /" with prompt "Harness needs your password to install Podman for Browser." with administrator privileges`])
+    expect(r.runs[0]!.args[0]).toBe('-e')
+    expect(r.runs[0]!.args[1]).toMatch(/^do shell script ".*" with prompt "Harness needs your password to install Podman for Browser\." with administrator privileges$/)
     expect(existsSync(r.downloads[0]!.to)).toBe(false)
     expect(r.steps[0]).toBe('installing')
+  })
+
+  it('the root step installs, from a root-only copy, exactly the bytes it verified, and removes the copy', async () => {
+    await pinnedTo('installer', async () => {
+      const root = fakeRoot(() => {})
+      try {
+        const r = rig({ onRun: root.onRun })
+        await r.setup.run({ step: null })
+        const [flag, pkg, target, to] = root.read('args')!.trimEnd().split('\n')
+        expect([flag, target, to]).toEqual(['-pkg', '-target', '/'])
+        expect(dirname(pkg!)).not.toBe(dirname(r.downloads[0]!.to))
+        expect(root.read('dir')).toMatch(/^drwx------[@+.]? /)
+        expect(root.read('bytes')).toBe('installer')
+        expect(existsSync(dirname(pkg!))).toBe(false)
+      } finally {
+        root.cleanup()
+      }
+    })
+  })
+
+  it('a pkg swapped while the password dialog is open is refused and nothing is installed', async () => {
+    await pinnedTo('installer', async () => {
+      let swapped = ''
+      const root = fakeRoot(() => { writeFileSync(swapped, 'not the installer') })
+      try {
+        const r = rig({ onRun: (cmd, args) => { swapped = r.downloads[0]!.to; return root.onRun(cmd, args) } })
+        const error = await failure(r.setup.run({ step: null }))
+        expect(error.state).toBe('podman_install_failed')
+        expect(error.message).toContain('The Podman installer changed after its checksum')
+        expect(root.read('args')).toBeNull()
+        expect(r.podmanRuns).toEqual([])
+      } finally {
+        root.cleanup()
+      }
+    })
   })
 
   it('an Intel Mac gets the amd64 pkg', async () => {
@@ -154,6 +235,14 @@ describe('Setup', () => {
     const error = await failure(missing.setup.run({ step: null }))
     expect(error.state).toBe('podman_install_failed')
     expect(error.message).toBe('apt-get install podman exited 100: E: Unable to locate package podman')
+  })
+
+  it('Linux never runs as root a tool found outside the system folders', async () => {
+    for (const whichDir of ['/home/me/.local/bin', '/usr/local/bin', '/usr/bin/../../tmp']) {
+      const r = rig({ platform: 'linux', which: ['pkexec', 'apt-get'], whichDir })
+      expect((await failure(r.setup.run({ step: null }))).state).toBe('podman_manual')
+      expect(r.runs).toEqual([])
+    }
   })
 
   it('no way to ask is podman_manual', async () => {

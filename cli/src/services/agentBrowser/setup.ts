@@ -6,7 +6,7 @@
  */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { PodmanError, type Podman } from './podman.js'
 import { PODMAN_RELEASE } from './podmanRelease.js'
 
@@ -26,6 +26,9 @@ const MESSAGE_LIMIT = 500
 // Harness's own machine, made when the person's will not start (spec § Podman).
 const OWN_MACHINE = 'harness'
 
+// Folders only root can write on a Linux distribution.
+const SYSTEM_DIRS = ['/usr/bin', '/usr/sbin', '/bin', '/sbin']
+
 const LINUX_MANAGERS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['apt-get', ['install', '-y', 'podman', 'uidmap', 'slirp4netns']],
   ['dnf', ['install', '-y', 'podman']],
@@ -42,9 +45,28 @@ export function canAskForPassword(env: NodeJS.ProcessEnv = process.env, platform
   return platform !== 'linux' || Boolean(env.DISPLAY || env.WAYLAND_DISPLAY)
 }
 
-/** The path is read by sh inside an AppleScript string: quoted for sh, then escaped for AppleScript. */
-function macInstallScript(pkg: string): string {
-  const command = `installer -pkg '${pkg.replaceAll("'", `'\\''`)}' -target /`
+/** One argument for sh, whatever it holds. */
+const shQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
+
+/**
+ * What runs as root, after the person types the password: $1 is the downloaded pkg, $2 its pinned SHA-256. The pkg
+ * sits in the person's own temp folder while the dialog is open, where any of their processes could swap it, so root
+ * copies it into a folder only root can open, checks that copy and installs that copy (security review, 2026-11-10).
+ */
+const ROOT_INSTALL = [
+  'umask 077',
+  'dir=$(/usr/bin/mktemp -d /var/tmp/harness-podman.XXXXXXXX) || exit 1',
+  'trap \'/bin/rm -rf "$dir"\' EXIT',
+  '/bin/chmod 700 "$dir" || exit 1',
+  '/bin/cp -- "$1" "$dir/podman.pkg" || exit 1',
+  'sum=$(/usr/bin/shasum -a 256 "$dir/podman.pkg") || exit 1',
+  'if [ "${sum%% *}" != "$2" ]; then echo "The Podman installer changed after its checksum" >&2; exit 3; fi',
+  '/usr/sbin/installer -pkg "$dir/podman.pkg" -target /',
+].join('; ')
+
+/** The command is read by sh inside an AppleScript string: quoted for sh, then escaped for AppleScript. */
+function macInstallScript(pkg: string, sha256: string): string {
+  const command = ['/bin/sh', '-c', ROOT_INSTALL, 'harness-podman-install', pkg, sha256].map(shQuote).join(' ')
   return `do shell script "${command.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
     + ' with prompt "Harness needs your password to install Podman for Browser." with administrator privileges'
 }
@@ -88,16 +110,26 @@ export class Setup {
     if (!artifact) throw manual(`No Podman installer for ${platform} ${arch}`)
     this.deps.step('installing')
     await this.withInstaller(artifact, async (pkg) => {
-      const result = await this.deps.run('osascript', ['-e', macInstallScript(pkg)], { timeoutMs: INSTALL_TIMEOUT_MS })
+      const result = await this.deps.run('osascript', ['-e', macInstallScript(pkg, artifact.sha256)], { timeoutMs: INSTALL_TIMEOUT_MS })
       if (result.code !== 0) throw installFailed('The Podman installer', result)
     })
   }
 
+  /**
+   * A tool pkexec runs as root must be one only root can change. `which` reads the person's login shell PATH, which any
+   * of their processes can point at a folder of its own (security review, 2026-11-10).
+   */
+  private async systemTool(name: string): Promise<string | null> {
+    const found = await this.deps.which(name)
+    if (found && !SYSTEM_DIRS.includes(dirname(found))) throw manual(`${name} at ${found} is not in a system folder`)
+    return found
+  }
+
   private async installLinux(): Promise<void> {
-    const pkexec = await this.deps.which('pkexec')
+    const pkexec = await this.systemTool('pkexec')
     if (!pkexec) throw manual('pkexec is not installed')
     for (const [name, args] of LINUX_MANAGERS) {
-      const manager = await this.deps.which(name)
+      const manager = await this.systemTool(name)
       if (!manager) continue
       this.deps.step('installing')
       const result = await this.deps.run(pkexec, [manager, ...args], { timeoutMs: INSTALL_TIMEOUT_MS })
@@ -107,7 +139,10 @@ export class Setup {
     throw manual('No known package manager (apt-get, dnf, pacman, zypper)')
   }
 
-  /** The installer lives in a folder of its own, removed after use: a file that fails its checksum is never run. */
+  /**
+   * The installer lives in a folder of its own, removed after use: a file that fails its checksum never reaches the
+   * password dialog. Root checks it again on its own copy (ROOT_INSTALL).
+   */
   private async withInstaller(artifact: { url: string; sha256: string }, use: (file: string) => Promise<void>): Promise<void> {
     const dir = await mkdtemp(join(tmpdir(), 'harness-podman-'))
     try {
