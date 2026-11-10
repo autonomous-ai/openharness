@@ -278,9 +278,12 @@ class LocalDaemonHttpAdapter implements HttpClientAdapter {
     try {
       return await _unixFor(path).fetch(options, requestStream, cancelFuture);
     } catch (error) {
-      if (!isConnectionFailure(error)) rethrow;
-      // Nothing was sent: the socket could not be opened. Discovery will find
-      // the socket again later; this request fails as a daemon that is down.
+      // The socket could not be opened, or its file is gone: the daemon
+      // stopped, and a kept-alive connection to it may break as anything (a
+      // reset is an HttpException, not a SocketException). Any other failure
+      // is the daemon's answer. Discovery will find the socket again later;
+      // this request fails as a daemon that is down.
+      if (!isConnectionFailure(error) && transport.socketPresent) rethrow;
       transport.useTcp();
       return overPort();
     }
