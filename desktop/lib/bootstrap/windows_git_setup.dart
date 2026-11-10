@@ -8,9 +8,9 @@ import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 
 /// Git for Windows, put in place beside setup so nobody has to know they need
-/// it: Swarm agents' git, a Buddy's guard and setup scripts all run in its
-/// bash. For this user alone, so Windows asks nothing, and hidden. Tried once:
-/// without it Harness still works, and whatever needs it says so.
+/// it: Swarm agents' git and setup scripts all run in its bash. For this user
+/// alone, so Windows asks nothing, and hidden. Tried once: without it Harness
+/// still works, and whatever needs it says so.
 class WindowsGitSetup {
   WindowsGitSetup({
     Map<String, String>? environment,

@@ -38,18 +38,41 @@ void main() {
   }
 
   final composer = find.byKey(const ValueKey('super-message-composer'));
+
+  testWidgets('an archived chat says it is read-only in its box', (
+    tester,
+  ) async {
+    final server = ConversationServer.chat()..append('Done here.');
+    final c = await show(tester, server);
+    final id = c.selectedId!;
+    expect(
+      tester.widget<TextField>(composer).decoration!.hintText,
+      isNot('Read-only conversation'),
+    );
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == id)['archived'] =
+        true;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(c.selectedId, id);
+    expect(
+      tester.widget<TextField>(composer).decoration!.hintText,
+      'Read-only conversation',
+    );
+  });
   FocusNode composerFocus(WidgetTester tester) =>
       tester.widget<TextField>(composer).focusNode!;
   String composerText(WidgetTester tester) =>
       tester.widget<TextField>(composer).controller!.text;
 
-  for (final chat in ['a workgroup', 'the Buddy chat']) {
+  for (final chat in ['a workgroup', "an agent's chat"]) {
     testWidgets(
       'Reply in $chat puts the cursor in the composer, reply attached',
       (tester) async {
         final server = ConversationServer.chat();
-        if (chat == 'the Buddy chat') {
-          // The reader's own Buddy chat, where the PM's private lines land.
+        if (chat == "an agent's chat") {
+          // The reader's chat with their own agent.
           final pm = (server.state['conversations'] as List)[1] as Map;
           pm['kind'] = 'agent-chat';
           server.append(
@@ -60,7 +83,7 @@ void main() {
           server.append('Which build should I test?');
         }
         final c = await show(tester, server);
-        if (chat == 'the Buddy chat') {
+        if (chat == "an agent's chat") {
           c.select('offline');
           await tester.pumpAndSettle();
           expect(c.selectedId, 'offline');
