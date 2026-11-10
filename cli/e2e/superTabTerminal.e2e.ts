@@ -41,12 +41,14 @@ async function superTab(s: Side, tab: string, agent: string, args: string[]): Pr
   return { code, out }
 }
 
-/** The agent with this id in an `agents` list of the Swarm's first load, wherever the read puts that list. */
+/** The agent with this id in the `agents` of the Swarm's first load, wherever the read puts them: each a part, `{ key, data }`
+ *  (backend superTabs/read), or the agent itself. */
 function agentIn(value: unknown, id: string): Record<string, any> | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Record<string, any>
-  const listed = Array.isArray(row.agents) ? row.agents.find((agent: Record<string, any>) => agent?.id === id) : undefined
-  if (listed) return listed
+  const listed = Array.isArray(row.agents)
+    ? row.agents.find((agent: Record<string, any>) => agent?.key === id || agent?.id === id || agent?.data?.id === id) : undefined
+  if (listed) return listed.data ?? listed
   for (const child of Object.values(row)) { const found = agentIn(child, id); if (found) return found }
   return null
 }
