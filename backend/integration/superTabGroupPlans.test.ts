@@ -21,6 +21,7 @@ import { logger } from '../src/utils/logger.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, queryShape } from './bench/profile.js'
 
 // Prod's slow log (2026-10-28): SwarmGroup reads spent ~200 ms each planning. Prisma sends its filters as $expr, and a filter
@@ -69,7 +70,7 @@ async function scene() {
   const empty = s.run({ type: 'project.create', name: 'Empty', visibility: 'public', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const done = s.group('Done work')
   // A Reviewer kept for more work, in the conversations that go quiet below: the Lead's poll reads those (store.ts fullDeliveries).
   const reviewer = s.add('reviewer-harness', done, false, ownerActor, machineId, owner.sub)

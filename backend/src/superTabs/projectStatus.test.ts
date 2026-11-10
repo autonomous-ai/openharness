@@ -102,18 +102,6 @@ describe('the project status card', () => {
 
 describe('no card wake-up for the coordinator (#3593)', () => {
   // The server writes the card (statusCard.ts), so a work group's change marks nothing for the coordinator to read.
-  it('marks no work group for a report, whatever changes in it', () => {
-    const f = fixture(), group = f.group()
-    const engineer = f.add('engineer', group)
-    const as: Actor = { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' }
-    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: engineer }).result.assignmentId as string
-    f.tick(5 * MINUTE)
-    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'PR #7' }, as)
-    f.tick(15 * MINUTE)
-    expect(f.state.conversations.find(c => c.id === group)!.reportSeq).toBeUndefined()
-    expect(projectOf(f.state, 'lead').progress).toBeUndefined()
-  })
-
   it('lets an archived group go quiet at once, with no report to wait for', () => {
     const f = fixture(), group = f.group()
     f.run({ type: 'conversation.archive', conversationId: group, archived: true })
