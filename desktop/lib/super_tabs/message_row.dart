@@ -552,7 +552,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
         alignment: Alignment.centerLeft,
         widthFactor: 1,
         heightFactor: 1,
-        child: Text(widget.author, style: style),
+        child: Text(
+          widget.author,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: style,
+        ),
       ),
     );
     return InkWell(onTap: widget.onOpenAgent, child: name);

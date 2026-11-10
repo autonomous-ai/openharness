@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/account_keys.dart';
 import 'package:harness/super_tabs/leaderboard/model.dart';
@@ -277,6 +278,10 @@ void main() {
   testWidgets(
     'a failed board read does not strand the list: a public project keeps its people',
     (tester) async {
+      final lines = <String>[];
+      final before = appLog;
+      appLog = _Recorder(lines);
+      addTearDown(() => appLog = before);
       final f = await swarm(tester, board: false);
       f.server.failLeaderboardReads = 1;
       await f.show(tester);
@@ -285,6 +290,11 @@ void main() {
       expect(person('dee'), findsOneWidget);
       expect(person('tony'), findsOneWidget, reason: 'public: everyone');
       expect(agent(2), findsNothing);
+      // Said in the app log by the failure's name.
+      expect(
+        lines.where((line) => line.contains('leaderboard')),
+        ['super-tabs Project leaderboard not read (OFFLINE)'],
+      );
       await f.close(tester);
     },
   );
@@ -748,4 +758,18 @@ void main() {
       await f.close(tester);
     });
   });
+}
+
+class _Recorder implements AppLog {
+  _Recorder(this.lines);
+  final List<String> lines;
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('$category $message');
 }

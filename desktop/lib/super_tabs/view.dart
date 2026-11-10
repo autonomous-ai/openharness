@@ -3915,9 +3915,16 @@ class _SuperTabViewState extends State<SuperTabView>
     setState(() {
       _instructionsOpen = false;
       _infoOpen = false;
-      _taskListOpen = false;
+      _closeTaskList();
     });
     _returnToChat();
+  }
+
+  /// Closes a project's tasks and forgets the task open in them, so Tasks opens on the list again. Within setState.
+  void _closeTaskList() {
+    _taskListOpen = false;
+    _issue = null;
+    _issueFromChannel = false;
   }
 
   /// Chat, over a terminal in the chat's place: the terminal closes, and a pane beside stays.
@@ -3983,15 +3990,27 @@ class _SuperTabViewState extends State<SuperTabView>
       group.id,
       app: widget.app,
     );
-    if (repository == null) return null;
+    if (repository == null) {
+      // Unlinked: its cards go, and nothing of it is read again, an earlier page included.
+      _dropFeed(group.id);
+      return null;
+    }
     final held = _feeds[group.id];
     if (held != null && held.repository == repository) return held;
-    held?.dispose();
+    _dropFeed(group.id);
     return _feeds[group.id] = SwarmChannelFeed(
       github: _github,
       repository: repository,
       channelId: group.id,
     )..addListener(_feedChanged);
+  }
+
+  /// Forgets channel [id]'s feed and where its cards stood among its rows.
+  void _dropFeed(String id) {
+    _feeds.remove(id)?.dispose();
+    _feedAnchor.remove(id);
+    _feedRows.remove(id);
+    _feedSeen.remove(id);
   }
 
   /// A feed read something new: the channel draws it, and follows it to the end when its reader was there.
@@ -4289,7 +4308,9 @@ class _SuperTabViewState extends State<SuperTabView>
                 color: _taskListOpen
                     ? DesktopChrome.foreground
                     : DesktopChrome.muted,
-                onPressed: () => setState(() => _taskListOpen = !_taskListOpen),
+                onPressed: () => setState(
+                  () => _taskListOpen ? _closeTaskList() : _taskListOpen = true,
+                ),
               ),
             ],
             if (!widget.board && (isProject || !_menuNamesViews)) ...[
@@ -6520,11 +6541,9 @@ class _SuperTabViewState extends State<SuperTabView>
                 repository: opened.repository,
                 number: opened.number,
                 refreshEvery: kUnderTest ? null : const Duration(seconds: 30),
-                onClose: () => setState(() {
-                  _issue = null;
-                  if (_issueFromChannel) _taskListOpen = false;
-                  _issueFromChannel = false;
-                }),
+                onClose: () => setState(
+                  () => _issueFromChannel ? _closeTaskList() : _issue = null,
+                ),
               ),
             )
           : null;
@@ -6545,7 +6564,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   number: opened.number,
                 );
               }),
-              onClose: () => setState(() => _taskListOpen = false),
+              onClose: () => setState(_closeTaskList),
             )
           : null;
       final viewer = _imageViewer();

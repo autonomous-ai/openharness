@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../logging/app_log.dart';
 import '../controller.dart';
 
 /// One person on the Swarm's leaderboard (docs/plans/2026-11-09-swarm-v4-leaderboard.md): how many of their agents ship, and
@@ -172,10 +173,12 @@ class SuperTabShippingReader extends ChangeNotifier {
         error = null;
       } else {
         error = failure.message;
+        _logFailed(failure.code);
       }
-    } catch (_) {
+    } catch (error) {
       if (read != _read) return;
-      error = "Couldn't read the leaderboard.";
+      this.error = "Couldn't read the leaderboard.";
+      _logFailed('${error.runtimeType}');
     } finally {
       if (read == _read) loading = false;
     }
@@ -185,6 +188,10 @@ class SuperTabShippingReader extends ChangeNotifier {
   void _notify() {
     if (!_disposed) notifyListeners();
   }
+
+  /// By the failure's name alone: what the server or GitHub said may name the person's own work.
+  void _logFailed(String name) =>
+      appLog.warn('super-tabs', 'Leaderboard not read ($name)');
 
   @override
   void dispose() {
