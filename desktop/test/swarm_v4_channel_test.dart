@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -158,6 +159,42 @@ void main() {
       expect(key('super-thread-mic'), findsNothing);
       expect(find.byType(EditableText), findsNothing);
       expect(server.posts, isEmpty);
+    },
+  );
+
+  // The backend refuses a person's edit in a project's channel and its tasks' chats (AGENTS_ONLY); a delete still goes.
+  // Their chat with their own agent keeps both.
+  testWidgets(
+    'a person deletes but does not edit their own old post in the channel, and does both in their agent\'s chat',
+    (tester) async {
+      final server = swarmV4Channel();
+      swarmV4Talk(server);
+      server.append('An old note of mine', conversationId: 'channel');
+      final inChannel = 'message-${server.revision}';
+      server.append('Please read #12 first', conversationId: 'agent-chat-pip');
+      final inChat = 'message-${server.revision}';
+      await openSwarmV4(tester, server);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      addTearDown(mouse.removePointer);
+      Future<void> openMore(String id) async {
+        await mouse.moveTo(tester.getCenter(key('super-message-$id')));
+        await tester.pumpAndSettle();
+        await tester.tap(key('super-message-more-$id'));
+        await tester.pumpAndSettle();
+      }
+
+      await openMore(inChannel);
+      expect(find.text('Delete message'), findsOneWidget);
+      expect(find.text('Edit message'), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      await tester.tap(key('super-agent-pip'));
+      await tester.pumpAndSettle();
+      await openMore(inChat);
+      expect(find.text('Delete message'), findsOneWidget);
+      expect(find.text('Edit message'), findsOneWidget);
     },
   );
 
