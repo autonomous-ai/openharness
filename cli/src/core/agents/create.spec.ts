@@ -998,6 +998,16 @@ describe('creating an agent', () => {
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
+    it('browser:true adds the args; absent adds nothing', async () => {
+      const { create } = setup()
+      await create(request({ browser: true }))
+      expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
+        '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'])
+      vi.mocked(buildEngineLaunchArgv).mockClear()
+      await create(request())
+      expect(JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1])).not.toContain('browser-mcp')
+    })
+
     it('gives a Buddy the machine MCP servers, as its owner\'s own session has them (task #2832)', async () => {
       const { writeMachineMcp } = await import('../../lib/machineMcp.js')
       const { rmSync } = await import('node:fs')
