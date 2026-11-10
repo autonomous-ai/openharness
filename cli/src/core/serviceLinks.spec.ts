@@ -195,12 +195,17 @@ describe('service links', () => {
 
   it('says one on demand is not up when it does not connect in the wait, and when it could not start at all', async () => {
     const links = make({ owned: { 'engine-claude': ['screen_read'], search: ['session_search'] }, onDemand: new Set(['engine-claude']), want: vi.fn(), startWaitMs: 60_000 })
+    // Another service's request in flight is no part of this start.
+    links.accept('search', TOKEN, sink(), vi.fn())
+    const searching = vi.fn()
+    void links.call('search', 'session_search', {}, 120_000).then(searching)
     const up = vi.fn()
     void links.whenStarting('engine-claude')!.then(up)
     await vi.advanceTimersByTimeAsync(59_999)
     expect(up).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(up).toHaveBeenCalledWith(false)
+    expect(searching).not.toHaveBeenCalled()
     // Past its start wait it counts as not starting: nothing more is waited for, and a request is refused at once.
     expect(links.whenStarting('engine-claude')).toBeNull()
     const refused = vi.fn()
@@ -209,6 +214,7 @@ describe('service links', () => {
     expect(refused).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'engine-claude', retryable: true })
     // One not on demand is never waited for, nor any where none is on demand.
     expect(links.whenStarting('search')).toBeNull()
+    expect(links.whenStarting('nobody')).toBeNull()
     expect(make().whenStarting('search')).toBeNull()
     // One that connected and went is refused at once, as its requests are: nothing to wait for.
     const once = make({ owned: { 'engine-claude': ['screen_read'] }, onDemand: new Set(['engine-claude']), want: vi.fn() })
