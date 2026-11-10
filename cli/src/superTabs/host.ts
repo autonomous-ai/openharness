@@ -330,6 +330,10 @@ const LEAD_LIST_MS = 30_000
 const PUSH_LEASE_MS = 150_000
 /** How long a tick waits for the core to say whether a PM works (leadTurn, #3545) before its list read goes without it. */
 const LEAD_TURN_WAIT_MS = 200
+/** How long a delivery its busy agent's pane refused waits to be tried again when no end of the agent's turn is heard. It is tried
+ *  as the turn ends (`onEnd`); tried every tick (each second) instead, each try wrote and fsynced the journal twice, 120 times a
+ *  minute for one busy agent (Q3, 2026-11-10). */
+const BUSY_HOLD_MS = 30_000
 /** Spec 2026-11-02-poll-cost Part 3: a delivery the core refused to write (a running turn, a draft, a dialog) was claimed again
  *  every second for as long as it was held, up to a day (prod 2026-11-02: 414 claim POSTs a minute). The claimed message is
  *  kept and written again on each tick; the claim is renewed only this often, well inside the backend's 10-minute claim quiet
@@ -534,7 +538,8 @@ export class SuperTabHost {
   /** Each delivery's last claim: the list row it came from, the backend's answer and when, and whether the core refused its
    *  write (`refused`). A refused one is written again from this, and claimed again only after HELD_RECLAIM_MS. Freed once the
    *  delivery leaves its list or the journal, and once a write is no longer refused. */
-  private readonly claims = new Map<string, { delivery: Json; result: Json; claimedAt: number; refused: boolean }>()
+  /** Each delivery's claim; `busyUntil` while its busy agent's pane refused it (`heard`), when it is tried again regardless. */
+  private readonly claims = new Map<string, { delivery: Json; result: Json; claimedAt: number; refused: boolean; busyUntil?: number }>()
   /** Each of this machine's thread sessions, by `tabId:agentId`: when it last did anything, since when its terminal is gone,
    *  and its end once asked of the backend. */
   private readonly threadSessions = new Map<string, { activeAt: number; seenAt: number; missingSince?: number; ending?: 'idle' | 'stopped'
@@ -688,7 +693,7 @@ export class SuperTabHost {
     this.replies = new AgentReplies(core, this.journal, { now: this.now, log: this.log, save: () => this.persist(), typedId: deliveryId => typedId({ deliveryId }), refused: receiptRefused })
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
-    this.stopEnds = core.turns.onEnd(event => { void this.replies.ended(event) })
+    this.stopEnds = core.turns.onEnd(event => { this.turnEnded(event.agentId); void this.replies.ended(event) })
     this.stopNotices = core.account.onNotice(notice => this.pushed(notice))
     if (existsSync(nativeJournalFile(core.dataDir, machineId))) {
       try { this.native = new NativeRecorder(core, machineId) } catch (error) { this.log(String(error)) }
@@ -1940,6 +1945,8 @@ export class SuperTabHost {
       this.authorized.delete(id)
       const active = this.active.delete(id)
       if (entry.stage === 'prepared') entry.harnessId = target.agent.harnessId
+      const moved = this.claims.get(deliveryId)
+      if (moved) delete moved.busyUntil
       else if (entry.stage === 'submitting') {
         entry.stage = 'uncertain'
         entry.receipt = 'The member changed terminals before native submission was confirmed. Inspect the earlier session before retrying.'
@@ -1969,6 +1976,12 @@ export class SuperTabHost {
     }
     // A write the pane refused is tried again with the claim it holds, and claimed again only every HELD_RECLAIM_MS.
     const kept = this.claims.get(deliveryId)
+    // Its busy agent's pane refused it: it waits while the core says the agent works (from memory; nothing is written), until its
+    // turn ends (`turnEnded`), and BUSY_HOLD_MS at most. The end can come before the refusal, and a pane can look busy a moment after.
+    if (kept?.busyUntil !== undefined) {
+      if (this.now() < kept.busyUntil && await this.working(entry.harnessId)) return false
+      delete kept.busyUntil
+    }
     const reuse = kept?.refused && this.now() - kept.claimedAt < HELD_RECLAIM_MS
     const result = reuse ? kept.result : object(await backend(this.core, 'POST', `${path}/${deliveryId}`, { type: 'claim', claimId: entry.claimId }))
     // The receipt check may have retired this held entry while the claim was in flight.
@@ -2465,6 +2478,11 @@ export class SuperTabHost {
       .catch(error => this.log(error instanceof Error ? error.message : String(error)))
   }
 
+  /** [harnessId]'s turn ended: what its busy pane refused is tried at the next tick. */
+  private turnEnded(harnessId: string): void {
+    for (const [deliveryId, claim] of this.claims) if (this.journal.entries[deliveryId]?.harnessId === harnessId) delete claim.busyUntil
+  }
+
   private heard(event: TurnDelivery): void {
     // Before the entry is looked for: what the host owes its person for a delivery outlives the entry, which goes at the acknowledgement.
     this.replies.delivery(event)
@@ -2479,7 +2497,11 @@ export class SuperTabHost {
       // expired authority). A later fresh check may retry the same claim safely.
       entry.stage = 'prepared'
       delete entry.receipt
-      if (claim) claim.refused = true
+      if (claim) {
+        claim.refused = true
+        // The pane is not idle: its agent works (engines/kit/screen.ts teamHold).
+        if (event.reason === 'team_waiting_idle') claim.busyUntil = this.now() + BUSY_HOLD_MS
+      }
       this.reportWithheld(entry, event.reason)
     } else {
       this.claims.delete(entry.deliveryId)

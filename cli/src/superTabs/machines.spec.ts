@@ -17,7 +17,7 @@ import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}) {
-  let now = 1000, stamp = 's0', team = false
+  let now = 1000, stamp = 's0'
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
     stopped: vi.fn(async id => id === 'stopped'),
@@ -53,9 +53,9 @@ function fixture(env: NodeJS.ProcessEnv = {}) {
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
   const claudeProfiles = vi.fn((): unknown[] => [])
   const codexProfiles = vi.fn((): unknown[] => [])
-  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, modelsStamp, now: () => now }
+  const deps = { backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, modelsStamp, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
-  return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  return { deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -266,101 +266,23 @@ describe('contributed machine executor', () => {
     expect(f.prepare).toHaveBeenCalledTimes(2)
     expect(f.start).toHaveBeenCalledTimes(2)
   })
-  it('starts another person\'s work with the app for whom it is, and fails a start whose token cannot be had', async () => {
+  // The Harness GitHub App is gone: a start is never handed an account to work for, and no token is asked of the server.
+  it('starts a queued start with no GitHub App account, even after a prepare that names one', async () => {
     const f = fixture()
     f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
-    f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
-    f.advance()
-    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null })
+  })
+  it('asks the server for no GitHub token, and starts the start', async () => {
+    const f = fixture()
+    const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
+      log: f.log, env: {}, now: () => 1000 } as never)
+    Object.assign(f.pool, { githubApp: true })
+    f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
+      : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
+    await machine.tick()
+    expect(f.backend.mock.calls.some(c => String(c[2]).endsWith('/github-token'))).toBe(false)
     expect(f.start).toHaveBeenCalledTimes(1)
-    const failed = f.backend.mock.calls.find(c => JSON.stringify(c[3] ?? {}).includes('could not get a Harness GitHub App token'))!
-    expect(failed[3]).toMatchObject({ command: { type: 'agent.startFailed', startId: 'start' } })
-  })
-  // Diego's Mac, 2026-10-30: one backend timeout on the GitHub App token call failed the start on its first try. Only an
-  // answer the backend decided fails it now; a timeout or a 5xx is tried again on the next pass, for as long as a refused start.
-  describe('a start whose GitHub App token call does not get an answer', () => {
-    const TOKEN_ANSWER = { github: true, token: `ghs_${'f'.repeat(36)}`, repository: 'example/project', requestedBy: { email: 'olive@example.com' } }
-    afterEach(() => { vi.unstubAllGlobals() })
-    /** A team account's host preparing with the real prepareSwarmStart, its token call answered by [answers] in turn; the
-     *  token's revocation goes to [revoked], never to GitHub. */
-    function teamHost(...answers: Array<() => unknown>) {
-      const revoked = vi.fn(async (_url: string, _init: { headers: Record<string, string> }) => ({ status: 204 }))
-      vi.stubGlobal('fetch', revoked)
-      const f = fixture()
-      const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
-        log: f.log, env: {}, team: () => true, now: () => now } as never)
-      let now = 1000
-      Object.assign(f.pool, { githubApp: true })
-      const token = vi.fn(async () => (answers.length > 1 ? answers.shift()! : answers[0]!)())
-      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes')
-        ? hostForm([], { pools: [f.pool] }) : path.endsWith('/github-token') ? token() : { revision: 1 })
-      const failures = () => f.backend.mock.calls.filter(c => c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
-        .map(c => c[3] as { operationId: string; command: { type: string; error?: string } }).filter(body => body.command.type === 'agent.startFailed')
-      return { f, machine, token, failures, revoked, pass: async (ms = 0) => { now += ms; await machine.tick() } }
-    }
-    const timeout = () => { throw new SuperTabHostError('BACKEND_TIMEOUT', 'The Harness server did not answer in time.', 504) }
-
-    it('is tried again on the next pass after one timeout, and starts then', async () => {
-      const h = teamHost(timeout, () => TOKEN_ANSWER)
-      await h.pass()
-      expect([h.failures(), h.f.start.mock.calls.length]).toEqual([[], 0])
-      expect(h.f.log.mock.calls.flat().join('\n')).toContain('The Harness server did not answer in time.')
-      await h.pass(16_000)
-      expect(h.token).toHaveBeenCalledTimes(2)
-      expect(h.failures()).toEqual([])
-      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
-      // The read-only token is revoked once the start is prepared, as on a first try.
-      expect(h.revoked.mock.calls.map(([url, init]) => [url, init.headers.Authorization])).toEqual([['https://api.github.com/installation/token', `Bearer ${TOKEN_ANSWER.token}`]])
-    })
-
-    it('is tried again after a 5xx or a failure to reach the server, as after a timeout', async () => {
-      for (const failure of [() => { throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'Bad gateway.', 502) }, () => { throw new Error('fetch failed') }]) {
-        const h = teamHost(failure, () => TOKEN_ANSWER)
-        await h.pass()
-        await h.pass(16_000)
-        expect([h.failures(), h.f.start.mock.calls.length]).toEqual([[], 1])
-      }
-    })
-
-    it('fails at once when the backend refuses it or the server has no GitHub App', async () => {
-      for (const refusal of [new SuperTabHostError('FORBIDDEN', 'This start is not this machine\'s.', 403),
-        new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'This server has no GitHub App.', 503),
-        // Security review of #2390: GitHub refused the server's app, which the backend decided; it waited a minute.
-        new SuperTabHostError('GITHUB_APP_MISCONFIGURED', 'GitHub refused the Harness GitHub App\'s credentials.', 503)]) {
-        const h = teamHost(() => { throw refusal })
-        await h.pass()
-        expect(h.failures()).toEqual([{ operationId: 'prepare-failed-start', command: { type: 'agent.startFailed', startId: 'start',
-          error: `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${refusal.message}` } }])
-        expect(h.f.start).not.toHaveBeenCalled()
-      }
-    })
-
-    it('fails after the same minute as a refused start when it keeps timing out, naming the timeout', async () => {
-      const h = teamHost(timeout)
-      await h.pass()
-      await h.pass(30_000)
-      expect(h.failures()).toEqual([])
-      await h.pass(30_000)
-      expect(h.failures()).toEqual([{ operationId: 'prepare-failed-start', command: { type: 'agent.startFailed', startId: 'start',
-        error: 'This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner\'s own GitHub login either: The Harness server did not answer in time. (BACKEND_TIMEOUT)' } }])
-      expect(h.f.start).not.toHaveBeenCalled()
-    })
-  })
-  it('readies a start with the backend, as a team account when this daemon runs team work only', async () => {
-    for (const team of [false, true]) {
-      const f = fixture()
-      const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
-        log: f.log, env: {}, team: () => team, now: () => 1000 } as never)
-      Object.assign(f.pool, { githubApp: true })
-      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
-        : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
-      await machine.tick()
-      const asked = f.backend.mock.calls.find(c => String(c[2]).endsWith('/github-token'))!
-      expect(asked[3]).toEqual(team ? { always: true } : {})
-      expect(f.start).toHaveBeenCalledTimes(team ? 0 : 1)
-    }
   })
   it('publishes only scoped measurements and executes through the owner start endpoint', async () => {
     const f = fixture()
@@ -3014,19 +2936,6 @@ describe('the profiles a machine reports', () => {
     expect(profiles.map(p => p.label)).not.toContain('.codex-found')
     const read = f.request.mock.calls.filter(c => c[0] === 'usage_read').map(c => JSON.stringify(c[1]))
     expect(read.join()).not.toContain(id('b'))
-  })
-
-  // Team machines went (backend 1.4.52): a computer still signed in for team work is its person's, and offers its accounts.
-  it('a computer signed in for team work reports its accounts as any other', async () => {
-    const labels = async (team: boolean) => {
-      const f = both()
-      f.setTeam(team)
-      await f.machine.tick()
-      return (posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>).map(p => [p.engine, p.label])
-    }
-    const own = await labels(false)
-    expect(own.length).toBeGreaterThan(2)
-    expect(await labels(true)).toEqual(own)
   })
 
   it("reports the default Codex home once, as Default", async () => {

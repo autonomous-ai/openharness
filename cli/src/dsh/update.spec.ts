@@ -28,7 +28,9 @@ vi.mock('node:fs', async original => {
   }
 })
 
-describe('package updates', { timeout: 30_000 }, () => {
+// Each test clones and checks out real git repositories, several times: on a loaded machine under coverage that passed 30 s.
+// Their own deadline, not a retry.
+describe('package updates', { timeout: 60_000 }, () => {
   let root: string
   let savedRoot: string
   const id = 'acme/thing'
@@ -345,7 +347,8 @@ describe('package updates', { timeout: 30_000 }, () => {
     let waiting = false
     const pending = updateDsh({ id, registry: () => entry, onLine: line => { if (line === 'waiting') waiting = true } })
     try {
-      await vi.waitFor(() => expect(waiting).toBe(true), { timeout: 5000 })
+      // A clone and a setup's start come first: the same deadline as the test's own work.
+      await vi.waitFor(() => expect(waiting).toBe(true), { timeout: 30_000 })
       expect(removeDsh(id)).toMatchObject({ ok: false, error: 'DSH_BUSY' })
       expect(await update(entry)).toMatchObject({ ok: false, error: 'DSH_BUSY' })
       expect(await installDsh({ source: repo })).toMatchObject({ ok: false, error: 'DSH_BUSY' })

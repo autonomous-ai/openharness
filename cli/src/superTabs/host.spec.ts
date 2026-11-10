@@ -3331,7 +3331,7 @@ describe('the beat a host keeps', () => {
     const start = vi.fn(() => new Promise(() => {}))
     let clock = 0
     const host = t.open({ machines: { open: async () => local, capabilities: async () => ({ ok: true, resources: {}, tools: {} }) as never,
-      prepare: async () => null, start: start as never, now: () => clock } })
+      prepare: async () => {}, start: start as never, now: () => clock } })
     const readings = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'POST' && path === '/api/super-tabs/tab/machines/machine-1')
     host.start()
     await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
@@ -3906,6 +3906,70 @@ describe('ending a Buddy\'s thread sessions', () => {
     hold = null
     await t.poll(1_000)
     expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+  })
+
+  // A delivery its busy agent's pane refused was tried again on every tick (each second) while the agent worked, and each try wrote
+  // and fsynced the journal twice ('submitting', then 'prepared' again): 120 fsyncs a minute for one busy agent, 180 ms each on a
+  // busy Mac (Q3, 2026-11-10). It waits for the agent's turn to end instead, and 30 s at most when no end is heard.
+  describe('a delivery its busy agent refused', () => {
+    const held = (t: ReturnType<typeof lifeFixture>) => {
+      t.live(true)
+      const backendOf = t.core.account.backend
+      t.core.account.backend = async (method, path, body) => {
+        if (method === 'GET' && path.endsWith('/agents/agent/deliveries')) return { status: 200, body: { data: [{ id: 'delivery', conversationId: chat, status: 'claimed' }] } }
+        if ((body as Record<string, unknown> | undefined)?.type === 'claim') {
+          return { status: 200, body: { data: { delivery: { id: 'delivery' }, message: { id: 'm', conversationId: chat, text: 'Still there?', author: { name: 'Peer' } } } } }
+        }
+        return backendOf(method, path, body)
+      }
+      vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_idle'))
+      // It works until a test says otherwise.
+      vi.mocked(t.core.agents.activity).mockImplementation(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'working' as const])))
+      t.push({ type: 'super_tab_deliveries' })
+    }
+
+    it('writes nothing while its agent works, and is typed once as soon as the turn ends', async () => {
+      const write = vi.fn(writeJournal)
+      const t = lifeFixture([sessionRow()], { write })
+      held(t)
+      await t.poll()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      const refused = write.mock.calls.length
+      for (let i = 0; i < 20; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(write.mock.calls.length).toBe(refused)
+      t.end()
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
+    // The end can come before the refusal it answers (the core reads the pane while the turn ends), or the pane can still look
+    // busy a moment after it: the host asks whether the agent works, from memory, and tries it at once when it does not.
+    it('is tried at the next tick when its agent no longer works, however the end and the refusal crossed', async () => {
+      const t = lifeFixture([sessionRow()])
+      held(t)
+      // The turn ends while the core reads the pane: its end is heard first, then the refusal.
+      vi.mocked(t.core.turns.deliver).mockImplementationOnce(() => {
+        vi.mocked(t.core.agents.activity).mockImplementation(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'idle' as const])))
+        t.end()
+        t.event('rejected', 'team_waiting_idle')
+      })
+      await t.poll()
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
+    it('is tried again 30 s on when no end of the turn is heard, once', async () => {
+      const t = lifeFixture([sessionRow()])
+      held(t)
+      await t.poll()
+      for (let i = 0; i < 29; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+      for (let i = 0; i < 29; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
   })
 
   // Spec 2026-11-02-poll-cost Part 3: a delivery its pane holds no longer keeps its list read each second, and still waits.

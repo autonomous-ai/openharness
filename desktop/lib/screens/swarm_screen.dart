@@ -3495,13 +3495,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!mounted) return;
     switch (choice) {
       case AccountMenuChoice.profile:
-        await _dialog(
-          () => showAccountProfileSheet(
-            context,
-            app,
-            swarm: accountProfileSwarm(app),
-          ),
-        );
+        await _dialog(() => showAccountProfileSheet(context, app));
       case AccountMenuChoice.addPhone:
         await _addPhone(from: AddPhoneOpening.account);
       case AccountMenuChoice.devices:

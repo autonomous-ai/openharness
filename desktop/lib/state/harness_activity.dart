@@ -71,7 +71,9 @@ HarnessActivity? harnessActivity(
     return HarnessActivity.offline;
   }
   if (agent.isStopped) return HarnessActivity.paused;
-  if (agent.launchState == 'starting' || agent.launchState == 'held') {
+  if (agent.waitingFor == 'engine' ||
+      agent.launchState == 'starting' ||
+      agent.launchState == 'held') {
     return HarnessActivity.starting;
   }
   if (agent.launchState == 'failed') {

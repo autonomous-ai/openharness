@@ -50,6 +50,15 @@ class SuperTabPaneLayout extends StatefulWidget {
   /// [rightWidth]. At 900 the middle showed one and a half columns (#4211).
   static const boardCenterWidth = 560.0;
 
+  /// The width of a window from which two panes sit side by side, half and half (Swarm v4): a text pane (an agent's Instructions,
+  /// a project's Tasks) beside the chat, a task's thread beside its channel. Narrower, the pane takes the chat's place, and the
+  /// thread is a drawer. The window is never under 880.
+  static const twoPanesFrom = 1080.0;
+
+  /// A terminal needs about 480 of its own: beside the chat from the width at which half of what the left pane leaves is that,
+  /// ((1260 - [leftWidth]) / 2); narrower, it takes the chat's place.
+  static const terminalBesideFrom = 1260.0;
+
   /// The roster drawer's share of a narrow window at most. On a phone it filled the screen, leaving no
   /// veil to tap, so closing it was hard (owner, 2026-10-23).
   static const drawerMaxFraction = 0.7;
