@@ -1,5 +1,8 @@
 # Shell guard for Swarm agents: implementation plan
 
+> Removed in Swarm v4 (anh Dee, 2026-11-09): plain agents run with their person's own settings, with no shell guard. The
+> CLI keeps a no-op `__swarm-shell-guard` entry until 2026-12-10, for agents started before.
+
 > Written by the project's Engineer way of working (project instructions, Engineer): plan first, then each task test first,
 > the failing test committed before its code. No Execution Handoff.
 

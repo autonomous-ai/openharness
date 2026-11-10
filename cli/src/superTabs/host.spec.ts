@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Whether this process runs as a Harness Team account, which a Buddy is never prepared in (lib/swarmSkills.ts prepareBuddyFolder).
 // The tests set it, so they pass the same in an owner account, a Team account and CI: it reports an owner account unless a test says.
 const team = vi.hoisted(() => ({ value: false }))
-vi.mock('./teamDaemon.js', async original => ({ ...await original<typeof import('./teamDaemon.js')>(), isTeamDaemon: () => team.value }))
 vi.mock('../team/config.js', async original => ({ ...await original<typeof import('../team/config.js')>(), isTeamAccount: () => team.value }))
 vi.mock('./buddyHome.js', async original => {
   const real = await original<typeof import('./buddyHome.js')>()
@@ -28,6 +27,7 @@ vi.mock('../lib/buddyGuard.js', async original => {
   return { ...actual, forgetBuddyReads: vi.fn(actual.forgetBuddyReads), buddyOwnerOf: () => 'peer' }
 })
 import type { BackendNotice, CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
+import { promptHash } from '../lib/promptIdentity.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { attachedFiles as attachedFilesType } from './attachments.js'
 import { backend, writeJournal, removeStaleJournalTemps, BUDDY_SESSION_GONE_MS, BUDDY_SESSION_IDLE_MS, BUDDY_SESSION_SLEEP_GAP_MS, buddyChatIdOf, swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions } from './host.js'
@@ -93,7 +93,8 @@ function setup(messageFields: Record<string, unknown> = {}, claimFields: Record<
     for (const fn of listeners) fn({ deliveryId: 'team:service:superTabs:delivery', sessionId: 'harness', state, reason })
   }
   /** The agent's turn ends, as the core tells it. */
-  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, ...turn }) }
+  // A live turn that ended, by the prompt it was asked, which is the message the host types unless a test says another.
+  const end = (turn: Partial<TurnEnd> = {}) => { for (const fn of endListeners) fn({ agentId: 'harness', sessionId: 'session', aborted: false, prompt: promptHash('ok, ship it'), turnId: 1, ...turn }) }
   const saved = () => JSON.parse(readFileSync(hostJournalFile(dir, 'machine-1'), 'utf8'))
   return { core, call, open, event, end, receipts, holds, log, row, wait: (ms: number) => { clock += ms }, saved, dir, remove: () => { removed = true },
     /** What the server's daemon socket tells this machine (backend lib/adapterWs.ts). */
@@ -3431,7 +3432,9 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     const agent = { id: 'lead', harnessId: 'harness', machineId: 'machine-1' }
     const rows = [{ tabId: 'own', joinSwarm: true, agent }, { tabId: 'other', joinSwarm: false, agent }, { tabId: 'old', agent }]
     const commands: unknown[] = [], refusals: string[] = []
-    let clock = 0
+    /** The Swarm as its person reads it: the machines they took out of it (backend removedMachines, their own only). */
+    const swarm: Record<string, unknown> = { id: 'own', machines: [] }
+    let clock = 0, reads = 0
     const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
       if (path.endsWith('/commands')) {
         commands.push({ path, ...(body as object) })
@@ -3439,20 +3442,22 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
         if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
         return { status: 200, body: { success: true, data: {} } }
       }
-      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] })
+        : path.startsWith('/api/super-tabs/own/') ? (reads++, swarmReply(path, swarm)) : [] } }
     })
     const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'Ken Mac') } })
     const prepare = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/data/swarm-projects/own', engines: ['claude', 'codex'], maxAgents: 3, scope: 'swarm' }))
     const log = vi.fn()
     const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare }); hosts.push(host)
-    /** One roster pass at `at` ms, waiting for the add it may start to finish. */
+    /** One roster pass at `at` ms, waiting for the add it may start to finish: each starts with a Swarm read, and ends in a
+     *  command sent, a skip or a refusal said, or a read that comes back no more. */
     const pass = async (at: number) => {
       clock = at
-      const tries = prepare.mock.calls.length, heard = commands.length + log.mock.calls.length
+      const before = reads, heard = commands.length + log.mock.calls.length
       await host.tick()
-      if (prepare.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
+      if (reads > before) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
     }
-    return { core, rows, commands, refusals, prepare, log, pass }
+    return { core, rows, swarm, commands, refusals, prepare, log, pass }
   }
 
   it('adds it once with the prepared slots and leaves unmarked Swarms alone', async () => {
@@ -3460,11 +3465,30 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     await t.pass(0)
     expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' }, { reads: expect.any(SwarmReads) })
     expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
-      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'memory', ifMissing: true } }])
+      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'memory', ifMissing: true,
+      unlessRemoved: true } }])
     await t.pass(59_000)
     t.rows[0]!.joinSwarm = false
     await t.pass(120_000)
     expect(t.prepare).toHaveBeenCalledTimes(1)
+  })
+
+  // A machine its person took out of the Swarm stays out: only a person adds it back (backend removedMachines, #2181). The
+  // server refuses the add too (`unlessRemoved`); the host prepares nothing, and looks again, saying so, each half hour.
+  it('never adds back a machine its person removed, and looks again only each half hour while the roster marks it', async () => {
+    const t = joining()
+    t.swarm.removedMachines = ['machine-1']
+    await t.pass(0)
+    await t.pass(30 * 60_000 - 1)
+    await t.pass(30 * 60_000)
+    expect(t.prepare).not.toHaveBeenCalled()
+    expect(t.commands).toEqual([])
+    expect(t.log.mock.calls).toEqual(Array(2).fill(['Not adding this machine back to a Swarm its person removed it from']))
+    // No longer removed (added back, or dropped from the server's list): the next look adds it.
+    delete t.swarm.removedMachines
+    await t.pass(60 * 60_000)
+    expect(t.prepare).toHaveBeenCalledOnce()
+    expect(t.commands).toHaveLength(1)
   })
 
   it('backs off a refusal, doubling up to half an hour, and starts over after an add', async () => {
@@ -3509,91 +3533,6 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     t.rows[0]!.joinSwarm = false
     for (const at of [60_000, 30 * 60_000, 24 * 60 * 60_000]) await t.pass(at)
     expect(t.prepare).toHaveBeenCalledTimes(1)
-  })
-})
-
-// One machine (docs/plans/2026-10-24-swarm-team-account.md): this Mac's Harness Team account is this Mac under the scenes.
-// Where its owner added this Mac, the roster names the team account still missing (backend store.ts hostTabs `joinTeam`);
-// the team account prepares its own workspace, asked through the relay, and this host adds it as the person.
-describe('adding this Mac\'s Harness Team account where this Mac was added', () => {
-  function joining() {
-    const dir = mkdtempSync(join(tmpdir(), 'super-tab-team-join-')); roots.push(dir)
-    const rows: Record<string, unknown>[] = [{ tabId: 'own', joinTeam: { machineId: 'team-1', name: 'MacBook Pro', maxAgents: 4 } }, { tabId: 'other', joinTeam: {} }]
-    const commands: unknown[] = [], refusals: string[] = []
-    let clock = 0
-    const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
-      if (path.endsWith('/commands')) {
-        commands.push({ path, ...(body as object) })
-        const code = refusals.shift()
-        if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
-        return { status: 200, body: { success: true, data: {} } }
-      }
-      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
-    })
-    const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'MacBook Pro') } })
-    const prepareTeam = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/Users/harnessteam/harnesses/swarms/own', engines: ['claude'], maxAgents: 8, scope: 'swarm' }))
-    const prepare = vi.fn()
-    const log = vi.fn()
-    const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare as never, prepareTeam }); hosts.push(host)
-    const pass = async (at: number) => {
-      clock = at
-      const tries = prepareTeam.mock.calls.length, heard = commands.length + log.mock.calls.length
-      await host.tick()
-      if (prepareTeam.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
-    }
-    return { core, host, rows, commands, refusals, prepareTeam, prepare, log, pass }
-  }
-
-  it('adds it once, prepared by its own daemon, with this Mac\'s name and slots', async () => {
-    const t = joining()
-    await t.pass(0)
-    expect(t.prepareTeam).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', machineId: 'team-1' })
-    expect(t.prepare).not.toHaveBeenCalled()
-    expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
-      machineId: 'team-1', name: 'MacBook Pro', cwd: '/Users/harnessteam/harnesses/swarms/own', scope: 'swarm', engines: ['claude'], maxAgents: 4, ifMissing: true } }])
-    t.rows.splice(0, 1)
-    await t.pass(120_000)
-    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
-  })
-
-  // Amon, 11-05 (#3215): after Repair his Mac read "joining" for good. A refusal stopped the join until the daemon restarted,
-  // and nothing on the row said why. Each is retried with the usual backoff: the roster stops asking when it no longer
-  // applies (backend hostRows.ts joinTeam, within the machine's room).
-  it.each(['MACHINES_FULL', 'MACHINE_LIMIT_PER_PERSON', 'OWNER_REQUIRED'])('retries after %s with the usual backoff, and says why', async code => {
-    const t = joining()
-    t.refusals.push(code)
-    await t.pass(0)
-    expect(t.host.teamJoinFailure()).toBe(`Refused: ${code}`)
-    await t.pass(59_000)
-    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
-    await t.pass(60_000)
-    expect(t.prepareTeam).toHaveBeenCalledTimes(2)
-    expect(t.host.teamJoinFailure()).toBeNull()
-  })
-
-  it('tries again at once when its person asks (Retry on the row), not after the backoff', async () => {
-    const t = joining()
-    t.prepareTeam.mockRejectedValueOnce(new Error('That machine is not reachable now.'))
-    await t.pass(0)
-    expect(t.host.teamJoinFailure()).toBe('That machine is not reachable now.')
-    t.host.retryTeamJoins()
-    await t.pass(1_000)
-    expect(t.prepareTeam).toHaveBeenCalledTimes(2)
-    expect(t.commands).toHaveLength(1)
-    expect(t.host.teamJoinFailure()).toBeNull()
-  })
-
-  it('backs off while the team account cannot prepare (offline, signed out), and says why', async () => {
-    const t = joining()
-    t.prepareTeam.mockRejectedValueOnce(new Error('That machine is not reachable now.'))
-    await t.pass(0)
-    expect(t.commands).toEqual([])
-    expect(t.log).toHaveBeenCalledWith('Could not add this Mac\'s Harness Team account to its Swarm: That machine is not reachable now.')
-    await t.pass(59_000)
-    expect(t.prepareTeam).toHaveBeenCalledTimes(1)
-    await t.pass(60_000)
-    expect(t.prepareTeam).toHaveBeenCalledTimes(2)
-    expect(t.commands).toHaveLength(1)
   })
 })
 
@@ -5835,8 +5774,9 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     })
     return posts
   }
+  /** The core has [assistantText] for the turn that was asked [userMessage]. */
   const answered = (t: ReturnType<typeof setup>, userMessage = 'ok, ship it', assistantText = 'Shipped.') =>
-    vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue({ userMessage, assistantText })
+    vi.mocked(t.core.turns.answerOf).mockImplementation(async end => end.prompt === promptHash(userMessage) ? assistantText : null)
   /** What the host started at a turn's end is promises with nothing to wait for in these specs: one turn of the event loop finishes it. */
   const flush = () => new Promise(resolve => setImmediate(resolve))
 
@@ -6012,7 +5952,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       await vi.waitFor(() => expect(posts).toHaveLength(1))
       expect(posts[0]).toEqual({ path: '/api/super-tabs/tab/commands', operationId: 'reply-delivery', asAgentId: 'agent',
         command: { type: 'message.send', conversationId: 'chat', text: 'Shipped.', replyTo: null, answers: 'message', recipientIds: [] } })
-      expect(t.core.transcripts.lastTurn).toHaveBeenCalledWith('session')
+      expect(t.core.turns.answerOf).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session', prompt: promptHash('ok, ship it'), turnId: 1 }))
       t.end(); t.end()
       await flush()
       expect(posts).toHaveLength(1)
@@ -6106,19 +6046,26 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       await flush()
       expect(posts).toEqual([])
     })
-    it('is not posted for a turn that was asked something else, or ended with no answer; it stays owed for its own', async () => {
+    it('is not posted for a turn that was asked something else, which is not even read; it stays owed for its own', async () => {
       const t = inChat(), posts = posting(t)
       await t.open().tick()
-      answered(t, 'Something typed in the terminal.', 'Done.')
-      t.end()
-      vi.mocked(t.core.transcripts.lastTurn).mockResolvedValue(null)
-      t.end()
+      answered(t)
+      t.end({ prompt: promptHash('Something typed in the terminal.') })
       await flush()
+      expect(t.core.turns.answerOf).not.toHaveBeenCalled()
       expect(posts).toEqual([])
       expect(Object.keys(t.saved().replies)).toEqual(['delivery'])
-      answered(t)
       t.end()
       await vi.waitFor(() => expect(posts).toHaveLength(1))
+    })
+    it('is not posted for a turn that ended with no answer, and is not owed any more, saying so', async () => {
+      const t = inChat(), posts = posting(t)
+      await t.open().tick()
+      vi.mocked(t.core.turns.answerOf).mockResolvedValue(null)
+      t.end()
+      await vi.waitFor(() => expect(t.log).toHaveBeenCalledWith('No reply posted for delivery delivery of agent agent: its turn ended without an answer.'))
+      expect(posts).toEqual([])
+      expect(t.saved().replies).toBeUndefined()
     })
     it('is not owed for a delivery the core refused for good, and is for one it may have typed', async () => {
       const refused = inChat()
@@ -6162,7 +6109,7 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
       const host = t.open()
       await host.tick()
       t.end({ agentId: 'another-harness' })
-      expect(t.core.transcripts.lastTurn).not.toHaveBeenCalled()
+      expect(t.core.turns.answerOf).not.toHaveBeenCalled()
       host.stop()
       expect(t.core.turns.onEnd).toHaveBeenCalledTimes(1)
     })

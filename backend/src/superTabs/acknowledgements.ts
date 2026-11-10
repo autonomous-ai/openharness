@@ -1,7 +1,8 @@
 /**
  * An agent's post that only acknowledges (task #3391, anh Dee's Swarm redesign, 11-05). "On it", "got it", "thanks" and
  * "will do" fill the chat, wake the agent they answer for nothing, and tell nobody what a reaction would not. The server
- * refuses such a post with ACK_ONLY and the next step; a reaction settles the delivery instead (reactions.ts).
+ * refuses such a post with ACK_ONLY and the next step. An agent from before may react instead, which settles its delivery
+ * (reactions.ts); today's CLI lets an agent send only posts, and the delivery stays until it has something to say.
  *
  * The classifier is conservative: a post is an acknowledgement only when every clause of it is on the list below, so a real
  * short answer ("Yes at 1a2b3c", "Merged.", a link, a question) is never refused. There is no length number: the list is the
@@ -31,4 +32,4 @@ export function isAcknowledgement(text: string): boolean {
 }
 
 /** The refusal's words: the guard and the next step. */
-export const ACK_ONLY_HINT = 'This post only acknowledges. React to the message instead: 👀 when you start, ✅ when you have done what it asked. Post only substance: a plan, a question, a finding, a verdict or a result.'
+export const ACK_ONLY_HINT = 'This post only acknowledges: nothing needs to be said. Post only substance: a plan, a question, a finding, a verdict or a result.'

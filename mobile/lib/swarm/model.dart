@@ -1126,8 +1126,8 @@ class SuperTabSnapshot {
   /// shows no reminders yet.
   final String? remindersDigest;
 
-  /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts).
-  /// Read as the desktop's model reads it; the phone does not apply it yet.
+  /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts),
+  /// as stored: the phone applies it through `SwarmReader.notifyOf`.
   final Map<String, String> chatSettings;
 
   /// False only where the server does not try Harness Team accounts yet
@@ -1147,6 +1147,9 @@ class SuperTabSnapshot {
   late final _conversationsById = _byId(conversations, (c) => c.id);
   late final _agentsById = _byId(agents, (a) => a.id);
   late final _projectsById = _byId(projects, (p) => p.id);
+  late final _leadConversations = {
+    for (final p in projects) p.leadConversationId,
+  };
   late final _projectsByLead = <String, SuperTabProject>{
     for (final p in projects.reversed)
       ?conversation(p.leadConversationId)?.leadId: p,
@@ -1162,7 +1165,7 @@ class SuperTabSnapshot {
   }
 
   bool isProjectLead(String conversationId) =>
-      projects.any((p) => p.leadConversationId == conversationId);
+      _leadConversations.contains(conversationId);
 
   SuperTabProject? leadProjectForAgent(String agentId) =>
       _projectsByLead[agentId];
@@ -1774,6 +1777,9 @@ class SuperTabMessage {
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      recipientIds = List.unmodifiable(
+        (row['recipientIds'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -1821,6 +1827,9 @@ class SuperTabMessage {
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;
+
+  /// The agents it was sent to (backend `recipientIds`), as the desktop reads them: the phone draws nothing of them yet.
+  final List<String> recipientIds;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

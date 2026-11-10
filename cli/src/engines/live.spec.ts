@@ -59,6 +59,26 @@ describe('the live engine facet', () => {
     expect(idle.turnOpen).toBe(false)
   })
 
+  // A Stop hook its engine ran before a turn's opening record was written is about an earlier turn (engines/kit/stopHook.ts).
+  it('says when the record that opened each turn was written, and keeps it while the turn goes on', () => {
+    const parser = liveFor('claude')!.create({ engine: 'claude' })
+    const at = (line: string, timestamp: string) => JSON.stringify({ ...JSON.parse(line), timestamp })
+    expect(parser.snapshot().openedAt).toBeUndefined()
+    parser.ingest(at(prompt('one'), '2026-11-10T00:00:01.000Z'))
+    parser.ingest(at(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } }), '2026-11-10T00:00:02.000Z'))
+    expect(parser.snapshot().openedAt).toBe(Date.parse('2026-11-10T00:00:01.000Z'))
+    parser.ingest(at(continuation, '2026-11-10T00:00:03.000Z'))
+    expect(parser.snapshot().openedAt).toBe(Date.parse('2026-11-10T00:00:01.000Z'))
+    parser.closeTurn('hook')
+    parser.ingest(at(continuation, '2026-11-10T00:00:04.000Z'))
+    expect(parser.snapshot().openedAt).toBe(Date.parse('2026-11-10T00:00:04.000Z'))
+    // A record with no time of its own, or one that is no time, says nothing.
+    parser.ingest(prompt('two'))
+    expect(parser.snapshot().openedAt).toBeUndefined()
+    parser.ingest(at(prompt('three'), 'soon'))
+    expect(parser.snapshot().openedAt).toBeUndefined()
+  })
+
   it('keeps the previous cancel semantics, but clears abandoned tools on relaunch or Stop', () => {
     const call = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } })
     const end = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' } })

@@ -176,10 +176,32 @@ ConversationServer swarmV4Server() {
 
 /// What `gh` answers for lampOS's issues in these tests, as GitHub's GraphQL does: three open tasks (one nobody has, one for
 /// the seventh builder, one the first builder is on), and #5759's text with its newest two comments, signed by their agents as
-/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does.
-SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
+/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does, and every call while
+/// [signedOut] says so fails as a `gh` that is not signed in does.
+SwarmGitHub swarmV4GitHub({
+  List<List<String>>? calls,
+  bool Function()? signedOut,
+}) => SwarmGitHub(
   run: (arguments) async {
+    // The channel's feed reads three REST lists with `gh api -i` (Swarm v4): nothing is in them here, and they are not among the
+    // calls these tests count.
+    if (arguments.contains('-i')) {
+      return ProcessResult(
+        1,
+        0,
+        'HTTP/2.0 200 OK\r\nEtag: W/"none"\r\n\r\n[]',
+        '',
+      );
+    }
     calls?.add(arguments);
+    if (signedOut?.call() ?? false) {
+      return ProcessResult(
+        0,
+        4,
+        '',
+        'To get started with GitHub CLI, please run:  gh auth login',
+      );
+    }
     final query = arguments
         .firstWhere((a) => a.startsWith('query='), orElse: () => '')
         .substring(6);
@@ -390,6 +412,14 @@ class SwarmV4Computer {
   /// The next save is applied but its answer never comes, as when a link drops after the computer wrote the file.
   bool loseNextReply = false;
 
+  /// What else instructs the agent in its folder, as a read's answer carries it (`shared`, `skipped`), and beside the
+  /// code of a refused read. Null is a computer that sends none (an older one). Objects, so a test can send what the
+  /// app does not understand.
+  Object? shared, skipped;
+
+  /// Called as a read arrives, and the read is not answered until what it returns completes: a computer slow to answer.
+  Future<void> Function()? hold;
+
   static String versionOf(String? text) =>
       text == null ? '' : 'v${text.hashCode}';
 
@@ -399,13 +429,24 @@ class SwarmV4Computer {
     payload,
   ) async {
     requests.add((machineId, type, payload));
+    final around = {
+      if (type == 'agent_instructions_read') ...{
+        'shared': ?shared,
+        'skipped': ?skipped,
+      },
+    };
+    if (type == 'agent_instructions_read') await hold?.call();
     if (refuse case final code?) {
-      throw WsRequestFailure(responseType: '${type}_result', code: code);
+      throw WsRequestFailure(
+        responseType: '${type}_result',
+        code: code,
+        payload: {'error': code, ...around},
+      );
     }
     final key = '${payload['agentId']}/${payload['name']}';
     final text = files[key];
     if (type == 'agent_instructions_read') {
-      return {'text': text, 'version': versionOf(text)};
+      return {'text': text, 'version': versionOf(text), ...around};
     }
     if (payload['version'] != versionOf(text)) {
       throw WsRequestFailure(responseType: '${type}_result', code: 'CHANGED');

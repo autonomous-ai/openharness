@@ -10,6 +10,11 @@
  * it names one, else the newest file under the workspace with one of `viewer.artifactExtensions`
  * (rescanned when such a file changes). Either change republishes the URL, which is how the 3D pane
  * follows the newest STEP without the DSH knowing Harness exists.
+ *
+ * A verdict may also name a `preview`: a page the agent serves itself on this computer (its dev server,
+ * `http://127.0.0.1:5173/`). Once something listens there the pane shows that page instead of the package's,
+ * so an app with a build step, routes and storage is seen as a browser sees it; until then, and when the
+ * verdict stops naming it, the package's viewer stays.
  */
 import chokidar, { type FSWatcher } from 'chokidar'
 import type { ChildProcess } from 'node:child_process'
@@ -71,13 +76,15 @@ export interface DshViewerDeps {
   log?: (line: string) => void
   /** Test seams. */
   freePort?: () => Promise<number>
-  waitForPort?: (port: number, timeoutMs: number) => Promise<boolean>
+  waitForPort?: (port: number, timeoutMs: number, host?: string) => Promise<boolean>
   spawn?: typeof spawnDshCommand
   now?: () => number
   /** How `viewer.use` finds its package; the installed index by default. */
   lookup?: (id: string) => InstalledDsh | undefined
   /** Where each spawned viewer's pid is recorded so the next daemon can reap it (viewerLedger.ts). */
   ledger?: ViewerLedger
+  /** Ports a preview may never name: the daemon's own API. */
+  reservedPorts?: () => readonly number[]
 }
 
 interface ViewerState {
@@ -90,6 +97,9 @@ interface ViewerState {
   url: string | null
   verdictArtifact: string | null
   scannedArtifact: string | null
+  /** The verdict's `preview`, and whether something listened there since it was named. */
+  preview: string | null
+  previewUp: boolean
   watcher: FSWatcher | null
   rescanTimer: NodeJS.Timeout | null
   stopping: boolean
@@ -102,6 +112,8 @@ const RESTART_WINDOW_MS = 60_000
 const RESTART_LIMIT = 3
 const RESCAN_DEBOUNCE_MS = 300
 const LOG_LINE_LIMIT = 40
+/** How long a named preview is waited for: a dev server is often named before its first build is done. */
+const PREVIEW_WAIT_MS = 10 * 60_000
 
 export async function freeLoopbackPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -116,11 +128,11 @@ export async function freeLoopbackPort(): Promise<number> {
   })
 }
 
-export function waitForLoopbackPort(port: number, timeoutMs: number): Promise<boolean> {
+export function waitForLoopbackPort(port: number, timeoutMs: number, host = '127.0.0.1'): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   return new Promise((resolve) => {
     const attempt = (): void => {
-      const socket = connect({ port, host: '127.0.0.1' })
+      const socket = connect({ port, host })
       socket.setTimeout(1_000)
       const done = (ok: boolean): void => {
         socket.destroy()
@@ -156,6 +168,8 @@ export class DshViewerManager {
    * kept here, a restored agent's pane opens on that artifact instead of on none.
    */
   private readonly verdictArtifacts = new Map<string, string | null>()
+  /** What each agent's verdict last named as its `preview`, kept as `verdictArtifacts` is. */
+  private readonly verdictPreviews = new Map<string, string | null>()
   /**
    * The viewer each agent last failed to start (`viewerKey`): it could not be started, found no port, or never listened.
    * Its watch and process are gone, but the agents' scans attach every live agent again, and starting the same viewer
@@ -174,11 +188,14 @@ export class DshViewerManager {
     return this.states.get(agentId)?.url ?? null
   }
 
-  /** Forward only the port this manager allocated to this running viewer. */
+  /** Forward only the port this manager allocated to this running viewer, or the preview its verdict named and that
+   *  listened: never a port another computer asks for. */
   forwardingUrl(agentId: string): string | null {
     const state = this.states.get(agentId)
     const target = viewerTarget(state?.url)
-    return state?.child && target && Number(target.port) === state.port ? state.url : null
+    if (!state?.child || !target) return null
+    if (state.previewUp && state.url === state.preview) return state.url
+    return Number(target.port) === state.port ? state.url : null
   }
 
   /** Idempotent: the same agent, DSH and workspace keep their running viewer. */
@@ -200,9 +217,10 @@ export class DshViewerManager {
     const state: ViewerState = {
       agentId, dsh, viewer, workspace, port: null, child: null, url: null,
       verdictArtifact: this.verdictArtifacts.get(agentId) ?? null, scannedArtifact: null, watcher: null, rescanTimer: null,
-      stopping: false, exits: [],
+      preview: null, previewUp: false, stopping: false, exits: [],
     }
     this.states.set(agentId, state)
+    this.followPreview(state, this.verdictPreviews.get(agentId) ?? null)
     if (viewer.artifactExtensions.length) {
       state.scannedArtifact = newestArtifact(workspace, viewer.artifactExtensions)?.path ?? null
       this.watchArtifacts(state, viewer.artifactExtensions)
@@ -219,14 +237,46 @@ export class DshViewerManager {
     this.publish(state)
   }
 
+  /** The verdict named (or stopped naming) a page the agent serves itself. */
+  setVerdictPreview(agentId: string, preview: string | null): void {
+    this.verdictPreviews.set(agentId, preview)
+    const state = this.states.get(agentId)
+    if (state) this.followPreview(state, preview)
+  }
+
+  /** Show [preview] once something listens there; the package's viewer until then, and when there is none. */
+  private followPreview(state: ViewerState, preview: string | null): void {
+    if (state.preview === preview) return
+    const target = viewerTarget(preview)
+    if (preview && (!target || (this.deps.reservedPorts?.() ?? []).includes(Number(target.port)))) {
+      this.log(`[dsh] ${state.dsh.id} preview ${preview} refused · a loopback page of the agent's own, not this daemon`)
+      preview = null
+    }
+    state.preview = preview
+    state.previewUp = false
+    this.publish(state)
+    if (!preview || !target) return
+    const host = target.hostname.replace(/^\[|\]$/g, '')
+    void (this.deps.waitForPort ?? waitForLoopbackPort)(Number(target.port), PREVIEW_WAIT_MS, host).then((up) => {
+      if (state.stopping || this.states.get(state.agentId) !== state || state.preview !== preview) return
+      if (!up) {
+        this.log(`[dsh] ${state.dsh.id} preview ${preview} did not listen within ${PREVIEW_WAIT_MS / 60_000} min · the package's viewer stays`)
+        return
+      }
+      state.previewUp = true
+      this.log(`[dsh] ${state.dsh.id} viewer shows the agent's preview ${preview}`)
+      this.publish(state)
+    })
+  }
+
   private effectiveArtifact(state: ViewerState): string | null {
     return state.verdictArtifact ?? state.scannedArtifact
   }
 
   private publish(state: ViewerState): void {
-    const url = state.port !== null && state.child
-      ? buildViewerUrl(state.viewer.url, state.port, this.effectiveArtifact(state))
-      : null
+    const url = state.port === null || !state.child ? null
+      : state.preview && state.previewUp ? state.preview
+        : buildViewerUrl(state.viewer.url, state.port, this.effectiveArtifact(state))
     if (url === state.url) return
     state.url = url
     this.deps.onUrl(state.agentId, url)
@@ -351,6 +401,7 @@ export class DshViewerManager {
   /** The agent's viewer is done: stop it and forget what its verdict named. */
   async stop(agentId: string): Promise<void> {
     this.verdictArtifacts.delete(agentId)
+    this.verdictPreviews.delete(agentId)
     this.failed.delete(agentId)
     const state = this.states.get(agentId)
     if (state) await this.halt(state)

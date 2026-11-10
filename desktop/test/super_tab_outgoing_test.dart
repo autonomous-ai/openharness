@@ -739,7 +739,7 @@ void main() {
       request: (method, path, {body}) async {
         final reply = await server.request(method, path, body: body);
         if (isCommand(method, path) &&
-            (body!['command'] as Map)['type'] == 'member.status') {
+            (body!['command'] as Map)['type'] == 'conversation.archive') {
           holdSave = true;
         }
         return reply;
@@ -752,9 +752,10 @@ void main() {
     final first = c.send();
     await pumpEventQueue();
     expect(c.saving, isFalse, reason: 'Acknowledged; its read is held.');
-    final status = c.command({
-      'type': 'member.status',
-      'status': {'text': 'Reviewing', 'emoji': null},
+    final reopen = c.command({
+      'type': 'conversation.archive',
+      'conversationId': 'offline',
+      'archived': false,
     });
     await pumpEventQueue();
     expect(c.saving, isTrue);
@@ -764,10 +765,10 @@ void main() {
     expect(
       c.saving,
       isTrue,
-      reason: 'The status change still holds the lane while it saves.',
+      reason: 'The reopened chat still holds the lane while it saves.',
     );
     saving.complete();
-    await status;
+    await reopen;
     expect(c.saving, isFalse);
   });
 

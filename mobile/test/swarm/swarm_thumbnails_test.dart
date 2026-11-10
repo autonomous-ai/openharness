@@ -7,6 +7,8 @@ import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_attachment.dart';
 import 'package:harness_mobile/swarm/swarm_attachment_store.dart';
 import 'package:harness_mobile/swarm/swarm_file_links.dart';
+import 'package:harness_mobile/swarm/swarm_reader.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 
 import '../temp_folder.dart';
 import 'picture_loads.dart';
@@ -266,5 +268,175 @@ void main() {
         await closed(tester);
       },
     );
+  });
+
+  // Task 60: a chat opened again after its links ended (minutes later, or from
+  // the chats kept for a restart) asks one fresh link and draws the thumbnail,
+  // as Desktop does, never the original in its place.
+  group('a thumbnail whose link has ended', () {
+    final t = DateTime.utc(2026, 11, 9, 9);
+    final ms = t.millisecondsSinceEpoch;
+    late List<String> reads;
+    late Map<String, dynamic>? answer;
+    late SwarmReader reader;
+
+    String signed(String name, String sig) =>
+        'https://storage.googleapis.com/bucket/super-tabs/tab/file-1/$name'
+        '?X-Goog-Signature=$sig';
+
+    Map<String, dynamic> message(
+      String sig, {
+      required int expiresAt,
+      bool thumbLinked = true,
+    }) => {
+      ...row(),
+      'link': signed('photo.jpg', sig),
+      'expiresAt': expiresAt,
+      'thumb': {
+        'url': thumb.toString(),
+        'width': 720,
+        'height': 540,
+        'size': 40000,
+        if (thumbLinked) ...{
+          'link': signed('photo.jpg.thumb.webp', sig),
+          'expiresAt': expiresAt,
+        } else
+          'unlinked': true,
+      },
+    };
+
+    setUp(() {
+      swarmFileClock = () => t;
+      reads = [];
+      answer = null;
+      reader = SwarmReader(
+        tabId: 'tab',
+        accountId: 'me',
+        request: (method, path, {body}) async {
+          reads.add(path);
+          final fresh = answer;
+          if (fresh == null) {
+            throw const SuperTabFailure(
+              'FILE_UNAVAILABLE',
+              'This file is no longer available.',
+              statusCode: 404,
+            );
+          }
+          return {'attachment': fresh};
+        },
+      );
+    });
+    tearDown(() {
+      swarmFileClock = DateTime.now;
+      reader.dispose();
+    });
+
+    /// The message's picture as the chat's row builds it
+    /// (swarm_message_row.dart): the links at hand, and where fresh ones come
+    /// from.
+    Future<void> pumpMessage(
+      WidgetTester tester,
+      Map<String, dynamic> row,
+    ) async {
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+      await tester.runAsync(() => store.keepOnly('person-me'));
+      final file = SuperTabAttachment.fromJson(row);
+      final ref = SwarmFileRef(
+        file,
+        conversationId: 'lead',
+        messageId: 'm1',
+        reader: reader,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 320,
+              child: SwarmAttachment(
+                file: file,
+                link: ref.current,
+                thumb: ref.currentThumb,
+                fileRef: ref,
+                chip: const Text('chip', key: ValueKey('chip')),
+                store: store,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    const read =
+        '/api/super-tabs/tab/conversations/lead/messages/m1/attachments/file-1';
+
+    testWidgets(
+      'asks one fresh link and draws the new thumbnail, not the original',
+      (tester) async {
+        storage.bytes = await png(tester);
+        answer = message('fresh', expiresAt: ms + 600000);
+        await pumpMessage(tester, message('old', expiresAt: ms - 1));
+        await until(tester, () => drawn(tester));
+
+        expect(reads, [read]);
+        expect(asked(), [signed('photo.jpg.thumb.webp', 'fresh')]);
+
+        // The full screen viewer takes the original by the link that same
+        // read brought: no second read.
+        await tester.tap(preview);
+        await until(tester, () => viewer.evaluate().isNotEmpty);
+        expect(reads, [read]);
+        expect(asked(), [
+          signed('photo.jpg.thumb.webp', 'fresh'),
+          signed('photo.jpg', 'fresh'),
+        ]);
+        await closed(tester);
+      },
+    );
+
+    testWidgets('draws the thumbnail kept before, fetching nothing', (
+      tester,
+    ) async {
+      storage.bytes = await png(tester);
+      await pumpMessage(tester, message('old', expiresAt: ms + 600000));
+      await until(tester, () => drawn(tester));
+      expect(asked(), [signed('photo.jpg.thumb.webp', 'old')]);
+      await closed(tester);
+
+      // The chat opened again once those links ended.
+      answer = message('fresh', expiresAt: ms + 600000);
+      await pumpMessage(tester, message('old', expiresAt: ms - 1));
+      await until(tester, () => drawn(tester));
+
+      expect(reads, [read]);
+      expect(asked(), [signed('photo.jpg.thumb.webp', 'old')]);
+      await closed(tester);
+    });
+
+    testWidgets('draws the original when the fresh read links no thumbnail', (
+      tester,
+    ) async {
+      storage.bytes = await png(tester);
+      answer = message('fresh', expiresAt: ms + 600000, thumbLinked: false);
+      await pumpMessage(tester, message('old', expiresAt: ms - 1));
+      await until(tester, () => drawn(tester));
+
+      expect(reads, [read]);
+      expect(asked(), [signed('photo.jpg', 'fresh')]);
+      await closed(tester);
+    });
+
+    testWidgets('a fresh read that fails shows the chip, read once', (
+      tester,
+    ) async {
+      await pumpMessage(tester, message('old', expiresAt: ms - 1));
+      await until(
+        tester,
+        () => find.byKey(const ValueKey('chip')).evaluate().isNotEmpty,
+      );
+
+      expect(reads, [read]);
+      expect(asked(), isEmpty);
+    });
   });
 }

@@ -84,9 +84,7 @@ function partsOf(root: Json): Parts {
 function machineName(parts: Parts, machineId: unknown): string {
   const row = parts.machines.find((machine) => machine.machineId === machineId)
   if (!row) return String(machineId ?? 'unknown')
-  const name = text(row.name) || String(machineId)
-  // A machine's own row and its team account are two rows: the reading says which one it is.
-  return object(row.observation).sessionKind === 'team' ? `${name} (team account)` : name
+  return text(row.name) || String(machineId)
 }
 
 function groupTitle(parts: Parts, conversationId: unknown): string {

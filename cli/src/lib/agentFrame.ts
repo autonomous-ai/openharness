@@ -147,6 +147,9 @@ export type AgentFrame = {
   /** The engine's named agent (`agent_create`'s `agent`); `namedAgent` on the wire so an agent
    *  object never carries a key called `agent`. */
   namedAgent: string | null
+  /** What a message sent to it waits for before it is typed: `engine` while its engine's reader starts (lib/sessionInput.ts),
+   *  as `message_waiting` said once; null when nothing. A window that connects meanwhile reads it here. */
+  waitingFor: 'engine' | null
 }
 
 /** What the daemon knows about an agent's DSH — looked up by the caller, never here. */
@@ -174,6 +177,8 @@ export interface AgentFrameContext {
   /** What the models service says of the grid the agent is on (core/api.ts `ModelsPort.annotation`): from
    *  memory, never I/O. Absent when the caller has none to give, and then the frame says nothing of it. */
   gridAnnotation?: (grid: AgentGridTarget) => GridAnnotation | null
+  /** What a message to the agent waits for now (core/input.ts); absent, nothing. Read as the frame is built. */
+  waitingFor?: () => 'engine' | null
 }
 
 /**
@@ -214,7 +219,7 @@ const gitContexts = new SessionGitContextReader()
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation }: AgentFrameContext,
+  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor }: AgentFrameContext,
 ): Promise<AgentFrame> {
   // The git context is git's own display projection and keeps reading git directly; the frame's
   // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
@@ -287,5 +292,6 @@ export async function agentFrame(
     permissionMode: s.permissionMode ?? null,
     bypassPermission: s.bypassPermission ?? null,
     namedAgent: s.agent ?? null,
+    waitingFor: waitingFor?.() ?? null,
   }
 }
