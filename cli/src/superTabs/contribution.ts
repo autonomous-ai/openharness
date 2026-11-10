@@ -26,23 +26,23 @@ interface ContributionDeps {
 const CONTRIBUTION_DEPS = { backend, open: openDaemon, prepare: prepareProjectFolder, capacity: readCapabilities, install: installEngine,
   firstRun: () => firstRunAnswered('claude') }
 
-/** The engines the phone may ask installed for its Buddy (owner, 2026-11-06: Codex as well as Claude Code). */
-export type BuddyEngine = 'claude' | 'codex'
-const ENGINE_NAME: Record<BuddyEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
+/** The engines the phone may ask installed as it sets a computer up (owner, 2026-11-06: Codex as well as Claude Code). */
+type SetupEngine = 'claude' | 'codex'
+const ENGINE_NAME: Record<SetupEngine, string> = { claude: 'Claude Code', codex: 'Codex' }
 
 /** How long an engine's install may take here before the setup gives up on it: as long as a pane's installer gets
  *  (engines/kit/nativeInstall.ts). Over a slow Wi-Fi it took more than 5 minutes (the Dell, 2026-11-05). */
 const INSTALL_FOR_MS = 20 * 60_000
 
 /** Each engine's install under way, which a second setup asking for it joins. */
-const installing = new Map<BuddyEngine, Promise<void>>()
+const installing = new Map<SetupEngine, Promise<void>>()
 /** The last install, which the next one waits for: two npm installs into one prefix fight over its files. */
 let lastInstall: Promise<unknown> = Promise.resolve()
 
 /** Installs [engine] on this machine with its vendor's own line (lib/engineInstall.ts), in the shell a pane installs it
- *  from. Asked for by the phone setting up a new computer, so its Buddy can start there (owner, 2026-11-05): the OS ships no
+ *  from. Asked for by the phone setting up a new computer, so an agent can start there (owner, 2026-11-05): the OS ships no
  *  engine of its own. Whether it worked is the engine probe's to say, not the installer's exit. */
-export function installEngine(engine: BuddyEngine = 'claude', run: typeof spawn = spawn): Promise<void> {
+export function installEngine(engine: SetupEngine = 'claude', run: typeof spawn = spawn): Promise<void> {
   const under = installing.get(engine)
   if (under) return under
   const next = lastInstall.catch(() => {}).then(() => runEngineInstall(engine, run)).finally(() => { installing.delete(engine) })
@@ -51,7 +51,7 @@ export function installEngine(engine: BuddyEngine = 'claude', run: typeof spawn 
   return next
 }
 
-async function runEngineInstall(engine: BuddyEngine, run: typeof spawn): Promise<void> {
+async function runEngineInstall(engine: SetupEngine, run: typeof spawn): Promise<void> {
   const recipe = engineInstallRecipe(engine)
   if (!recipe || process.platform === 'win32') throw new Error(`Install ${ENGINE_NAME[engine]} on this machine, then try again.`)
   const [command, ...args] = buildEngineInstallationArgv(engine, recipe, { HOME: homedir() })
@@ -119,8 +119,8 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
       .map(e => e.engine as string)
     const [first, capability] = await Promise.all([probe(), deps.capacity({ cwd, tools: ['git'], devices: [] })])
     let answer = first, engines = installed(answer)
-    // The phone setting up a new computer (`installEngine`): the engine the person picked for their Buddy, Claude Code or
-    // Codex, is installed now when it is not here, so the Buddy it starts next is admitted (capacity.ts admission); one here
+    // The phone setting up a new computer (`installEngine`): the engine the person picked, Claude Code or Codex, is
+    // installed now when it is not here, so the agent it starts next is admitted (capacity.ts admission); one here
     // already is not installed again (owner, 2026-11-06). Anyone else is told to install one.
     const wanted = input.installEngine === 'claude' || input.installEngine === 'codex' ? input.installEngine : null
     if (wanted && !engines.includes(wanted)) {
@@ -128,7 +128,7 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
       answer = await probe()
       engines = installed(answer)
     }
-    // Which of them are signed in, so that phone asks for the sign-in before the Buddy waits on it.
+    // Which of them are signed in, so that phone asks for the sign-in before an agent waits on it.
     const signedIn = (Array.isArray(answer.engines) ? answer.engines.map(object) : [])
       .filter(e => engines.includes(e.engine as string) && e.signedIn === true).map(e => e.engine as string)
     if (!engines.length) throw new Error('Install Claude Code or Codex on this machine, then try again.')
@@ -141,7 +141,7 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
     const maxAvailableAgents = machineMaximum(total)
     const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
     // Claude Code here with its first-run screens still to answer: the phone answers them, then `claudeFirstRun` records them,
-    // rather than its first Buddy waiting on its screen with nobody there (owner, 2026-11-06).
+    // rather than its first agent waiting on its screen with nobody there (owner, 2026-11-06).
     const firstRun = engines.includes('claude') && deps.firstRun() === false ? { firstRun: ['claude'] } : {}
     return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], signedIn: [...new Set(signedIn)], ...firstRun, maxAgents, maxAvailableAgents,
       ...(swarm ? { scope: 'swarm' } : {}) }

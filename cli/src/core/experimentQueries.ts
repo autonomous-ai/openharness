@@ -113,7 +113,7 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
         ? { ...await (core.agents.keepLeadAlive?.(agentId) ?? { ok: false, error: 'UNSUPPORTED' }) }
         : { ...await (core.agents.closeMember?.(agentId, creationId as string | undefined) ?? { error: 'UNSUPPORTED' }) }
     }
-    // Whether its agents are in a turn: a Buddy session's idle end asks before ending one (superTabs/host.ts).
+    // Whether its agents are in a turn (superTabs/host.ts).
     case 'activity': {
       if (service !== 'superTabs') return { error: 'NOT_SUPER_TABS' }
       const ids = Array.isArray(payload.agentIds) ? payload.agentIds.filter((id): id is string => typeof id === 'string').slice(0, 64) : []

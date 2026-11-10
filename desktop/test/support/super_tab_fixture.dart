@@ -102,7 +102,6 @@ class SwarmPartsBackend {
           'unreadMarks',
           'threadMarks',
           'chatSettings',
-          'teamAccounts',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -169,8 +168,6 @@ class SwarmPartsBackend {
     'agents': <String, dynamic>{},
     'machines': <String, dynamic>{},
     if (state['avatars'] != null) 'avatars': state['avatars'],
-    // Only where the server does not try Team accounts (backend read/views.ts).
-    if (state['teamAccounts'] == false) 'teamAccounts': false,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -464,10 +461,6 @@ class ConversationServer {
 
   /// Messages per page, as the backend pages them.
   int messagePage = 100;
-
-  /// Where the ask at each thread's root stands, by root: what the backend's
-  /// summaries say (threads.ts).
-  final threadAsks = <String, String>{};
 
   /// Whether messages are written with threads, as backends from threads on
   /// write them (backend threads.ts).
@@ -889,7 +882,6 @@ class ConversationServer {
           case final thread when thread.length > 1)
         {
           'id': root,
-          'ask': ?threadAsks[root],
           'replies': thread.length - 1,
           'lastSequence': thread.last['sequence'],
           'lastAt': thread.last['createdAt'],
@@ -1334,6 +1326,10 @@ class ConversationServer {
           if (newAgentChatsDormant) 'dormant': true,
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'tab.rename') {
+        // As backend commands.ts sets it: the Swarm's one name.
+        revision++;
+        state['name'] = command['name'];
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[

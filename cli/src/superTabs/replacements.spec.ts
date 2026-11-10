@@ -145,14 +145,13 @@ it('a new backend gets profileId, and any other failure is thrown, not remembere
   expect(bad).toHaveBeenCalledTimes(4)
 })
 
-it('rebinds a Swarm Buddy under its stable identity without inventing a project', async () => {
+// The v3 Buddy is gone (backend S17): a row that still names an owner rebinds in its project, as any agent's.
+it('rebinds an agent whose row still names an owner in its project, as any other', async () => {
   const f = fixture()
   await recordReplacement(f.core, f.payload)
-  const row = { tabId: 'tab', buddyConversationId: 'private-chat', agent: { id: 'buddy', harnessId: 'old', machineId: 'machine',
-    buddyScope: 'swarm', buddyOf: { personId: 'owner', generation: 'g' } } }
+  const row = { tabId: 'tab', agent: { id: 'owned', harnessId: 'old', machineId: 'machine', buddyScope: 'swarm', buddyOf: { personId: 'owner', generation: 'g' } } }
   const observations = await replacementObservations(f.core, 'machine', [row])
   expect(observations).toHaveLength(1)
-  expect(observations[0].body).toMatchObject({ asAgentId: 'buddy', command: {
-    type: 'agent.rebind', agentId: 'buddy', machineId: 'machine', previousHarnessId: 'old', harnessId: 'new' } })
-  expect(observations[0].body.command).not.toHaveProperty('projectId')
+  expect(observations[0].body).toMatchObject({ asAgentId: 'owned', command: {
+    type: 'agent.rebind', agentId: 'owned', machineId: 'machine', projectId: 'lead', previousHarnessId: 'old', harnessId: 'new' } })
 })

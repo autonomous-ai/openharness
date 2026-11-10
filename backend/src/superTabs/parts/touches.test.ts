@@ -39,25 +39,6 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Hi', replyTo: null, recipientIds: [] }, f.agentActor(a.worker)).touches, 'agent', a.worker)).toBe(true)
   })
 
-  it('makes the coordinator\'s instructions save, notes and name meet a Lead change on the Lead conversation its check reads (review of phase 2)', () => {
-    const f = swarm(), lead = f.agentActor(f.lead)
-    const notes = [{ id: 'n1', text: 'Not machine A.', askedBy: 'owner', at: 500, expiresAt: null }]
-    for (const [command, context] of [
-      [{ type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: 'PM text.', summary: 'PM text', askedBy: 'owner' }, {}],
-      [{ type: 'note.add', projectId: 'lead', text: 'Not machine B.', askedBy: 'owner' }, {}],
-      [{ type: 'note.remove', projectId: 'lead', noteId: 'n1' }, { notes }],
-      [{ type: 'project.coordinatorName', projectId: 'lead', name: 'Lead engineer' }, {}],
-      [{ type: 'project.answers', projectId: 'lead', inThread: true }, {}],
-      [{ type: 'project.about', projectId: 'lead', about: 'The Harness app' }, {}],
-      // An older CLI's rule, a save to the instructions after the one above (project instructions, phase 4).
-      [{ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.', askedIn: { conversationId: 'lead', messageId: 'm1' } },
-        { askedIn: { author: { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'g' }, source: false, createdAt: 0 },
-          instructions: { revision: 2, text: 'PM text.' } }],
-    ] as Array<[Command, Partial<CommandContext>]>) {
-      expect(has(f.run(command, lead, context).touches, 'group', 'lead'), command.type).toBe(true)
-    }
-  })
-
   it('leaves a post\'s recipients alone, so workers posting to their Lead in different groups never meet on the Lead', () => {
     const f = swarm(), a = f.group('A')
     const { effects, touches } = f.run({ type: 'message.send', conversationId: a.id, text: 'Report', replyTo: null, recipientIds: [f.lead] }, f.agentActor(a.worker))

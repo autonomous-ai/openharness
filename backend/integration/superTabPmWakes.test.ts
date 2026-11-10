@@ -106,7 +106,6 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
 const rowsOf = (tabId: string, where: Record<string, unknown> = {}) => db.superTabDelivery.findMany({ where: { tabId, ...where }, orderBy: { createdAt: 'asc' } })
 const deliveryOf = (messageId: string, agentId: string) => db.superTabDelivery.findUniqueOrThrow({ where: { id: stableId(messageId, agentId) } })
 const kindOf = (message: { source: unknown }) => (message.source as { kind?: string } | null)?.kind
-const digests = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } })).filter(m => kindOf(m) === 'notice-digest')
 
 const schedules = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } }))
   .filter(m => m.text.includes('Built-in schedule,'))

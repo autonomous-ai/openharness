@@ -50,7 +50,7 @@ describe('Super Tab attachment downloads', () => {
     const [, path] = listed.text.match(/^Attached files:\n- (\/\S+-screen\.png) \(sent as "screen\.png", 5 B\)$/) ?? []
     expect([...readFileSync(path!)]).toEqual([1, 2, 3, 4, 5])
     expect(fetcher).toHaveBeenCalledWith(file().url, expect.objectContaining({ redirect: 'error' }))
-    // The paths it wrote, so a Buddy's guard may list them for its own person's files (lib/buddyGuard.ts).
+    // The paths it wrote.
     expect(listed.paths).toEqual([path])
   })
   it('names only the files it wrote among those of a message', async () => {
@@ -162,7 +162,7 @@ describe('Super Tab attachment downloads', () => {
     expect(basename(theirs)).toMatch(/^[0-9a-f]{8}-shared-once\.bin$/)
     expect(statSync(theirs).mode).toBe(statSync(mine).mode)
     expect(readFileSync(theirs).equals(readFileSync(mine))).toBe(true)
-    // One agent editing its copy leaves the other's as it was, so a Buddy guard's hash of it still matches.
+    // One agent editing its copy leaves the other's as it was.
     writeFileSync(mine, 'edited')
     expect(readFileSync(theirs).byteLength).toBe(2 * 64 * 1024)
     expect(second.text).toContain(theirs)

@@ -12,7 +12,6 @@ import 'dialog_scope.dart';
 import 'github_issues.dart';
 import 'model.dart';
 import 'pane.dart';
-import 'personal_machines.dart';
 import 'personal_projects.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 import 'terminal_unavailable.dart';
@@ -31,6 +30,7 @@ class SuperTabWorkspace extends StatefulWidget {
     this.onNewAgent,
     this.onAttachAgent,
     this.onNewSwarm,
+    this.onRenameSwarm,
     this.github,
   });
   final AppNotifier app;
@@ -44,6 +44,9 @@ class SuperTabWorkspace extends StatefulWidget {
   /// Attach beside + New agent: the ⌘P picker of agents already running on its person's own computers (Swarm v4).
   final VoidCallback? onAttachAgent;
   final VoidCallback? onNewSwarm;
+
+  /// Rename in the Swarm's own menu: the workspace's Rename, for this Swarm.
+  final VoidCallback? onRenameSwarm;
 
   /// Reads a project's tasks with `gh`; tests give their own.
   final SwarmGitHub? github;
@@ -486,7 +489,6 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) {
                   unawaited(PersonalProjects.of(app).sync(controller));
-                  unawaited(PersonalMachines.of(app).sync(controller));
                 }
               });
             }
@@ -580,6 +582,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onNewAgent: widget.onNewAgent,
                   onAttachAgent: widget.onAttachAgent,
                   onNewSwarm: widget.onNewSwarm,
+                  onRenameSwarm: widget.onRenameSwarm,
                   github: widget.github,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,

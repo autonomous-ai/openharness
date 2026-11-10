@@ -1,26 +1,13 @@
 import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { projectsRoot } from '../lib/projectFolder.js'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
-import { worktreeFolderName } from '../lib/agentNames.js'
-import { env } from '../config/env.js'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
+import { inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
-import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
-// What this computer's Claude Code reads as: signed in unless a test says otherwise (lib/engineAccount.ts).
-const claudeAccount = vi.hoisted(() => ({ signedIn: true as boolean | null }))
-vi.mock('../lib/engineAccount.js', async (original) => ({ ...await original<object>(), engineAccount: async () => ({ signedIn: claudeAccount.signedIn, lastUsedAt: null }) }))
-const prepared = vi.hoisted(() => ({ value: { ready: [] as string[], missing: [] as string[] } }))
-vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => prepared.value, trustBuddyHome: async () => {} }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
-/** A Buddy's start as its owner's own machine's host dispatches it (task #2832): the Swarm's record of the machine and the
- *  account signed in there both its owner's. */
-const OWN_HOST = { signedIn: 'peer' } as const
-const ownMachine = (f: { start: Record<string, unknown> }) => Object.assign(f.start, { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null })
 function fixture(options: { refused?: string; loseClose?: boolean; refuse?: string; loseCancel?: boolean; loseFailure?: boolean; launchModel?: string[]; acceptedLaunchModel?: { model: string | null; effort: string | null }; refuseModel?: string; frame?: string; guest?: boolean; identity?: { sessionId: string; createdAt: string }; screen?: string } = {}) {
   const start = { creationId: 'super-native-receipt', error: null as string | null, request: { machineId: 'target', conversationId: 'group', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
     requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }, dispatched: false }
@@ -245,208 +232,6 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with its name alone', async e
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('review')
   expect(payload.prompt).toBe('You are Builder.')
-})
-
-it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy skill, talking in its owner\'s chat and waiting for no assignment', async engine => {
-  const f = fixture()
-  f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
-  ownMachine(f)
-  await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
-  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  expect(payload.swarmRole).toBe('buddy')
-  expect(payload.prompt).toContain('Use the built-in swarm-buddy skill for this session.')
-  expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
-  expect(payload.prompt).not.toContain('assign')
-  expect(payload.prompt).not.toContain('swarm-dev')
-})
-
-it.each([
-  ['main', {}],
-  ['Swarm', { buddyScope: 'swarm' }],
-  ['thread', { buddySession: { thread: 'root-1', from: 1 } }],
-  ['project session', { buddySession: { thread: 'root-1', from: 1, projectId: 'project' } }],
-])('tells the %s Buddy nothing of proposals, which the Swarm no longer takes (backend S9)', async (_name, context) => {
-  const f = fixture()
-  Object.assign(f.start.request, { buddyOf: { personId: 'peer', generation: 'g' }, ...context })
-  ownMachine(f)
-  await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
-  const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
-  expect(prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
-  expect(prompt).not.toMatch(/propos|to a project's PM|to this project's PM/i)
-})
-
-it('admits a person\'s one Buddy by the disk its folder is made on, as the folder its start names is never made', async () => {
-  // The real disk reading, on a folder that is not there: measured as it stands it is refused, and the Buddy never starts (2026-11-02).
-  const root = mkdtempSync(join(tmpdir(), 'swarm-buddy-disk-'))
-  try {
-    const f = fixture(), answer = f.request.getMockImplementation()!
-    f.request.mockImplementation(async (type, payload = {}, ms) => {
-      if (type !== 'super_tabs' || !['capacity', 'reserveCapacity'].includes(String(payload.action))) return answer(type, payload, ms)
-      const disk = await readCapacityDisk(String(payload.cwd), payload.worktree === true, root).catch(() => null)
-      if (payload.action === 'reserveCapacity') return disk ? answer(type, payload, ms) : { error: 'CAPACITY_UNAVAILABLE', detail: 'The destination disk capacity could not be verified.' }
-      return { ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 100, projectDiskFreeBytes: disk?.freeBytes ?? null }, tools: { git: true }, devices: {} }
-    })
-    f.start.request = { ...f.start.request, cwd: join(root, 'swarm', '.buddy-peer'), worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
-    ownMachine(f)
-    const result = await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
-    expect(result.error).not.toBe('CAPACITY_UNAVAILABLE')
-    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-    expect(payload.cwd).toContain(join('worktrees', 'buddy-home'))
-    expect(payload.projectSource).toBeUndefined()
-  } finally { rmSync(root, { recursive: true, force: true }) }
-})
-
-it('tells a person\'s one Buddy where to read which revision each project copy is at, and when it may say it is behind', async () => {
-  const f = fixture()
-  f.start.request = { ...f.start.request, cwd: join(tmpdir(), 'swarm-buddy-prompt', '.buddy-peer'), worktree: false, buddyScope: 'swarm', buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
-  ownMachine(f)
-  // The mocked folder has its copies ready.
-  prepared.value = { ready: ['Web'], missing: [] }
-  try {
-    await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
-    const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
-    expect(prompt).toContain('project-copies.txt')
-    expect(prompt).toContain('Say your copy is behind only when that file says it may be')
-  } finally { prepared.value = { ready: [], missing: [] } }
-})
-
-it.each(['claude'])('starts a %s thread session as a Buddy in every way, told its thread and to answer only there, with no message text', async engine => {
-  const plain = fixture()
-  plain.start.request = { ...plain.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof plain.start.request
-  ownMachine(plain)
-  await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, plain.scoped, where, plain.open)
-  const main = plain.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  const f = fixture()
-  f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 42 } } as typeof f.start.request
-  ownMachine(f)
-  await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
-  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  const chat = f.start.request.conversationId
-  // Everything but the prompt is the main Buddy's: its role, permissions, worktree and skill.
-  const { prompt, ...rest } = payload, { prompt: mainPrompt, ...mainRest } = main
-  expect(rest).toEqual(mainRest)
-  expect(prompt).not.toBe(mainPrompt)
-  expect(prompt).toContain('Use the built-in swarm-buddy skill for this session.')
-  expect(prompt).toContain(`harness super-tab --tab tab messages ${chat} --thread root-1`)
-  expect(prompt).toContain(`post ${chat} 'your message' UNIQUE_OPERATION_ID --reply-to MESSAGE_ID`)
-  expect(prompt).toContain('only in this thread')
-  expect(prompt).not.toContain('greet')
-  expect(prompt).not.toContain('assign')
-})
-
-it('launches a Codex thread session as any Buddy: the guard its refusal stood for is gone (task #2832)', async () => {
-  const f = fixture()
-  f.start.request = { ...f.start.request, engine: 'codex', buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'root-1', from: 1 } } as typeof f.start.request
-  ownMachine(f)
-  const result = await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
-  expect(result.error).toBeUndefined()
-  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  expect([payload.engine, payload.permissionMode, payload.bypassPermission]).toEqual(['codex', undefined, false])
-})
-
-it('starts a plain Buddy for a thread session whose thread is not an id', async () => {
-  const f = fixture()
-  f.start.request = { ...f.start.request, buddyOf: { personId: 'peer', generation: 'g' }, buddySession: { thread: 'x; rm -rf ~', from: 1 } } as typeof f.start.request
-  ownMachine(f)
-  await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
-  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-  expect(payload.prompt).not.toContain('rm -rf')
-  expect(payload.prompt).not.toContain('--thread')
-})
-
-it('starts a Buddy with its owner\'s own permission settings (tasks #2832, #4215)', async () => {
-  for (const engine of ['claude', 'codex'] as const) {
-    const f = fixture()
-    f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
-    ownMachine(f)
-    await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never,
-      f.scoped, where, f.open)
-    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-    expect([engine, payload.permissionMode, payload.bypassPermission]).toEqual([engine, undefined, false])
-  }
-})
-
-// Task #2832 (Ken, 11-04): a Buddy runs with its owner's full rights, so it launches only where those are its owner's own: its
-// machine's own host dispatches it, in its owner's own account (never a Harness Team account), the account signed in here is
-// its owner's, and the Swarm's record says the machine is theirs and not lent. Any of these missing launches nothing.
-describe('a Buddy launches only on its owner\'s own machine', () => {
-  const ownStart = (f: ReturnType<typeof fixture>, engine = 'claude', extra: Record<string, unknown> = {}) => {
-    f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' }, ...extra } as typeof f.start.request
-    ownMachine(f)
-    Object.assign(f.start, { machineOwnerId: 'peer', contributorId: 'peer', hostGrant: null })
-  }
-  const launches = (f: ReturnType<typeof fixture>) => f.request.mock.calls.some(call => call[0] === 'agent_create')
-
-  it.each(['claude', 'codex'])('launches a %s Buddy dispatched by its owner\'s own host, signed in as its owner', async engine => {
-    const f = fixture()
-    ownStart(f, engine)
-    const mark = buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start'))
-    rmSync(mark, { force: true })
-    const result = await startAgent({ tabId: 'tab', startId: 'start', signedIn: 'peer' } as never,
-      f.scoped, where, f.open)
-    expect(result.error).toBeUndefined()
-    expect(launches(f)).toBe(true)
-    // Its folder is recorded as its owner's before it launches, so its relaunches find the check passed (security review 2).
-    expect(buddyOwnerOf(join('/somewhere', worktreeFolderName('super-tab/start')), env.ADAPTER_DATA_DIR)).toBe('peer')
-    rmSync(mark, { force: true })
-  })
-
-  // Task #3737 (tuan.dev, 11-06): on a computer where Claude Code is not signed in, a Claude Buddy stopped on its sign-in screen
-  // in a terminal nobody sees, and its chat went quiet. Refused before anything is reserved or launched, in words to act on.
-  describe('with Claude Code signed out on this computer', () => {
-    // A start that launches records its folder's owner (security review 2 of #2832): left behind, it fails the refusals' checks below.
-    afterEach(() => rmSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')), { force: true }))
-    const start = async (f: ReturnType<typeof fixture>, id: string) => startAgent({ tabId: 'tab', startId: 'start', signedIn: 'peer' } as never, f.scoped, where, f.open)
-    it('refuses a Claude Buddy with the sign-in sentence, before anything is reserved or launched', async () => {
-      claudeAccount.signedIn = false
-      try {
-        const f = fixture()
-        ownStart(f, 'claude')
-        const result = await start(f, 'signed-out')
-        expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_CLAUDE_SIGNED_OUT })
-        expect(BUDDY_CLAUDE_SIGNED_OUT).toBe('Sign in to Claude Code on this computer first')
-        expect(launches(f)).toBe(false)
-        expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
-        expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_CLAUDE_SIGNED_OUT }) }))
-      } finally { claudeAccount.signedIn = true }
-    })
-    it.each([
-      ['a Codex Buddy', 'codex', {}],
-      ['a Claude Buddy on a grid model, which does not use Claude Code\'s sign-in', 'claude', { gridModel: 'm' }],
-      ['a Claude Buddy on a machine that cannot say', 'claude', {}],
-    ])('still starts %s', async (_case, engine, extra) => {
-      claudeAccount.signedIn = _case.includes('cannot say') ? null : false
-      try {
-        const f = fixture()
-        ownStart(f, engine, extra)
-        const result = await start(f, `still-${engine}`)
-        expect(result.error).toBeUndefined()
-        expect(launches(f)).toBe(true)
-      } finally { claudeAccount.signedIn = true }
-    })
-  })
-
-  const refusals: [string, (f: ReturnType<typeof fixture>) => Record<string, unknown>][] = [
-    ['not dispatched by its machine\'s own host', () => ({})],
-    ['with another account signed in here', () => ({ signedIn: 'owner' })],
-    ['with no account signed in here', () => ({ signedIn: null })],
-    ['on a machine the Swarm records as another person\'s', f => { Object.assign(f.start, { machineOwnerId: 'owner' }); return { signedIn: 'peer' } }],
-    ['on a machine another person contributed', f => { Object.assign(f.start, { contributorId: 'owner' }); return { signedIn: 'peer' } }],
-    ['on a machine lent to its owner', f => { Object.assign(f.start, { hostGrant: 'grant' }); return { signedIn: 'peer' } }],
-  ]
-  it.each(refusals)('refuses a Buddy before anything launches %s', async (_case, given) => {
-    for (const engine of ['claude', 'codex']) {
-      const f = fixture()
-      ownStart(f, engine)
-      const input = given(f)
-      const result = await startAgent({ tabId: 'tab', startId: 'start', ...input } as never, f.scoped, where, f.open)
-      expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_NOT_OWN_MACHINE })
-      expect(launches(f)).toBe(false)
-      expect(existsSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')))).toBe(false)
-      expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
-      expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_NOT_OWN_MACHINE }) }))
-    }
-  })
 })
 
 it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation', async () => {
@@ -1056,7 +841,6 @@ describe('a routed Claude start launches with the model instead of switching it 
   })
 })
 
-
 it('records the original launch identity and retries without it only for an older backend', async () => {
   const identity = { sessionId: 'original-session', createdAt: '2026-10-22T00:00:00.000Z' }
   const f = fixture({ identity })
@@ -1341,8 +1125,7 @@ describe('neutral start prompts', () => {
   const starts = async (extra: Record<string, unknown>, roleName?: string) => {
     const f = fixture()
     f.start.request = { ...f.start.request, ...extra, ...(roleName ? { roleName } : {}) } as typeof f.start.request
-    if (extra.buddyOf) ownMachine(f)
-    await startAgent({ ...(extra.buddyOf ? OWN_HOST : {}), tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
+    await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
     return { payload: f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!, f }
   }
   const lead = { leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }
@@ -1391,7 +1174,7 @@ describe('neutral start prompts', () => {
     }
   })
   // Project instructions, phase 4 (decision 1): the CLI's kinds stay inside it this release; an older machine's launches.ts
-  // takes lead, dev, review and buddy alone, and refuses a key it does not know.
+  // takes lead, dev and review alone, and refuses a key it does not know.
   it('sends an older machine only the role values it knows', async () => {
     const keys = ['branchBase', 'branchName', 'bypassPermission', 'creationId', 'engine', 'gitSource', 'name', 'projectSource', 'prompt', 'startedBy', 'swarmRole', 'swarmSkillMode']
     for (const [extra, roleName, swarmRole] of [[{}, 'Tester', 'dev'], [{}, undefined, 'dev'], [lead, 'Product Manager', 'lead'], [lead, undefined, 'lead'],
@@ -1400,14 +1183,13 @@ describe('neutral start prompts', () => {
       expect(payload.swarmRole).toBe(swarmRole)
       expect(Object.keys(payload).sort()).toEqual(keys)
     }
-    const { payload } = await starts({ buddyOf: { personId: 'peer', generation: 'g' } }, 'Tester')
-    expect(payload.swarmRole).toBe('buddy')
   })
-  it('leaves the Buddy prompt as it was', async () => {
-    const { payload } = await starts({ buddyOf: { personId: 'peer', generation: 'g' } }, 'Tester')
-    expect(String(payload.prompt)).toContain('Use the built-in swarm-buddy skill for this session.')
-    expect(String(payload.prompt)).not.toContain('instructions')
-    expect(String(payload.prompt)).not.toContain('Tester')
+  // The v3 Buddy is gone (backend S17): a start that still names an owner is an agent's, named as any other.
+  it('starts as an agent a start that names an owner, as a Buddy\'s did', async () => {
+    const { payload } = await starts({ buddyOf: { personId: 'peer', generation: 'g' }, buddyScope: 'swarm' }, 'Tester')
+    expect(payload.swarmRole).toBe('dev')
+    expect(payload.prompt).toBe('You are Builder.')
+    expect(payload).toMatchObject({ projectSource: 'worktree', gitSource: '/repo' })
   })
 })
 

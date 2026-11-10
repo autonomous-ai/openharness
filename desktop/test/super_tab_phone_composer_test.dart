@@ -17,16 +17,16 @@ final _field = find.byKey(const ValueKey('super-message-composer'));
 final _actions = find.byKey(const ValueKey('super-message-composer-actions'));
 final _send = find.byTooltip('Send message');
 
-/// The reader's own Buddy chat ('offline' in the fixture), as in Huy's
+/// The reader's chat with their own agent ('offline' in the fixture), as in Huy's
 /// screenshot.
-ConversationServer _buddyChat() {
+ConversationServer _agentChat() {
   final server = ConversationServer()..threads = true;
   final chat =
       (server.state['conversations'] as List)[1] as Map<String, dynamic>
         ..['kind'] = 'agent-chat'
         ..['title'] = 'Rowan';
   (server.state['agents'] as List).add({
-    'id': 'buddy-main',
+    'id': 'own-agent',
     'name': 'Rowan',
     'displayName': 'Rowan',
     'machineId': 'mac',
@@ -34,19 +34,19 @@ ConversationServer _buddyChat() {
     'contributorId': 'owner',
     'configuration': {'engine': 'claude'},
   });
-  chat['agentIds'] = ['buddy-main'];
+  chat['agentIds'] = ['own-agent'];
   server.append('Hello', conversationId: 'offline');
   return server;
 }
 
 void main() {
   testWidgets(
-    'in a Buddy chat: a one-line hint, send below the field, nothing under the box',
+    "in an agent's chat: a one-line hint, send below the field, nothing under the box",
     (tester) async {
       final (_, c) = await mountPhoneSuperTab(
         tester,
         _phone,
-        server: _buddyChat(),
+        server: _agentChat(),
         initial: 'offline',
       );
       expect(tester.widget<TextField>(_field).decoration!.hintMaxLines, 1);
@@ -73,7 +73,7 @@ void main() {
     final (_, c) = await mountPhoneSuperTab(
       tester,
       const Size(320, 640),
-      server: _buddyChat(),
+      server: _agentChat(),
       initial: 'offline',
       textScale: 1.5,
     );
@@ -96,7 +96,7 @@ void main() {
         final (_, c) = await mountPhoneSuperTab(
           tester,
           Size(320, height),
-          server: _buddyChat(),
+          server: _agentChat(),
           initial: 'offline',
         );
         tester.view.viewInsets = FakeViewPadding(bottom: keyboard);
@@ -120,7 +120,7 @@ void main() {
     final (_, c) = await mountPhoneSuperTab(
       tester,
       const Size(390, 320),
-      server: _buddyChat(),
+      server: _agentChat(),
       initial: 'offline',
     );
     c.attachments('offline').add([
@@ -139,7 +139,7 @@ void main() {
       final (_, c) = await mountPhoneSuperTab(
         tester,
         const Size(320, 568),
-        server: _buddyChat(),
+        server: _agentChat(),
         initial: 'offline',
       );
       tester.view.viewInsets = const FakeViewPadding(bottom: 300);
@@ -168,7 +168,7 @@ void main() {
         final (_, c) = await mountPhoneSuperTab(
           tester,
           size,
-          server: _buddyChat(),
+          server: _agentChat(),
           initial: 'offline',
         );
         tester.view.viewInsets = FakeViewPadding(bottom: keyboard);

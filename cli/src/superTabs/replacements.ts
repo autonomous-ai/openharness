@@ -139,7 +139,7 @@ export async function replacementObservations(core: CoreApi, machineId: string, 
     const configuration = { engine: target.engine, model: known ? profile.model : null, effort: known ? profile.effort : null,
       contextWindow: null, engineVersion: null }
     const command = { type: 'agent.rebind', agentId: agent.id, profileId: accountId(machineId, target), machineId,
-      ...(agent.buddyScope === 'swarm' && agent.buddyOf ? {} : { projectId: agent.projectId ?? 'lead' }),
+      projectId: agent.projectId ?? 'lead',
       previousHarnessId: agent.harnessId, harnessId: target.agentId, configuration }
     observations.push({ path: `/api/super-tabs/${row.tabId}/commands`, body: {
       operationId: `replacement-${digest([row.tabId, agent.id, report.changeId, target.agentId])}`, asAgentId: agent.id, command } })

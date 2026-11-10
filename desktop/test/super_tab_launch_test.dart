@@ -729,7 +729,6 @@ void main() {
         int max = 8,
         int running = 0,
         int age = 0,
-        String? host,
         List<String> repositories = const [],
       }) => {
         'machineId': id,
@@ -738,7 +737,6 @@ void main() {
         'contributorId': contributor,
         'maxAgents': max,
         'paused': false,
-        'hostMachineId': ?host,
         'observation': {
           'receivedAt': now - age,
           'resources': {'deviceType': device},
@@ -766,7 +764,6 @@ void main() {
         ),
         pool('laptop', 'Ken MacBook', device: 'MacBook Pro'),
         pool('rig', '2x 4090 Rig', contributor: 'diego', max: 16),
-        pool('rig-team', 'Rig team', contributor: 'diego', host: 'rig'),
         pool('old', 'Old Mac', age: 10 * 60 * 1000),
       ];
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
@@ -788,7 +785,7 @@ void main() {
       });
       expect(machines[1].maySleep, isTrue);
       expect(machines[1].unavailable, 'Not connected to this computer');
-      // Its Team account's host has not said it can start a PM.
+      // It has not said it can start a PM.
       expect(
         machines[2].unavailable,
         'Update Harness on 2x 4090 Rig to run a Product Manager there.',
@@ -853,11 +850,8 @@ void main() {
     String id,
     String name, {
     String contributor = 'diego',
-    String? host,
-    String kind = 'computer',
     int available = 4,
     bool lead = false,
-    Map<String, dynamic> teamWork = const {'allowed': true},
   }) => {
     'machineId': id,
     'name': name,
@@ -866,11 +860,8 @@ void main() {
     'maxAgents': 8,
     'availableSlots': available,
     'paused': false,
-    'hostMachineId': ?host,
-    'teamWork': teamWork,
     'observation': {
       'receivedAt': DateTime.now().millisecondsSinceEpoch,
-      'sessionKind': kind,
       'runningHarnessIds': <String>[],
       if (lead) 'capabilities': ['leadStart'],
     },
@@ -883,135 +874,26 @@ void main() {
         'role': 'collaborator',
       });
 
-  test('a teammate’s Mac takes the PM in its Team account', () async {
+  test('a teammate’s Mac takes the PM itself', () async {
     final f = SuperTabLaunchFixture();
     addDiego(f);
     f.connection.server.state['machines'] = [
-      machineRow('diego-mac', 'Diego MacBook'),
-      machineRow(
-        'diego-team',
-        'Diego MacBook',
-        host: 'diego-mac',
-        kind: 'team',
-        available: 3,
-        lead: true,
-      ),
+      machineRow('rig', '2x 4090 Rig', lead: true),
     ];
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     final box = await f.box(newProject: true);
-    final diego = box.integration!.leadMachines!
-        .where((m) => m.id == 'diego-mac')
-        .single;
-    expect(diego.unavailable, isNull);
-    expect(diego.startable, isTrue);
-    expect(diego.freeAgents, 3);
-    expect(diego.own, isFalse);
-    expect(diego.native, isFalse);
-    expect(diego.team, isTrue);
+    final rig = box.integration!.leadMachines!.where((m) => !m.own).single;
+    expect(rig.unavailable, isNull);
+    expect(rig.startable, isTrue);
+    expect(rig.freeAgents, 4);
+    expect(rig.native, isFalse);
   });
-
-  for (final (what, rows) in [
-    ('has no Team account', [machineRow('rig', '2x 4090 Rig', lead: true)]),
-    (
-      'has an offline Team account',
-      [
-        machineRow('rig', '2x 4090 Rig', lead: true),
-        {
-          ...machineRow(
-            'rig-team',
-            '2x 4090 Rig',
-            host: 'rig',
-            kind: 'team',
-            available: 1,
-            lead: true,
-          ),
-          'observation': {
-            'receivedAt': 0,
-            'sessionKind': 'team',
-            'runningHarnessIds': <String>[],
-            'capabilities': ['leadStart'],
-          },
-        },
-      ],
-    ),
-    (
-      'has a Team account that cannot take it now',
-      [
-        machineRow('rig', '2x 4090 Rig', lead: true),
-        machineRow(
-          'rig-team',
-          '2x 4090 Rig',
-          host: 'rig',
-          kind: 'team',
-          available: 1,
-          lead: true,
-          teamWork: {
-            'allowed': false,
-            'code': 'PRIVACY_CHECK_FAILED',
-            'reason': 'The Harness Team account on 2x 4090 Rig is not private (sharing), so it runs only its owner’s projects.',
-          },
-        ),
-      ],
-    ),
-  ]) {
-    test('a teammate’s Mac that $what takes the PM itself', () async {
-      final f = SuperTabLaunchFixture();
-      addDiego(f);
-      f.connection.server.state['machines'] = rows;
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-      final box = await f.box(newProject: true);
-      final rig = box.integration!.leadMachines!.where((m) => !m.own).single;
-      expect(rig.unavailable, isNull);
-      expect(rig.startable, isTrue);
-      // The Mac's own room, not its Team account's.
-      expect(rig.freeAgents, 4);
-      expect((rig.team, rig.native), (false, false));
-    });
-  }
 
   for (final (what, rows, reason) in [
     (
-      'has no Team account and runs an older Harness',
+      'runs an older Harness',
       [machineRow('rig', '2x 4090 Rig')],
       'Update Harness on 2x 4090 Rig to run a Product Manager there.',
-    ),
-    (
-      'fails its Team account’s privacy check',
-      [
-        machineRow('diego-mac', 'Diego MacBook'),
-        machineRow(
-          'diego-team',
-          'Diego MacBook',
-          host: 'diego-mac',
-          kind: 'team',
-          lead: true,
-          teamWork: {
-            'allowed': false,
-            'code': 'PRIVACY_CHECK_FAILED',
-            'reason': 'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
-          },
-        ),
-      ],
-      'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
-    ),
-    (
-      'was added as its person joined and has no Team account',
-      [
-        {
-          ...machineRow(
-            'rig',
-            '2x 4090 Rig',
-            lead: true,
-            teamWork: {
-              'allowed': false,
-              'code': 'TEAM_ACCOUNT_REQUIRED',
-              'reason': '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
-            },
-          ),
-          'teamAccountOnly': true,
-        },
-      ],
-      '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
     ),
     (
       'is paused',
@@ -1019,19 +901,6 @@ void main() {
         {...machineRow('rig', '2x 4090 Rig', lead: true), 'paused': true},
       ],
       'Paused in this Swarm',
-    ),
-    (
-      'runs an older Harness',
-      [
-        machineRow('diego-mac', 'Diego MacBook'),
-        machineRow(
-          'diego-team',
-          'Diego MacBook',
-          host: 'diego-mac',
-          kind: 'team',
-        ),
-      ],
-      'Update Harness on Diego MacBook to run a Product Manager there.',
     ),
   ]) {
     test('a teammate’s machine that $what says why', () async {
@@ -1050,15 +919,7 @@ void main() {
     final f = SuperTabLaunchFixture();
     addDiego(f);
     f.connection.server.state['machines'] = [
-      machineRow('diego-mac', 'Diego MacBook'),
-      machineRow(
-        'diego-team',
-        'Diego MacBook',
-        host: 'diego-mac',
-        kind: 'team',
-        available: 30,
-        lead: true,
-      ),
+      machineRow('diego-mac', 'Diego MacBook', available: 30, lead: true),
       machineRow('m', 'Mac Studio', contributor: 'owner', available: 2),
       // Yours, but this Desktop has no connection to it: the Swarm starts it.
       machineRow('far', 'Office Mini', contributor: 'owner', lead: true),
@@ -1070,7 +931,7 @@ void main() {
     expect(machines.map((m) => m.id).take(3), ['m', 'far', 'diego-mac']);
     expect(machines.first.native, isTrue);
     final far = machines[1];
-    expect((far.native, far.startable, far.team), (false, true, false));
+    expect((far.native, far.startable), (false, true));
     final old = machines.where((m) => m.id == 'old').single;
     expect(old.unavailable, 'Not connected to this computer');
   });
@@ -1124,7 +985,7 @@ void main() {
   };
 
   // Combination review of batch #2239: New Project names computers as Add
-  // machine and the Buddy picker do (superTabMachineName), so "Studio.local"
+  // machine does (superTabMachineName), so "Studio.local"
   // is "Studio" in the chip and in every menu row.
   testWidgets('New Project names a machine without its .local suffix, in the '
       'chip and the menu', (tester) async {
@@ -1261,8 +1122,7 @@ void main() {
   // Mac runs the PM, by engine (backend leadStart.ts leadChoices), and New
   // Project shows that rather than working it out from the readings.
   group('the server’s decision of where the PM runs', () {
-    // Diego's Mac runs Claude Code; its Team account, fresh and private,
-    // offers only Codex.
+    // Diego's Mac runs Claude Code.
     List<Map<String, dynamic>> rows(Map<String, dynamic> lead) => [
       {
         ...offering(machineRow('diego-mac', 'Diego MacBook', lead: true), [
@@ -1270,20 +1130,10 @@ void main() {
         ]),
         'lead': lead,
       },
-      offering(
-        machineRow(
-          'diego-team',
-          'Diego MacBook',
-          host: 'diego-mac',
-          kind: 'team',
-          lead: true,
-        ),
-        ['codex'],
-      ),
     ];
 
-    test('a busy Team account: Codex is refused and Claude Code runs on the '
-        'Mac itself, so New Project starts it there', () async {
+    test('Codex is refused and Claude Code runs on the Mac, so New Project '
+        'starts it there', () async {
       final f = SuperTabLaunchFixture();
       addDiego(f);
       knownRepo(f);
@@ -1648,14 +1498,7 @@ void main() {
       addDiego(f);
       knownRepo(f);
       f.connection.server.state['machines'] = [
-        machineRow('diego-mac', 'Diego MacBook'),
-        machineRow(
-          'diego-team',
-          'Diego MacBook',
-          host: 'diego-mac',
-          kind: 'team',
-          lead: true,
-        ),
+        machineRow('diego-mac', 'Diego MacBook', lead: true),
       ];
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(engine: 'claude', newProject: true);
@@ -1763,20 +1606,13 @@ void main() {
   });
 
   test(
-    'New Project asks the Swarm to start the PM in a teammate’s Team account',
+    'New Project asks the Swarm to start the PM on a teammate’s Mac',
     () async {
       final f = SuperTabLaunchFixture();
       addDiego(f);
       knownRepo(f);
       f.connection.server.state['machines'] = [
-        machineRow('diego-mac', 'Diego MacBook'),
-        machineRow(
-          'diego-team',
-          'Diego MacBook',
-          host: 'diego-mac',
-          kind: 'team',
-          lead: true,
-        ),
+        machineRow('diego-mac', 'Diego MacBook', lead: true),
       ];
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(newProject: true);
@@ -1836,18 +1672,11 @@ void main() {
       addDiego(f);
       knownRepo(f);
       f.connection.server.state['machines'] = [
-        machineRow('diego-mac', 'Diego MacBook'),
-        machineRow(
-          'diego-team',
-          'Diego MacBook',
-          host: 'diego-mac',
-          kind: 'team',
-          lead: true,
-        ),
+        machineRow('diego-mac', 'Diego MacBook', lead: true),
       ];
       f.connection.server.leadRefusal = {
-        'code': 'TEAM_ACCOUNT_REQUIRED',
-        'message': 'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+        'code': 'NOT_YOUR_COMPUTER',
+        'message': 'A new agent starts only on its own person’s computer, in their own account, never on another person’s.',
       };
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(newProject: true);
@@ -1855,7 +1684,7 @@ void main() {
       expect(await box.create(), NewHarnessOutcome.failed);
       expect(
         box.error,
-        'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+        'A new agent starts only on its own person’s computer, in their own account, never on another person’s.',
       );
       expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
       expect(commandsOf(f, 'project.create'), hasLength(1));
@@ -1900,7 +1729,7 @@ void main() {
   test('free agents are the server’s count, not slots minus running', () async {
     final f = SuperTabLaunchFixture();
     // Eight slots and two running, but the server counts one free: its count
-    // includes starts still pending and the Team account sharing the Mac.
+    // includes starts still pending.
     f.connection.server.state['machines'] = [studioPool(available: 1)];
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     final box = await f.box(newProject: true);
@@ -1909,8 +1738,7 @@ void main() {
 
   test('a server without availableSlots reads slots minus running', () async {
     final f = SuperTabLaunchFixture();
-    // Eight slots, three harnesses running (a Buddy among them still holds
-    // its slot): five can start, which is what the person is told.
+    // Eight slots, three harnesses running (each holds its slot): five can start, which is what the person is told.
     final pool = studioPool(running: 3)..remove('availableSlots');
     f.connection.server.state['machines'] = [pool];
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');

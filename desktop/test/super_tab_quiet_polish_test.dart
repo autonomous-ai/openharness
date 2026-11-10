@@ -9,22 +9,6 @@ import 'super_tab_mentions_test.dart' show showView;
 
 Finder _key(String key) => find.byKey(ValueKey(key));
 
-Map<String, dynamic> _taskLine(int sequence, String state, String title) => {
-  'id': 'line-$sequence',
-  'conversationId': 'lead',
-  'sequence': sequence,
-  'text': '$title · $state',
-  'thread': 'line-$sequence',
-  'createdAt': '2026-11-02T09:00:00Z',
-  'author': {'kind': 'agent', 'id': 'kai', 'name': 'Kai'},
-  'source': {
-    'kind': 'task-line',
-    'taskId': 'offline',
-    'title': title,
-    'state': state,
-  },
-};
-
 Map<String, dynamic> _said(int sequence, String text) => {
   'id': 'said-$sequence',
   'conversationId': 'lead',
@@ -47,61 +31,6 @@ void main() {
       // Its task is in the Tasks view, not listed under it (task #2569).
       expect(find.text('?'), findsNothing);
       await tester.pump(const Duration(milliseconds: 300));
-    });
-
-    // Project rows are 4 px taller than the rest since Huy's ask (11-03,
-    // #2427); Activity and Buddy keep Slack's pitch.
-  });
-
-  group('the header', () {});
-
-  group('the chat', () {
-    testWidgets("a proposal sent in your name is your own bubble, on the "
-        "right with your message; an agent's task line is on the left "
-        '(#4529)', (tester) async {
-      final server = swarm();
-      server.messages
-        ..add(_said(1, 'A plain message.'))
-        ..add(_taskLine(2, 'working', 'Windows credential fix'))
-        ..add({
-          ..._said(3, 'Goal: Activity read fix'),
-          'thread': 'said-3',
-          'source': {'kind': 'buddy-proposal', 'personId': 'owner'},
-        });
-      await showView(tester, server);
-      Rect bubble(String text) => tester.getRect(
-        find
-            .ancestor(
-              of: find.textContaining(text),
-              matching: find.byKey(const ValueKey('swarm-bubble')),
-            )
-            .first,
-      );
-      final mine = bubble('A plain message.');
-      expect(bubble('Goal: Activity read fix').right, mine.right);
-      expect(bubble('Windows credential fix').left, lessThan(mine.left));
-      // The view saves its read mark 200 ms after the change: let it land.
-      await tester.pump(const Duration(milliseconds: 250));
-    });
-  });
-
-  group("a task message's thread pane", () {
-    Future<void> open(WidgetTester tester) async {
-      final server = swarm();
-      server.messages.add(_taskLine(1, 'working', 'Windows credential fix'));
-      final c = await showView(tester, server);
-      c.openThread('line-1');
-      await tester.pumpAndSettle();
-    }
-
-    testWidgets("its header's rule meets the chat's", (tester) async {
-      await open(tester);
-      final panel = find.byKey(const ValueKey('super-thread-close'));
-      final rule = find.descendant(
-        of: find.ancestor(of: panel, matching: find.byType(Column)).first,
-        matching: find.byType(Divider),
-      );
-      expect(tester.getTopLeft(rule.first).dy, 51);
     });
   });
 

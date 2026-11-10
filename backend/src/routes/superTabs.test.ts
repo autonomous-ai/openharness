@@ -107,7 +107,11 @@ describe('what Swarm v1-v3 had, over HTTP', () => {
       { type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: 'task-1', checks: [] },
       { type: 'conversation.create', title: 'Fix', brief: 'Fix it.', checks: [], requestMessageId: 'm1' },
       { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], handoff: 'm1' },
-      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], mentionsIfNoWorker: true }]) {
+      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], mentionsIfNoWorker: true },
+      { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: '# Mine', summary: 'Mine' },
+      { type: 'note.add', projectId: 'lead', text: 'Ship on Fridays', askedBy: 'u1' }, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
+      { type: 'project.skills', projectId: 'lead', mode: 'default' }, { type: 'project.role.remove', projectId: 'lead', roleId: 'review' },
+      { type: 'project.coordinatorName', projectId: 'lead', name: 'Boss' }, { type: 'tab.routingPolicy', policy: null }, { type: 'tab.tidy', enabled: true }]) {
       for (const asAgentId of [undefined, 'agent-1']) {
         const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
         expect(res.statusCode, JSON.stringify(command)).toBe(400)
@@ -125,7 +129,10 @@ describe('what Swarm v1-v3 had, over HTTP', () => {
       ['GET', '/api/super-tabs/:tabId/inbox'], ['GET', '/api/super-tabs/:tabId/personal-tasks'], ['GET', '/api/super-tabs/:tabId/proposals'],
       ['GET', '/api/super-tabs/:tabId/conversations/:conversationId/catch-up'], ['POST', '/api/super-tabs/:tabId/activity/read'],
       ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow'],
-      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder'], ['POST', '/api/super-tabs/:tabId/avatars']]
+      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder'], ['POST', '/api/super-tabs/:tabId/avatars'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/roles/:roleId'],
+      ['GET', '/api/super-tabs/routing-policy'], ['POST', '/api/super-tabs/routing-policy']]
     for (const [method, url] of gone) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
   })
 })

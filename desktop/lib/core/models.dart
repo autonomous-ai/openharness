@@ -311,11 +311,7 @@ class AgentBrowser {
   /// During `failed`: one of [errors].
   final String? error;
 
-  static const steps = {
-    'installing',
-    'starting_podman',
-    'building',
-  };
+  static const steps = {'installing', 'starting_podman', 'building'};
   static const errors = {
     'needs_setup',
     'podman_install_failed',
@@ -536,8 +532,7 @@ class Agent {
   final String? startedBy;
 
   /// Started by the Swarm: by an agent, from no harness on this machine, as
-  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`). Every
-  /// Buddy is one.
+  /// the CLI tells one (superTabs/inCore/adoption.ts `swarmStarted`).
   bool get startedBySwarm => startedBy == 'agent' && parentAgentId == null;
   final AgentProject? project;
   final AgentGitContext? gitContext;
@@ -643,7 +638,7 @@ class Agent {
   /// agent that runs on a computer (docs/design/2026-10-11-cloud-agents.md).
   final AgentCloud? cloud;
 
-  /// Extra launch flags saved on the machine for this agent (a Buddy's `--chrome`), as words.
+  /// Extra launch flags saved on the machine for this agent (`--chrome`, say), as words.
   /// Empty from an older daemon or an agent with none.
   final List<String> launchArgs;
 

@@ -1193,9 +1193,7 @@ export function startHookServer(
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
       }
-      // A profile picture (`/avatars`) too: without it the daemon answered 404 and Desktop's Upload picture… failed
-      // with only "Could not upload the file".
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/(attachments|avatars)$/.exec(url) : null
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
       if (attachment) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }

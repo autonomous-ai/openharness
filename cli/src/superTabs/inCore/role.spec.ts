@@ -24,7 +24,8 @@ it('reads the Super Tab process\'s answer as a role kind, in either value set', 
   expect(await read('native')).toEqual({ role: 'agent', fallback: 'review', mode: 'default' })
   expect(await read('native')).toEqual({ role: 'coordinator' })
   expect(await read('native')).toEqual({ role: 'agent' })
-  expect(await read('native')).toEqual({ role: 'buddy' })
+  // The v3 Buddy is gone: an older process's `buddy` is no role.
+  expect(await read('native')).toBeUndefined()
   expect(await read('native')).toEqual({ role: 'coordinator' })
   expect(await read('native')).toEqual({ role: 'agent', mode: 'orchestration' })
   expect(await read('native')).toBeUndefined()
