@@ -244,3 +244,18 @@ Initial contract. Lifted from the `.board.json` (Circuit) and `.episode.json` (T
   is still checked after its download, before it is moved into place.
 - **Mechanism:** `cli/src/dsh/registry.ts` (`storeEntry`, `DshRegistryEntrySchema`),
   `cli/scripts/lib/dshRegistry.mjs`, `store/tools/catalog.mjs`, `cli/src/dsh/service.ts`.
+
+## 2026-11-09 — `preview` in the verdict
+
+- **Change:** `verdict.preview` (optional): a page the agent serves itself on this computer,
+  `http://127.0.0.1:PORT/…` or `http://localhost:PORT/…` (its dev server). Once something listens
+  there, the viewer pane shows that page instead of the package's viewer; when the verdict stops
+  naming it, or it never listens (10 minutes), the package's viewer stays.
+- **Why:** a package viewer serves files as they are. An app with a build step (Vite, React), routes
+  and storage only runs in its own dev server, which another computer could not reach: the pane kept
+  the starter page while the agent's real app ran unseen on its own port.
+- **Backward compatible:** yes. Absent means the package's viewer, as before; an older daemon ignores
+  the field. Only a loopback HTTP URL with a port counts, never the daemon's own port, and another
+  computer still names only the agent, never a port.
+- **Mechanism:** `cli/src/dsh/verdict.ts` (`preview`), `cli/src/dsh/viewer.ts` (`setVerdictPreview`,
+  `forwardingUrl`), `cli/src/services/viewers.ts`.
