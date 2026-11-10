@@ -1089,6 +1089,27 @@ describe('a verdict by command', () => {
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 0 }, owner)).toEqual({ error: 'INVALID_REQUEST' })
     t.service.port.stop()
   })
+  // The CLI gives up after 30 seconds and says "Try again" while the daemon works on: the same command again joins the one
+  // still running, and posts nothing of its own (the second review of #3907).
+  it('does a command that arrives again while the first still runs once, and answers both', async () => {
+    const t = verdictSetup()
+    t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [{ name: 'builder:juno' }] } : [] }))
+    t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [{ name: 'builder:juno' }, { name: 'status:taken' }] }
+        : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/issues/34#issuecomment-9001' } } })
+    const take = () => t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner)
+    const answers = await Promise.all([take(), take()])
+    expect(answers).toEqual(Array(2).fill({ ok: true, value: { url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true } }))
+    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/labels', '/repos/acme/app/issues/34/comments'])
+    t.service.port.stop()
+    // A verdict the same way; another verdict on the same head is its own command.
+    const u = verdictSetup()
+    const reads = await Promise.all([u.read(), u.read(), u.read({ verdict: 'HOLD', text: 'It breaks the build.' })])
+    expect(reads.map(read => 'ok' in read)).toEqual([true, true, true])
+    expect(u.sent.map(sent => String((sent.body as { body: string }).body).split('\n')[0]!.replace(/^Juno, \d\d:\d\d: /, ''))).toEqual([`READ-OK ${HEAD}`, `HOLD ${HEAD}`])
+    u.service.port.stop()
+  })
   // Review of #3902: this computer's gh login is its person's, so only that person's own agent here posts with it, as GitHub
   // news and the merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
   it('posts with this computer\'s GitHub login only for its own person\'s agent, and signs with the agent\'s name when it has no display name', async () => {

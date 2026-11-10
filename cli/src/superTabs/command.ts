@@ -240,7 +240,7 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     if (!asked) throw usageError()
     Object.assign(payload, { ...asked })
   } else if (action === 'take' && positional.length === 2) {
-    // A builder's claim on a task (githubClaim.ts): the daemon makes it, by the comments' own order.
+    // A builder's claim on a task given to it (githubClaim.ts): the daemon makes it.
     const asked = claimAsked({ repository: first?.slice(0, first.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(first ?? '')?.[1]) })
     if (!asked) throw usageError()
     Object.assign(payload, { ...asked })
