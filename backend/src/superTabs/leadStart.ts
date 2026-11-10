@@ -35,7 +35,7 @@ export interface LeadContext {
 
 /** Efforts a Product Manager never runs at (task #3022, Ken 11-05): it keeps what people teach it only when it thinks hard
  *  enough to. Claude's and Codex's names below high. */
-const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
+export const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
 /** The effort a Product Manager gets when its start or switch names a model and no effort. */
 export const LEAD_EFFORT = 'high'
 
