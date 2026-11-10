@@ -31,7 +31,8 @@ PhoneSheetSection swarmNotifySection(
     caption: 'Notifications',
     actions: [
       for (final level in SwarmNotify.values)
-        if (level != SwarmNotify.muted || !reader.cannotMute(chatId))
+        if (level != SwarmNotify.muted ||
+            reader.snapshot?.isProjectLead(chatId) != true)
           PhoneSheetAction(
             icon: level == now
                 ? LucideIcons.check300

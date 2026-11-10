@@ -355,14 +355,10 @@ class SwarmReader extends ChangeNotifier {
         _notifySending[id] ??
         _notifyKept[id]?.$1 ??
         SwarmNotify.parse(snapshot?.chatSettings[id]);
-    return level == SwarmNotify.muted && cannotMute(id)
+    return level == SwarmNotify.muted && snapshot?.isProjectLead(id) == true
         ? SwarmNotify.mentions
         : level;
   }
-
-  /// Whether chat [id] can no longer be muted: a project's channel
-  /// ([notifyOf]).
-  bool cannotMute(String id) => snapshot?.isProjectLead(id) ?? false;
 
   /// Settings sent and not yet answered: the newest choice per chat, with
   /// its number.
