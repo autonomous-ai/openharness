@@ -70,7 +70,6 @@ export default defineConfig({ test: {
     'integration/superTabTimeChecks.test.ts',
     'integration/superTabTeamMachines.test.ts',
     'integration/superTabGithubComments.test.ts',
-    'integration/superTabCanChat.test.ts',
     'integration/superTabChatPush.test.ts',
     'integration/superTabRequestReads.test.ts',
     'integration/superTabVoiceMessages.test.ts',
