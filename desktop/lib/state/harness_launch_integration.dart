@@ -159,4 +159,16 @@ class HarnessLaunchIntegration {
   // Drops a request recovery cannot finish. Null once dropped, or a question
   // to confirm before dropping it anyway; throws when the request is kept.
   Future<String?> Function({bool anyway})? discard;
+
+  /// A Swarm's New Project and New Agent (anh Dee, 2026-11-10: "NEVER block users for minutes"): called once the start is
+  /// under way and its person has nothing more to choose. The form then closes and the start goes on without it, its row
+  /// in the left pane saying so (`super_tabs/swarm_starts.dart`), and it ends there, opening nothing.
+  void Function()? onStarted;
+
+  /// Whether the start goes on without its form ([onStarted]).
+  bool get inBackground => onStarted != null;
+
+  /// What that row shows while it starts: the agent's name once it has one, and a new project's id once it is made,
+  /// whose own row it stands in for.
+  String? name, projectId;
 }

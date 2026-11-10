@@ -21,6 +21,7 @@ class SuperTabQuietRow extends StatelessWidget {
     this.detail,
     this.selected = false,
     this.unread = false,
+    this.failed = false,
     this.tooltip,
   });
 
@@ -54,6 +55,9 @@ class SuperTabQuietRow extends StatelessWidget {
   /// The one quiet word on the right: the project a Lead leads, "offline", a person's points, a count.
   final String? detail;
   final bool selected, unread;
+
+  /// Its detail says a failure: in red, the one red of the left pane.
+  final bool failed;
   final String? tooltip;
   final VoidCallback? onTap;
 
@@ -69,7 +73,9 @@ class SuperTabQuietRow extends StatelessWidget {
           : grid.SidebarInk.muted(context),
     ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
     final detailStyle = DesktopChrome.metadata(
-      color: grid.SidebarInk.faint(context),
+      color: failed
+          ? Theme.of(context).colorScheme.error
+          : grid.SidebarInk.faint(context),
     ).copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
     final nameText = Text(
       name,

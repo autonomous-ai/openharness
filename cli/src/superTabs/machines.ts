@@ -15,7 +15,6 @@ import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
 import { readCapabilities, quotaOf, meteredEngine, quotaUnknownReason } from './capacity.js'
 import { startAgent, type ScopedRequest } from './start.js'
-import { copySetup } from './memberSetup.js'
 import { settleHiddenScreen } from './startScreen.js'
 import { prepareSwarmStart } from './projectFolder.js'
 import { createSwarmCloneTrustRepair, swarmCloneRoots } from './cloneTrust.js'
@@ -27,7 +26,6 @@ import { cleanupClosed } from './cleanupCloses.js'
 import { repositoryKey } from './repositoryKey.js'
 import { profileId } from '../lib/claudeProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
-import { folderTrust } from '../engines/launchPrep.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -81,8 +79,7 @@ const POOLS_FRESH_MS = 2_000
 /** The worktrees this machine's Swarm starts made, by tab: what a removal may delete besides the tab's Swarm folders. */
 export const swarmWorktreesFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-worktrees-${machineId}.json`)
 /** `kind: 'agent-folder'`: a folder Harness made for an agent whose start named a temporary one (agentFolder.ts, #3713). */
-/** `teamWritten`: a Team-written start's (task #4353), whose removal also clears the folder trust it saved. */
-type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string; kind?: 'agent-folder'; teamWritten?: true }
+type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string; kind?: 'agent-folder' }
 function readWorktrees(file: string): SwarmWorktree[] {
   let saved: unknown
   try { saved = JSON.parse(readFileSync(file, 'utf8')) } catch { return [] }
@@ -148,8 +145,6 @@ export interface MachineDeps {
   /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
    *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
   progress?: (harnessIds: readonly string[]) => Record<string, number>
-  /** Copies a Member's set-up folders into its helper's new worktree ([copySetup], task #4698). */
-  readySetup?: typeof copySetup
 }
 const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 /** A start's folder preparation can clone a whole repository; past this, its cleanup gives up and tries again later. */
@@ -180,9 +175,7 @@ const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list
 // windowsBuddy: this CLI proves a command's pane from its parents on Windows too (callerPane.ts `windowsRunningPane`), so a
 // Buddy there refuses no other agent's Swarm command. The backend starts no Buddy on a Windows machine without it.
 // `regularAgent`: it launches a Regular agent's start, sent apart as `regularStarts` (backend agent.new, task #4116).
-// `memberSetUp`: a Member's start tells it to set its project up once and report agent.setUp, and a helper's start gets its
-// Member's set-up folders (memberSetup.ts, task #4698). The backend waits for that report only from a host that says this.
-const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'memberSetUp']
+const CAPABILITIES = ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent']
 /** What this host does for a Product Manager's switch to another engine or account (spec 2026-11-02-pm-switch-engine-account),
  *  said beside the others: the backend refuses a switch to a host that does not. */
 CAPABILITIES.push('leadSwitch')
@@ -737,10 +730,7 @@ export class ContributedMachines {
               // A Buddy launches only where the account signed in here is its owner's (superTabs/start.ts buddyOnOwnMachine): read
               // at each start, as the start itself says whether it is a Buddy's. One that cannot be read is none: a Buddy refuses.
               const signedIn = await Promise.resolve().then(() => this.core.account.identity()).then(identity => identity?.accountId ?? null, () => null)
-              const helperOf = object(object(start.request).helperOf)
-              const helperRequest = object(start.request)
-              const beforeJoin = identifier(helperOf.harnessId) ? (harnessId: string) => this.readyHelper(String(row.tabId), String(helperOf.harnessId), harnessId, helperRequest) : null
-              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn, ...(beforeJoin ? { beforeJoin } : {}) },
+              const result = await this.deps.start({ tabId: row.tabId, startId: start.id, signedIn },
                 scoped, where, this.deps.open)
               this.refused.delete(String(start.id))
               const refused = result.ok !== true && !start.dispatched && !NOT_REFUSED.has(String(result.error))
@@ -1113,35 +1103,6 @@ export class ContributedMachines {
    *  after the weekly sweep's idle week, by that sweep's own rule (lib/worktreeSweep.ts): only a worktree this machine's
    *  record proves the Swarm made, with no session in it and nothing uncommitted. Its branch keeps every commit and goes
    *  only when they are all on other branches or the remote, as once its pull request merged. Anything else stays. */
-  /** The worktree a Swarm start made for [harnessId] here, from this machine's record: its folder and its project clone. */
-  worktreeOf(tabId: string, harnessId: string): { path: string; source: string } | null {
-    const record = readWorktrees(swarmWorktreesFile(this.core.dataDir, this.machineId)).find(w => w.tabId === tabId && w.harnessId === harnessId)
-    return record ? { path: record.path, source: record.source } : null
-  }
-
-  /** A helper's new worktree gets its Member's set-up folders (task #4698), from the Member's worktree this machine's Swarm made.
-   *  A Member set up elsewhere, or a copy this disk cannot make, leaves the helper to install itself; the log says which,
-   *  with no path. */
-  private async readyHelper(tabId: string, memberHarnessId: string, harnessId: string, request: Record<string, unknown>): Promise<void> {
-    try {
-      const member = this.worktreeOf(tabId, memberHarnessId)?.path, helper = this.core.agents.byAgent(harnessId)?.cwd
-      if (!member || !helper) { this.log('Started a helper without its Member\'s setup: HELPER_SETUP_NOT_HERE'); return }
-      // Only into the new worktree its own start made: never the Member's folder, nor the checkout it came from, which may be a
-      // person's own (security review 2 of #3579).
-      const source = typeof request.cwd === 'string' ? request.cwd : null
-      const shared = (a: string, b: string) => within(a, b) || within(b, a)
-      if (request.worktree !== true || !source || shared(helper, member) || shared(helper, source)) {
-        this.log('Started a helper without its Member\'s setup: HELPER_FOLDER_NOT_OWN'); return
-      }
-      const copy = await (this.deps.readySetup ?? copySetup)(member, helper)
-      this.log(copy.skipped ? `Started a helper without its Member's setup: ${copy.skipped}`
-        : `Readied a helper from its Member's setup: ${copy.copied.length} folder${copy.copied.length === 1 ? '' : 's'} copied`)
-    } catch {
-      // Its own name only: an error's words can carry a path.
-      this.log('Started a helper without its Member\'s setup: HELPER_SETUP_FAILED')
-    }
-  }
-
   removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
     // Lead, 10-30: an ended session (host.ts endSession) and a stopped worker (releaseWorker) can ask at the same moment.
     // Each waits for the one before it and then checks for itself: after a removal it finds no record; after one that
@@ -1160,11 +1121,11 @@ export class ContributedMachines {
     if (!record) return
     // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
-    if (await folderGone(record.path)) return this.removed(file, record, mine)
+    if (await folderGone(record.path)) return this.removed(file, mine)
     if (record.kind === 'agent-folder') return this.removeAgentFolder(file, record, mine)
     if (!await swarmWorktree(record.path, record.source, record.startId)) {
       // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
-      if (await folderGone(record.path)) return this.removed(file, record, mine)
+      if (await folderGone(record.path)) return this.removed(file, mine)
       this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
       return
     }
@@ -1180,24 +1141,12 @@ export class ContributedMachines {
     if (!await sweepOne(record.path, Date.now(), 0, unused).catch(error => {
       this.log(`Kept a Swarm worktree: ${error instanceof WorktreeKept ? error.code : 'WORKTREE_CHECK_FAILED'}`); return false
     })) return
-    this.removed(file, record, mine)
+    this.removed(file, mine)
   }
 
-  /** A worktree gone: its record goes, and so does the folder trust a Team-written start saved for it. */
-  private removed(file: string, record: SwarmWorktree, mine: (w: SwarmWorktree) => boolean) {
-    if (record.teamWritten) this.forgetTrust(record.path)
+  /** A worktree gone: its record goes. */
+  private removed(file: string, mine: (w: SwarmWorktree) => boolean) {
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
-  }
-
-  /**
-   * Clears the Claude folder trust a Team-written start saved for its worktree (core/agents/launches.ts `swarmCheckout`),
-   * now that the worktree is gone (task #4353). Left, the person's later Claude sessions in that folder would load the
-   * branch's own settings and hooks without asking. The folder was new at that start, so its flag was saved in its life; the
-   * person's own answers (its repository, a folder above it) are other keys and stay. The same home the start saved it in.
-   */
-  private forgetTrust(path: string) {
-    try { folderTrust('claude')?.forget(path) }
-    catch (error) { this.log(`Could not clear the folder trust of a Team-written worktree: ${(error as NodeJS.ErrnoException).code ?? 'TRUST_WRITE_FAILED'}`) }
   }
 
   /** An agent's own folder (#3713), only when it is still the one Harness made and marked in its agent-home folder, and no
@@ -1212,7 +1161,7 @@ export class ContributedMachines {
     // record, for its person, as a worktree with uncommitted changes is.
     if (!agentFolderEmpty(record.path)) { this.log('Kept an agent folder: AGENT_FOLDER_HAS_WORK'); return }
     try { rmSync(record.path, { recursive: true, force: true }) } catch { this.log('Kept an agent folder: AGENT_FOLDER_REMOVAL_FAILED'); return }
-    writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+    this.removed(file, mine)
   }
 
   /** A removal deletes only what is provably the Swarm's: the record says which worktree, or agent folder, each start made. */
@@ -1223,7 +1172,7 @@ export class ContributedMachines {
     try {
       const file = swarmWorktreesFile(this.core.dataDir, this.machineId), worktrees = readWorktrees(file)
       if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId,
-        source: request.cwd, path, ...(agentFolder ? { kind: 'agent-folder' as const } : {}), ...(request.projectSettings === 'off' ? { teamWritten: true as const } : {}) }])
+        source: request.cwd, path, ...(agentFolder ? { kind: 'agent-folder' as const } : {}) }])
     } catch (error) { this.log(`Could not record the worktree of Swarm start ${startId}: ${error instanceof Error ? error.message : String(error)}`) }
   }
   private log(message: string) { (this.deps.log ?? (line => console.warn(`[super-tabs] ${line}`)))(message) }
@@ -1304,7 +1253,7 @@ export class ContributedMachines {
     const swarm = new Set(recorded.map(w => w.harnessId))
     /** Each Swarm start's receipt on this machine, by the agent it names: what lets the core close one its host no longer retains. */
     const receipts = new Map<string, string>()
-    const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true, teamWritten: w.teamWritten === true }))
+    const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true }))
     for (const start of starts) {
       const request = object(start.request)
       if (request.machineId !== this.machineId || !identifier(start.id) || !identifier(start.harnessId) || !identifier(start.creationId)) continue
@@ -1313,8 +1262,7 @@ export class ContributedMachines {
       if (proven) { swarm.add(start.harnessId); receipts.set(start.harnessId, start.creationId) }
       const agent = this.core.agents.all().find(a => a.agentId === start.harnessId)
       if (request.worktree === true && typeof request.cwd === 'string' && agent?.cwd && !candidates.some(c => c.path === agent.cwd)) {
-        candidates.push({ source: request.cwd, path: agent.cwd, startId: start.id, proven: proven && agent.startedBy === 'agent',
-          teamWritten: request.projectSettings === 'off' })
+        candidates.push({ source: request.cwd, path: agent.cwd, startId: start.id, proven: proven && agent.startedBy === 'agent' })
       }
     }
     const worktrees: string[] = []
@@ -1352,7 +1300,6 @@ export class ContributedMachines {
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
       if (candidate) await git(candidate.source, ['worktree', 'remove', '--force', target]).catch(() => null)
       await rm(target, { recursive: true, force: true })
-      if (candidate?.teamWritten) this.forgetTrust(target)
     }
     // Diego 10-29: a folder kept for a live session was confirmed cleaned anyway and its records dropped, so nothing ever
     // tried it again. Unconfirmed, the cleanup row stays and the next try comes on clean()'s backoff.

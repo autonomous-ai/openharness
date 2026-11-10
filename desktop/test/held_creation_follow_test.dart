@@ -494,9 +494,9 @@ void main() {
       testWidgets(
         'the form follows ${starting ? 'startup after its wait expires' : 'a held request'} with no press',
         (tester) async {
-          final previous = NewHarnessFormState.heldFollowInterval;
-          NewHarnessFormState.heldFollowInterval = const Duration(seconds: 3);
-          addTearDown(() => NewHarnessFormState.heldFollowInterval = previous);
+          final previous = NewHarnessController.heldFollowInterval;
+          NewHarnessController.heldFollowInterval = const Duration(seconds: 3);
+          addTearDown(() => NewHarnessController.heldFollowInterval = previous);
           final machine = _Machine();
           if (starting) {
             machine.starts = 3;
