@@ -11,7 +11,6 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
-import 'package:harness/super_tabs/chat/fold.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -164,8 +163,6 @@ Future<List<SuperTabController>> _show(
       ),
     ),
   );
-  await tester.pump();
-  // A fold says More a frame after it measures what it holds.
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
@@ -511,7 +508,7 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              title('Chat: bubbles, a time after a pause, cards'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -575,14 +572,6 @@ class _Gallery extends StatelessWidget {
                           title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
                           action: 'Read',
                           details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
-                        SwarmFold(
-                          child: Text(
-                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
-                                .join('\n'),
-                            style: SwarmType.body(context),
-                          ),
                         ),
                       ],
                     ),

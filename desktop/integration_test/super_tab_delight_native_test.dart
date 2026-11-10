@@ -34,7 +34,7 @@ void main() {
     image.dispose();
   }
 
-  testWidgets('avatars, status, reactions and a ship moment', (tester) async {
+  testWidgets('avatars, status and a ship moment', (tester) async {
     expect(defaultTargetPlatform, TargetPlatform.macOS);
     await windowManager.ensureInitialized();
     await windowManager.setSize(const Size(1280, 860));

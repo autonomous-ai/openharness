@@ -312,7 +312,13 @@ class SwarmGitHub {
   /// [repository]'s open pull requests, by the task each is for ([SwarmPull.tasks]); a task with two has the one with the
   /// newest activity. One GraphQL read of the newest [pullsMax], each with its head's checks, whether it conflicts, and its
   /// newest comments, where its readers' verdicts are.
-  Future<Map<int, SwarmPull>> pulls(String repository) async {
+  ///
+  /// [team] names the agents of its project ([SwarmPull.teamOf]): from the login that opened a pull request, only their signed
+  /// READ-OK counts.
+  Future<Map<int, SwarmPull>> pulls(
+    String repository, {
+    Set<String>? team,
+  }) async {
     final (owner, name) = _split(repository);
     final answer = await _call([
       'api',
@@ -333,7 +339,11 @@ class SwarmGitHub {
         : null;
     final byTask = <int, SwarmPull>{};
     for (final row in _nodes(map['pullRequests'])) {
-      final pull = SwarmPull.read(row, defaultBranch: defaultBranch);
+      final pull = SwarmPull.read(
+        row,
+        defaultBranch: defaultBranch,
+        team: team,
+      );
       if (pull == null) continue;
       for (final task in pull.tasks) {
         byTask.putIfAbsent(task, () => pull);
@@ -530,7 +540,7 @@ class SwarmGitHub {
       r'query($owner:String!,$name:String!,$first:Int!){'
       r'repository(owner:$owner,name:$name){defaultBranchRef{name} '
       r'pullRequests(states:OPEN,first:$first,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{'
-      'number title url isDraft headRefName headRefOid baseRefName body mergeable '
+      'number title url isDraft headRefName headRefOid baseRefName body mergeable author{login} '
       'labels(first:20){nodes{name}} closingIssuesReferences(first:5){nodes{number}} '
       'commits(last:1){nodes{commit{statusCheckRollup{state}}}} '
       'comments(last:30){nodes{body createdAt authorAssociation author{login}}}}}}}';
@@ -549,14 +559,39 @@ class SwarmGitHub {
       r'repository(owner:$owner,name:$name){issue(number:$number){'
       'comments(last:\$last,before:\$before){$_commentFields}}}}';
 
+  /// What a read says while GitHub limits this person's requests.
+  static const limitedWords =
+      'GitHub is limiting requests. Wait a few minutes.';
+
+  /// How long no `gh` runs after GitHub said it is limiting requests: the board reads every minute and a task's panel every
+  /// 30 s, and asking again at once only spends what the limit leaves.
+  static const limitedFor = Duration(minutes: 2);
+
+  /// Until when GitHub limits this person's requests ([limitedFor]); null when it does not.
+  DateTime? _limitedUntil;
+
   Future<String> _call(List<String> arguments, String repository) async {
+    if (_limitedUntil case final until? when clock.now().isBefore(until)) {
+      throw const SwarmGitHubError(limitedWords);
+    }
     final result = await _ask(
       arguments,
       log: 'issues',
       missing: 'Install the GitHub CLI (gh) to see tasks.',
     );
     if (result.exitCode == 0) return '${result.stdout}';
-    throw _refused(result, repository, log: 'issues');
+    final (kind, refusal) = _refusal(
+      result.exitCode,
+      '${result.stderr}',
+      repository,
+    );
+    // Its kind names the failure in the log; what gh printed stays out of it.
+    appLog.warn(
+      'super-tabs',
+      'GitHub issues not read: $kind (gh exited ${result.exitCode})',
+    );
+    if (kind == 'rate limited') _limitedUntil = clock.now().add(limitedFor);
+    throw refusal;
   }
 
   /// One page of a REST list of [repository] (`gh api repos/<repository>/<path>`), conditional on [etag]: GitHub answers a list
@@ -592,7 +627,16 @@ class SwarmGitHub {
         );
       }
     }
-    throw _refused(result, repository, log: 'feed');
+    final (kind, refusal) = _refusal(
+      result.exitCode,
+      '${result.stderr}',
+      repository,
+    );
+    appLog.warn(
+      'super-tabs',
+      'GitHub feed not read: $kind (gh exited ${result.exitCode})',
+    );
+    throw refusal;
   }
 
   /// Runs `gh` with [arguments]: its result, or why it could not run in the words the person sees. [log] names what was being
@@ -616,35 +660,54 @@ class SwarmGitHub {
     }
   }
 
-  /// Why a `gh` that ran did not answer, in the words the person sees.
-  SwarmGitHubError _refused(
-    ProcessResult result,
-    String repository, {
-    required String log,
-  }) {
-    final said = '${result.stderr}';
-    appLog.warn(
-      'super-tabs',
-      'GitHub $log not read: gh exited ${result.exitCode}',
-    );
-    if (result.exitCode == 4 ||
+  /// What a failed `gh` call means, from its exit code and what it printed: its kind for the log and the words the person
+  /// sees. A limit or an organization's SSO comes first: GitHub can answer either beside a repository it then cannot find.
+  static (String, SwarmGitHubError) _refusal(
+    int exitCode,
+    String said,
+    String repository,
+  ) {
+    if (exitCode == 4 ||
         said.contains('gh auth login') ||
         said.contains('not logged in') ||
         said.contains('HTTP 401')) {
-      return const SwarmGitHubError('Sign in to GitHub: run gh auth login.');
+      return (
+        'signed out',
+        const SwarmGitHubError('Sign in to GitHub: run gh auth login.'),
+      );
+    }
+    if (said.contains('rate limit') || said.contains('HTTP 429')) {
+      return ('rate limited', const SwarmGitHubError(limitedWords));
+    }
+    if (said.contains('SAML')) {
+      return (
+        'SSO',
+        const SwarmGitHubError(
+          'Authorize gh for this organization\'s SSO: run gh auth refresh.',
+        ),
+      );
     }
     if (said.contains('Could not resolve to a Repository') ||
         said.contains('HTTP 404')) {
-      return SwarmGitHubError('You can\'t see $repository on GitHub.');
+      return (
+        'no repository',
+        SwarmGitHubError('You can\'t see $repository on GitHub.'),
+      );
     }
     if (said.contains('Could not resolve to an Issue')) {
-      return const SwarmGitHubError('That issue is gone.');
+      return ('no issue', const SwarmGitHubError('That issue is gone.'));
     }
     if (said.contains('disabled issues') ||
         said.contains('has disabled issues')) {
-      return SwarmGitHubError('$repository has issues turned off.');
+      return (
+        'issues off',
+        SwarmGitHubError('$repository has issues turned off.'),
+      );
     }
-    return const SwarmGitHubError('GitHub didn\'t answer. Try again.');
+    return (
+      'failed',
+      const SwarmGitHubError('GitHub didn\'t answer. Try again.'),
+    );
   }
 
   /// `gh` where its installers put it: a Finder launch has only launchd's bare PATH (`/usr/bin:/bin:/usr/sbin:/sbin`),
