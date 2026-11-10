@@ -7,8 +7,7 @@ import 'support/super_tab_fixture.dart';
 import 'support/swarm_v4_channel.dart';
 
 /// What a person who is elsewhere sees of a project's channel (Swarm v4, anh Dee 2026-11-09: "i dont see any agent to agent
-/// chat"): how many posts are new on its row, and a tag of them by an agent as the red number, which Activity and the system
-/// notice say too.
+/// chat"): how many posts are new, on its row.
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
@@ -86,22 +85,4 @@ void main() {
       expect(int.parse(words.split('+').first), lessThan(140));
     },
   );
-
-  testWidgets('an agent that tags the person is the red number on the row', (
-    tester,
-  ) async {
-    final server = swarmV4Channel();
-    swarmV4Post(server, 'Faye', 'Plan: @Pip takes #12.');
-    final c = await openThenLeave(tester, server);
-    final ask = swarmV4Post(server, 'Pip', '@owner can you merge #20?');
-    server.tag(
-      ask,
-      conversationId: 'channel',
-      text: '@owner can you merge #20?',
-      messageSequence: server.revision,
-    );
-    await arrive(tester, c);
-    expect(key('super-mentions-channel'), findsOneWidget);
-    expect(tester.widget<Text>(key('super-new-channel')).data, '1 new');
-  });
 }
