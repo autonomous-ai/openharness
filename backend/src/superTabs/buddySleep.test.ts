@@ -97,11 +97,10 @@ describe('server-owned Buddy sleep', () => {
     expect(buddySleepManaged(f.state, f.buddy)).toBe(false)
   })
 
-  it.each(['old-membership', 'session', 'team', 'stopping'])('never sleeps a %s Buddy', which => {
+  it.each(['old-membership', 'session', 'stopping'])('never sleeps a %s Buddy', which => {
     const f = fixture()
     if (which === 'old-membership') f.buddy.buddyOf!.generation = 'old'
     if (which === 'session') f.buddy.buddySession = { thread: 'thread', from: 0 }
-    if (which === 'team') f.pool.observation!.sessionKind = 'team'
     if (which === 'stopping') f.buddy.workDecision = 'stop'
     expect(buddySleepManaged(f.state, f.buddy)).toBe(false)
     expect(buddySleepCandidates(f.state, NOW)).toEqual([])

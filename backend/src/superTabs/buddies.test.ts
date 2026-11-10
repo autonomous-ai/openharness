@@ -190,19 +190,19 @@ describe('what a Buddy reads', () => {
     expect(JSON.stringify(visibleState(f.state, agentActor('buddy')))).not.toMatch(/owner-studio|owner-laptop/)
   })
 
-  it('shows no other agent\'s machine owner, contributor or Team account, nor a task\'s, only its own (security reviews of #2258)', () => {
+  it('shows no other agent\'s machine owner or contributor, nor a task\'s, only its own (security reviews of #2258)', () => {
     const f = setup()
     const pm = f.state.agents.find(a => a.id === f.pm)!
     // A grant under an older share policy names the contributor's email (lib/machineSharePolicy.ts machineShareGrant).
-    Object.assign(pm, { machineOwnerId: 'ken-user', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
+    Object.assign(pm, { machineOwnerId: 'ken-user', hostGrant: 'share-1:email:ken@example.com' })
     expect(pm.contributorId).toBe('owner')
     f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
       execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'ken-user' } } as never
     const seen = visibleState(f.state, agentActor('buddy'))
     const agent = (id: string) => seen.agents.find(a => a.id === id)!
-    expect([agent(f.pm).machineOwnerId, agent(f.pm).contributorId, agent(f.pm).teamAccount]).toEqual(['', '', undefined])
+    expect([agent(f.pm).machineOwnerId, agent(f.pm).contributorId]).toEqual(['', ''])
     expect(seen.conversations.find(c => c.id === f.group)!.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
-    expect(JSON.stringify(seen)).not.toMatch(/ken-user|"teamAccount"/)
+    expect(JSON.stringify(seen)).not.toMatch(/ken-user/)
     // Nor at which membership another agent was added, which matches a person's and so names them (delta review 1 of #2258).
     const generations = new Set(seen.people.map(p => p.generation))
     expect(seen.agents.filter(a => a.id !== 'buddy' && generations.has(a.membershipGeneration)).map(a => a.id)).toEqual([])
@@ -212,9 +212,9 @@ describe('what a Buddy reads', () => {
     expect([agent('buddy').machineOwnerId, agent('buddy').contributorId, agent('buddy').membershipGeneration]).toEqual(['host', 'peer', 'first'])
     // People and the PM read them as before; the stored agent is unchanged.
     for (const reader of [owner, { kind: 'agent', agentId: f.pm, machineOwnerId: 'ken-user' } as Actor]) expect(visibleState(f.state, reader).agents
-      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, membershipGeneration: pm.membershipGeneration,
+      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', membershipGeneration: pm.membershipGeneration,
         hostGrant: 'share-1:email:ken@example.com' })
-    expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
+    expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', hostGrant: 'share-1:email:ken@example.com' })
   })
 
   it('is no other person\'s Buddy chat in the same project', () => {
@@ -250,7 +250,7 @@ describe('Buddies in every Swarm', () => {
 function machine(f: ReturnType<typeof setup>, machineId: string, contributorId: string) {
   f.state.machines = [...(f.state.machines ?? []), { machineId, name: `${contributorId}'s Mac`, contributorId, generation: 'g1', cwd: '/swarm', scope: 'swarm',
     membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation, engines: ['claude', 'codex'], maxAgents: 3, paused: false,
-    observation: { generation: 'g1', receivedAt: 1000, sessionKind: 'computer',
+    observation: { generation: 'g1', receivedAt: 1000,
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
         deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [],
       // A host that runs a Swarm-wide Buddy and its sessions (machines.ts SWARM_BUDDY_CAPABILITY).
@@ -897,43 +897,15 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
   })
 
   // Full access on its owner's machine makes the wrong machine worse, not better (#2832): Codex is refused there as Claude is.
-  it('is never someone else\'s machine or a Harness Team account on Codex either (#2832)', () => {
+  it('is never someone else\'s machine on Codex either (#2832)', () => {
     const f = fresh()
     machine(f, 'owner-mac', 'owner')
-    machine(f, 'peer-team', 'peer')
-    Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
-    f.state.machines!.find(m => m.machineId === 'peer-team')!.observation!.sessionKind = 'team'
     const starts = f.state.starts?.length ?? 0
-    for (const [machineId, machineOwner] of [['owner-mac', 'owner'], ['peer-team', 'peer']] as const) {
-      let code: string | undefined
-      try { add(f, machineId, machineOwner, 'codex') } catch (error) { code = (error as { code?: string }).code }
-      expect(code, machineId).toBe('BUDDY_OWN_MACHINE')
-    }
+    let code: string | undefined
+    try { add(f, 'owner-mac', 'owner', 'codex') } catch (error) { code = (error as { code?: string }).code }
+    expect(code).toBe('BUDDY_OWN_MACHINE')
     expect(f.state.starts?.length ?? 0).toBe(starts)
     expect(add(f, 'peer-mac', 'peer', 'codex').result.startId).toBeTruthy()
-  })
-
-  it('is never a Harness Team account, not even the one on its owner\'s own Mac', () => {
-    const f = fresh()
-    machine(f, 'peer-team', 'peer')
-    Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
-    f.state.machines!.find(m => m.machineId === 'peer-team')!.observation!.sessionKind = 'team'
-    expect(() => add(f, 'peer-team', 'peer')).toThrow('A Buddy runs only on your own machine')
-  })
-
-  it('stays in its owner\'s own account for a teammate\'s project, even where teammates\' work needs a Team account', () => {
-    const f = fresh()
-    const saved = { required: process.env.SWARM_TEAM_ACCOUNT_REQUIRED }
-    process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
-    try {
-      machine(f, 'peer-team', 'peer')
-      Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
-      // A Builder for the owner's project would be refused here, or moved to the Mac's Team account.
-      const start = add(f, 'peer-mac', 'peer').result.startId
-      expect(f.state.starts!.find(s => s.id === start)!.request.machineId).toBe('peer-mac')
-    } finally {
-      if (saved.required === undefined) delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED; else process.env.SWARM_TEAM_ACCOUNT_REQUIRED = saved.required
-    }
   })
 })
 

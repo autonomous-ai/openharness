@@ -11,11 +11,6 @@ const words = 'Keep offline edits.'
 const task = { goal: words, changes: 'Persist drafts', constraints: 'No sign-in', owns: ['backend/src/superTabs/'] }
 function fixture() {
   const f = fullSwarm(NOW)
-  // Its machine is its person's own computer: a Team-session machine takes no new work in Swarm v3 (task #4120).
-  f.edit(state => {
-    const reading = state.machines!.find(m => m.machineId === 'host')!.observation!
-    reading.sessionKind = 'computer'
-  })
   f.state.projects![0]!.boardMode = true
   const candidate = f.add('candidate', f.web), other = f.add('other-candidate', f.web)
   let seq = 0
