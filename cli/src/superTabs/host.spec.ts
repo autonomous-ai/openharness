@@ -3432,7 +3432,9 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     const agent = { id: 'lead', harnessId: 'harness', machineId: 'machine-1' }
     const rows = [{ tabId: 'own', joinSwarm: true, agent }, { tabId: 'other', joinSwarm: false, agent }, { tabId: 'old', agent }]
     const commands: unknown[] = [], refusals: string[] = []
-    let clock = 0
+    /** The Swarm as its person reads it: the machines they took out of it (backend removedMachines, their own only). */
+    const swarm: Record<string, unknown> = { id: 'own', machines: [] }
+    let clock = 0, reads = 0
     const call: CoreApi['account']['backend'] = vi.fn(async (method, path, body) => {
       if (path.endsWith('/commands')) {
         commands.push({ path, ...(body as object) })
@@ -3440,20 +3442,22 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
         if (code) return { status: 409, body: { success: false, error: { code, message: `Refused: ${code}` } } }
         return { status: 200, body: { success: true, data: {} } }
       }
-      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
+      return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] })
+        : path.startsWith('/api/super-tabs/own/') ? (reads++, swarmReply(path, swarm)) : [] } }
     })
     const core = fakeCore({ dataDir: dir, account: { backend: call, machineName: vi.fn(() => 'Ken Mac') } })
     const prepare = vi.fn(async () => ({ ok: true, state: 'ready', cwd: '/data/swarm-projects/own', engines: ['claude', 'codex'], maxAgents: 3, scope: 'swarm' }))
     const log = vi.fn()
     const host = new SuperTabHost(core, 'machine-1', { log, now: () => clock, prepareContribution: prepare }); hosts.push(host)
-    /** One roster pass at `at` ms, waiting for the add it may start to finish. */
+    /** One roster pass at `at` ms, waiting for the add it may start to finish: each starts with a Swarm read, and ends in a
+     *  command sent, a skip or a refusal said, or a read that comes back no more. */
     const pass = async (at: number) => {
       clock = at
-      const tries = prepare.mock.calls.length, heard = commands.length + log.mock.calls.length
+      const before = reads, heard = commands.length + log.mock.calls.length
       await host.tick()
-      if (prepare.mock.calls.length > tries) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
+      if (reads > before) await vi.waitFor(() => expect(commands.length + log.mock.calls.length).toBeGreaterThan(heard))
     }
-    return { core, rows, commands, refusals, prepare, log, pass }
+    return { core, rows, swarm, commands, refusals, prepare, log, pass }
   }
 
   it('adds it once with the prepared slots and leaves unmarked Swarms alone', async () => {
@@ -3461,11 +3465,30 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     await t.pass(0)
     expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' }, { reads: expect.any(SwarmReads) })
     expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
-      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'memory', ifMissing: true } }])
+      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'memory', ifMissing: true,
+      unlessRemoved: true } }])
     await t.pass(59_000)
     t.rows[0]!.joinSwarm = false
     await t.pass(120_000)
     expect(t.prepare).toHaveBeenCalledTimes(1)
+  })
+
+  // A machine its person took out of the Swarm stays out: only a person adds it back (backend removedMachines, #2181). The
+  // server refuses the add too (`unlessRemoved`); the host prepares nothing, and looks again, saying so, each half hour.
+  it('never adds back a machine its person removed, and looks again only each half hour while the roster marks it', async () => {
+    const t = joining()
+    t.swarm.removedMachines = ['machine-1']
+    await t.pass(0)
+    await t.pass(30 * 60_000 - 1)
+    await t.pass(30 * 60_000)
+    expect(t.prepare).not.toHaveBeenCalled()
+    expect(t.commands).toEqual([])
+    expect(t.log.mock.calls).toEqual(Array(2).fill(['Not adding this machine back to a Swarm its person removed it from']))
+    // No longer removed (added back, or dropped from the server's list): the next look adds it.
+    delete t.swarm.removedMachines
+    await t.pass(60 * 60_000)
+    expect(t.prepare).toHaveBeenCalledOnce()
+    expect(t.commands).toHaveLength(1)
   })
 
   it('backs off a refusal, doubling up to half an hour, and starts over after an add', async () => {
