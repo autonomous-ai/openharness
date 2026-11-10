@@ -2076,24 +2076,6 @@ describe('role kinds decide nothing', () => {
     expect(f.state.conversations.find(c => c.id === linked)!.agentIds).toContain(reviewer)
   })
 
-  it('names an older client\'s start by its kind or custom role, and keeps both for older readers', () => {
-    const f = fixture(), group = f.group()
-    f.add('lead', 'owner', 'lead', true)
-    // The custom set an older client made before project instructions, kept in the state (role saves are kept nowhere now).
-    f.state.projects![0]!.roles = [{ id: 'lead', name: 'Coordinator', kind: 'lead', version: 'v' }, { id: 'dev', name: 'Builder', kind: 'builder', version: 'v' },
-      { id: 'aaaaaaaaaaaa', name: 'Docs writer', kind: 'builder', version: 'v' }, { id: 'bbbbbbbbbbbb', name: 'Checker', kind: 'reviewer', version: 'v' }]
-    const stored = (id: string) => f.state.agents.find(a => a.id === id)!
-    const reviewer = stored(started(f, group, { role: 'reviewer' }, 'r'))
-    expect(reviewer).toMatchObject({ role: 'reviewer', roleName: 'Reviewer' })
-    expect(stored(started(f, group, { roleId: 'aaaaaaaaaaaa' }, 'w'))).toMatchObject({ roleId: 'aaaaaaaaaaaa', roleName: 'Docs writer' })
-    expect(stored(started(f, group, { role: 'reviewer', roleName: 'Tester' }, 't')).roleName).toBe('Tester')
-    expect(stored(started(f, group, {}, 'e'))).not.toHaveProperty('roleName')
-    // An older Desktop adds a session in a custom role.
-    const added = f.run({ type: 'agent.add', conversationId: group, machineId: 'host', harnessId: 'added', name: 'added', configuration: config, lead: false,
-      roleId: 'bbbbbbbbbbbb' }, owner, { contribution }).result.agentId as string
-    expect(stored(added)).toMatchObject({ role: 'reviewer', roleId: 'bbbbbbbbbbbb', roleName: 'Checker' })
-  })
-
   it('holds nothing for an undecided worker', () => {
     const f = routed(), group = f.group()
     // Its work stopped, as an older Swarm left it: awaiting a decision.
@@ -3411,13 +3393,11 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('lets the PM tag, routes another agent’s tag to the PM, and refuses another project’s Lead and the removed Leads conversation; a person tags (mentions.test.ts)', () => {
+  it('lets the PM and any other agent tag, and refuses another project’s Lead and the removed Leads conversation; a person tags (mentions.test.ts)', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
     expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
-    // People talk only to the PM (crewNeeds.ts, task #3404): the worker's tag is the PM's crew need.
-    const byWorker = f.run(send(group, ['peer']), as(worker)).messages
-    expect(byWorker.flatMap(m => m.mentions ?? [])).toEqual([])
-    expect(byWorker.filter(m => m.source?.kind === 'crew-need').map(m => m.recipients)).toEqual([[lead]])
+    // Swarm v4 routes no tag through the PM: the worker tags the person.
+    expect(f.run(send(group, ['peer']), as(worker)).messages.flatMap(m => m.mentions ?? [])).toEqual(['peer'])
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This conversation is unavailable.')
     expect(() => f.run(send(storeOldLeads(f.state), ['owner']), as(lead))).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
   })
@@ -3537,8 +3517,7 @@ describe('credentials in every command', () => {
   it.each([
     ['agent.new', 'name'], ['agent.new', 'projectName'],
     ['agent.add', 'roleName'], ['agent.start', 'request.roleName'],
-    ['project.role.set', 'role.name'], ['project.roles.create', 'roles[].name'],
-    ['swarm.delete', 'name'], ['tab.routingPolicy', 'policy.notes'],
+    ['swarm.delete', 'name'],
     ['rules.set', 'rules.machines[].why'], ['rules.set', 'rules.crew[].names[]'],
     ['conversation.create', 'task.requires.access[]'], ['route.record', 'decision.context.missing[]'], ['agent.screenResult', 'error'],
   ])('removes a credential from %s %s', (type, path) => {
@@ -3552,8 +3531,6 @@ describe('credentials in every command', () => {
   const NOT_WORDS: readonly (readonly [why: string, fields: readonly string[]])[] = [
     // agent.input: the host types the exact text and terminal.ts redacts its chat row. A screen goes, exact, only to the agent that asked.
     ['A terminal\'s exact text', ['agent.input text', 'agent.screenResult text', 'agent.inputResult text']],
-    ['A role\'s skill text, read only by its project\'s owner, Lead and hosts', ['project.role.set role.text', 'project.roles.create roles[].text',
-      'project.roles.reset roles[].text']],
     // A token here fails the launch rather than reaching anyone.
     ['A lab\'s engine, model, effort or grid, passed to its CLI or matched to a list', [
       'agent.add configuration.engine', 'agent.add configuration.model', 'agent.add configuration.effort', 'agent.add configuration.engineVersion',
@@ -3566,11 +3543,7 @@ describe('credentials in every command', () => {
       'agent.start request.gridModel', 'agent.start request.gridName', 'agent.start request.requirements.tools[]',
       'route.modelResult model', 'route.modelResult effort', 'route.record decision.assessment.model', 'route.record decision.assessment.kind',
       'route.record decision.candidates[].model', 'route.record decision.candidates[].effort', 'route.record decision.candidates[].gridModel',
-      'route.record decision.candidates[].gridName', 'rule.set rule.model', 'rule.set rule.taskKind',
-      'tab.routingPolicy policy.models[].model', 'tab.routingPolicy policy.models[].effort', 'tab.routingPolicy policy.localModels.models[].model',
-      'tab.routingPolicy policy.priorOverrides[].model',
-      ...['project.role.set role', 'project.roles.create roles[]', 'project.roles.reset roles[]'].flatMap(role =>
-        [`${role}.defaults.model`, `${role}.defaults.effort`])]],
+      'route.record decision.candidates[].gridName']],
     // A repository URL that holds a credential is refused by its schema.
     ['A folder a host opens, or a URL or ref held to its shape', ['agent.add project.cwd', 'agent.add project.repositoryUrl', 'github.relay repository', 'github.relay login',
       'agent.new repositoryUrl', 'agent.start request.cwd', 'agent.start request.codexHome', 'agent.start request.branchRef',
@@ -3578,8 +3551,7 @@ describe('credentials in every command', () => {
       'machine.contribute cwd', 'project.repository repositoryUrl', 'tab.project project.cwd', 'tab.project project.repositoryUrl',
       'conversation.create task.requires.devices[]']],
     ['An id, an account key, a time or a time zone', ['agent.add roleId', 'agent.rebind profileId', 'agent.start request.roleId',
-      'project.closeTab tabOperation', 'project.role.remove roleId', 'project.role.set role.id',
-      'project.roles.create roles[].id', 'project.roles.reset roles[].id', 'route.override candidateId',
+      'project.closeTab tabOperation', 'route.override candidateId',
       'route.record decision.candidates[].id', 'route.record decision.pick', 'route.record decision.candidates[].fit.account',
       'rules.set rules.instructionApprovals.topDeciderId',
       'rules.set rules.instructionApprovals.people[].accountIds[]',
@@ -3626,7 +3598,7 @@ describe('credentials in every command', () => {
     const exempt = NOT_WORDS.flatMap(([, fields]) => fields)
     const covered = new Set([...Object.entries(WORDS).flatMap(([type, paths]) => paths!.map(path => `${type} ${path}`)), ...exempt])
     const all = strings()
-    expect(all.length).toBeGreaterThan(180)
+    expect(all.length).toBeGreaterThan(140)
     expect(all.filter(field => !covered.has(field))).toEqual([])
     // Nothing listed is stale or listed twice.
     expect([...covered].filter(field => !all.includes(field))).toEqual([])

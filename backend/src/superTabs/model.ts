@@ -627,12 +627,6 @@ export const NOTICE_READERS = {
   'task-approval': 'recipients',
   // Each its own case in commands.ts, decided by the row (forRecipients): statuses, briefs, merges, starts, removals.
   system: 'people',
-  // A save of the project's instructions was posted in the project chat until #3132 (Dee and Ken, 11-05): the rows stored
-  // before are read by nobody (#3165), and a project chat ending in one is served as read (read/servedTops.ts). A change is
-  // read in the Instructions history.
-  instructions: 'agent',
-  // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
-  'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people',
   // Proposal history, written until proposals went (2026-11-10), and the private Buddy notices stored before task #4558, are visible
   // to the people who can read their card/chat. Delete them with the notice readers of v1-v3 (slice S18).
