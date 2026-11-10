@@ -216,7 +216,7 @@ class SuperTabAgent {
   final String? role;
   final String? roleId;
 
-  /// The role the project's document gives it; null from a backend before project instructions.
+  /// The role the backend names it by; null when it names none.
   final String? roleName;
 
   final Map<String, dynamic> configuration;
@@ -655,8 +655,8 @@ class SuperTabSnapshot {
             lead.machineOwnerId == accountId);
   }
 
-  /// The role [agentId] goes by, and its badge: the role the project's document gives it, or, from a backend before
-  /// project instructions, its kind's (Product Manager/PM, Reviewer/Rev, Engineer/Dev). Null for an unknown agent.
+  /// The role [agentId] goes by, and its badge: the role the backend names (`roleName`), else its kind's (Product
+  /// Manager/PM, Reviewer/Rev, Engineer/Dev). Null for an unknown agent.
   ({String name, String badge})? roleOf(String agentId) {
     final agent = this.agent(agentId);
     if (agent == null) return null;
@@ -1209,6 +1209,13 @@ class SuperTabMessage {
   /// a person nothing to do (Dee 11-05, task #3127). The server keeps it for
   /// diagnosis, and a required recovery still reaches the coordinator.
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
+
+  /// A note the backend writes when an agent types into another's terminal, or when a daemon sees an agent wait at a
+  /// prompt or hit a usage limit: v3's Lead terminal notes, no chat row and nothing unread in Swarm v4 (anh Dee,
+  /// 2026-11-10). A person hears "Waiting on you" from their own computer, and an agent's details say until when it is
+  /// limited.
+  bool get leadTerminalNote =>
+      source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
 
   String? get terminalNote {
     if (!fromTerminal) return null;

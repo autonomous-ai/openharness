@@ -1781,7 +1781,8 @@ class SuperTabController extends ChangeNotifier {
   /// Whether [id]'s newest page has been read, or drawn from the saved view: before it, no messages is not an empty chat.
   bool messagesRead(String id) => _messages[id] != null;
 
-  static bool _listed(SuperTabMessage m) => !m.terminalPrompt && !m.terminalGap;
+  static bool _listed(SuperTabMessage m) =>
+      !m.terminalPrompt && !m.terminalGap && !m.leadTerminalNote;
 
   bool hasOlder(String id) => _before[id] != null;
 

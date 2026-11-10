@@ -180,30 +180,18 @@ void main() {
     });
 
     test('a plain message that only looks like a line still groups', () {
-      // A routing line, a Lead's typing into a terminal or a terminal's alert from before Swarm v4 draws as a plain
-      // message, on either side.
-      for (final source in const <Map<String, Object?>>[
-        {'kind': 'route', 'decisionId': 'decision-1'},
-        {'kind': 'terminal-input'},
-        {'kind': 'terminal-alert', 'alert': 'prompt', 'agentId': 'pm'},
-      ]) {
-        expect(
-          SuperTabMessageRow.groupsWith(
-            message(2, start.add(const Duration(seconds: 10))),
-            message(1, start, source: source),
+      // A routing line from before Swarm v4 draws as a plain message.
+      expect(
+        SuperTabMessageRow.groupsWith(
+          message(2, start.add(const Duration(seconds: 10))),
+          message(
+            1,
+            start,
+            source: const {'kind': 'route', 'decisionId': 'decision-1'},
           ),
-          isTrue,
-          reason: '$source',
-        );
-        expect(
-          SuperTabMessageRow.groupsWith(
-            message(2, start.add(const Duration(seconds: 10)), source: source),
-            message(1, start),
-          ),
-          isTrue,
-          reason: '$source',
-        );
-      }
+        ),
+        isTrue,
+      );
     });
   });
 

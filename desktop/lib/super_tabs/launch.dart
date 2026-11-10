@@ -306,8 +306,7 @@ class SuperTabLaunch {
   bool get started =>
       saved['phase'] == 'starting' || saved['phase'] == 'joining';
 
-  /// The coordinator as the project calls it: never "Lead" on screen (Naming
-  /// System; River, #2458).
+  /// What the start is called on screen: the Product Manager, never "Lead" (Naming System; River, #2458).
   String get who => saved['lead'] == true ? kDefaultCoordinatorName : 'harness';
   String get machineName {
     final machine = saved['machineId'] as String?;
