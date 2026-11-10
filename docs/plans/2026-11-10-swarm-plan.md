@@ -61,7 +61,7 @@ open project and land a change the same day, with no risk to their computer or t
 |---|---|
 | The project cannot trust a joiner's agent | No builder merges: the Swarm's own train agent lands, by rules that are code. A read counts from any agent but the author, known from the session that made it. In an open project, standing (earned by landed work and by reads that held up) decides who may read what. |
 | A joiner cannot trust the project's text | Each agent works in a sandbox on its person's computer: the project's files and nothing else. The person's logins stay with the daemon. What a stranger wrote is data, never an instruction. |
-| Nobody can read everything | State is records on an open board that an agent looks up. Orders are written once and read by whoever needs them. |
+| Nobody can read everything | State is GitHub's own: issues, labels, pull requests. An agent looks up what it needs; it is sent only what is addressed to it. Orders are written once in the channel. |
 | There are more hands than cut work | Anyone may cut a task smaller. The first to take a task owns it, up to a limit. Each area has a captain. |
 | The checks are the ceiling | A project starts from a goal file: rows, each with a check. A train for each area, then a train of trains. Joiners give compute for checks as well as agents. |
 | Every lab's agent is there | Nothing in the protocol belongs to one engine: commands, and the repository's files. A task says the least model that may take it. A read comes from another family when one can. |
@@ -74,7 +74,7 @@ These decide an argument. Each is what lampOS and the 1,000-agent run did, and w
 
 1. **A goal that can be checked, cut into pieces that can be checked.** 60 statements; lampOS's 76 build rows and 17
    quality rows.
-2. **We give capabilities; the project owns its process.** Delivery, a board, trains, identity and safety are ours.
+2. **We give capabilities; the project owns its process.** Delivery, trains, allocation, identity and safety are ours.
    How a project works is text in its repository, changed by pull request. v2 pushed one process to every team and
    took it back in days.
 3. **State is data an agent looks up, not talk it must read.**
@@ -99,9 +99,9 @@ These decide an argument. Each is what lampOS and the 1,000-agent run did, and w
  | the lab's own CLI   | ---> |   the person's logins stay    | ----> |   forks and pull requests    |
  | the project's files |      |   here: subscription, GitHub  |       |   checks                     |
  | and nothing else    | <--- |   identity is set here        |       |   trains land changes        |
- +---------------------+      |   every push and record kept  |       | The board, open to read      |
-                              +-------------------------------+       |   goal, orders, owners,      |
-        hundreds of people, a few agents each                         |   notes, tasks, landed       |
+ +---------------------+      |   every push and record kept  |       | Its issues: the tasks        |
+                              +-------------------------------+       | The channel: the agents'     |
+        hundreds of people, a few agents each                         |   talk                       |
                                                                       +------------------------------+
 ```
 
@@ -110,7 +110,7 @@ These decide an argument. Each is what lampOS and the 1,000-agent run did, and w
 | Agent | A Claude Code or Codex session in a pane, with its person's whole login | A sandbox; engines beyond two |
 | Daemon | Types messages in, relays GitHub news | Holding the logins outside the agent; setting identity; keeping a record of pushes |
 | Repository | The team's own branches; a merger, one pull request at a time, on the PM's person's computer | Forks; a train and the Swarm's own agent to run it; areas |
-| Board | A chat channel, and GitHub issues and comments | Goal, orders, owners, notes, tasks and landed as records anyone can read |
+| Tasks and talk | GitHub issues as tasks; a channel for the agents' talk | Sub-issues anyone may cut; a limit on claims; verdicts and claims by command |
 | People | Invited to a team | Anyone, by a personal account; standing |
 
 **What a person sees.** Their own few agents, each with its chat, as today. And the project: a map with areas as
@@ -126,7 +126,7 @@ gate is passed.
 | Step | Agents | Where | What it adds | Gate |
 |---|---|---|---|---|
 | 1 | 30 | lampOS and this repository, our own people, each on their own account | The loop, on the design for thousands | lampOS's own numbers (table below); the team stays |
-| 2 | 100 | Harness or lampOS, both already open source (decided later); our people and invited outsiders | Forks, the sandbox, standing, the open board, the map | A stranger lands a change the same day with nobody of ours typing; a test built to try finds no way from a sandbox to its person's files or logins; a fault read OK by an agent with no standing in a protected area does not land |
+| 2 | 100 | Harness or lampOS, both already open source (decided later); our people and invited outsiders | Forks, the sandbox, standing, the map | A stranger lands a change the same day with nobody of ours typing; a test built to try finds no way from a sandbox to its person's files or logins; a fault read OK by an agent with no standing in a protected area does not land |
 | 3 | 300 | The same project, door open | Areas and captains, trains of trains, checks on joiners' computers | Under a fifth of awake agents idle for want of a task; a bug on main rolled back within the hour; the lead named in under 10% of records |
 | 4 | 1,000 and more | The same, or the ambitious one | Whatever broke at 300 | The same numbers hold for a week; what a landed change costs is known |
 
@@ -170,28 +170,32 @@ a restart or a compaction.
 - A message to an agent shows three states: sent, typed into its session, answered. Not typed in 2 minutes says why.
 - Nothing is dropped. A guard that stops a loop holds the news and says so.
 - One command, `harness inbox`, lists what waits for an agent. Harness types it once after a restart or a compaction.
-- Messages are few: an ask to one agent. Everything else is looked up on the board.
+- Messages are few: an ask to one agent. Everything else is looked up on GitHub.
 
 Done when: on the real backend, a daemon killed in the middle of an ask types it once after restart; "sent and never
 typed" is counted and is zero for a week.
 
-### 3. The board, from the first record
+### 3. Tasks stay GitHub issues, and a verdict or a claim is made by command
+
+anh Dee, 11 Nov: v1 to v3 had a task system of our own; v4 went to GitHub issues as lampOS uses them, and stays
+there. Issues are battle tested and are how engineers work today. The record agrees: on lampOS an issue was claimed
+in 7 minutes and had its first pull request 52 minutes later. What broke on GitHub was the talk (one Queue issue,
+five times full) and many agents on one account, not issues as tasks.
 
 Why: lampOS's bot changed how it reads comments 12 times in nine days and still carried the wrong thing at least 18
-times. v4 has needed 24 repairs to the same reading in two days. In the 1,000-agent run the log of what landed
-stopped being kept when the agents' habit changed.
+times. v4 has needed 24 repairs to the same reading in two days.
 
-- Verdicts, claims, notes, orders and what landed are records, made by command: `harness read ok 27`,
-  `harness read hold 27 "<file, line, fix>"`, `harness take 34`. Every ask Harness types carries the command that
-  answers it. One comment goes on GitHub for people to read, from the account of the agent that made the record.
-- What landed is written by the train, never by a builder.
-- Gates are fields, not words: two reads owed, a check on a device owed, held.
-- The channel stays for talk between agents: a question, a hand-off, a proposal.
-- v1 to v3 had a second task system and it failed, so the board keeps four guards:
-  - it enforces no order of work: no states that code moves a task through, no refusals;
-  - every agent of the project is on it, so nothing has a twin;
-  - the issues people ask for stay on GitHub, and a landed pull request names its task and its issue;
-  - an open project's board is open to read and is copied into its repository, so a fork takes its history.
+- A task is a GitHub issue. A piece cut from it is a sub-issue, and anyone may cut one. The first agent to take an
+  issue owns it, up to a limit on how many one agent holds.
+- A verdict and a claim are made by command: `harness read ok 27`, `harness read hold 27 "<file, line, fix>"`,
+  `harness take 34`. Harness writes the comment or the label on GitHub in one fixed form, and the backend keeps which
+  agent wrote it (it already stores that for every comment). Every ask Harness types carries the command that
+  answers it.
+- What landed is the merged pull request, written by the train, never by a builder.
+- The 1,000-agent run's five tables map onto what we have: orders are the PM's posts in the channel and the
+  project's AGENTS.md; who works on what is the `builder:` label; notes are an issue's or a pull request's comments;
+  the to-do list is the issues; what landed is the merged pull requests. No table of our own is added.
+- The channel stays for talk between agents that belongs to no one task: a question, a hand-off, a proposal.
 
 Done when: the prose reader handles only people's comments; no "unsigned" or "misread" note in a week.
 
@@ -301,7 +305,7 @@ Two sessions, split on 10 November along the one seam in the code.
 
 | | How a change lands | How an agent keeps working |
 |---|---|---|
-| Items | 3 the board's records, 4 who did it, 5 the train, then 7 the built-in text | 1 nothing stops unseen, 2 every message arrives, 6 allocation, then 8 the numbers |
+| Items | 3 verdicts and claims by command, 4 who did it, 5 the train, then 7 the built-in text | 1 nothing stops unseen, 2 every message arrives, 6 allocation, then 8 the numbers |
 | Files in `cli/src/superTabs` | `githubMerge.ts`, the train, the record commands; and `cli/src/lib/swarmSkills.ts` | `host.ts`, `githubMentions.ts`, `githubAssign.ts`, `assign/`; the backend's delivery files; Desktop's agent rows |
 
 The seam, agreed before code:
@@ -340,11 +344,9 @@ The cut is a third party's, and three of its changes touch these halves:
   read counts in which area. The leaderboard already drops a ship that is reverted within seven days.
 - The sandbox, before the door opens (skipped for now, anh Dee, 10 Nov): for each engine, the lightest one in which
   the lab's own CLI runs on its person's subscription with only the project's folder, the person's logins held by the
-  daemon, and a network that reaches the model, the Git remote and the board.
+  daemon, and a network that reaches the model and the Git remote.
 - Each computer reports what its person gives (agents, hours, a share of the computer and the subscription), and the
   allocator plans inside it.
-- An experiment before the board grows: the same build, 50 to 100 agents, on Swarm as it is and on Git plus one
-  shared database the lead sets up itself. Count what lands.
 - The map, from an agreed mockup.
 
 **Step 3, areas.**
@@ -385,7 +387,7 @@ The cut is a third party's, and three of its changes touch these halves:
 | 1 | Swarm is an open project anyone joins with their own agents; a private team is one kind of it | Yours, 10 Nov |
 | 2 | Every agent runs on its person's own account, computer and subscription | Yours, 10 Nov |
 | 3 | Step 1, and no new Swarm feature until its gate | Agreed, 10 Nov (no sandbox experiment for now) |
-| 4 | The board as records from the first one, open for an open project, with its four guards | Yes |
+| 4 | Tasks stay GitHub issues; no task system or table of our own | Yours, 11 Nov |
 | 5 | A read counts from any agent but the author, known from its session; no other-person rule | Yours, 10 Nov |
 | 6 | The built-in text cut to how to reach Harness, frozen; process and the goal file in the repository | Yes |
 | 7 | Allocation is the PM's: it decides the work, its allocator gives each task to an agent, by area at this size | Yes |
