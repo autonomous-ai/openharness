@@ -1,5 +1,5 @@
 // Smaller transfer regions must still produce exactly the fully rendered frame.
-#include "../main/ui/habitat/octopus.h"
+#include "../main/ui/habitat/terminal.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,15 +35,6 @@ static void transition(const ht_scene_t *a,const ht_scene_t *b)
 int main(void)
 {
     ht_scene_t a,b;ht_scene_clear(&a,ht_rgb(0x080c08));transition(NULL,&a);
-    const char *recaps[]={NULL,"Fixed. All checks passed.",
-        "The update is installed. Voice input now sends to the selected agent. The result stays in the center."};
-    for(int i=0;i<768;i++) {
-        ht_tim_face_t f={.recipient=i%2?"Deploy latest firmware":"hn",.status=i%3?"Inbox 2 / Working":"Coalescing",
-            .mood=i%8,.foreground=0xffff,.dim=0x7777,.ink=0xafe0,.straight_title=i%7==0,
-            .pose={.look=i%3-1,.blink=i%11==0,.level=i%5}};
-        ht_scene_clear(&b,a.background);ht_octopus_face(&b,&f,i%HT_OCTOPUS_FRAMES,ht_rgb(0xc8a9f0),recaps[i%3]);
-        transition(&a,&b);a=b;
-    }
     static const char *labels[]={"","A longer line","x","abc 123", "↗", "café — ready"};
     for(int trial=0;trial<2000;trial++) {
         ht_scene_clear(&b,trial%37?a.background:(uint16_t)next());
@@ -58,9 +49,9 @@ int main(void)
     }
     // Forty isolated thin rows force the 24-region budget to coalesce safely.
     ht_scene_clear(&b,a.background);
-    for(int i=0;i<40;i++)ht_text(&b,(i*31)%360,i*10,60,&ht_octopus_font_2,0xffff,b.background,".:::::::.");
+    for(int i=0;i<40;i++)ht_text(&b,(i*31)%360,i*10,60,&ht_mono_16,0xffff,b.background,".:::::::.");
     transition(&a,&b);a=b;
     ht_scene_clear(&b,a.background);transition(&a,&b);
     assert(improved>500);
-    printf("Damage bands: 768 real layout/pose transitions + 2000 overlapping/clipped scenes, region-budget pressure and guarded partial redraws match full frames; %u smaller updates PASS\n",improved);
+    printf("Damage bands: 2000 overlapping/clipped scenes, region-budget pressure and guarded partial redraws match full frames; %u smaller updates PASS\n",improved);
 }

@@ -1,4 +1,4 @@
-#include "../main/ui/habitat/octopus.h"
+#include "../main/ui/habitat/terminal.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,8 +12,7 @@ static void identical(void) {
     assert(!memcmp(a.runs,b.runs,a.count*sizeof *a.runs));
 }
 int main(void) {
-    const ht_font_t *fonts[]={&ht_octopus_font_2,&ht_octopus_font_4,&ht_octopus_font_6,
-        &ht_octopus_font_8,&ht_octopus_font_10,&ht_mono_20};
+    const ht_font_t *fonts[]={&ht_mono_16,&ht_mono_20,&ht_mono_24,&ht_mono_28,&ht_open_20,&ht_mono_20};
     size_t page=(size_t)sysconf(_SC_PAGESIZE);
     char *map=mmap(NULL,page*3,PROT_NONE,MAP_PRIVATE|MAP_ANON,-1,0);
     assert(map!=MAP_FAILED&&!mprotect(map+page,page,PROT_READ|PROT_WRITE));
@@ -37,13 +36,5 @@ int main(void) {
     assert(!ht_ascii_text(&b,0,0,40,&ht_mono_20,0,0,NULL,1));
     for(int i=0;i<HT_RUNS;i++)assert(ht_ascii_text(&b,0,0,40,&ht_mono_20,0,0,NULL,0));
     assert(!ht_ascii_text(&b,0,0,40,&ht_mono_20,0,0,"x",1));
-    for(unsigned frame=0;frame<HT_OCTOPUS_FRAMES;frame++) for(unsigned mood=0;mood<=HT_TIM_LISTENING;mood++)
-    for(unsigned size=0;size<5;size++) {
-        ht_tim_face_t face={.mood=(ht_tim_mood_t)mood,.dim=0x8410,.unread=frame%2,
-            .pose={.look=(int)(frame%5)-2,.blink=frame%3==0,.pressed=frame%4==0,.level=frame%5}};
-        ht_scene_clear(&a,0);ht_scene_clear(&b,0);
-        ht_octopus_fast_scene(false);ht_octopus_portrait(&a,&face,frame,0xfedc,fonts[size],80);
-        ht_octopus_fast_scene(true);ht_octopus_portrait(&b,&face,frame,0xfedc,fonts[size],80);identical();
-    }
-    puts("ASCII scene: 10000 exact-length guarded assets + 2520 full portrait scenes match UTF-8 construction byte for byte PASS");
+    puts("ASCII scene: 10000 exact-length guarded assets match UTF-8 construction byte for byte PASS");
 }

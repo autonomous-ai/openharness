@@ -18,10 +18,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # PENDING_VERIFY and must call esp_ota_mark_app_valid_cancel_rollback() once healthy, else the
 # bootloader reverts to the previous slot on the next reboot (a bad update can't brick the device).
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
-# Allow OTA over plain HTTP (no TLS). Security here is version-gate + SHA-256 integrity check
-# (the Wi-Fi OTA path, since replaced by the host's push over the cable); image signing / HTTPS was a deferred follow-up. Without this, esp_https_ota_begin
-# refuses a non-verified server ("No option for server verification is enabled").
-CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
 # --- FreeRTOS ---
 CONFIG_FREERTOS_HZ=1000
@@ -30,6 +26,10 @@ CONFIG_FREERTOS_HZ=1000
 # OTA boot mode performs HTTP download and SHA verification on app_main. The
 # measured 8KiB stack left only 1,444B (17.6%); 10KiB restores the 25% margin.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
+
+# --- printf ---
+# Newlib nano printf saves ~31 KB of flash code; it cannot print %ll*, %j, %z, %t, %L or %a (test_nano_formats.py), but still prints floats.
+CONFIG_LIBC_NEWLIB_NANO_FORMAT=y
 
 # --- Log level ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from '../leads.test-support.js'
 import * as store from '../parts/index.js'
-import { readerView } from './views.js'
+import { groupView, readerView } from './views.js'
 import { projectLightGroup, lightSelect } from '../parts/lightSelect.js'
 import { recordPulse } from '../pulse.js'
 import { fullSwarm, NOW, outsider, owner, peer, richSwarm } from './fixture.test-support.js'
-import type { Actor } from '../model.js'
+import type { Actor, Conversation } from '../model.js'
 
 const R = 9_000
 const MINUTE = 60_000
@@ -192,12 +192,10 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(expired).not.toHaveProperty('suspendedEngines')
   })
 
-  it('gives a Lead the other projects\' work and a person the mentions waiting', () => {
+  it('gives a Lead the other projects\' work, and nobody a tag count since Swarm v4', () => {
     const { s, parts } = scene()
     expect(readerView(parts, agentActor(s.lead), NOW, {}).derived).toHaveProperty('otherProjectsWork', [])
-    expect(readerView(parts, agentActor(s.lead), NOW, {}).derived).not.toHaveProperty('mentionsWaiting')
-    expect(readerView(parts, peer, NOW, { mentionsWaiting: 2, mentionsDigest: 'd' }).derived).toMatchObject({ mentionsWaiting: 2, mentionsDigest: 'd' })
-    expect(readerView(parts, agentActor(s.lead), NOW, { mentionsWaiting: 2, mentionsDigest: 'd' }).derived).not.toHaveProperty('mentionsDigest')
+    for (const reader of [agentActor(s.lead), peer]) expect(readerView(parts, reader, NOW, {}).derived).not.toHaveProperty('mentionsWaiting')
     expect(readerView(parts, peer, NOW, {}).derived).not.toHaveProperty('otherProjectsWork')
   })
 
@@ -370,5 +368,21 @@ describe('the pulse on the read', () => {
     expect(full[pilot]!.asks.count).toBe(1)
     expect(full[pilot]!.nextUp.count).toBeGreaterThan(0)
     expect(readerView(light as never, peer, NOW, {}).derived.pulse).toEqual(full)
+  })
+})
+
+// Swarm v4 writes no pull request check state, head, event, step listing or check verdict (2026-11-10). A group stored before
+// still holds them: a reader is sent none, so no card shows a state frozen at the release.
+describe('what a group stored before Swarm v4 still holds', () => {
+  it('sends no pull request watch fields, step listing or check verdicts', () => {
+    const group = { id: 'g1', title: 'Fix', leadId: null, agentIds: [], archived: false, brief: '', assignment: null, lastMessageSequence: 0,
+      checks: [{ id: 'c1', description: 'Works', independent: false, evidence: 'Looks right', passedBy: 'agent:a', verdicts: [{ by: 'agent:a', passed: true }] }],
+      pullRequestUrls: ['https://github.com/o/r/pull/1'], pullRequestChecks: { 'https://github.com/o/r/pull/1': 'red' },
+      pullRequestHeads: { 'https://github.com/o/r/pull/1': { head: 'abc', patch: null, at: 1 } }, pullRequestEvents: { 'https://github.com/o/r/pull/1': ['ci-red:abc'] },
+      stepIds: ['s1'], waitingWindowsStep: { pulls: [] }, openedBy: 'server' } as unknown as Conversation
+    const view = groupView(group, new Set()) as unknown as Record<string, unknown>
+    for (const field of ['pullRequestChecks', 'pullRequestHeads', 'pullRequestEvents', 'stepIds', 'waitingWindowsStep', 'openedBy']) expect(view, field).not.toHaveProperty(field)
+    expect(view.checks).toEqual([{ id: 'c1', description: 'Works', independent: false, evidence: 'Looks right', passedBy: 'agent:a' }])
+    expect(view.pullRequestUrls).toEqual(['https://github.com/o/r/pull/1'])
   })
 })

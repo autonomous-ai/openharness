@@ -46,7 +46,6 @@ const HAND_MADE: Array<[string, Record<string, unknown>]> = [
   ['product_usage_activity', { key: { subject: 1, dayUtc: 1 }, name: 'product_usage_activity_subject_dayUtc_key', unique: true }],
   ['harness_sessions', { key: { expiresAt: 1 }, name: 'harness_session_expiry', expireAfterSeconds: 30 * DAY }],
   ['SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: 120 }],
-  ['SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: 30 * DAY }],
   ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] as [string, Record<string, unknown>]),
 ]
 

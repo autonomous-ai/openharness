@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../core/machine_resources.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
@@ -137,13 +136,11 @@ List<AddComputerRow> addComputerRows(
 /// Add your computers (Dee, 10-29): the reader's other computers, added to
 /// the Swarm in one step with today's defaults, one at a time. Their first
 /// computer never comes through here: joining or creating a Swarm adds it.
-/// [readResources] stands in for [AppNotifier.readMachineResources] and
-/// [openDownload] for opening the download page.
+/// [openDownload] stands in for opening the download page.
 Future<void> showAddComputers(
   BuildContext context,
   SuperTabController c,
   AppNotifier app, {
-  Future<MachineResources?> Function(String machineId)? readResources,
   void Function(Uri url)? openDownload,
 }) => showAppDialog<void>(
   context: context,
@@ -152,7 +149,6 @@ Future<void> showAddComputers(
     child: _AddComputers(
       controller: c,
       app: app,
-      readResources: readResources,
       openDownload: openDownload,
     ),
   ),
@@ -162,12 +158,10 @@ class _AddComputers extends StatefulWidget {
   const _AddComputers({
     required this.controller,
     required this.app,
-    this.readResources,
     this.openDownload,
   });
   final SuperTabController controller;
   final AppNotifier app;
-  final Future<MachineResources?> Function(String machineId)? readResources;
   final void Function(Uri url)? openDownload;
 
   @override
@@ -237,7 +231,6 @@ class _AddComputersState extends State<_AddComputers> {
           setupId: setupId,
           alive: _alive,
           teamAccountOnly: teamAccountOnly,
-          readResources: widget.readResources,
         );
         _setups.remove(id);
         if (done == null) break;

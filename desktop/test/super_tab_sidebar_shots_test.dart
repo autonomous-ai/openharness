@@ -57,10 +57,7 @@ void main() {
           'resources': {'deviceType': ?type},
         },
       };
-      final server = ConversationServer()
-        ..tag('message-1')
-        ..tag('message-2')
-        ..ask(['Ship it behind a flag?']);
+      final server = ConversationServer();
       server.state['agents'] = <Object>[];
       server.state['machines'] = [
         machine('studio', 'MACs-Mac-Studio.local', 'Mac Studio'),
@@ -82,7 +79,6 @@ void main() {
               body: SuperTabView(
                 controller: c,
                 app: app,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 onNewProject: () {},

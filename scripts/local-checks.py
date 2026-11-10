@@ -54,7 +54,7 @@ CHECKS = {
                                  "desktop/test/macos*.dart", "desktop/pubspec.yaml", "desktop/pubspec.lock")),
 }
 CLI_SHARED = ("cli/package.json", "cli/package-lock.json", "cli/vitest.config.ts", "cli/vitest.setup.ts",
-              "cli/vitest.tmpdir.ts", "cli/tsconfig*.json", "cli/.node-version", "cli/.nvmrc")
+              "cli/vitest.tmpdir.ts", "cli/src/__fixtures__/vitestRun.ts", "cli/tsconfig*.json", "cli/.node-version", "cli/.nvmrc")
 FENCE = re.compile(r"^```harness-local-checks\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 

@@ -1,6 +1,5 @@
 {
   "src/superTabs/confidential.ts swarmAgent.findMany": 1,
-  "src/superTabs/decisions.ts superTabDecision.findMany": 1,
   "src/superTabs/migration/links.ts superTabAttempt.findMany": 1,
   "src/superTabs/migration/links.ts superTabMessage.findMany": 1,
   "src/superTabs/read/host.ts swarmGroup.findMany": 1,
@@ -11,7 +10,7 @@
   "src/superTabs/sessionScope.ts superTabSessionScope.updateMany": 1,
   "src/superTabs/store.ts superTabAttachment.findMany": 2,
   "src/superTabs/store.ts superTabAttachment.updateMany": 2,
-  "src/superTabs/store.ts superTabDelivery.updateMany": 11,
+  "src/superTabs/store.ts superTabDelivery.updateMany": 10,
   "src/superTabs/store.ts superTabOperation.findMany": 1,
   "src/superTabs/store.ts superTabRun.deleteMany": 1,
   "src/superTabs/store.ts superTabTerminalRequest.count": 1,

@@ -142,7 +142,7 @@ void main() {
       ..['kind'] = 'buddy'
       ..['buddyOwnerId'] = 'owner'
       ..['agentIds'] = ['pm'];
-    final c = await showView(tester, s, board: false);
+    final c = await showView(tester, s);
     await c.select('offline');
     await tester.pumpAndSettle();
     final rows = find.byType(SuperTabMessageRow);

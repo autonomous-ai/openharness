@@ -6,7 +6,7 @@ import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
-import 'buddy_rows.dart' show SuperTabCountBadge;
+import 'count_badge.dart' show SuperTabCountBadge;
 
 /// Keeps resource headings aligned whether their add action is available or not.
 class SuperTabSectionHeading extends StatelessWidget {

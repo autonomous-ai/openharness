@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ContributedMachine } from '../machines.js'
-import { createSuperTab, type Agent, type Check, type Conversation, type SuperTabState } from '../model.js'
+import { createSuperTab, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { addLent } from './lent.js'
-import { recordVerdict, type GroupLedger } from './record.js'
+import type { GroupLedger } from './record.js'
 import { HOUR_MS as HOUR, lentIn, periodSpans, reviewsIn, type PeriodName } from './rolling.js'
 import { leaderboard } from './stats.js'
 import { DAY_MS as DAY, WEEK_MS as WEEK, weekStart } from './week.js'
@@ -230,33 +230,6 @@ describe('review verdicts in a rolling period', () => {
   it('reads a week by its weekly rows alone', () => {
     const ledger = { reviews: [{ week: THIS_WEEK, ...opus, count: 3 }], reviewHours: [{ hour: NOW - HOUR, ...opus, count: 3 }] }
     expect(reviewsIn(ledger, { start: THIS_WEEK, end: THIS_WEEK + WEEK, rolling: false })).toMatchObject([{ count: 3 }])
-  })
-})
-
-describe('what a verdict writes', () => {
-  const check = { id: 'c1', description: 'Passes', status: 'pending' } as unknown as Check
-  const reviewer = { id: 'rev', harnessId: 'h-rev', machineId: 'mac', configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } } as unknown as Agent
-  const reviewed = () => group({ assignment: { id: 'a', agentId: 'worker' } as Conversation['assignment'], ledger: { runs: [{ assignmentId: 'a', at: NOW - DAY, engine: 'claude', model: 'opus' }] } })
-
-  it('counts it in its week and its hour, one row per hour and model', () => {
-    const g = reviewed()
-    recordVerdict(swarm(), g, check, reviewer, NOW + 1, true)
-    recordVerdict(swarm(), g, check, reviewer, NOW + 2, true)
-    expect(g.ledger!.reviews).toEqual([{ week: THIS_WEEK, ...opus, count: 2 }])
-    expect(g.ledger!.reviewHours).toEqual([{ hour: NOW, ...opus, count: 2 }])
-  })
-
-  it('lets go of hours older than the weeks kept', () => {
-    const g = reviewed()
-    g.ledger!.reviewHours = [{ hour: NOW - 36 * DAY, ...opus, count: 7 }, { hour: NOW - 34 * DAY, ...opus, count: 1 }]
-    recordVerdict(swarm(), g, check, reviewer, NOW, true)
-    expect(g.ledger!.reviewHours.map(r => r.hour)).toEqual([NOW - 34 * DAY, NOW])
-  })
-
-  it('keeps an assignee\'s own verdict out of both', () => {
-    const g = reviewed()
-    recordVerdict(swarm(), g, check, { ...reviewer, id: 'worker' }, NOW, true)
-    expect(g.ledger).not.toHaveProperty('reviewHours')
   })
 })
 

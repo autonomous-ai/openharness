@@ -2269,6 +2269,50 @@ class Registry {
    * rather than mint another. `terminalHost` stays set so the exit is recognised (`releaseEngine`).
    * Refused for anything but a terminal: an agent already running one engine is never re-labelled.
    */
+  /**
+   * An archived harness back on the pane its own engine never left: the terminal row that kept the pane gives it back.
+   *
+   * A restore that could not see a pane's engine archived the harness as exited and handed its pane to a new terminal
+   * row (`retainExitedSession`), while the engine ran on: on DESKTOP-0TFH0OJ (2026-11-10) CLI 0.5.97 did that to every
+   * Hermes pane, and the harness then answered Enter with `AGENT_BUSY` for as long as its own Hermes lived. The caller
+   * has proved [processIdentity] is the archived row's own process, in this pane. The archived row keeps its id, name and
+   * conversation, and takes the terminal row's pane; the terminal row goes. The terminal row may already have adopted that
+   * engine (a build with the engine fix but not this one): a terminal-born row of the same engine, with no conversation
+   * of its own yet, gives the pane back the same way. Null, changing nothing, for any other row, an archived id that is
+   * live, or a conversation bound to another row.
+   */
+  reinstateArchived(terminalAgentId: string, saved: RegisteredSession, processIdentity: ProcessIdentity): RegisteredSession | null {
+    const terminal = this.agents.get(terminalAgentId)
+    const holder = !!terminal && (isTerminalEngine(terminal.engine)
+      || (!!terminal.terminalHost && !terminal.sessionId && terminal.engine === saved.engine))
+    if (this.writeBlocked || !terminal || !holder || isTerminalEngine(saved.engine)
+      || this.agents.has(saved.agentId) || (saved.sessionId && this.bySession(saved.sessionId))
+      || !validProcessIdentity(processIdentity)) return null
+    this.drop(terminal)
+    this.terminalAvailableAgents.delete(terminal.agentId)
+    const entry: RegisteredSession = {
+      ...saved,
+      active: true,
+      launch: { state: 'ready' },
+      processIdentity,
+      runtimes: terminal.runtimes,
+      primaryRuntimeKey: terminal.primaryRuntimeKey,
+      tmuxPane: terminal.tmuxPane,
+      touchedAt: Date.now(),
+    }
+    this.traceLaunch(entry.agentId, saved.launch, entry.launch, `reinstateArchived from ${terminal.agentId}`)
+    this.index(entry)
+    this.terminalAvailableAgents.add(entry.agentId)
+    try { this.save() } catch {
+      this.drop(entry)
+      this.terminalAvailableAgents.delete(entry.agentId)
+      this.index(terminal)
+      this.terminalAvailableAgents.add(terminal.agentId)
+      return null
+    }
+    return entry
+  }
+
   adoptEngine(agentId: string, engine: AgentEngine, processIdentity?: ProcessIdentity | null): RegisteredSession | null {
     const entry = this.agents.get(agentId)
     if (!entry || !isTerminalEngine(entry.engine) || isTerminalEngine(engine)) return null

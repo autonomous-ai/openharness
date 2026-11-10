@@ -48,10 +48,10 @@ static bool draft_emit(const ht_draft_command_t *c,void *ctx){(void)c;(void)ctx;
 '''
 code += defines('UI_FONT', source=source)
 code += defines('FACE_CX', source=source)
-# The production helpers are skin-aware; this harness has no Focus skin, so they are the mono calls.
-code += '''static int ui_rows(const char *t,const ht_font_t *f,int w){return ht_text_rows(t,f,w);}
-static bool ui_can_display(const char *t,const ht_font_t *f,int w,int l){return ht_can_display(t,f,w,l);}
-'''
+# The production helpers set every page in Inter (focus_skin is gone: Focus is the only character).
+code += '#include <limits.h>\n#include "focus_faces.h"\n'
+for name in ['focus_face_for','focus_span','focus_take','focus_rows','ui_rows','ui_can_display']:
+    code += function(name)
 for name in ['copy','question_rows','draft_page','ui_voice_draft','ui_draft_state']:
     code+=function(name)
 code+=r'''
@@ -99,5 +99,5 @@ int main(void){
 with tempfile.TemporaryDirectory(prefix='harness-draft-ui-') as d:
     root=Path(d);(root/'test.c').write_text(code)
     subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g','-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
-        '-I',str(native),str(root/'test.c'),str(native/'draft.c'),str(native/'carry.c'),str(native/'terminal.c'),str(native/'fonts.c'),'-o',str(root/'test')],check=True)
+        '-I',str(native),str(root/'test.c'),str(native/'draft.c'),str(native/'carry.c'),str(native/'terminal.c'),str(native/'fonts.c'),str(native/'focus_faces.c'),str(native/'lvgl_fonts.c'),'-o',str(root/'test')],check=True)
     subprocess.run([str(root/'test')],check=True)

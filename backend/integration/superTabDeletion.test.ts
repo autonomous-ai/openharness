@@ -271,9 +271,9 @@ describe('while a Swarm is deleted', () => {
     expect((await w.store.invitations(late)).map(i => i.tabId)).not.toContain(f.tab)
   })
 
-  it('keeps everyone\'s thread follows and chat settings through the hourly sweeps, and a restore brings them back', async () => {
+  it('keeps everyone\'s thread marks and chat settings through the hourly sweeps, and a restore brings them back', async () => {
     const w = world(), f = await swarm(w)
-    await w.reads.followThread(member, f.tab, 'lead', f.hello, true)
+    await w.reads.markThreadRead(member, f.tab, 'lead', f.hello, 1)
     await w.reads.setChatNotify(member, f.tab, 'lead', 'all')
     const kept = async () => [await db.superTabThreadMark.count({ where: { tabId: f.tab } }), await db.superTabChatSetting.count({ where: { tabId: f.tab } })]
     expect(await kept()).toEqual([1, 1])
@@ -303,7 +303,7 @@ describe('while a Swarm is deleted', () => {
   })
 
   /** A Swarm with a group archived by hand (so it may sleep), a finished start past its keeping,
-   *  a decision still waiting in that finished group, and a group finished weeks ago with a merged pull request; deleted or
+   *  and a group finished weeks ago with a merged pull request; deleted or
    *  not. Each background job changes the live one, so a check on the deleted one can fail (re-check 2 of #2457). */
   async function quietSwarm(w: ReturnType<typeof world>, name: string, deleted: boolean) {
     const f = await swarm(w, name)
@@ -330,8 +330,6 @@ describe('while a Swarm is deleted', () => {
       data: { id: 'start-old', creationId: 'c', actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: 'g', machineOwnerId: host.sub,
         hostGrant: null, error: 'It failed long ago.', request: { conversationId: 'lead', machineId: f.machineId, engine: 'codex', name: 'Builder', cwd: '/repo',
           worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } } })
-    await db.superTabDecision.create({ data: { id: `${f.tab}:decision`, tabId: f.tab, batchId: 'b', projectId: 'lead', conversationId: group,
-      personId: owner.sub, askerAgentId: f.lead, question: 'Ship it?', options: ['Yes', 'No'], recommended: 0, unblocks: 'Shipping', createdAt: old } })
     return { ...f, group }
   }
 

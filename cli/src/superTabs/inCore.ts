@@ -19,8 +19,6 @@ export { createSwarmSkillAdoption } from './inCore/adoption.js'
 export { createSwarmAgents } from './inCore/agents.js'
 export { SWARM_LAUNCH } from './inCore/launch.js'
 export { typesWhileBusy } from './inCore/deliveries.js'
-export { teamRetirement } from './inCore/teamRetire.js'
-export { isTeamAccount } from '../team/config.js'
 export { mayBeBuddy, retainedHarnesses, retainedLeads, retainedSleepingBuddies } from './retention.js'
 export { recordCleanupClose } from './cleanupCloses.js'
 // A Product Manager switched from its pane (Change agent) is the one stop of a Lead its close guard and stop guard let through.

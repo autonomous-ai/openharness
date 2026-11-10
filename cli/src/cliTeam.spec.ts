@@ -30,10 +30,3 @@ it('has no `harness team`: it is an unknown command, and touches nothing', () =>
   expect(run.out).not.toMatch(/harness team|Team account/)
   expect(run.left).toEqual([])
 }, 90_000)
-
-// An old Team account's boot job runs `team __start <file>` before its daemon, which then stops itself
-// (superTabs/inCore/teamRetire.ts): it answers quietly, so the daemon still starts and its log gets no usage text.
-it('answers an old Team account\'s boot job quietly, exit 0, so its daemon still starts', () => {
-  const run = team('__start', '/Library/Application Support/Harness/Team/handoff')
-  expect({ status: run.status, out: run.out, left: run.left }).toEqual({ status: 0, out: '', left: [] })
-}, 90_000)

@@ -3,6 +3,7 @@
  * owner's machines the daemon carries it over the paired E2EE relay (localWsServer `machine_select`). `harness
  * send` reaches its own daemon the same way.
  */
+import { refusedLineText } from '../lib/localJsonLimit.js'
 import { randomBytes } from 'node:crypto'
 import { env } from '../config/env.js'
 import { WebSocket } from 'ws'
@@ -48,13 +49,16 @@ export function createMessagesRpc(options: LocalDaemonOptions = {}): Rpc {
     const unreachable = (error?: unknown) => new MessageError('DAEMON_UNREACHABLE', target.dataDir ? unreachableText({ error, pid: pidIn(target.dataDir) }) : NOT_RUNNING)
     const attach = (socket: WebSocket): void => {
       socket.on('error', (error) => finish(unreachable(error)))
-      socket.on('close', (code) => finish(new MessageError(code === 4404 ? 'NO_PEER_LINK' : 'DISCONNECTED', code === 4404
-        ? 'That machine is not paired with this one.' : 'The daemon connection closed.')))
+      socket.on('close', (code) => finish(code === 1009 ? new MessageError('REQUEST_TOO_LARGE', refusedLineText(undefined))
+        : new MessageError(code === 4404 ? 'NO_PEER_LINK' : 'DISCONNECTED', code === 4404
+          ? 'That machine is not paired with this one.' : 'The daemon connection closed.')))
       socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId: target.machineId, localProtocolVersion: 1 } })))
       socket.on('message', (raw, binary) => {
         if (binary || finished) return
         try {
           const frame = JSON.parse(raw.toString())
+          // The daemon refused the message as too large and closes the line, with its numbers.
+          if (frame.type === 'frame_too_large') { finish(new MessageError('REQUEST_TOO_LARGE', refusedLineText(frame.payload))); return }
           if (frame.type === 'machine_select_error') { finish(new MessageError(String(frame.payload?.error ?? 'MACHINE_UNAVAILABLE'), 'That machine is unavailable.')); return }
           if (frame.type === 'connected' && !selected) {
             selected = true

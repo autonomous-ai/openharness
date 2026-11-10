@@ -110,25 +110,6 @@ bool config_save_habitat_options(uint8_t options)
     return ok;
 }
 
-uint8_t config_load_habitat_character(uint8_t fallback)
-{
-    nvs_handle_t h;
-    uint8_t value = fallback;
-    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u8(h, "habitat_char", &value);
-        nvs_close(h);
-    }
-    return value;
-}
-bool config_save_habitat_character(uint8_t character)
-{
-    nvs_handle_t h;
-    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return false;
-    bool ok = nvs_set_u8(h, "habitat_char", character) == ESP_OK && nvs_commit(h) == ESP_OK;
-    nvs_close(h);
-    return ok;
-}
-
 // --- scroll direction ---------------------------------------------------------------------------
 // Which way a drag moves the window's scrollback. A habit, not a fact about the hardware: some hands
 // expect the text to follow the finger, others expect the VIEW to follow it, and neither is wrong.

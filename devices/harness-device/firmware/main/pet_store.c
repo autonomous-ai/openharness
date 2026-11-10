@@ -167,7 +167,12 @@ typedef struct { uint8_t n; uint16_t ms; int16_t dx, dy; uint16_t idx[255]; } sc
 
 // parse's working arrays (~3.7 KB), kept off the 6 KiB cable reader task's stack. parse runs only on the cable
 // task (from pet_store_finish), one at a time, so one static copy is enough.
+#ifdef ESP_PLATFORM
+#include "esp_attr.h"
+static EXT_RAM_BSS_ATTR struct { uint16_t small[LOOPS][255]; scene_raw_t sc[SCENES]; } s_scratch;   // PSRAM BSS: parse is rare and not timing-critical
+#else
 static struct { uint16_t small[LOOPS][255]; scene_raw_t sc[SCENES]; } s_scratch;
+#endif
 
 static unsigned gcd(unsigned a, unsigned b) { while (b) { unsigned t = a % b; a = b; b = t; } return a; }
 

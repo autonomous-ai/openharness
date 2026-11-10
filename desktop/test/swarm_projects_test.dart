@@ -3,14 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/shared/theme/app_icons.dart';
-import 'package:harness/super_tabs/activity.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
 
 import 'support/super_tab_fixture.dart';
-import 'support/super_tab_members.dart';
 
 ConversationServer projectsServer() {
   final server = ConversationServer();
@@ -40,9 +37,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             onNewProject: onNewProject,
@@ -59,62 +54,6 @@ void main() {
     await c.flush();
     c.dispose();
   }
-
-  testWidgets('project rows open lead chats and list no workgroups', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    var creations = 0;
-    await mount(tester, c, onNewProject: () => creations++);
-    expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
-    expect(find.byIcon(AppIcons.lock), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('super-group-design-lead')),
-      findsOneWidget,
-    );
-    expect(find.text('Leads'), findsNothing);
-    expect(find.text('Projects'), findsOneWidget);
-    // The right column opens only from Members (Quiet Swarm).
-    expect(find.text('People'), findsNothing);
-    await openSuperTabMembers(tester);
-    expect(find.text('People'), findsOneWidget);
-    // The roster's heading; the leaderboard's Agents pill is the other one.
-    expect(
-      find.descendant(
-        of: find.byType(SuperTabSectionHeading),
-        matching: find.text('Agents'),
-      ),
-      findsOneWidget,
-    );
-    final create = find.byTooltip('New project');
-    final project = find.byKey(const ValueKey('super-group-lead'));
-    expect(
-      tester.getBottomLeft(create).dy,
-      lessThan(tester.getTopLeft(project).dy),
-    );
-    expect(c.selectedId, 'lead');
-    expect(find.text('12  Offline editing'), findsNothing);
-    // Already open: a click on it keeps its chat, and lists no workgroups:
-    // they are in the project's Tasks view (task #2569).
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-    await tester.pumpAndSettle();
-    expect(c.selectedId, 'lead');
-    expect(find.text('12  Offline editing'), findsNothing);
-    await c.select('offline');
-    await tester.pumpAndSettle();
-    expect(c.selectedId, 'offline');
-    await tester.tap(find.byKey(const ValueKey('super-group-design-lead')));
-    await tester.pumpAndSettle();
-    expect(c.selectedId, 'design-lead');
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
-    await tester.pumpAndSettle();
-    expect(c.selectedId, 'lead');
-    await tester.tap(find.byTooltip('New project'));
-    expect(creations, 1);
-    expect(server.posts, isEmpty);
-    expect(tester.takeException(), isNull);
-    await unmount(tester, c);
-  });
 
   testWidgets('a project row works from the keyboard', (tester) async {
     final server = projectsServer(), c = server.controller();
@@ -147,40 +86,9 @@ void main() {
     await unmount(tester, c);
   });
 
-  testWidgets('project pull requests include its workgroups and stay scoped', (
-    tester,
-  ) async {
-    final server = projectsServer(), c = server.controller();
-    server.append(
-      'Ready: https://github.com/example/lamp/pull/12',
-      conversationId: 'offline',
-    );
-    server.append(
-      'Design: https://github.com/example/design/pull/8',
-      conversationId: 'design-lead',
-    );
-    await mount(tester, c);
-    await tester.tap(find.byTooltip('Project options'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
-    await tester.pumpAndSettle();
-    expect(find.text('example/lamp #12'), findsOneWidget);
-    expect(find.text('example/design #8'), findsNothing);
-    expect(find.text('This project'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('super-group-design-lead')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Project options'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(AppMenuItem, 'Pull requests'));
-    await tester.pumpAndSettle();
-    expect(find.text('example/design #8'), findsOneWidget);
-    expect(find.text('example/lamp #12'), findsNothing);
-    await unmount(tester, c);
-  });
-
-  // Quiet Swarm polish: a project's row says only what opening it shows, and Activity holds what needs you.
+  // Quiet Swarm polish: a project's row says only what opening it shows.
   testWidgets(
-    'a collapsed project\'s waiting workgroup is held by Activity, not by a mark on its row',
+    'a collapsed project\'s waiting workgroup puts no mark on its row',
     (tester) async {
       final server = projectsServer(), c = server.controller();
       server.state['agents'] = [
@@ -198,11 +106,9 @@ void main() {
       group['assignment'] = {
         'status': 'needs_human',
         'agentId': 'worker',
-        // Activity holds a waiting task only when it asked the reader by name.
         'askedOf': 'owner',
       };
       await mount(tester, c);
-      await SuperTabActivity.of(c).decisions.load();
       expect(find.byKey(const ValueKey('super-group-offline')), findsNothing);
       expect(
         find.descendant(
@@ -210,10 +116,6 @@ void main() {
           matching: find.byTooltip('Needs a human'),
         ),
         findsNothing,
-      );
-      expect(
-        SuperTabActivity.of(c).needsYou.map((need) => need.conversationId),
-        contains('offline'),
       );
       await unmount(tester, c);
     },
