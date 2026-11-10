@@ -1807,15 +1807,12 @@ describe('the super-tab command in delivered input', () => {
     // The Answer line closes every delivery (Swarm v4); these read what comes before it.
     return String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1]).replace(/\n\nAnswer: [^\n]*$/, '')
   }
-  // anh Dee, task #2926: a Buddy's proposal is its owner's own message; its goal, scope and priority ride in its source for the PM.
-  // Named, never by email (task #2954).
-  it('hands the PM a proposal\'s goal, scope and priority after its owner\'s words', async () => {
+  // Backend S9 (#3867): proposals are gone. A row a Buddy's proposal posted before is delivered as any other: its owner's words,
+  // with nothing of the proposal's source (task #2954: named, never by email).
+  it('hands the PM a row from a Buddy\'s proposal as any other, with nothing of its source', async () => {
     const author = { kind: 'person', id: 'peer', name: 'peer@example.com' }
     const source = { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', goal: 'Desktop keeps drafts offline', scope: 'Desktop only', priority: 'high' }
-    expect((await delivered({ text: 'Keep my drafts when I go offline', author, source })).endsWith('@peer, to you:\nKeep my drafts when I go offline\n\n'
-      + 'Proposal details from their Buddy, for the PM:\nGoal: Desktop keeps drafts offline\nScope: Desktop only\nPriority: high')).toBe(true)
-    // A proposal from before keeps its details in its Buddy's reply, and any other row is as it was.
-    expect((await delivered({ text: 'Offline drafts', author, source: { kind: 'buddy-proposal', personId: 'peer' } })).endsWith('@peer, to you:\nOffline drafts')).toBe(true)
+    expect((await delivered({ text: 'Keep my drafts when I go offline', author, source })).endsWith('@peer, to you:\nKeep my drafts when I go offline')).toBe(true)
   })
   it('marks a message the server says an agent of another account wrote, right before it (audit M3)', async () => {
     const author = { kind: 'agent', id: 'team-agent', name: 'Tester' }
