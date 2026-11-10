@@ -6,9 +6,7 @@
  * Claude Code hashes for its Keychain item and what CLAUDE_CONFIG_DIR must hold; its id is of the real path.
  *
  * Two labels, both from the folder alone: `label` is for the machine's owner; `reportLabel` is what leaves the
- * machine, so it drops a name holding an '@' and is cut short. `offered` marks what the owner put on the Swarm: the
- * default account and what they offered by name (lib/accountOffers.ts); every other folder, linked or made by Add Claude account
- * included, stays the owner's own to pick in Change agent.
+ * machine, so it drops a name holding an '@' and is cut short.
  */
 
 import { createHash, randomUUID } from 'crypto'
@@ -17,8 +15,7 @@ import { homedir } from 'os'
 import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
-import { offeredFolders, recordOffer } from './accountOffers.js'
-import { defaultCodexHome, listCodexProfiles, resolveCodexProfilePath } from './codexProfiles.js'
+import { defaultCodexHome, listCodexProfiles } from './codexProfiles.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 
 export interface ClaudeProfile {
@@ -26,7 +23,6 @@ export interface ClaudeProfile {
   path: string
   label: string
   reportLabel: string
-  offered: boolean
   /** Set on the default account alone. */
   default?: true
 }
@@ -61,14 +57,13 @@ function reportLabelFor(path: string, home: string): string {
   return (name.includes('@') ? 'Claude' : name).slice(0, REPORT_LABEL_MAX)
 }
 
-function profileFor(machineId: string, path: string, real: string, home: string, offered: boolean, isDefault = false): ClaudeProfile {
+function profileFor(machineId: string, path: string, real: string, home: string, isDefault = false): ClaudeProfile {
   return {
     id: profileId(machineId, 'claude', isDefault ? 'default' : real),
     ...(isDefault ? { default: true as const } : {}),
     path,
     label: folderLabel(path, home),
     reportLabel: reportLabelFor(path, home),
-    offered: offered || isDefault,
   }
 }
 
@@ -122,7 +117,7 @@ export function linkClaudeProfile(path: string, machineId: string): { profile: C
   const linked = readLinkedPaths()
   linked.add(path)
   writeLinkedPaths(linked)
-  return { profile: profileFor(machineId, path, resolved, homedir(), offeredFolders('claude').has(resolved)) }
+  return { profile: profileFor(machineId, path, resolved, homedir()) }
 }
 
 function holdsProfile(folder: string): boolean {
@@ -159,7 +154,7 @@ function discover(home: string, environment: NodeJS.ProcessEnv): string[] {
 /**
  * Every Claude profile this machine can offer: the default account, linked folders, `observedPaths`
  * (folders the caller already knows from this machine's other agents) and discovered ones. Never
- * throws; a folder that vanished or is malformed is just not offered.
+ * throws; a folder that vanished or is malformed is just not listed.
  */
 export function listClaudeProfiles(
   observedPaths: readonly string[] = [],
@@ -167,16 +162,15 @@ export function listClaudeProfiles(
 ): ClaudeProfile[] {
   const home = options.home ?? homedir()
   const linkedPaths = readLinkedPaths()
-  const offered = offeredFolders('claude')
   const candidates = new Set<string>([...linkedPaths, ...observedPaths, ...discover(home, options.environment ?? process.env)])
   const defaultPath = resolveFolder(home)
-  const defaultProfile = profileFor(options.machineId, home, typeof defaultPath === 'string' ? defaultPath : home, home, true, true)
+  const defaultProfile = profileFor(options.machineId, home, typeof defaultPath === 'string' ? defaultPath : home, home, true)
   const profiles = new Map<string, ClaudeProfile>()
   for (const candidate of candidates) {
     const resolved = resolveFolder(candidate)
     // De-duplicated by the real folder; the path kept is the first one given.
     if (typeof resolved === 'string' && resolved !== (typeof defaultPath === 'string' ? defaultPath : home) && !profiles.has(resolved)) {
-      profiles.set(resolved, profileFor(options.machineId, candidate, resolved, home, offered.has(resolved)))
+      profiles.set(resolved, profileFor(options.machineId, candidate, resolved, home))
     }
   }
   const others = [...profiles.values()].sort((a, b) => a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.path.localeCompare(b.path))
@@ -184,45 +178,17 @@ export function listClaudeProfiles(
 }
 
 /**
- * The owner's choice for one account: offered, other people's PMs on this machine can run on it and spend it; withdrawn, the next
- * report drops it and a switch on its way finds it gone (`profileHome` with offeredOnly). A PM already running on it stays until
- * someone moves it. A folder that is gone can still be withdrawn.
- */
-export function offerAccount(
-  engine: string, path: string, offered: boolean, options: { home?: string; environment?: Record<string, string | undefined> } = {},
-): { offered: boolean } | { error: 'INVALID_ENGINE' | 'INVALID_PATH' | 'NOT_FOUND' | 'DEFAULT_ACCOUNT' | 'TOO_MANY' } {
-  if (engine !== 'claude' && engine !== 'codex') return { error: 'INVALID_ENGINE' }
-  if (!homeIsAbsolute(path) || path.length > 4096 || CONTROL_CHARS_RE.test(path)) return { error: 'INVALID_PATH' }
-  const home = options.home ?? homedir()
-  const found = engine === 'claude' ? resolveFolder(path) : (() => { const r = resolveCodexProfilePath(path); return 'error' in r ? r : r.path })()
-  if (typeof found !== 'string') {
-    if (offered || found.error === 'INVALID_PATH') return found
-    recordOffer(engine, path, false)
-    return { offered: false }
-  }
-  const defaultFolder = engine === 'claude' ? resolveFolder(home) : defaultCodexHome(home, options.environment ?? process.env)
-  if (found === defaultFolder) return { error: 'DEFAULT_ACCOUNT' }
-  return recordOffer(engine, found, offered) ? { offered } : { error: 'TOO_MANY' }
-}
-
-/** What leaves the machine for a Codex folder: its name, and never one holding an '@' (an email). */
-export function codexReportLabel(path: string): string {
-  const name = basename(path)
-  return (name.includes('@') ? 'Codex' : name).slice(0, REPORT_LABEL_MAX)
-}
-
-/**
  * The folder a reported profile id stands for: 'default' for the engine's default account (the literal 'default', which an
  * older backend sends, or its reported id), a path for a profile this machine still has, null for an unknown or gone one.
  */
 export function profileHome(
-  engine: string, id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv; offeredOnly?: boolean } = {},
+  engine: string, id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
 ): string | 'default' | null {
   if (engine !== 'claude' && engine !== 'codex') return null
   if (id === 'default' || id === profileId(machineId, engine, 'default')) return 'default'
-  if (engine === 'claude') return listClaudeProfiles([], { ...options, machineId }).find((p) => p.id === id && (p.offered || !options.offeredOnly))?.path ?? null
+  if (engine === 'claude') return listClaudeProfiles([], { ...options, machineId }).find((p) => p.id === id)?.path ?? null
   const discovery = options.home ? { home: options.home, environment: (options.environment ?? {}) as Record<string, string> } : undefined
-  const found = listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id && (p.offered || !options.offeredOnly))?.path ?? null
+  const found = listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id)?.path ?? null
   // The default Codex home is the default account, whichever of its two ids was asked.
   return found === defaultCodexHome(options.home, options.environment) ? 'default' : found
 }

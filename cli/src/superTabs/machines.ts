@@ -26,8 +26,7 @@ import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { cleanupClosed } from './cleanupCloses.js'
 import { repositoryKey } from './repositoryKey.js'
-import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
-import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
+import { profileId } from '../lib/claudeProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
 import { folderTrust } from '../engines/launchPrep.js'
 
@@ -153,13 +152,10 @@ export interface MachineDeps {
   /** When each of these harnesses' screens last changed, epoch ms (superTabs/terminal.ts `progressOf`): the backend
    *  renews a task's lease from it, so work never sits with a dead owner (docs: swarm-never-stops). */
   progress?: (harnessIds: readonly string[]) => Record<string, number>
-  /** The Claude and Codex profile folders this machine offers ([listClaudeProfiles], [listCodexProfiles]). */
-  claudeProfiles?: (machineId: string) => Array<{ id: string; path: string; reportLabel: string; offered: boolean; default?: true }>
-  codexProfiles?: () => Array<{ path: string; offered?: boolean }>
   /** Copies a Member's set-up folders into its helper's new worktree ([copySetup], task #4698). */
   readySetup?: typeof copySetup
 }
-const MACHINE_DEPS = { claudeProfiles: (machineId: string) => listClaudeProfiles([], { machineId }), codexProfiles: () => listCodexProfiles(), backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
+const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities, start: startAgent, now: Date.now }
 /** A start's folder preparation can clone a whole repository; past this, its cleanup gives up and tries again later. */
 const CLEANUP_WAIT_MS = 10 * 60_000
 const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm.'
@@ -303,8 +299,6 @@ export class ContributedMachines {
   private quotaReasonsRefusedUntil = 0
   /** Until when the reading leaves out its profiles, which the backend refused. */
   private profilesRefusedUntil = 0
-  /** Per profile, its last allowance and until when it stands. */
-  private readonly profileReads = new Map<string, { value: { left: number | null; resetsAt: string | null }; until: number }>()
   /** Per Swarm folder, its checkouts' readiness and until when it stands, and the folders being read now. A push check
    *  asks the remote, so it is read beside the pass, never holding up a start. */
   private readonly checkoutReads = new Map<string, { value: ReadyCheckout[] | null; until: number }>()
@@ -337,39 +331,13 @@ export class ContributedMachines {
     const wait = Array.isArray(value.providers) ? USAGE_FRESH_MS : USAGE_RETRY_MS
     return this.usageRead = { value, at: now, until: now + wait }
   }
-  /** The allowance left on one account, from its tightest window. A profile is read at most once per [USAGE_FRESH_MS]. */
-  private async profileAllowance(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> },
-    engine: 'claude' | 'codex', id: string): Promise<{ left: number | null; resetsAt: string | null }> {
-    const now = this.deps.now(), key = `${engine}:${id}`, kept = this.profileReads.get(key)
-    if (kept && now < kept.until) return kept.value
-    const value = object(await local.request('usage_read', { profile: { engine, id } }, 20_000).catch(() => null))
-    const wait = Array.isArray(value.providers) ? USAGE_FRESH_MS : USAGE_RETRY_MS
-    const read = allowanceLeft(quotaOf(value, engine, false).windows)
-    const result = read.left === null && kept ? kept.value : read
-    this.profileReads.set(key, { value: result, until: now + wait })
-    return result
-  }
-  /** The accounts a Product Manager here could move to, by id and label only: the default account's allowance is the one
-   *  already read, the others are read each at most once per [USAGE_FRESH_MS]. An entry the backend would refuse is left out. */
-  private async profiles(local: { request: (type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<unknown> },
-    engines: string[], allowances: Array<{ engine: string; windows: Parameters<typeof allowanceLeft>[0] }>) {
-    const found: Array<{ engine: 'claude' | 'codex'; id: string; label: string; leftPercent: number | null; resetsAt: string | null }> = []
-    const accounts = {
-      claude: () => this.deps.claudeProfiles!(this.machineId).filter(p => !p.default && p.offered).map(p => ({ id: p.id, label: p.reportLabel })),
-      // The default Codex account is ~/.codex or an inherited CODEX_HOME: reported once, as Default.
-      codex: () => this.deps.codexProfiles!().filter(p => p.offered && p.path !== defaultCodexHome()).map(p => ({ id: profileId(this.machineId, 'codex', p.path), label: codexReportLabel(p.path) })),
-    }
-    for (const engine of ['claude', 'codex'] as const) {
-      if (!engines.includes(engine)) continue
-      const defaultLeft = allowanceLeft(allowances.find(a => a.engine === engine)?.windows ?? [])
-      const listed = [{ id: profileId(this.machineId, engine, 'default'), label: 'Default', read: 'default' }, ...accounts[engine]().map(a => ({ ...a, read: a.id }))]
-        .filter(({ id, label }) => /^[0-9a-f]{16}$/.test(id) && label.length > 0 && label.length <= 40 && !label.includes('@')).slice(0, MAX_PROFILES_PER_ENGINE)
-      for (const { id, label, read } of listed) {
-        const { left, resetsAt } = read === 'default' ? defaultLeft : await this.profileAllowance(local, engine, read)
-        found.push({ engine, id, label, leftPercent: left, resetsAt })
-      }
-    }
-    return found.slice(0, MAX_PROFILES)
+  /** The accounts a Product Manager here could move to, by id and label only: each engine's default account, with the
+   *  allowance already read. No other account is on the Swarm: offering one went with Desktop's accounts page (F9). */
+  private profiles(engines: string[], allowances: Array<{ engine: string; windows: Parameters<typeof allowanceLeft>[0] }>) {
+    return (['claude', 'codex'] as const).filter(engine => engines.includes(engine)).map(engine => ({
+      engine, id: profileId(this.machineId, engine, 'default'), label: 'Default',
+      ...(({ left, resetsAt }) => ({ leftPercent: left, resetsAt }))(allowanceLeft(allowances.find(a => a.engine === engine)?.windows ?? [])),
+    }))
   }
   /** What the reading says of [engine]'s allowance. Windows that could not be read again stand for [USAGE_KEEP_MS] after
    *  they were read, unless the engine signed out; past that, unknown says why. */
@@ -681,7 +649,7 @@ export class ContributedMachines {
         // Only to a backend that asks for them (backend read/hostRows.ts): an older one refuses the field, and would refuse
         // every reading with it.
         // Only to a backend that asks for capabilities, as it is new enough to know the field: an older one refuses it.
-        const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? await this.profiles(local, engines, allowances) : []
+        const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? this.profiles(engines, allowances) : []
         const idleBuddies: Record<string, string> | null = row.buddySleepWanted === true
           ? await (buddyActivity ??= readBuddyActivity().catch(error => {
             this.log(`Could not read Buddy activity: ${error instanceof Error ? error.name : typeof error}`)
@@ -1424,8 +1392,6 @@ const READINESS_MS = 10 * 60_000
 const READINESS_RETRY_MS = 60_000
 /** How long an allowance reading stands: Codex's is a process start of its app-server (lib/codexRateLimits.ts). */
 const USAGE_FRESH_MS = 3 * 60_000
-const MAX_PROFILES = 16
-const MAX_PROFILES_PER_ENGINE = 8
 /** The allowance left on an account, from its tightest window, and when that window resets (ISO, as the backend takes it). */
 function allowanceLeft(windows: ReturnType<typeof quotaOf>['windows']): { left: number | null; resetsAt: string | null } {
   const tightest = windows.reduce<(typeof windows)[number] | null>((t, w) => !t || w.usedPercent > t.usedPercent ? w : t, null)

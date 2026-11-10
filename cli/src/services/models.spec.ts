@@ -100,7 +100,6 @@ vi.mock('../lib/apiModels.js', () => ({
 vi.mock('../lib/claudeProfiles.js', async (importOriginal) => ({
   profileId: (await importOriginal<typeof import('../lib/claudeProfiles.js')>()).profileId,
   listClaudeProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ id: 'p', path, label: 'Claude', reportLabel: 'Claude' }))),
-  offerAccount: vi.fn((_engine: string, path: string, offered: boolean) => (path ? { offered } : { error: 'INVALID_PATH' })),
   linkClaudeProfile: vi.fn((path: string) => (path ? { profile: { id: 'p', path, label: 'Linked', reportLabel: 'Linked' } } : { error: 'INVALID_PATH' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({
@@ -970,12 +969,13 @@ describe('the models service', () => {
         log.mockRestore()
       })
 
-      it('swarm_account_offer: takes the owner\'s explicit choice, and nothing less', async () => {
+      // F9: offering an account to the Swarm went with Desktop's accounts page. A Desktop of the last 30 days may still ask, and is
+      // told no account is offered; nothing is kept.
+      it('swarm_account_offer: offers nothing and keeps nothing, and says so', async () => {
         const { ask } = setup()
-        expect(await ask('swarm_account_offer', { engine: 'claude', path: '/p', offered: true })).toEqual({ offered: true })
-        expect(await ask('swarm_account_offer', { engine: 'codex', path: '/p', offered: false })).toEqual({ offered: false })
-        expect(await ask('swarm_account_offer', { engine: 'claude', path: '/p' })).toEqual({ error: 'INVALID_OFFER' })
-        expect(await ask('swarm_account_offer', { engine: 'claude', path: 42, offered: true })).toEqual({ error: 'INVALID_PATH' })
+        for (const payload of [{ engine: 'claude', path: '/p', offered: true }, { engine: 'codex', path: '/p', offered: false }, { engine: 'claude', path: 42 }]) {
+          expect(await ask('swarm_account_offer', payload)).toEqual({ offered: false, ignored: true })
+        }
       })
 
       it('the Claude and Codex profile requests answer OWNER_REQUIRED to a guest', async () => {

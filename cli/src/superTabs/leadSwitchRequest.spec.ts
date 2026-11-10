@@ -17,7 +17,7 @@ import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } f
 
 afterEach(() => { vi.unstubAllEnvs() })
 
-const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
+const request = { id: 'sw1', engine: 'claude', profileId: 'default' }
 const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1',
   agent: { id: 'a1', harnessId: 'h1', switchRequest: request, ...over }, ...top })
 const NOW = 1_800_000_000_000
@@ -67,7 +67,7 @@ function setup(options: { claim?: boolean; home?: string | null; refuse?: string
   }) }
   const core = fakeCore({ dataDir, account: { backend },
     agents: { byAgent: vi.fn((id: string) => id === 'h1' && live ? { ...PM, ...options.old } as never : undefined) } })
-  const profiles = vi.fn(() => options.home === undefined ? '/home/p1' : options.home)
+  const profiles = vi.fn(() => options.home === undefined ? 'default' : options.home)
   const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, signedIn: async () => options.signedIn !== false,
     open: async () => daemon, profiles: profiles as never,
     readHandoff: () => 'Earlier project state.' })
@@ -75,7 +75,7 @@ function setup(options: { claim?: boolean; home?: string | null; refuse?: string
 }
 
 describe('a PM host carrying out a switch the Swarm asked for', () => {
-  it('claims, prepares the handoff, closes with the change id, creates with creationId = changeId and the profile home, completes the handoff', async () => {
+  it('claims, prepares the handoff, closes with the change id, creates with creationId = changeId on the default account, completes the handoff', async () => {
     const t = setup()
     await t.switches.serve(row())
     expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim'])
@@ -83,7 +83,8 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     const changeId = String(t.calls[0][1].changeId)
     expect(changeId).toMatch(/^[0-9a-f]{32}$/)
     expect(t.calls[1][1]).toEqual({ agentId: 'h1', sessionId: 'native-old', createdAt: '2027-01-15T08:00:00.000Z', mode: 'now', changeId })
-    expect(t.calls[2][1]).toMatchObject({ engine: 'claude', cwd: '/work', creationId: changeId, claudeHome: '/home/p1', permissionMode: 'ask', name: 'PM' })
+    expect(t.calls[2][1]).toMatchObject({ engine: 'claude', cwd: '/work', creationId: changeId, permissionMode: 'ask', name: 'PM' })
+    expect(t.calls[2][1]).not.toHaveProperty('claudeHome')
     expect(String(t.calls[2][1].prompt)).toContain(`.harness/handoff/h1-${changeId}.md`)
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
   })
@@ -131,15 +132,18 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     }
   })
 
-  it('asks the machine for offered accounts only, so one the owner never offered is refused as gone', async () => {
-    const t = setup({ home: null })
+  // F9: offering an account to the Swarm went with Desktop's accounts page, so a PM moves to an engine's default account alone.
+  it('refuses a switch to any other account as gone, even one this machine has, before closing the PM', async () => {
+    const t = setup({ home: '/home/me/.claude-work' })
     await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'claude', profileId: 'abcdef0123456789' } }))
-    expect(t.profiles).toHaveBeenCalledWith('claude', 'abcdef0123456789', expect.anything(), { offeredOnly: true })
+    expect(t.profiles).toHaveBeenCalledWith('claude', 'abcdef0123456789', 'm1')
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is no longer on this machine' })
+    expect(t.calls).toEqual([])
   })
 
   it('maps a permission mode the target engine lacks to ask, as Desktop does, and bypass follows the mode', async () => {
     const t = setup({ old: { permissionMode: 'acceptEdits', bypassPermission: true } })
-    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: 'p1' } }))
+    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: 'default' } }))
     expect(t.calls.find(c => c[0] === 'agent_create')![1]).toMatchObject({ engine: 'codex', permissionMode: 'ask', bypassPermission: false })
     const f = setup({ old: { permissionMode: 'full', bypassPermission: true } })
     await f.switches.serve(row())
@@ -345,7 +349,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
   })
 })
 
-describe('whether a profile folder holds a sign-in', () => {
+describe('whether the default account holds a sign-in', () => {
   /** A fake `claude auth status --json` / `codex login status`, recording what it was asked. */
   const cli = (signedIn: boolean | null) => {
     const calls: Array<{ engine: string; args: readonly string[]; env: NodeJS.ProcessEnv }> = []
@@ -356,58 +360,20 @@ describe('whether a profile folder holds a sign-in', () => {
     }
     return { run, calls }
   }
-  /** A folder holding the sign-in files the CLIs once kept: their presence must never count. */
-  const folder = () => {
-    const dir = mkdtempSync(join(tmpdir(), 'profile-signed-in-'))
-    writeFileSync(join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: 'r' } }))
-    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'a@b.c' } }))
-    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'k', tokens: { access_token: 'a', refresh_token: 'r' } }))
-    return dir
-  }
-
   it('asks the engine itself for the default account, under the daemon\'s own environment, or takes its key', async () => {
     const yes = cli(true)
-    expect(await profileSignedIn('claude', 'default', { PATH: '/bin' }, yes.run)).toBe(true)
-    expect(await profileSignedIn('codex', 'default', { PATH: '/bin', CODEX_HOME: '/mine' }, yes.run)).toBe(true)
+    expect(await profileSignedIn('claude', { PATH: '/bin' }, yes.run)).toBe(true)
+    expect(await profileSignedIn('codex', { PATH: '/bin', CODEX_HOME: '/mine' }, yes.run)).toBe(true)
     expect(yes.calls).toEqual([
       { engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin' } },
       { engine: 'codex', args: ['login', 'status'], env: { PATH: '/bin', CODEX_HOME: '/mine' } },
     ])
     const no = cli(false)
-    expect(await profileSignedIn('claude', 'default', {}, no.run)).toBe(false)
-    expect(await profileSignedIn('claude', 'default', { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(true)
+    expect(await profileSignedIn('claude', {}, no.run)).toBe(false)
+    expect(await profileSignedIn('claude', { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(true)
     expect(no.calls).toHaveLength(1)
   })
 
-  it('asks Claude Code about a profile folder as its CLAUDE_CONFIG_DIR, and reads none of its files', async () => {
-    const dir = folder(), no = cli(false), yes = cli(true)
-    expect(await profileSignedIn('claude', dir, { PATH: '/bin' }, no.run)).toBe(false)
-    expect(no.calls).toEqual([{ engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin', CLAUDE_CONFIG_DIR: dir } }])
-    expect(await profileSignedIn('claude', dir, {}, yes.run)).toBe(true)
-    // A key the daemon has is the default account's, not the folder's.
-    expect(await profileSignedIn('claude', dir, { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(false)
-    expect(await profileSignedIn('claude', dir, {}, cli(null).run)).toBe(false)
-  })
-
-  it('asks Codex about a profile folder as its CODEX_HOME, by its exit code, and reads none of its files', async () => {
-    const dir = folder(), no = cli(false)
-    expect(await profileSignedIn('codex', dir, { CODEX_HOME: '/other' }, no.run)).toBe(false)
-    expect(no.calls).toEqual([{ engine: 'codex', args: ['login', 'status'], env: { CODEX_HOME: dir } }])
-    expect(await profileSignedIn('codex', dir, {}, cli(true).run)).toBe(true)
-    expect(await profileSignedIn('codex', dir, {}, cli(null).run)).toBe(false)
-  })
-
-  it('a switch to a profile asks the engine by default', async () => {
-    const t = setup()
-    const dir = folder(), no = cli(false)
-    const switches = new LeadSwitchRequests(fakeCore({ dataDir: t.dataDir, account: { backend: vi.fn(async () => ({ status: 200, body: { success: true, data: { result: {} } } })) },
-      agents: { byAgent: vi.fn(() => ({ ...PM }) as never) } }), 'm1',
-      { now: () => NOW, profiles: (() => dir) as never, run: no.run })
-    await switches.serve(row())
-    expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', dir]])
-    // Signed out under that folder: refused before anything is closed.
-    expect(vi.mocked(switches['core'].account.backend).mock.calls.at(-1)![2]).toMatchObject({ command: { type: 'agent.switchResult', ok: false, error: 'that account is signed out' } })
-  })
 })
 
 
