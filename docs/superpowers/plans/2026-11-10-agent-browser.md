@@ -127,7 +127,7 @@ Read it before starting any task. This plan does not repeat its reasons.
   chat. No tool waits longer than 60 s, inside both engines' defaults (Codex 300 s, Claude Code 120 s before it moves
   a call to the background), so no timeout setting is added.
 - **Stream profiles:** `direct` Tight q6/c2 at most 15 fps; `turn` q3/c6 at most 5 fps; `relay` q3/c6 at most 2 fps.
-  The daemon enforces them (Task 13b). The relay budget is 512 KB/s per machine (pending the PM's agreement); pacing
+  The daemon enforces them (Task 13b). The relay budget is 512 KB/s per machine (agreed 2026-11-10); pacing
   shares it. The page acks bytes after noVNC has taken them, so the window bounds what is not drawn yet.
 - **Stream numbers** (relay budget, pacing, credit window, chunk size): taken from Task 0's report. Tasks that need
   them say so. The relay budget is per machine; the daemon paces the total of its relayed browser bytes under it.

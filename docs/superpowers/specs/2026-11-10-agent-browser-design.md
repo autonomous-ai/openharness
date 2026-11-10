@@ -776,7 +776,7 @@ Saving a change that needs it restarts the browser; the login stays.
      `podman exec -i harness-browser-<agentId> socat STDIO TCP:127.0.0.1:5900`: one exec per open viewer, at most 4
      per browser.
    - The stream exists only while a panel is open. Closing the panel, or losing the connection, ends the exec.
-   - **Stream profiles by route** *(call; the relay budget waits for the PM)*. The first spike measured, while a page
+   - **Stream profiles by route** *(call; the relay budget, 512 KB/s per machine, agreed 2026-11-10)*. The first spike measured, while a page
      scrolls without stopping (Wikipedia, 201 images), Tight encoding:
 
      | Screen, quality/compression, frame cap | Mean | Peak |
@@ -818,7 +818,7 @@ Saving a change that needs it restarts the browser; the login stays.
      - **The relay budget** for browser bytes is per machine: 512 KB/s, enough for one viewer scrolling on the `relay`
        profile with room for its peaks, and for several at rest (6-16 KB/s each). Pacing shares it between the
        machine's relayed streams, so two viewers scrolling at once each get less. The PR reports relay bytes per open
-       minute, scrolling and at rest, and the project's PM agrees the budget before the stream ships.
+       minute, scrolling and at rest.
      - **The bridge** carries the `direct` profile with room to spare: the second spike measured 30-58 MB/s through the
        JavaScript channel on macOS, and the real viewer page kept up with the recorded stream at 2x its speed
        (5.2 MB/s), with the Flutter UI thread's p95 frame under 1 ms. Messages of 8 KiB from the page caused slow
