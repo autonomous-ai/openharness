@@ -32,20 +32,21 @@ async function create(s: Side, folder: string): Promise<Record<string, any>> {
   }, 60_000, 500)
 }
 
-/** What an agent on `s` runs: `harness super-tab --tab TAB --agent AGENT …`, its printed answer and exit code. No pane of the
- *  runner's own (a run started in tmux): the agent is named by --agent, as from its own pane. */
+/** What an agent on `s` runs: `harness super-tab --tab TAB --agent AGENT …`, its printed answer and exit code. Never the pane of
+ *  the runner's own terminal (a run started in tmux): the agent is named by --agent, as from its own pane. */
 async function superTab(s: Side, tab: string, agent: string, args: string[]): Promise<{ code: number; out: string }> {
   let out = ''
   const code = await superTabCommand(['--tab', tab, '--agent', agent, ...args],
-    { where: () => ({ port: s.daemon.port, dataDir: s.daemon.dataDir, machineId: s.machineId }), env: {}, print: text => { out = text } })
+    { where: () => ({ port: s.daemon.port, dataDir: s.daemon.dataDir, machineId: s.machineId }), pane: undefined, print: text => { out = text } })
   return { code, out }
 }
 
-/** The first object in [value] with this id that says what it is alerting about, as the Swarm's read hands it out. */
+/** The agent with this id in an `agents` list of the Swarm's first load, wherever the read puts that list. */
 function agentIn(value: unknown, id: string): Record<string, any> | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Record<string, any>
-  if (row.id === id && 'harnessId' in row) return row
+  const listed = Array.isArray(row.agents) ? row.agents.find((agent: Record<string, any>) => agent?.id === id) : undefined
+  if (listed) return listed
   for (const child of Object.values(row)) { const found = agentIn(child, id); if (found) return found }
   return null
 }
@@ -81,7 +82,13 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('a PM driving its agent\'
     const pm = (await run({ type: 'agent.add', conversationId: channel, machineId: P.machineId, harnessId: pmHarness.id, name: 'Faye', configuration: CONFIG, lead: true })).agentId as string
     const pip = (await run({ type: 'agent.add', conversationId: channel, machineId: A.machineId, harnessId: agentHarness.id, name: 'Pip', configuration: CONFIG, lead: false })).agentId as string
     for (const s of [P, A]) expect(await s.client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
-    const pipNow = async () => agentIn((await backend.api(owner, `/api/super-tabs/${tab}/parts`)).body, pip)
+    const agentNow = async (id: string) => {
+      const read = await backend.api(owner, `/api/super-tabs/${tab}/parts`)
+      expect(read.status, JSON.stringify(read.body)).toBe(200)
+      const row = agentIn(read.body, id)
+      expect(row, `${id} in the Swarm's read`).toBeTruthy()
+      return row!
+    }
 
     // The agent asks permission to run a command, and waits on it.
     A.client.send('message', { agentId: agentHarness.id, content: '!permit printf terminal-check' })
@@ -105,11 +112,14 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('a PM driving its agent\'
 
     // After 3 minutes on the prompt, its host marks it waiting on its person.
     const marked = await until('the agent marked waiting on its prompt', async () => {
-      const row = await pipNow()
-      return row?.alerting?.includes('prompt') ? row : null
-    }, 5 * 60_000, 5_000)
+      const row = await agentNow(pip)
+      return row.alerting?.includes('prompt') ? row : null
+    }, 5 * 60_000, 10_000)
     expect(Date.now() - asked).toBeGreaterThanOrEqual(3 * 60_000 - 15_000)
     expect(marked.alerting).toEqual(['prompt'])
+    // Read again while the prompt still waits: still marked, once.
+    expect((await superTab(P, tab, pm, ['screen', pip])).out).toContain('Do you want to proceed?')
+    expect((await agentNow(pip)).alerting).toEqual(['prompt'])
 
     // The PM answers Yes, on its person's own login; the agent runs the command, the prompt is gone and so is the mark.
     const typed = await superTab(P, tab, pm, ['type', pip, '--key', '1'])
@@ -120,10 +130,16 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('a PM driving its agent\'
       return read.out.includes('ran printf terminal-check') && !read.out.includes('Do you want to proceed?') ? read.out : null
     }, 30_000, 1_000)
     expect(after).toContain('ran printf terminal-check')
-    await until('the waiting mark to clear', async () => ((await pipNow())?.alerting ?? []).includes('prompt') ? null : true, 60_000, 2_000)
-    // Neither the screens, the keys nor the mark write a row where people read the team talk.
-    const rows = (await backend.api(owner, `/api/super-tabs/${tab}/conversations/${channel}/messages`)).body.data.messages as Array<Record<string, any>>
-    expect(rows.filter(m => String(m.source?.kind ?? '').startsWith('terminal'))).toEqual([])
-    expect(rows.some(m => String(m.text).includes('Do you want to proceed?'))).toBe(false)
+    await until('the waiting mark to clear', async () => ((await agentNow(pip)).alerting ?? []).includes('prompt') ? null : true, 60_000, 2_000)
+    // Neither the screens, the keys nor the mark write a row where people read the team talk, nor in the PM's or the agent's chat.
+    const pmRow = await agentNow(pm), pipRow = await agentNow(pip)
+    const conversations = [...new Set([channel, pmRow.chatId, pipRow.chatId].filter((id): id is string => typeof id === 'string'))]
+    for (const conversation of conversations) {
+      const read = await backend.api(owner, `/api/super-tabs/${tab}/conversations/${conversation}/messages`)
+      expect(read.status, JSON.stringify(read.body)).toBe(200)
+      const rows = read.body.data.messages as Array<Record<string, any>>
+      expect(rows.filter(m => String(m.source?.kind ?? '').startsWith('terminal')), conversation).toEqual([])
+      expect(rows.some(m => String(m.text).includes('Do you want to proceed?')), conversation).toBe(false)
+    }
   }, 9 * 60_000)
 })
