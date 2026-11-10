@@ -29,9 +29,12 @@ const FOOTER_START = /^\s*agent \S+(?: \([^)]*\))? \| session /
 /**
  * The title, the first line the TUI draws: `openclaw tui - <gateway url> - agent <id>[ (<name>)] - session <key>`. It
  * scrolls off a long conversation. A remote TUI still holds this machine's state database open, so only this URL tells
- * a local Gateway from one on another host.
+ * a local Gateway from one on another host. It word-wraps like the footer: a Harness key (`harness-<uuid>`) makes it
+ * about 103 characters, so under that many columns the URL is read off its first line and the session off its lines
+ * joined.
  */
-const TITLE = /^\s*openclaw tui - (wss?:\/\/\S+) - agent ([A-Za-z0-9_-]{1,64})(?: \([^)]*\))? - session ([A-Za-z0-9._:-]{1,128})\s*$/
+const TITLE_START = /^\s*openclaw tui - (wss?:\/\/\S+) - agent /
+const TITLE = /^openclaw tui - wss?:\/\/\S+ - agent ([A-Za-z0-9_-]{1,64})(?: \([^)]*\))? - session ([A-Za-z0-9._:-]{1,128})$/
 
 /** The composer's borders: the two rules under the footer are the last lines a running TUI draws. */
 export const OPENCLAW_RULE = /^\s*─{8,}\s*$/
@@ -44,6 +47,9 @@ const STATUS = {
   ready: /^(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)$/,
   busy: /^\S{1,2} (?:running|streaming|connecting)\b/,
   noGateway: /^gateway disconnected\b/,
+  /** The connection dropped or just came back: `gateway disconnected: …` (5 s), `disconnected` after it, `gateway
+   * reconnected` (4 s; `setConnectionStatus` in OpenClaw's tui). */
+  gatewayLost: /^(?:gateway )?(?:disconnected|reconnected)\b/,
 }
 
 /** What `openclaw tui` prints as it exits when the config has no Gateway token (`screen-no-token.txt`). */
@@ -64,9 +70,11 @@ export interface OpenclawScreen {
   state: OpenclawPaneState | null
   /** The running TUI's footer, its wrapped lines joined: where the model and tokens are read. */
   footer: string | null
+  /** The status line says the Gateway connection dropped or just came back. */
+  gatewayLost: boolean
 }
 
-const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null }
+const NOTHING: OpenclawScreen = { key: null, url: null, state: null, footer: null, gatewayLost: false }
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
 export function openclawScreenLines(capture: string): string[] {
@@ -88,6 +96,20 @@ function liveFooter(lines: readonly string[], start: number): string | null {
 }
 
 /**
+ * The title from its first line, joined with the lines it wrapped onto until it reads whole. Null when it never
+ * does (a key cut mid-word, a title-like line in the chat).
+ */
+function readTitle(lines: readonly string[], start: number): RegExpExecArray | null {
+  let text = ''
+  for (let i = start; i < lines.length && lines[i].trim() && !OPENCLAW_RULE.test(lines[i]); i++) {
+    text = text ? `${text} ${lines[i].trim()}` : lines[i].trim()
+    const title = TITLE.exec(text)
+    if (title) return title
+  }
+  return null
+}
+
+/**
  * Reads an OpenClaw pane's screen (OpenClaw 2026.11.2, `__fixtures__/screen-*.txt`). The one reading of it: the binding
  * takes the key and the named states from it, the runtime profile the model and tokens, discovery whether the pane is
  * the TUI at all (every `openclaw` command renames its process `openclaw`, `onboard` and `logs` too).
@@ -97,21 +119,24 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
   const start = lastIndex(lines, (line) => FOOTER_START.test(line))
   const tokenless = lastIndex(lines, (line) => NO_TOKEN.test(line))
   if (tokenless > start) return { ...NOTHING, state: 'no-token' }
-  const titled = lastIndex(lines, (line) => TITLE.test(line))
-  const title = titled >= 0 ? TITLE.exec(lines[titled]) : null
-  const url = title?.[1] ?? null
+  const titled = lastIndex(lines, (line) => TITLE_START.test(line))
+  const url = titled >= 0 ? TITLE_START.exec(lines[titled])![1] : null
+  const title = titled >= 0 ? readTitle(lines, titled) : null
   const remote = url !== null && !LOOPBACK.test(url)
   const footer = start >= 0 && titled <= start ? liveFooter(lines, start) : null
   if (!footer) return { ...NOTHING, url, state: remote ? 'remote' : null }
   const shown = FOOTER.exec(footer)
-  const agrees = !title || (!!shown && title[2] === shown[1] && title[3] === shown[2])
+  // A title on screen that cannot be read whole agrees with no footer.
+  const agrees = titled < 0 || (!!title && !!shown && title[1] === shown[1] && title[2] === shown[2])
   const status = lastIndex(lines.slice(0, start), (line) => !!line.trim())
   const said = status >= 0 ? lines[status].trim() : ''
   const state: OpenclawPaneState | null = remote ? 'remote'
     : STATUS.noGateway.test(said) ? 'no-gateway'
       : STATUS.busy.test(said) ? 'busy'
         : STATUS.ready.test(said) ? 'ready' : null
-  return { key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null, url, state, footer }
+  return {
+    key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null, url, state, footer, gatewayLost: STATUS.gatewayLost.test(said),
+  }
 }
 
 /**
@@ -129,6 +154,8 @@ export const OPENCLAW_STATES = {
   noGateway: 'OpenClaw Gateway is not running. Start it with openclaw gateway.',
   noToken: 'OpenClaw has no Gateway token. Run openclaw onboard.',
   oldNode: 'OpenClaw needs Node 24.',
+  /** Harness's own Node lacks what reads OpenClaw's store (`node:sqlite`, zstd). */
+  harnessNode: 'This Harness needs Node 24 to read OpenClaw.',
   remote: 'This OpenClaw runs on another machine.',
   unsupported: 'This OpenClaw version is not supported yet.',
 } as const

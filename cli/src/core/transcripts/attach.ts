@@ -32,6 +32,9 @@ import type { LiveSessions, PreparedLive } from '../engines/liveSessions.js'
 import { createReaderLoads } from './readerLoads.js'
 import { createTurnReplacements } from './turnReplacement.js'
 
+/** What an OpenClaw store that cannot be read says on its agent: the holds the stream sets, and the only ones it clears. */
+const OPENCLAW_STORE_HOLDS = new Set<string>([OPENCLAW_STATES.unsupported, OPENCLAW_STATES.harnessNode])
+
 export interface AttachDeps {
   liveFor: LiveFor
   resolve: (agentId: string) => RegisteredSession | undefined
@@ -449,11 +452,11 @@ export function createAttach({
         return true
       }
       // A store this OpenClaw cannot be read from is said on the agent, as the screen's named states are (bind.ts), and
-      // cleared once it reads again.
+      // cleared once it reads again. A hold another reason set is that reason's to clear.
       const say = (hold: string | undefined): void => {
         const latest = resolve(session.agentId)
         if (latest?.sessionId !== session.sessionId) return
-        if (hold === undefined && latest.identityHold !== OPENCLAW_STATES.unsupported) return
+        if (latest.identityHold ? !OPENCLAW_STORE_HOLDS.has(latest.identityHold) : hold === undefined) return
         if (setIdentityHold(session.agentId, hold)) announceSession(resolve(session.agentId)!)
       }
       const live = new (engine('openclaw')!).OpenclawLive({
@@ -463,7 +466,7 @@ export function createAttach({
         onHeader: (record) => { runtimeProfiles.ingest(session, JSON.stringify(record), true) },
         onFailed: (message) => announceTurnAborted(session.sessionId, 'openclaw', message),
         onFatal: (reason) => {
-          const hold = reason === 'unsupported' ? OPENCLAW_STATES.unsupported : OPENCLAW_STATES.oldNode
+          const hold = reason === 'unsupported' ? OPENCLAW_STATES.unsupported : OPENCLAW_STATES.harnessNode
           console.warn(`[openclaw] ${sid(session.sessionId)} ${hold}`)
           say(hold)
         },

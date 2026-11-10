@@ -231,6 +231,7 @@ These are my calls unless marked as Ken's.
    - `OpenClaw Gateway is not running. Start it with openclaw gateway.`
    - `OpenClaw has no Gateway token. Run openclaw onboard.`
    - `OpenClaw needs Node 24.`
+   - `This Harness needs Node 24 to read OpenClaw.` Shown when Harness's own Node lacks `node:sqlite` or zstd.
    - `This OpenClaw runs on another machine.`
    - `This OpenClaw version is not supported yet.` Shown when a column the reader uses is missing. The schema
      version is logged but is not an allowlist.

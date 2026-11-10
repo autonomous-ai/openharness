@@ -69,6 +69,41 @@ describe('the OpenClaw contract', () => {
     expect(readOpenclawScreen(long)).toMatchObject({ key: 'agent:main:main', url: null, state: 'ready' })
   })
 
+  it('reads a title and a footer the TUI word-wrapped, on a Harness key at 80 and 100 columns, local and remote', () => {
+    // A launch key is `harness-<agent uuid>`: the title is then 103 characters. The TUI pads its text one column and
+    // wraps it at spaces (`Text(…, 1, 0)` in OpenClaw's tui).
+    const key = 'harness-aaaaaaaa-1111-4222-8333-000000000001'
+    const wrap = (text: string, columns: number): string[] => {
+      const lines: string[] = []
+      let line = ''
+      for (const word of text.split(' ')) {
+        if (line && line.length + 1 + word.length > columns - 2) { lines.push(` ${line}`); line = word }
+        else line = line ? `${line} ${word}` : word
+      }
+      return [...lines, ` ${line}`]
+    }
+    for (const columns of [80, 100]) {
+      for (const url of ['ws://127.0.0.1:18789', 'ws://172.17.0.3:18789']) {
+        const draw = (titled: string): string => [
+          ...wrap(`openclaw tui - ${url} - agent main - session ${titled}`, columns),
+          '',
+          ` session agent:main:${key}`,
+          ' connected | idle',
+          ...wrap(`agent main | session ${key} | deepseek/deepseek-v4.1-flash | deliver:off | tokens ?`, columns),
+          '─'.repeat(columns), '', '─'.repeat(columns),
+        ].join('\n')
+        const capture = draw(key)
+        expect(capture.split('\n')[1], `${columns}`).not.toBe('')
+        const remote = url !== 'ws://127.0.0.1:18789'
+        expect(readOpenclawScreen(capture), `${columns} ${url}`).toMatchObject({
+          key: `agent:main:${key}`, url, state: remote ? 'remote' : 'ready',
+        })
+        // The title still has to name the footer's session.
+        expect(readOpenclawScreen(draw(`${key}-other`)).key, `${columns} ${url}`).toBeNull()
+      }
+    }
+  })
+
   it('a line the model wrote is never taken for the session', () => {
     // The session line under the title is one more chat line: an answer can print the same words.
     const said = fixture('screen-plain.txt').replace(' connected | idle', ' session agent:main:other\n agent main | session other | m | deliver:off |\n connected | idle')

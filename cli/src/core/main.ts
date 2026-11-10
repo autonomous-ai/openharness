@@ -1973,7 +1973,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
     // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
-    openclawPaneReady: (sessionId, ready) => normalizers.openclawReaders.get(sessionId)?.paneReady(ready),
+    openclawPaneRead: (sessionId, reading) => normalizers.openclawReaders.get(sessionId)?.paneRead(reading),
     openclawStateDir: (pid) => openclawStateDir(pid),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))

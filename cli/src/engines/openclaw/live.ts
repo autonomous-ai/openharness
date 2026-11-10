@@ -7,7 +7,10 @@
  *   `OpencodeReader.hydrate` does; a run the store says is over (an abort leaves its call unanswered) is closed
  *   silently.
  * - A run that is aborted, fails or times out writes no closing row. A turn left open is closed once the key's status
- *   says no run is going, and once the pane reads idle twice in a row: a Gateway restart can leave `running` behind.
+ *   says no run is going. A Gateway restart can leave `running` behind, so a turn is also closed once the pane, after
+ *   showing the connection drop, reads idle on two passes with no row between them. Idle alone is no proof: the TUI
+ *   reads `connected | idle` through a run it did not start until that run's first delta (another TUI, the Control UI,
+ *   a channel message, cron), and its watchdog sets idle 30 s after a reconnect.
  * - The window's header (seq 0, `{type:'session', cwd}`) is handed on for the workspace label.
  */
 import type { LiveEvent } from '../../lib/normalize.js'
@@ -25,8 +28,17 @@ const FAILED: Record<Exclude<Closed, 'aborted'>, string> = {
 }
 /** Reads of the key whose status says no run is going, before a turn opened in the first of them is closed. */
 const STALE_READS = 2
-/** Bind passes (5 s apart, core/agents/bind.ts) that read the pane idle, before a turn still open is closed. */
+/** Bind passes (5 s apart, core/agents/bind.ts) that read the pane idle with no row between, before a turn left open
+ * after a Gateway drop is closed. */
 const READY_PASSES = 2
+
+/** What a bind pass read off the pane (contract.ts `readOpenclawScreen`). */
+interface OpenclawPaneReading {
+  /** The status line says idle. */
+  ready: boolean
+  /** The status line says the Gateway connection dropped or just came back. */
+  gatewayLost: boolean
+}
 
 export interface OpenclawLiveDeps {
   db: string
@@ -49,6 +61,8 @@ export class OpenclawLive {
   private lastStatus: string | null = null
   private staleReads = 0
   private readyPasses = 0
+  /** The pane showed the Gateway connection drop since the open turn started. */
+  private gatewayLost = false
 
   constructor(private readonly deps: OpenclawLiveDeps) {
     this.reader = new OpenclawReader({
@@ -63,6 +77,8 @@ export class OpenclawLive {
         else this.normalizer.closeTurn('aborted')
       },
       onEvents: (events) => {
+        // A row is the run going: the pane's idle passes count again from the next one.
+        if (events.length) this.readyPasses = 0
         this.headers(events)
         this.emit(this.normalizer.push(events))
       },
@@ -81,13 +97,15 @@ export class OpenclawLive {
   /** A cancel: the turn is over. What closing it returns is not emitted (a cancel sends no turn end). */
   closeTurn(): void {
     this.normalizer.closeTurn('aborted')
-    this.staleReads = this.readyPasses = 0
+    this.reset()
   }
 
-  /** What the bind pass read off the pane: `ready` is a status line that says idle (contract.ts `readOpenclawScreen`). */
-  paneReady(ready: boolean): void {
-    if (!ready || !this.normalizer.turnOpen) { this.readyPasses = 0; return }
-    if (++this.readyPasses >= READY_PASSES) this.close('aborted')
+  /** A bind pass's reading of the pane: the backstop for a run the status still calls `running` after a Gateway drop. */
+  paneRead(reading: OpenclawPaneReading): void {
+    if (!this.normalizer.turnOpen) { this.readyPasses = 0; return }
+    if (reading.gatewayLost) this.gatewayLost = true
+    if (!reading.ready) { this.readyPasses = 0; return }
+    if (++this.readyPasses >= READY_PASSES && this.gatewayLost) this.close('aborted')
   }
 
   private status(status: string | null): void {
@@ -108,8 +126,14 @@ export class OpenclawLive {
 
   private emit(out: LiveEvent[]): void {
     if (!out.length) return
-    if (out.some((event) => event.type === 'turn_started' || event.type === 'turn_ended')) this.staleReads = this.readyPasses = 0
+    if (out.some((event) => event.type === 'turn_started' || event.type === 'turn_ended')) this.reset()
     this.deps.onEvents(out)
+  }
+
+  /** What counts toward closing a turn is counted again for each turn. */
+  private reset(): void {
+    this.staleReads = this.readyPasses = 0
+    this.gatewayLost = false
   }
 
   private headers(events: OpenclawEvent[]): void {

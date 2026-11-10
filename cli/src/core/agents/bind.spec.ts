@@ -83,7 +83,7 @@ function setup(over: Partial<BindDeps> = {}) {
     deviceInput: { forget: vi.fn() },
     homes: { copilot: '/copilot', grok: '/grok', agy: '/agy' },
     capturePane: vi.fn(async () => null),
-    openclawPaneReady: vi.fn(),
+    openclawPaneRead: vi.fn(),
     openclawStateDir: vi.fn(async () => null),
     ...over,
   }
@@ -990,6 +990,27 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     }
   })
 
+  it('an overlay that hides the footer keeps the no-Gateway state until a footer shows again', async () => {
+    // Autocomplete draws its list under the composer, so the footer is not the last thing on screen for a pass.
+    const noGateway = screen('screen-no-gateway-attached')
+    let shown = noGateway
+    const run = setup({ capturePane: vi.fn(async () => shown) })
+    const row = pane({ sessionId: 'agent:main:plain' })
+    run.byAgent.set('a1', row)
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
+    shown = `${noGateway.trimEnd()}\n /help  Show help\n /new  Start a new session\n`
+    await run.binding.bindObservedAgent(tui())
+    expect(row.identityHold).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
+    shown = noGateway
+    await run.binding.bindObservedAgent(tui())
+    expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
+    shown = screen('screen-no-gateway-reconnected')
+    await run.binding.bindObservedAgent(tui())
+    expect(row).not.toHaveProperty('identityHold')
+  })
+
   it('never takes over a hold another reason set', async () => {
     const run = setup({ capturePane: vi.fn(async () => screen('screen-no-gateway')) })
     const row = pane({ sessionId: 'agent:main:plain', identityHold: 'This OpenClaw version is not supported yet.' } as Partial<RegisteredSession>)
@@ -1002,14 +1023,24 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     expect(row.identityHold).toBe('This OpenClaw version is not supported yet.')
   })
 
-  it('tells the bound session\'s stream whether its pane reads idle on each pass', async () => {
+  it('tells the bound session\'s stream on each pass whether its pane reads idle and whether the Gateway dropped', async () => {
     let shown = screen('screen-abort-running')
     const run = setup({ capturePane: vi.fn(async () => shown) })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:abort' }))
     await run.binding.bindObservedAgent(tui())
     shown = screen('screen-abort')
     await run.binding.bindObservedAgent(tui())
-    expect(vi.mocked(run.deps.openclawPaneReady).mock.calls).toEqual([['agent:main:abort', false], ['agent:main:abort', true]])
+    // A pass that reads no Gateway is told too, while its state is said on the agent.
+    shown = screen('screen-no-gateway').replace(/session no-gateway/g, 'session abort')
+    await run.binding.bindObservedAgent(tui())
+    shown = screen('screen-no-gateway-reconnected').replace(/session plain/g, 'session abort')
+    await run.binding.bindObservedAgent(tui())
+    expect(vi.mocked(run.deps.openclawPaneRead).mock.calls).toEqual([
+      ['agent:main:abort', { ready: false, gatewayLost: false }],
+      ['agent:main:abort', { ready: true, gatewayLost: false }],
+      ['agent:main:abort', { ready: false, gatewayLost: true }],
+      ['agent:main:abort', { ready: true, gatewayLost: true }],
+    ])
   })
 
   it('finds the state folder from the TUI\'s open database (fake /proc and lsof)', async () => {
@@ -1026,6 +1057,10 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     // A TUI that exited: the folder it held when bound, else OpenClaw's default.
     const exited = async () => []
     expect(await openclawSessionDb('agent:main:plain', { pid: 9004, stateDir: '/h/.openclaw-work' }, exited))
+      .toBe(join('/h/.openclaw-work', 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
+    // The pid outlived its TUI and now names another TUI's store: the folder remembered at bind is the session's.
+    const reused = async () => ['/h/.openclaw-other/state/openclaw.sqlite']
+    expect(await openclawSessionDb('agent:main:plain', { pid: 9005, stateDir: '/h/.openclaw-work' }, reused))
       .toBe(join('/h/.openclaw-work', 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))
     expect(await openclawSessionDb('agent:main:plain', { pid: 0 }, exited))
       .toBe(join(env.OPENCLAW_STATE_DIR, 'agents', 'main', 'agent', 'openclaw-agent.sqlite'))

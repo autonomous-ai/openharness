@@ -11,7 +11,7 @@
 import type { PaneInspection } from '../facets/screen.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
 import { RUNTIME_EFFORTS } from '../kit/runtime.js'
-import { OPENCLAW_RULE, openclawScreenLines, readOpenclawScreen, type OpenclawPaneState } from './contract.js'
+import { OPENCLAW_RULE, openclawScreenLines, readOpenclawScreen } from './contract.js'
 
 export interface OpenclawFooter {
   model: string
@@ -22,10 +22,6 @@ export interface OpenclawFooter {
 }
 
 const MODEL = /^agent \S+(?: \([^)]*\))? \| session \S+(?: \([^)]*\))? \| (\S+)(?: (\S+))? \| (?:.* \| )?deliver:\S+ \| tokens (\S+)/
-
-export function openclawPaneState(capture: string): OpenclawPaneState | null {
-  return readOpenclawScreen(capture).state
-}
 
 /**
  * Model, thinking level and tokens from the footer. Null rather than a half-read footer, and null while the model is

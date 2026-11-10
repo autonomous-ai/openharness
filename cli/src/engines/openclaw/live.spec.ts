@@ -129,23 +129,48 @@ describe('OpenclawLive', () => {
     expect(tail.deps.onFailed).toHaveBeenCalledWith('The OpenClaw run timed out.')
   })
 
-  it('a Gateway restart that leaves `running` behind: the turn closes once the pane reads idle twice in a row', async () => {
+  it('a slow run the pane reads idle stays open while the status says `running` and its rows arrive', async () => {
+    // A run this TUI did not start (another TUI, the Control UI, a channel message, cron) reads `connected | idle` until
+    // its first delta: a model thinking with no deltas looks idle on every pass.
+    const { path, db } = store('tool')
+    const window = windowOf(db, 'agent:main:tool')
+    db.exec(`CREATE TABLE later AS SELECT * FROM transcript_events WHERE session_id = '${window}' AND seq > 6`)
+    truncate(db, window, 6)
+    status(db, 'agent:main:tool', 'running')
+    const tail = live(path, 'agent:main:tool')
+    await tail.stream.start()
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    expect(ended(tail.events)).toEqual([])
+    // After a reconnect, the run's next row comes between two idle passes: still going.
+    tail.stream.paneRead({ ready: false, gatewayLost: true })
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    db.exec(`INSERT INTO transcript_events SELECT * FROM later WHERE seq = 7`)
+    await vi.waitFor(() => expect(tail.events.length).toBeGreaterThan(1))
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.stop()
+    expect(ended(tail.events)).toEqual([])
+    expect(tail.stream.turnOpen).toBe(true)
+  })
+
+  it('a Gateway restart that leaves `running` behind: the turn closes once the pane, after a disconnect, reads idle twice with no row', async () => {
     const { path, db } = store('tool')
     truncate(db, windowOf(db, 'agent:main:tool'), 6)
     status(db, 'agent:main:tool', 'running')
     const tail = live(path, 'agent:main:tool')
     await tail.stream.start()
-    // A busy pass, then an idle one, then a busy one again: no close.
-    tail.stream.paneReady(false)
-    tail.stream.paneReady(true)
-    tail.stream.paneReady(false)
-    tail.stream.paneReady(true)
+    tail.stream.paneRead({ ready: false, gatewayLost: true })
+    // An idle pass, then a busy one, then an idle one again: no close.
+    tail.stream.paneRead({ ready: true, gatewayLost: true })
+    tail.stream.paneRead({ ready: false, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
     expect(ended(tail.events)).toEqual([])
-    tail.stream.paneReady(true)
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
     expect(ended(tail.events)).toEqual([{ type: 'turn_ended', payload: { aborted: true } }])
     expect(tail.stream.turnOpen).toBe(false)
-    tail.stream.paneReady(true)
-    tail.stream.paneReady(true)
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
+    tail.stream.paneRead({ ready: true, gatewayLost: false })
     tail.stream.stop()
     expect(ended(tail.events)).toHaveLength(1)
   })

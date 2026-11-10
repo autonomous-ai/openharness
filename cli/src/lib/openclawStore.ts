@@ -4,9 +4,10 @@
  * The state folder is not in the TUI's arguments (it renames its process to a bare `openclaw`) and not in the
  * transcript. What the TUI does show is the file it holds open: `<stateDir>/state/openclaw.sqlite` (`ps-*.txt`,
  * Linux `/proc/<pid>/fd`, macOS `lsof`). That is the one exact answer, and it also covers a `--profile` or `--dev`
- * TUI, whose state folder is `~/.openclaw-<name>`. A session whose TUI has exited is read from the folder its TUI held
- * when it was bound (`RegisteredSession.openclawStateDir`). Where neither is known (Windows reads no open files),
- * OpenClaw's own default is used: `OPENCLAW_STATE_DIR`, else `~/.openclaw`.
+ * TUI, whose state folder is `~/.openclaw-<name>`. Once bound, the session is read from the folder its TUI held then
+ * (`RegisteredSession.openclawStateDir`): a TUI keeps its folder for life, and its pid, once it exits, can name another
+ * TUI with another store. Where neither is known (Windows reads no open files), OpenClaw's own default is used:
+ * `OPENCLAW_STATE_DIR`, else `~/.openclaw`.
  *
  * The agent's folder is `<stateDir>/agents/<agentId>/agent/` unless `openclaw.json` moves it
  * (`agents.entries.<id>.agentDir`). The config is read, never written.
@@ -73,8 +74,8 @@ async function configuredAgentDir(stateDir: string, agentId: string): Promise<st
 }
 
 /**
- * The agent database that holds `key` (`agent:<agentId>:<key>`): in the state folder the TUI with this pid holds open,
- * else the one it held when bound, else OpenClaw's default. Null for no key.
+ * The agent database that holds `key` (`agent:<agentId>:<key>`): in the state folder its TUI held when bound, else the
+ * one the TUI with this pid holds open, else OpenClaw's default. Null for no key.
  */
 export async function openclawSessionDb(
   key: string,
@@ -83,6 +84,6 @@ export async function openclawSessionDb(
 ): Promise<string | null> {
   const agentId = OPENCLAW_KEY.exec(key)?.[1]
   if (!agentId) return null
-  const stateDir = await openclawStateDir(pane.pid, openFiles) ?? (pane.stateDir || env.OPENCLAW_STATE_DIR)
+  const stateDir = pane.stateDir || (await openclawStateDir(pane.pid, openFiles) ?? env.OPENCLAW_STATE_DIR)
   return openclawAgentDb(stateDir, agentId, await configuredAgentDir(stateDir, agentId))
 }

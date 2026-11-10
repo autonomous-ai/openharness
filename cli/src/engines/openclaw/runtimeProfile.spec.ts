@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest'
 import { inspectRuntimePane } from '../../lib/legacyPane.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import {
-  createRuntimeProfileReader, openclawPaneState, parseOpenclawFooter, type OpenclawFooter,
+  createRuntimeProfileReader, parseOpenclawFooter, type OpenclawFooter,
 } from './runtimeProfile.js'
+import { readOpenclawScreen } from './contract.js'
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__')
 const screen = (name: string): string => readFileSync(join(dir, `screen-${name}.txt`), 'utf8')
+const openclawPaneState = (capture: string) => readOpenclawScreen(capture).state
 
 describe('OpenClaw pane state', () => {
   it.each([

@@ -137,6 +137,28 @@ describe('an OpenClaw pane, through the core', () => {
     run.normalizers.forget('agent:main:plain')
   })
 
+  it('an unreadable store never replaces or clears a state another reason said on the agent', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store('plain')
+    db.exec('ALTER TABLE session_nodes RENAME COLUMN label TO label_renamed')
+    const row = pane('agent:main:plain')
+    const run = attachTo(path, row, () => {})
+    await run.attach.attachSession(row)
+    expect(row.identityHold).toBe('This OpenClaw version is not supported yet.')
+    // The bind pass could not read the pane: its own reason replaces the store's.
+    const other = 'the pane could not be read'
+    row.identityHold = other
+    // OpenClaw changed its schema and still lacks the column, then gained it back.
+    db.exec('CREATE TABLE unrelated (id INTEGER)')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(row.identityHold).toBe(other)
+    db.exec('ALTER TABLE session_nodes RENAME COLUMN label_renamed TO label')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(row.identityHold).toBe(other)
+    expect(run.announceSession).toHaveBeenCalledTimes(1)
+    run.normalizers.forget('agent:main:plain')
+  })
+
   it('a run that timed out with no row of its own is told to the person, and its turn ends', async () => {
     vi.useFakeTimers()
     const { path, db } = store('tool')

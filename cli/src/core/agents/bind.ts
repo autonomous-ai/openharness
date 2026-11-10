@@ -76,15 +76,15 @@ export interface BindDeps {
   owners?: Pick<ConversationOwners, 'settle'>
   /** The agent's pane as it shows now, or null when it cannot be read: OpenClaw's TUI names its session nowhere else. */
   capturePane: (agentId: string) => Promise<string | null>
-  /** Tells an OpenClaw session's live stream whether its pane reads idle on this pass (engines/openclaw/live.ts). */
-  openclawPaneReady: (sessionId: string, ready: boolean) => void
+  /** Tells an OpenClaw session's live stream what its pane read on this pass (engines/openclaw/live.ts). */
+  openclawPaneRead: (sessionId: string, reading: { ready: boolean; gatewayLost: boolean }) => void
   /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
   openclawStateDir: (pid: number) => Promise<string | null>
 }
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, deviceInput, homes, owners, capturePane, openclawPaneReady, openclawStateDir,
+  input, deviceInput, homes, owners, capturePane, openclawPaneRead, openclawStateDir,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -302,6 +302,9 @@ export function createBinding({
       const captured = await read(() => capturePane(agent.agentId))
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
+      // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
+      // close a turn its restart left `running`.
+      if (agent.sessionId) openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost })
       const held = screen.state ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold)
       if (held) {
@@ -314,7 +317,8 @@ export function createBinding({
       }
       if (agent.identityHold && ours) {
         // A remote TUI's title scrolls off a long conversation: only a title naming this machine's Gateway clears it.
-        if (agent.identityHold === OPENCLAW_STATES.remote && !screen.url) return
+        // The others only a footer does: an overlay or autocomplete that hides it shows no state at all.
+        if (!(agent.identityHold === OPENCLAW_STATES.remote ? screen.url : screen.footer)) return
         if (registry.setIdentityHold(agent.agentId, undefined)) {
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · working again`)
           announceSession(agent)
@@ -323,7 +327,6 @@ export function createBinding({
             `[agent] ${sid(agent.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
         }
       }
-      if (agent.sessionId) openclawPaneReady(agent.sessionId, screen.state === 'ready')
       const key = screen.key
       if (!key || key === agent.sessionId || isRecentlyDeleted(key)) return
       const owner = registry.bySession(key)
