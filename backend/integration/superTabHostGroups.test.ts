@@ -43,8 +43,13 @@ afterAll(async () => {
 beforeEach(() => { stamps = new MemoryStamps(); configureSwarmStamps(stamps) })
 afterEach(() => configureSwarmStamps(null))
 
+/** The rich fixture Swarm with extra conversations, and an agent of the owner's in Web on the owner's own machine: only agents post
+ *  in a project's channel and its tasks' chats (agentsOnly.test.ts). */
 async function scene() {
   const s = richSwarm(Date.now())
+  const machineId = `host-${randomUUID()}`
+  await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  const poster = s.add('poster-harness', s.web, false, ownerActor, machineId, owner.sub)
   const tabId = `tab-${randomUUID()}`
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   const report = await migrateSwarm(db, tabId)
@@ -58,7 +63,7 @@ async function scene() {
     }
   })
   await age(tabId)
-  return { tabId, web: s.web }
+  return { tabId, web: s.web, poster }
 }
 
 /** Every conversation last changed ten minutes ago, as a Swarm's quiet ones are: the cache's overlap re-reads the newest few seconds. */
@@ -102,7 +107,7 @@ const cachedInputs = async (cache: SwarmCache, tabId: string) => hostInputs(db, 
 
 describe('the host signature\'s conversations through the patched cache', () => {
   it('gives the pipeline\'s string after every kind of write, patching rather than loading again', { timeout: 120_000 }, async () => {
-    const { tabId, web } = await scene()
+    const { tabId, web, poster } = await scene()
     const delta = vi.fn(readDelta(db))
     const cache = new SwarmCache(stamps, { delta })
     const store = new SuperTabStore(db, Date.now, null, { readCache: cache })
@@ -115,7 +120,7 @@ describe('the host signature\'s conversations through the patched cache', () => 
       ['agent leaves', () => write(tabId, all => { const g = all.groups.find(x => !x.deleted && x.data!.agentIds.length); return g ? update(g.key, d => ({ ...d, agentIds: d.agentIds.slice(1) }))(all) : null })],
       ['new conversation', () => write(tabId, all => ({ op: 'insert', kind: 'group', key: `late-${++n}`, ordinal: 20_000 + n, data: { ...group(all, web).data!, id: `late-${n}`, assignment: null } }))],
       ['conversation removed', () => write(tabId, all => ({ op: 'remove', kind: 'group', key: 'extra-3', seen: group(all, 'extra-3').version, data: group(all, 'extra-3').data }))],
-      ['a post', () => store.execute(owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId: web, text: `m${++n}`, replyTo: null, recipientIds: [] } })],
+      ['a post', () => store.execute(owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId: web, text: `m${++n}`, replyTo: null, recipientIds: [] } }, poster)],
     ]
     expect(await cachedInputs(cache, tabId)).toBe(await pipeline(tabId))
     for (const [name, step] of steps) {
@@ -130,7 +135,7 @@ describe('the host signature\'s conversations through the patched cache', () => 
   })
 
   it('changes exactly when a host-relevant conversation changes: not for a rename or a post, for everything its rows read', { timeout: 60_000 }, async () => {
-    const { tabId, web } = await scene()
+    const { tabId, web, poster } = await scene()
     const cache = new SwarmCache(stamps, { delta: readDelta(db) })
     const store = new SuperTabStore(db, Date.now, null, { readCache: cache })
     const relevant: Array<[string, () => Promise<unknown>]> = [
@@ -143,7 +148,7 @@ describe('the host signature\'s conversations through the patched cache', () => 
     ]
     const irrelevant: Array<[string, () => Promise<unknown>]> = [
       ['renamed', () => write(tabId, update('extra-5', g => ({ ...g, title: 'Another name' })))],
-      ['a post', () => store.execute(owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId: web, text: 'hello', replyTo: null, recipientIds: [] } })],
+      ['a post', () => store.execute(owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId: web, text: 'hello', replyTo: null, recipientIds: [] } }, poster)],
     ]
     let held = await cachedInputs(cache, tabId)
     for (const [name, step] of relevant) {

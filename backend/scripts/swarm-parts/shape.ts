@@ -108,7 +108,7 @@ function history(state: SuperTabState, rng: () => number, tabId: string, finishe
   return { messages, revision: sequence + 7 }
 }
 
-/** What only the store writes: starts in every state, slot ledgers, observations, rules, invitations, report progress. */
+/** What only the store writes: starts in every state, slot ledgers, observations, invitations, report progress. */
 function ledger(state: SuperTabState, rng: () => number, machines: string[], workers: string[], groups: string[], now: number) {
   const pool = state.machines![0]!
   const request = (conversationId: string) => ({ conversationId, machineId: pool.machineId, engine: 'claude', name: 'Builder', cwd: '/work', worktree: true,
@@ -127,8 +127,6 @@ function ledger(state: SuperTabState, rng: () => number, machines: string[], wor
   state.closingSessions = [{ agentId: 'removed-agent', machineId: machines[0]!, harnessId: 'closing-h', machineOwnerId: owner }]
   state.machineCleanups = [{ machineId: 'removed-machine', removalId: 'removal-1', machineOwnerId: owner }]
   state.overlapAlerts = groups.length > 3 ? [`${groups[0]}:${groups[1]}`] : []
-  state.rules = (state.projects ?? []).map((p, r) => ({ id: `rule-${r}`, projectId: p.id, rule: { kind: 'preferEngine' as const, taskKind: 'ui', engine: 'codex' as const },
-    text: 'Codex for UI work.', askedBy: owner, askedIn: null, addedBy: owner, createdAt: new Date(now - 30 * DAY).toISOString() }))
   state.invitations.push({ id: 'pending-invite', email: 'later@example.com', role: 'viewer', conversationId: 'lead', expiresAt: now + 7 * DAY })
   for (const project of state.projects ?? []) {
     const reports = state.conversations.filter(c => (c.projectId ?? 'lead') === project.id && c.id !== project.leadConversationId && !c.kind).map(c => c.lastMessageSequence)

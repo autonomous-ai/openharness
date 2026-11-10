@@ -45,13 +45,18 @@ afterAll(async () => {
 beforeEach(() => { stamps = new MemoryStamps(); configureSwarmStamps(stamps) })
 afterEach(() => configureSwarmStamps(null))
 
+/** The rich fixture Swarm, with an agent of the owner's in Web on the owner's own machine: only agents post in a project's
+ *  channel and its tasks' chats (agentsOnly.test.ts). */
 async function scene() {
   const s = richSwarm(Date.now())
+  const machineId = `host-${randomUUID()}`
+  await db.machine.create({ data: { machineId, userId: people.owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  const poster = s.add('poster-harness', s.web, false, ownerActor, machineId, ownerActor.userId)
   const tabId = `tab-${randomUUID()}`
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   const report = await migrateSwarm(db, tabId)
   if (!report.ok) throw new Error(report.error)
-  return { tabId, web: s.web, secret: s.secret }
+  return { tabId, web: s.web, secret: s.secret, poster }
 }
 
 /** A seeded generator, so a failure replays. */
@@ -75,7 +80,7 @@ const liveOf = <T>(list: parts.Part<T>[]) => list.filter(p => !p.deleted)
 describe('the patched cache answers as reads with no cache do', () => {
   it('patched entries equal fresh loads after every write', { timeout: 120_000 }, async () => {
     const sceneStart = Date.now() - 60_000
-    const { tabId, web, secret } = await scene()
+    const { tabId, web, secret, poster } = await scene()
     const delta = vi.fn(readDelta(db))
     const cache = new SwarmCache(stamps, { delta })
     const store = new SuperTabStore(db, Date.now, null, { readCache: cache })
@@ -101,8 +106,8 @@ describe('the patched cache answers as reads with no cache do', () => {
       () => write(tabId, all => ({ op: 'update', kind: 'head', key: 'head', seen: all.head.version, data: { ...all.head.data!, name: `S${++n}` } })),
       // A machine's own reading (machine stamp only).
       () => write(tabId, all => { const m = one(liveOf(all.machines)); return m ? { op: 'update', kind: 'machine', key: m.key, seen: m.version, data: m.data } : null }),
-      // A real command. Refused once earlier steps left the conversation with no agent to address: a refusal writes nothing.
-      () => store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId: web, text: `m${++n}`, replyTo: null, recipientIds: [] } })
+      // A real command, an agent's post. Refused once earlier steps took the agent out of the conversation: a refusal writes nothing.
+      () => store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId: web, text: `m${++n}`, replyTo: null, recipientIds: [] } }, poster)
         .catch((error: { code?: string }) => { if (!error.code) throw error }),
     ]
 

@@ -64,15 +64,17 @@ async function swarm(now: () => number = Date.now) {
   const tab = (await store.create(owner, randomUUID(), 'Pictures', 'public')).id
   const execute = (command: Parameters<SuperTabStore['execute']>[2]['command'], user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
   await execute({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/repo', engines: ['codex'], maxAgents: 8 })
-  await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
+  // The Lead sends the pictures: only agents post in a project's channel (agentsOnly.test.ts), where its members read them.
+  const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: randomUUID(), name: 'Lead', configuration: config,
+    lead: true })).result.agentId)
   const invitation = await execute({ type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
   const upload = async (bytes: Buffer, name = 'photo.jpg', mime = 'image/jpeg') =>
-    (await store.upload(owner, tab, 'lead', { name, mime, body: Readable.from([bytes]) })).attachment
-  const send = async (attachment: Attachment) =>
-    String((await execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [attachment.id] })).result.messageId)
+    (await store.upload(owner, tab, 'lead', { name, mime, body: Readable.from([bytes]) }, lead)).attachment
+  const send = async (attachment: Attachment) => String((await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send',
+    conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [attachment.id] } }, lead)).result.messageId)
   const read = async (messageId: string, user = owner) => (await store.messages(user, tab, 'lead', { messageId })).messages[0]!.attachments as unknown as Attachment[]
-  return { files, attachments, store, tab, execute, upload, send, read }
+  return { files, attachments, store, tab, execute, lead, upload, send, read }
 }
 
 describe('a picture uploaded through the form', () => {
@@ -160,11 +162,11 @@ describe('when thumbnails are backed up', () => {
   it('completes a direct upload at once with the file and no thumbnail', async () => {
     const f = await swarm()
     const original = await jpeg(2400, 1600)
-    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength })
+    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength }, f.lead)
     expect(await f.files.receive(upload.url, upload.headers, original)).toBe(200)
     queue.busy = true
     try {
-      const { attachment } = await f.store.completeUpload(owner, f.tab, upload.id)
+      const { attachment } = await f.store.completeUpload(owner, f.tab, upload.id, f.lead)
       expect(attachment).toMatchObject({ name: 'big.jpg', size: original.byteLength })
       expect(attachment.thumb).toBeUndefined()
     } finally { queue.busy = false }
@@ -177,7 +179,7 @@ describe('the places a picture holds while it waits for its thumbnail', () => {
     const picture = await jpeg(1200, 900)
     // A client that drops the connection after the picture's first bytes.
     const dropped = () => f.store.upload(owner, f.tab, 'lead', { name: 'cut.jpg', mime: 'image/jpeg',
-      body: Readable.from((async function* () { yield picture.subarray(0, 2000); throw new Error('client dropped') })()) }).catch(() => null)
+      body: Readable.from((async function* () { yield picture.subarray(0, 2000); throw new Error('client dropped') })()) }, f.lead).catch(() => null)
     for (let i = 0; i < 9; i++) await dropped()
     for (let i = 0; i < 9; i++) expect((await f.upload(picture)).thumb, `upload ${i}`).toBeDefined()
   })
@@ -197,13 +199,13 @@ describe('a picture uploaded straight to the bucket', () => {
   it('gets its thumbnail when the upload is completed', async () => {
     const f = await swarm()
     const original = await jpeg(2400, 1600)
-    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength })
+    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength }, f.lead)
     expect(await f.files.receive(upload.url, upload.headers, original)).toBe(200)
-    const { attachment } = await f.store.completeUpload(owner, f.tab, upload.id)
+    const { attachment } = await f.store.completeUpload(owner, f.tab, upload.id, f.lead)
     expect(attachment).toMatchObject({ width: 2400, height: 1600, thumb: { width: 720, height: 480 } })
     expect(f.files.objects.has(keyOf(attachment.thumb!.url))).toBe(true)
     // Answered again after a lost answer: the same facts.
-    expect((await f.store.completeUpload(owner, f.tab, upload.id)).attachment).toMatchObject({ width: 2400, thumb: { width: 720 } })
+    expect((await f.store.completeUpload(owner, f.tab, upload.id, f.lead)).attachment).toMatchObject({ width: 2400, thumb: { width: 720 } })
     const [read] = await f.read(await f.send(attachment))
     expect(read).toMatchObject({ width: 2400, height: 1600, thumb: { width: 720, height: 480 } })
   })
@@ -215,7 +217,7 @@ describe('a picture whose read-back the bucket never answers', () => {
   it('completes without a thumbnail once the read is given up, stops the download and gives its place back', async () => {
     const f = await swarm()
     const original = await jpeg(2400, 1600)
-    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength })
+    const { upload } = await f.store.uploadLink(owner, f.tab, 'lead', { name: 'big.jpg', mime: 'image/jpeg', size: original.byteLength }, f.lead)
     expect(await f.files.receive(upload.url, upload.headers, original)).toBe(200)
     // How many places are free: taken until none is, then given back.
     const free = () => {
@@ -232,7 +234,7 @@ describe('a picture whose read-back the bucket never answers', () => {
       return new Promise<Buffer>((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
     })
     try {
-      const finishing = f.store.completeUpload(owner, f.tab, upload.id)
+      const finishing = f.store.completeUpload(owner, f.tab, upload.id, f.lead)
       await vi.waitFor(() => expect(download).toBeDefined(), { interval: 5 })
       await vi.advanceTimersByTimeAsync(UPLOAD_CHECK_MS)
       vi.useRealTimers()

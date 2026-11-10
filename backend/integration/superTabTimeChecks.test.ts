@@ -158,7 +158,8 @@ describe('the worker\'s pass on a quiet Swarm', () => {
     await runTimeCheckPass(db, counting, f.clock.now + 30_000, undefined, seen)
     expect(calls).toHaveLength(1)
     f.clock.now += 60_000
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Any news?', replyTo: null, recipientIds: [] } as Command)
+    // The worker's post: only agents post in a project's channel (agentsOnly.test.ts).
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Any news?', replyTo: null, recipientIds: [] } as Command, host, f.worker)
     await runTimeCheckPass(db, counting, f.clock.now, undefined, seen)
     expect(calls).toHaveLength(2)
     await runTimeCheckPass(db, counting, f.clock.now + QUIET_CHECK_MS - 1, undefined, seen)
