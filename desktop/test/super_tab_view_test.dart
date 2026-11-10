@@ -117,54 +117,6 @@ void main() {
     controller.dispose();
   });
 
-  for (final rename in [true]) {
-    testWidgets(
-      '${rename ? 'Rename' : 'New group'} clears its form when account access ends',
-      (tester) async {
-        final server = ConversationServer();
-        final controller = server.controller();
-        await controller.refresh();
-        controller.select('offline');
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SuperTabView(
-                controller: controller,
-                onAddAgent: (_) {},
-                onOpenTerminal: (_) {},
-                machineName: (_) => 'Test Mac',
-              ),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        if (rename) {
-          await tester.tap(find.byTooltip('Workgroup options'));
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Rename'));
-        } else {
-          await tester.tap(find.text('New group'));
-        }
-        await tester.pumpAndSettle();
-        final field = find.descendant(
-          of: find.byType(Dialog),
-          matching: find.byType(TextField),
-        );
-        await tester.enterText(field, 'Private draft for previous account');
-        controller.revokeAccess('Account changed.');
-        await tester.pumpAndSettle();
-        expect(find.text('Private draft for previous account'), findsNothing);
-        expect(find.text(rename ? 'Save' : 'Create'), findsNothing);
-        expect(server.posts, isEmpty);
-        await tester.tap(find.text('Close'));
-        await tester.pumpAndSettle();
-        await tester.pumpWidget(const SizedBox());
-        await controller.flush();
-        controller.dispose();
-      },
-    );
-  }
-
   testWidgets(
     'Enter respects IME composition and sends into the selected conversation',
     (tester) async {

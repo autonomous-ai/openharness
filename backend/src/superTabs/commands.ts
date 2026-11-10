@@ -33,10 +33,8 @@ import { credentialResult, redactCredentials, type CredentialKind } from './cred
 import { reportGroups, summarize } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
 import { recordAsked, recordPost, recordReportedModel } from './leaderboard/record.js'
-import { reactionSchema, type ReactionTarget } from './reactions.js'
 import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
 import { bindPullRequestCards, bindTaskCard } from './cards.js'
-import { avatarChoice, setAgentAvatar, setMemberAvatar } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
 import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isProjectChat, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
@@ -53,7 +51,6 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { BASE_DOCUMENT, BASE_VERSION } from './instructionsRebase.js'
 import { contractRefusal, missingContract } from './taskContract.js'
 import { DEFAULT_PRIORITY, PRIORITY_DEFAULTED, TASK_PRIORITIES } from './taskPriority.js'
-import { retiredCommandSchemas, retiredAnswer } from './retired.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 /** A route override's reason when its agent gave none, on a decision whose chosen candidate was not a pick (a person's choice, or an older record). */
@@ -236,18 +233,13 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.role.remove'), projectId: id, roleId }).strict(),
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
-  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(),
+  z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(),
     // How urgent the task is (taskPriority.ts); without one it is P2, and the reply says so.
     priority: z.enum(TASK_PRIORITIES).optional(),
     // Work no person asked for (a flaky test seen twice, an alarm) names nobody; this says why, in a few words (taskContract.ts).
     noRequesterReason: z.string().trim().min(1).max(200).optional(),
-    // A step of the task `reviewOf` names, as an older CLI sends it: the store answers it as retired (retired.ts opensRetiredStep).
-    step: z.string().min(1).max(40).optional(), checks: z.array(check).max(40),
-    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
-    // The person's message in the project chat an older PM opens a task from: its root in the task lines Swarm v4 removed
-    // (2026-11-10). An older CLI still sends it, in place of the requester it named: it is never read, and counts as naming
-    // someone in the task's contract, so the task opens with no requester. Delete it on or after 2026-12-10.
-    requestMessageId: id.optional() }).strict()
+    checks: z.array(check).max(40),
+    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
@@ -301,24 +293,13 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
-  // The suggested agent the person was shown, null for none (task #4217): compared, never read. Optional only for Desktops
-  // from before it, until 2026-12-07.
-  // Clear-only since 2026-11-09 (profile.ts): an older app's new picture is refused in words.
-  z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
-  z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(),
-    // `mentionsIfNoWorker` held a Lead's tags while a task had no worker, in the tag lists Swarm v4 removed (2026-11-10): an older CLI
-    // still sends it, and it is taken and kept nowhere. Delete it on or after 2026-12-09.
-    mentionsIfNoWorker: z.literal(true).optional(), agentOnly: z.literal(true).optional(),
+    agentOnly: z.literal(true).optional(),
     // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
     // routes as a reply to that message does, and opens no thread. Never with replyTo.
     answers: id.optional(),
-    // `handoff` gave an owed ask to the agent this post names, in the owed asks Swarm v4 removed (2026-11-10): an older CLI's PM
-    // still sends it, and the post still tells that agent which message to answer, in its words. Nothing else is kept. Delete
-    // it on or after 2026-12-10.
-    handoff: id.optional(),
     // The answer to the message in `answers` (task #3403): placed in that message's thread when it is a reply in one, else right
     // below it. Only with `answers`. Since Swarm v4 (2026-11-10) a second answer to one message is not refused.
     answer: z.literal(true).optional(),
@@ -327,9 +308,6 @@ export const commandSchema = z.discriminatedUnion('type', [
     notice: z.literal('skills').optional(),
     // Desktop sends it while its last read said the Swarm had one Buddy per person, until it restarts (controller.dart
     // `oneBuddy`): taken and ignored. Goes once a Desktop release stops sending it and 30 days have passed.
-    oneBuddy: z.literal(true).optional() }).strict(),
-  z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean(),
-    // As message.send's.
     oneBuddy: z.literal(true).optional() }).strict(),
   // The author's own post only (messageEdits.ts); the store finds the row (store.ts messageChangeTarget).
   z.object({ type: z.literal('message.edit'), conversationId: id, messageId: id, text: z.string().trim().max(32_000) }).strict(),
@@ -346,9 +324,6 @@ export const commandSchema = z.discriminatedUnion('type', [
     text: z.string().refine(value => Buffer.byteLength(value) <= 65_536, 'A screen is at most 64 KB.').optional(),
     error: z.string().trim().min(1).max(500).optional() }).strict().refine(c => c.ok || c.error !== undefined, 'Say why the request failed.')),
   z.object({ type: z.literal('agent.alert'), agentId: id, alert: z.enum(['prompt', 'limit', 'model']), active: z.boolean(), resetAt: z.iso.datetime().optional() }).strict(),
-  // `head`: the whole commit id of the pull request head the checker read (#3394; never shortened, security review of #3218).
-  // Commands v4 no longer has: an older client's is accepted and ignored (retired.ts).
-  ...retiredCommandSchemas,
 ])
 export type Command = z.infer<typeof commandSchema>
 export const operationSchema = z.object({ operationId: id, command: commandSchema }).strict()
@@ -373,7 +348,7 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.inputResult': ['error'],
   'agent.switchHandoff': ['note'],
   'agent.startSettled': ['warning'],
-  'conversation.create': ['title', 'brief', 'noRequesterReason', 'step', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]',
+  'conversation.create': ['title', 'brief', 'noRequesterReason', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]',
     'task.requires.access[]', 'task.review.focus', 'checks[].description'],
   'conversation.rename': ['title'],
   'project.create': ['name', 'brief'],
@@ -481,8 +456,6 @@ export interface CommandContext {
   voiceWords?: Record<string, string>
   /** `invite.accept`'s person's account name, which their name in the Swarm follows (personNames.ts nameFromAccount). */
   accountName?: string | null
-  /** The message an agent's `message.react` names, read by the store (reactions.ts). */
-  reaction?: ReactionTarget
   /** The message `message.edit` or `message.delete` names, read by the store (messageEdits.ts). */
   messageChange?: MessageChangeTarget
   /** Route decisions this tab recorded in the last hour, counted by the store. */
@@ -1215,7 +1188,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Without text the report only acknowledges, and the card stays.
       if (command.text) {
         mutableProjects(state)
-        projectOf(state, project.id).status = { text: command.text, at: new Date(context.now).toISOString(), by: (actor as Extract<Actor, { kind: 'agent' }>).agentId, own: true }
+        projectOf(state, project.id).status = { text: command.text, at: new Date(context.now).toISOString(), by: (actor as Extract<Actor, { kind: 'agent' }>).agentId }
       }
       break
     }
@@ -1826,7 +1799,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // An agent's task says its goal, when it is done, its priority and who asked (taskContract.ts, task #3389). A private chat
       // is no task of its own.
       if (actor.kind === 'agent' && prioritized) {
-        const missing = missingContract({ goal: brief, checks: command.checks.length, priority: Boolean(command.priority), requester: Boolean(requesterId || command.noRequesterReason || command.requestMessageId) })
+        const missing = missingContract({ goal: brief, checks: command.checks.length, priority: Boolean(command.priority), requester: Boolean(requesterId || command.noRequesterReason) })
         if (missing.length) fail('TASK_CONTRACT_MISSING', contractRefusal(missing), 400)
       }
       const number = nextConversationNumber(state)
@@ -2590,27 +2563,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       owner(state, actor)
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
       break
-    case 'message.react': {
-      // Nothing of a reaction is kept or shown (reactions.ts). A person's is answered as a retired command (the store answers
-      // it before this).
-      if (actor.kind !== 'agent') {
-        Object.assign(result, retiredAnswer().result)
-        break
-      }
-      // An agent's joins it to nothing: only where it already is (project instructions, phase 4), or in its project's chat while it
-      // works in the project (River, 2026-11-04, #2924).
-      const group = open(state, command.conversationId)
-      if (!group.agentIds.includes(actor.agentId)
-        && !(projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId))) {
-        fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
-      }
-      if (context.reaction?.messageId !== command.messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
-      // It changes nothing anyone sees.
-      result.changed = command.on
-      // It is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
-      if (command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
-      break
-    }
     case 'message.edit':
       // `command` is the cleaned one (withoutCredentials): the store writes this text, never the one it was sent.
       result.changed = editMessage(open(state, command.conversationId), actor, command.messageId, command.text, context.messageChange)
@@ -2618,12 +2570,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'message.delete':
       Object.assign(result, { changed: true }, deleteMessage(open(state, command.conversationId), actor, command.messageId, context.messageChange))
-      break
-    case 'member.avatar':
-      setMemberAvatar(state, actor, command.avatar)
-      break
-    case 'agent.avatar':
-      setAgentAvatar(state, actor, command.agentId, command.avatar)
       break
     case 'member.remove': {
       if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== command.userId)) {
@@ -2654,7 +2600,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
-      // An agent's post that says nothing beyond an acknowledgement is refused: a reaction acknowledges (task #3391). Never a
+      // An agent's post that says nothing beyond an acknowledgement is refused (task #3391). Never a
       // person's, a note to itself, a post with a file or a tag, or an agent's talk with its person.
       if (actor.kind === 'agent' && !command.agentOnly && !attachments.length && !command.mentions?.length
         && group.kind !== 'agent-chat' && isAcknowledgement(command.text)) {
@@ -2742,8 +2688,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       if (command.notice && !command.agentOnly) fail('VALIDATION_ERROR', 'A skills notice is an agent-only notice to the agent itself.', 400)
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId} in its thread.` : text
-      message(group.id, postText, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged)
+      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
       if (command.answers) effects.messages.at(-1)!.answers = command.answers
       // Whom a stuck line in a task tags, with its requester (stuck.ts, task #3915).

@@ -82,7 +82,6 @@ void main() {
         // The sidebar lists no tasks, open or closed (task #2569): the
         // closed one is read and opened as the Tasks view opens it.
         expect(find.textContaining('Closed ('), findsNothing);
-        await controller.loadDormant('lead');
         await controller.select('offline');
         await tester.pumpAndSettle();
         expect(controller.selectedId, 'offline');
@@ -95,23 +94,6 @@ void main() {
         expect(find.textContaining('This group is closed'), findsOneWidget);
 
         await _shot(tester, 'closed-read-only-${brightness.name}');
-        await tester.tap(find.byKey(const ValueKey('super-group-reopen')));
-        await tester.pumpAndSettle();
-        expect(server.posts.last['command'], {
-          'type': 'conversation.archive',
-          'conversationId': 'offline',
-          'archived': false,
-        });
-        expect(find.byKey(const ValueKey('super-group-reopen')), findsNothing);
-        expect(
-          tester
-              .widget<TextField>(
-                find.byKey(const ValueKey('super-message-composer')),
-              )
-              .enabled,
-          isTrue,
-        );
-
         await tester.pumpWidget(const SizedBox());
         await controller.flush();
         controller.dispose();

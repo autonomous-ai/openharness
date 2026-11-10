@@ -47,10 +47,10 @@ describe('the project status card', () => {
     const f = fixture()
     const first = f.run(report('Offline editing: PR #12 waiting on CI'), f.leadActor)
     expect(first.messages).toEqual([])
-    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: PR #12 waiting on CI', at: new Date(f.now).toISOString(), by: f.lead, own: true })
+    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: PR #12 waiting on CI', at: new Date(f.now).toISOString(), by: f.lead })
     f.tick(MINUTE)
     expect(f.run(report('Offline editing: merged'), f.leadActor).messages).toEqual([])
-    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: merged', at: new Date(f.now).toISOString(), by: f.lead, own: true })
+    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: merged', at: new Date(f.now).toISOString(), by: f.lead })
     // No text only acknowledges: the card stays.
     expect(f.run(report(null), f.leadActor).messages).toEqual([])
     expect(projectOf(f.state, 'lead').status!.text).toBe('Offline editing: merged')

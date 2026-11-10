@@ -14,7 +14,6 @@ import { MemoryAttachmentStore, MemoryAvatarStore, SharedAvatarStore } from '../
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
-import { RETIRED_NOTE } from '../src/superTabs/retired.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -31,16 +30,6 @@ const run = (tab: string, command: Command, user = owner, asAgentId?: string, op
 const read = async (tab: string, user: AuthUser, path = 'parts') => {
   const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/${path}`, headers: { authorization: `Bearer ${user.sub}` } })
   return { status: response.statusCode, body: response.json(), text: response.body }
-}
-// What an older app sends to set a picture: the form it posts first. The route only refuses it now (routes/superTabs.ts).
-const upload = async (tab: string, bytes: Uint8Array, name = 'me.png', mime = 'image/png', user = owner, asAgentId?: string) => {
-  const form = new FormData()
-  form.append('file', new Blob([bytes], { type: mime }), name)
-  const encoded = new Request('http://upload.test', { method: 'POST', body: form })
-  const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/avatars${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
-    headers: { authorization: `Bearer ${user.sub}`, 'content-type': encoded.headers.get('content-type')! }, payload: Buffer.from(await encoded.arrayBuffer()) })
-  const body = response.json()
-  return { status: response.statusCode, code: body.error?.code ?? body.code, message: body.error?.message as string | undefined }
 }
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const image = (size: number, head: number[] = PNG) => { const bytes = new Uint8Array(size).map((_, i) => i % 251); bytes.set(head); return bytes }
@@ -91,43 +80,6 @@ afterAll(async () => {
   await app?.close()
   await db?.$disconnect()
   await replica?.stop()
-})
-
-// Swarm v4 has no status, time zone, name, username or picture to set (2026-11-09), but Desktop and phone from the last 30 days still send them.
-describe('the profile commands an older app still sends', () => {
-  it('answers each as ignored, and nothing a member reads changes', async () => {
-    const tab = await swarm()
-    const before = (await read(tab, peer)).body.data.members
-    for (const command of [{ type: 'member.status', status: { text: 'Heads down', emoji: '🎯' } }, { type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' },
-      { type: 'member.username', username: 'pilot' }, { type: 'member.name', name: 'Minh Nguyen' }] as unknown as Command[]) {
-      expect((await run(tab, command)).result, command.type).toEqual({ ignored: true, note: RETIRED_NOTE })
-    }
-    expect((await read(tab, peer)).body.data.members).toEqual(before)
-  })
-
-  it('refuses a new picture in words, built in or uploaded, and the clearing of one still clears it', async () => {
-    const tab = await swarm()
-    await setPicture(tab, owner.sub, await keepPicture(pictures, tab))
-    const refused = { code: 'AVATARS_RETIRED', status: 410, message: 'Pictures can’t be changed any more.' }
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } })).rejects.toMatchObject(refused)
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: 'avatar-1' } })).rejects.toMatchObject(refused)
-    const mine = async () => ((await read(tab, peer)).body.data.members as Array<{ key: string; data: { avatar?: unknown } }>).find(m => m.key === owner.sub)!.data.avatar
-    expect(await mine()).toEqual({ kind: 'upload' })
-    await run(tab, { type: 'member.avatar', avatar: null })
-    expect(await mine()).toBeUndefined()
-    expect((await read(tab, peer)).body.data.derived?.avatars?.[`person:${owner.sub}`]).toBeUndefined()
-  })
-
-  it('refuses the picture it posts first in words, for everyone and for a Swarm that is not there, and keeps nothing', async () => {
-    const tab = await swarm()
-    const before = pictures.objects.size
-    const refused = { status: 410, code: 'AVATARS_RETIRED', message: 'Pictures can’t be changed any more.' }
-    for (const [where, user] of [[tab, owner], [tab, peer], [tab, outsider], [randomUUID(), owner]] as const) {
-      expect(await upload(where, image(64), 'me.png', 'image/png', user), `${where} ${user.email}`).toEqual(refused)
-    }
-    expect(await upload(tab, image(1024 * 1024 + 1))).toEqual(refused)
-    expect(pictures.objects.size).toBe(before)
-  })
 })
 
 describe('a picture already set', () => {
@@ -263,76 +215,5 @@ describe('a name that follows the account', () => {
     expect((await nameOf(tab, peer.sub)).name).toBe('Peer Again')
     expect(await store.followAccountNames(tab)).toBe(0)
     await rename(peer, null)
-  })
-})
-
-// Reactions are gone (anh Dee, 2026-11-09): nothing stores, counts or shows one (reactions.ts). An agent's still acknowledges a
-// message, so it settles that agent's delivery (integration/superTabs.test.ts), and is refused where the agent cannot see.
-describe('reactions', () => {
-  const post = async (tab: string, text = 'Shipped the fix') =>
-    (await run(tab, { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId as string
-  const react = (tab: string, messageId: string, on: boolean, user = owner, emoji: 'tada' | 'heart' = 'tada') =>
-    run(tab, { type: 'message.react', conversationId: 'lead', messageId, emoji, on }, user)
-  const page = async (tab: string, user = owner, conversationId = 'lead') =>
-    (await read(tab, user, `conversations/${conversationId}/messages`)).body.data as {
-      messages: Array<{ id: string; reactions: unknown[]; deliveries: Array<{ agentId: string; status: string }> }>; reactionSeq: number }
-
-  it('answers a person\'s reaction as ignored, anyone\'s, and stores and moves nothing', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    const before = await page(tab, peer)
-    // As a retired command: before anything is read, so a reader outside the Swarm is answered alike and learns nothing.
-    for (const [on, user] of [[true, owner], [true, peer], [false, peer], [true, outsider]] as const) {
-      expect((await react(tab, messageId, on, user)).result).toEqual({ ignored: true, note: RETIRED_NOTE })
-    }
-    expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
-    expect(await page(tab, peer)).toEqual(before)
-  })
-
-  it('shows no reaction stored before, on any page', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    await db.superTabReaction.create({ data: { id: `${messageId}-r`, tabId: tab, conversationId: 'lead', messageId, actorKind: 'person', actorId: peer.sub, emoji: 'heart' } })
-    expect((await page(tab, owner)).messages.find(m => m.id === messageId)!.reactions).toEqual([])
-  })
-
-  const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-  const agentIn = async (tab: string, conversationId: string, name: string, lead = false) =>
-    (await run(tab, { type: 'agent.add', conversationId, machineId: 'host', harnessId: randomUUID(), name, configuration: config, lead })).result.agentId as string
-  const agentReact = (tab: string, conversationId: string, messageId: string, agentId: string, emoji: 'eyes' | 'check' | 'rocket', on = true) =>
-    run(tab, { type: 'message.react', conversationId, messageId, emoji, on }, owner, agentId)
-
-  it('keeps an agent\'s reaction nowhere and shows it to nobody', async () => {
-    const tab = await swarm()
-    // Kai coordinates: the project chat holds only its coordinator among agents (#2207).
-    const builder = await agentIn(tab, 'lead', 'Kai', true)
-    const messageId = await post(tab, 'Kai, please add avatars.')
-    const before = await page(tab, peer)
-    for (const emoji of ['eyes', 'check'] as const) expect((await agentReact(tab, 'lead', messageId, builder, emoji)).result).toMatchObject({ changed: true })
-    expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
-    const after = await page(tab, peer)
-    expect(after.reactionSeq).toBe(before.reactionSeq)
-    expect(after.messages.map(m => m.reactions)).toEqual(before.messages.map(() => []))
-    // What it still does: it acknowledged the message, so Kai's delivery of it is settled.
-    expect(after.messages.find(m => m.id === messageId)!.deliveries).toEqual([expect.objectContaining({ agentId: builder, status: 'answered' })])
-  })
-
-  it('privacy: refuses an agent\'s reaction where it takes no part, and on another agent\'s private notice', async () => {
-    const tab = await swarm()
-    const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result as
-      { projectId: string; conversationId: string }
-    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [owner.sub] })
-    await agentIn(tab, conversationId, 'Secret PM', true)
-    const secret = (await run(tab, { type: 'message.send', conversationId, text: 'Ship the secret.', replyTo: null, recipientIds: [] })).result.messageId as string
-    // Both agents share a task, as the project chat holds only its coordinator among agents (#2207).
-    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.', checks: [] })).result.conversationId as string
-    const builder = await agentIn(tab, group, 'Kai')
-    await expect(agentReact(tab, conversationId, secret, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
-    const lead = await agentIn(tab, group, 'River', true)
-    const notice = (await run(tab, { type: 'message.send', conversationId: group, text: 'Your skill changed.', replyTo: null, recipientIds: [lead],
-      agentOnly: true }, owner, lead)).result.messageId as string
-    await expect(agentReact(tab, group, notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await agentReact(tab, group, notice, lead, 'eyes')
-    expect(await db.superTabReaction.count({ where: { tabId: tab } })).toBe(0)
   })
 })

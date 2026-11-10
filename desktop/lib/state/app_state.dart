@@ -109,6 +109,7 @@ import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/image_cache.dart' show superTabImageCache;
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
+import '../super_tabs/swarm_starts.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
@@ -1915,6 +1916,9 @@ class AppNotifier extends ChangeNotifier {
   /// What a host keeps of the account on this device beside the Super Tab
   /// views; Settings ▸ Account's Clear now clears it with them.
   final browserCopies = BrowserCopies();
+
+  /// A Swarm's New Project and New Agent going on after their forms closed, each a row in its Swarm's left pane.
+  final swarmStarts = SwarmStarts();
 
   late final SuperTabClient superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
@@ -15514,31 +15518,6 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// Linked Swarm PRs are read by this window's own computer, using its GitHub login.
-  /// An agent changing branch or stopping must not change whose account reads a link.
-  Future<Map<String, dynamic>> readPullRequestsStatus(List<String> urls) async {
-    final machine = localMachineState, revision = _authRevision;
-    if (machine == null) return {'error': 'LOCAL_GITHUB_UNAVAILABLE'};
-    try {
-      final result = await _conn(machine.machine.machineId).request(
-        'git_pull_requests_status',
-        payload: {'urls': urls},
-        timeout: const Duration(seconds: 120),
-      );
-      if (!_machineWorkCurrent(machine, revision)) {
-        return {'error': 'UNAVAILABLE'};
-      }
-      return result;
-    } on WsRequestFailure catch (error) {
-      if (!_machineWorkCurrent(machine, revision)) {
-        return {'error': 'UNAVAILABLE'};
-      }
-      return {...error.payload, 'error': error.code};
-    } catch (_) {
-      return {'error': 'UNAVAILABLE'};
-    }
-  }
-
   /// PR lookup runs on the agent's machine using that machine's GitHub access.
   Future<Map<String, dynamic>> readAgentPullRequest(
     String machineId,
@@ -23545,6 +23524,7 @@ class AppNotifier extends ChangeNotifier {
     agentMessagesRemote.dispose();
     agentMessages.dispose();
     sharedTabs.dispose();
+    swarmStarts.dispose();
     superTabs.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();

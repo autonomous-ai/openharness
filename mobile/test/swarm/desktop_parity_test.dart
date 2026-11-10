@@ -10,19 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// would parse on a computer and be dropped on the phone. Here a drift fails
 /// until the change is carried across — or, if the two are meant to differ now,
 /// until the file leaves this list on purpose.
+// The desktop's Swarm is v4 only (anh Dee, 2026-11-10): its parts reader no longer reads v3's personal tasks, live
+// cards, linked tasks and task steps, whose files went, so the phone's copies of those are its own now.
 const _copies = {
-  'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
   'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
-  'lib/swarm/tasks/personal_tasks.dart':
-      'lib/super_tabs/tasks/personal_tasks.dart',
-  // Live cards (Slack parity, #2212): which messages are cards, and the
-  // linked tasks a card shows. The phone reads no GitHub yet (Lead, 10-29:
-  // that request is a security change of its own), so Desktop's PR facts
-  // reader has no copy here.
-  'lib/swarm/live_card_model.dart': 'lib/super_tabs/live_card_model.dart',
-  'lib/swarm/linked_tasks.dart': 'lib/super_tabs/linked_tasks.dart',
-  // Task steps design: a task's steps and its merged chat.
-  'lib/swarm/task_steps.dart': 'lib/super_tabs/task_steps.dart',
   'lib/swarm/instructions_model.dart': 'lib/super_tabs/instructions_model.dart',
 };
 

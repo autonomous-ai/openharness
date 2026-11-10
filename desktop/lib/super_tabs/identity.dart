@@ -19,8 +19,8 @@ class SuperTabAvatar extends StatelessWidget {
     this.picture,
     this.engine,
     this.face = false,
-  }) : lead = false,
-       offline = false;
+    this.offline = false,
+  }) : lead = false;
 
   SuperTabAvatar.person(SuperTabPerson person, {super.key, this.size = 30})
     : identity = 'person:${person.id}',
@@ -66,7 +66,7 @@ class SuperTabAvatar extends StatelessWidget {
   /// moves: a PM in My agents.
   final bool lead;
 
-  /// Drawn grey: its agent is offline.
+  /// Drawn grey: its agent is offline, or not started yet (a start's row in the left pane).
   final bool offline;
 
   @override

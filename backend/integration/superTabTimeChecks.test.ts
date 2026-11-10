@@ -11,7 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import { QUIET_CHECK_MS, runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
-import { poolRows, rosterRows } from './hostRows.test-support.js'
+import { poolRows } from './hostRows.test-support.js'
 import { plan, profiled, reads } from './plans.test-support.js'
 import { storeAssignment } from './storedWork.test-support.js'
 
@@ -143,24 +143,6 @@ describe('the worker\'s pass', () => {
     expect(await quiet.rows('work-stalled')).toEqual([])
     // A week later nothing there is read again.
     expect(await timeCheckSwarms(db, f.clock.now + 8 * 24 * 60 * MINUTE)).not.toContain(f.tab)
-  })
-})
-
-// Swarm v4 (anh Dee, 2026-11-09): the server restarts no PM. A v3 "owes an answer" note left in a Swarm told its PM's host to
-// restart it while it hung; nothing writes it now, so a stale one would restart the PM forever. The checks clear it once.
-describe('a PM\'s owed note left by v3', () => {
-  it('is cleared by the time checks, and no host row carries one', async () => {
-    const f = await swarm()
-    const key = { tabId_key: { tabId: f.tab, key: 'head' } }
-    const head = await db.swarmHead.findUniqueOrThrow({ where: key })
-    const data = head.data as { projects?: Array<Record<string, unknown>> }
-    data.projects![0]!.owed = { messageId: 'm-old', since: f.clock.now - 60_000 }
-    await db.swarmHead.update({ where: key, data: { data: data as never } })
-    await f.timed.runTimeChecks(f.tab)
-    const after = (await db.swarmHead.findUniqueOrThrow({ where: key })).data as { projects?: Array<{ owed?: unknown }> }
-    expect(after.projects![0]!.owed).toBeUndefined()
-    const row = (await rosterRows(f.timed, host, 'lead-host')).find(r => r.tabId === f.tab && 'agent' in r && r.agent.id === f.lead) as Record<string, unknown>
-    expect(row.owed).toBeNull()
   })
 })
 

@@ -39,7 +39,8 @@ import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
-import 'package:harness/super_tabs/project_sidebar.dart' show SuperTabFoldRow;
+import 'package:harness/super_tabs/project_sidebar.dart'
+    show SuperTabFoldRow, SwarmStartRow;
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
@@ -107,13 +108,18 @@ void main() {
     };
     expect(details.evaluate(), isNotEmpty);
     expect(rights, hasLength(1), reason: '$rights');
-    // The heading's +: its glyph's box ends on the same edge.
+    // The headings' +, Your Team's and Projects': each glyph's box ends on the same edge.
     final plus = find.descendant(
       of: find.byKey(_Gallery.leftPane),
       matching: find.byIcon(AppIcons.plus),
     );
-    expect(plus, findsOneWidget);
-    expect(tester.getRect(plus).right, moreOrLessEquals(rights.single));
+    expect(plus, findsNWidgets(2));
+    for (final e in plus.evaluate()) {
+      expect(
+        tester.getRect(find.byWidget(e.widget)).right,
+        moreOrLessEquals(rights.single),
+      );
+    }
     await _close(tester, bars);
   });
 
@@ -179,7 +185,7 @@ Future<List<SuperTabController>> _show(
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 4242);
+  tester.view.physicalSize = const Size(760, 4353);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -476,6 +482,15 @@ class _Gallery extends StatelessWidget {
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
+                        // A New agent going on after its form closed: first, greyed, until it runs; one that failed opens
+                        // its form again.
+                        const SwarmStartRow(name: 'Faye', project: false),
+                        SwarmStartRow(
+                          name: 'Ivy',
+                          project: false,
+                          failed: true,
+                          onOpen: () {},
+                        ),
                         for (final (name, lead, unread, selected, state) in [
                           ('River', true, false, false, null),
                           ('Quinn', false, false, true, 'on #12'),
@@ -526,6 +541,15 @@ class _Gallery extends StatelessWidget {
                         ),
                         // Past the first eight: the rest, a click away.
                         SuperTabFoldRow(hidden: 32, onTap: () {}),
+                        SuperTabQuietHeading(
+                          'Projects',
+                          collapsed: false,
+                          onTap: () {},
+                          onAdd: () {},
+                          addTooltip: 'New project',
+                        ),
+                        // A New project going on after its form closed, in place of its own row.
+                        const SwarmStartRow(name: 'docs-home', project: true),
                         // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',
@@ -636,22 +660,6 @@ class _Gallery extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SwarmChatCard(
-                          icon: AppIcons.send,
-                          label: 'Sent to River',
-                          title: 'Every task opens as a thread',
-                          action: 'View brief',
-                          details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
-                        const SwarmChatCard(
-                          icon: AppIcons.circleCheck,
-                          label: 'Shipped',
-                          title: 'Wake fix: the mic closes after 1 second',
-                          action: 'What changed',
-                          details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
                         // What GitHub said to your agent (github_row.dart).
                         const SwarmChatCard(
                           icon: AppIcons.gitPullRequest,

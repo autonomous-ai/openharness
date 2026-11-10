@@ -29,7 +29,6 @@ import { derivedEtag, marksOf } from './derivedEtag.js'
 import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { AvatarLinks } from '../avatarLinks.js'
 import { cursorFor, readCursor } from './cursor.js'
-import { NO_PERSONAL_TASKS } from '../retired.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
@@ -122,10 +121,7 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
-        // This backend opens steps (task steps design): a newer CLI sends `step` only to a backend that says so.
-        steps: true as const, ...view.parts,
-        // The Tasks feed Swarm v4 retired, empty and reset for a Desktop that kept its rows (retired.ts).
-        ...read.actor.kind === 'person' ? { personalTasks: NO_PERSONAL_TASKS } : {},
+        ...view.parts,
         ...stamped({ ...await this.withAvatars(view, t0), ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -207,7 +203,7 @@ export class SwarmReads {
       // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
       if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...sent, ...read.actor.kind === 'person' ? { personalTasks: NO_PERSONAL_TASKS } : {},
+        epoch: read.parts.visibilityEpoch, ...sent,
         ...stamped({ ...await this.withAvatars(read.view, t0), ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
