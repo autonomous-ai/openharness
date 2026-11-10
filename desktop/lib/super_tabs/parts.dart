@@ -463,8 +463,6 @@ class SuperTabParts {
       'machines': machines,
       'starts': [for (final start in _data('starts')) start],
     };
-    // Sent only where the server does not try Harness Team accounts yet.
-    if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     if (_chatSettings.isNotEmpty) {
       state['chatSettings'] = Map.of(_chatSettings);
