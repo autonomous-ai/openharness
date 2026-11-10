@@ -235,11 +235,13 @@ export interface ThreadReply { thread: string; id: string; author: Author; menti
   session?: boolean
   /** Its source's kind, and what it says for its task's row (threads.ts). */
   kind?: unknown
-  ask?: import('./taskLine.js').TaskAsk }
+  ask?: TaskAsk }
+/** What a task line's reply said for its task's row: written until Swarm v4 removed task lines (2026-11-10), still stored. */
+type TaskAsk = 'on-it' | 'shipped' | 'closed'
 
 /** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly, routingRow). */
 interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean; session?: boolean | null
-  ask?: import('./taskLine.js').TaskAsk }
+  ask?: TaskAsk }
 /** One row of a part, by its place in the thread. */
 interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?: number }
 /** What the database sums up of some threads' rows (threadFacet), as it returns it: the same whoever reads. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bindPullRequestCards, cleanPullRequestLinks, pullRequestCard } from './cards.js'
+import { bindPullRequestCards, cleanPullRequestLinks } from './cards.js'
 import { githubRepository } from '../github/repository.js'
 import { appendPullRequestUrls, projectPullRequestUrl, pullRequestLinks, type Conversation } from './model.js'
 
@@ -48,7 +48,6 @@ describe('a project\'s pull request links', () => {
     bindPullRequestCards(group, { id: 'm2', conversationId: 'g', author: {} as never, text: `Again ${RIGHT}`, replyTo: null, recipients: [] }, REPO)
     bindPullRequestCards(group, { id: 'm3', conversationId: 'g', author: {} as never, text: `Spelled https://github.com/Autonomous-AI/OpenHarness/pull/1`, replyTo: null, recipients: [] }, REPO)
     expect(group.cards!.pullRequests).toEqual([{ url: RIGHT, messageId: 'm2' }])
-    expect(pullRequestCard(group, RIGHT)?.messageId).toBe('m2')
   })
 
   it('adds links from text by the project\'s repository', () => {

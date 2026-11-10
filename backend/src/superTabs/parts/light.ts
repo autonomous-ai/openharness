@@ -40,9 +40,7 @@ export const GROUP_FIELDS = {
     'leadId',
     'projectId',
     'proposal',
-    'pulse',
     'reviewOf',
-    'statusLine',
     'taskApproval',
   ],
   whenRunning: [
@@ -90,7 +88,6 @@ export const GROUP_FIELDS = {
     'messageSeq',
     'notBefore',
     'number',
-    'owed',
     'paused',
     'pin',
     'priority',

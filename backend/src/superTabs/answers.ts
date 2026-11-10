@@ -1,18 +1,17 @@
 /**
  * The PM answers each ask once, in its place (task #3403, anh Dee's Swarm redesign, 11-05). An answer (`message.send` with
  * `answer`, the CLI's `answer` command) goes where the ask was made: in its thread when it is a reply in one, else right below
- * it in the main chat. The PM's answers are recorded on the conversation (`Conversation.answered`), by `answer` or by any post
- * that settles an owed ask (pulse.ts), and a second `answer` to the same message is refused with where the first one is. A
- * plain post in a task/private chat is never refused by this helper. Project chats extend this to every agent and explicit
- * answer link or person reply mirrored into main (chatLimits.ts, task #3598).
+ * it in the main chat. The PM's answers are recorded on the conversation (`Conversation.answered`) by `answer`, and a second
+ * `answer` to the same message is refused with where the first one is. A plain post in a task/private chat is never refused
+ * by this helper. Project chats extend this to every agent and explicit answer link or person reply mirrored into main
+ * (chatLimits.ts, task #3598).
  */
 import type { CommandContext } from './commands.js'
 import { fail, type Conversation, type SuperTabState } from './model.js'
 import { groupProject } from './projects.js'
-import { pmOf, type OwedAsk } from './pulse.js'
 
 export const ALREADY_ANSWERED = 'ALREADY_ANSWERED'
-/** At most this many answers are kept per conversation, the newest: a growth bound, as pulse.ts MAX_OWED. */
+/** At most this many answers are kept per conversation, the newest: a growth bound. */
 export const MAX_ANSWERED = 50
 
 /** One message the PM answered: its id, the answer's id, the thread the answer went in (null: right below it), and when. */
@@ -25,7 +24,10 @@ export const inThread = (reply: Reply): boolean => !!reply.thread && reply.threa
 
 /** Whether [agentId] leads [group]'s project. Never throws: a conversation outside every project has no PM. */
 export function leadsGroup(state: SuperTabState, group: Conversation, agentId: string): boolean {
-  try { return pmOf(state, groupProject(state, group)) === agentId } catch { return false }
+  try {
+    const project = groupProject(state, group)
+    return state.conversations.find(c => c.id === project.leadConversationId)?.leadId === agentId
+  } catch { return false }
 }
 
 const clock = (at: number): string => new Date(at).toISOString().slice(11, 16)
@@ -40,7 +42,7 @@ export function requireUnanswered(group: Conversation, messageId: string, record
 }
 
 /** Records the PM's answer [answerId] to each of [asks]. */
-export function recordAnswered(group: Conversation, asks: ReadonlyArray<Pick<OwedAsk, 'id'>>, answerId: string, thread: string | null, at: number): void {
+export function recordAnswered(group: Conversation, asks: ReadonlyArray<{ id: string }>, answerId: string, thread: string | null, at: number): void {
   if (!asks.length) return
   const ids = new Set(asks.map(a => a.id))
   group.answered = [...(group.answered ?? []).filter(a => !ids.has(a.id)), ...asks.map(a => ({ id: a.id, answerId, thread, at }))].slice(-MAX_ANSWERED)

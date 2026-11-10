@@ -4,7 +4,6 @@ import { LEASE_MS, loseTasks, QUIET_RUNNING_MS, sweepLiveness, waitingForReview 
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
 import { CREW_REOPEN_GRACE_MS } from './crew.js'
 import { split } from './parts/index.js'
-import { stepsFixture } from './steps.test-support.js'
 
 const MINUTE = 60_000
 const assignment = (patch: Partial<Assignment> = {}): Assignment => ({ id: 'a1', agentId: 'w', status: 'working', result: null,
@@ -343,35 +342,4 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
   const starting = (start: Record<string, unknown>) => project(null, { starts: [{ id: 's1', request: { conversationId: 'g1', machineId: 'm', name: 'Builder' },
     dispatched: false, harnessId: null, error: null, requestedAt: NOW - 9 * MINUTE, ...start }] })
 
-})
-
-// Diego, 2026-11-04 (task #2693): the project chat's thread replies are the only task state the chat shows (#2704), but a task
-// lost outside any command (the sweep, a machine's report, its Lead's poll) never said Stuck there: the thread kept saying On it.
-describe('a task lost outside any command says Stuck in its project-chat thread', () => {
-  const lost = () => {
-    const f = stepsFixture()
-    // Asked for in a person's message, whose thread is the task's (taskLine.ts); a task no message asked for says nothing there.
-    f.group(f.task).cards = { ...f.group(f.task).cards, line: { messageId: 'ask', conversationId: 'lead' } }
-    const root = f.group(f.task).cards!.line!.messageId
-    const worker = f.state.agents.find(a => a.id === f.dev)!
-    const text = `Stuck: ${worker.displayName ?? worker.name} stopped. Next: another engineer takes it over.`
-    const replies = (rows: ReturnType<typeof loseTasks>) => rows.filter(r => r.conversationId === f.group(f.task).cards!.line!.conversationId)
-    f.tick(120 * MINUTE)
-    return { f, root, text, replies }
-  }
-
-  it('through the loss check: exactly one reply, in the task\'s thread, as its coordinator', () => {
-    const { f, root, text, replies } = lost()
-    const rows = loseTasks(f.state, f.now)
-    expect(f.group(f.task).assignment!.status).toBe('lost')
-    expect(replies(rows)).toEqual([expect.objectContaining({ text, replyTo: root, thread: root, recipients: [],
-      author: expect.objectContaining({ kind: 'agent', id: f.lead }), source: expect.objectContaining({ kind: 'system' }) })])
-  })
-
-  it('once when an alert loses it inside a command', () => {
-    const { f, root, text } = lost()
-    const rows = f.run({ type: 'agent.alert', agentId: f.dev, alert: 'limit', active: true }, f.as(f.dev)).messages
-    expect(f.group(f.task).assignment!.status).toBe('lost')
-    expect(rows.filter(r => r.thread === root && r.text.startsWith('Stuck:'))).toEqual([expect.objectContaining({ text })])
-  })
 })

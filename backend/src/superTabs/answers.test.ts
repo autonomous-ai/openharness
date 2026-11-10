@@ -29,30 +29,26 @@ function setup() {
   const refusal = (body: () => unknown): SuperTabError | null => {
     try { body(); return null } catch (error) { if (error instanceof SuperTabError) return error; throw error }
   }
-  const owed = () => (f.group('lead').owed ?? []).map(a => a.id)
-  return { f, ask, answer, refusal, owed }
+  return { f, ask, answer, refusal }
 }
 
 describe('the PM\'s answer', () => {
-  it('to a top-level ask goes right below it in the main chat, and settles it', () => {
-    const { f, ask, answer, owed } = setup()
+  it('to a top-level ask goes right below it in the main chat', () => {
+    const { f, ask, answer } = setup()
     const question = ask('Can the board show who works?')
-    expect(owed()).toEqual([question.id])
     const { sent } = answer(f.lead, question, 'Yes, from tonight.')
     expect(sent.replyTo).toBeNull()
     expect(sent.thread ?? null).toBeNull()
-    expect(owed()).toEqual([])
     expect(f.group('lead').answered?.map(a => ({ id: a.id, answerId: a.answerId, thread: a.thread }))).toEqual([{ id: question.id, answerId: sent.id, thread: null }])
   })
 
   it('to an ask inside a thread goes in that thread, not the main chat', () => {
-    const { f, ask, answer, owed } = setup()
+    const { f, ask, answer } = setup()
     const root = ask('Why is Working 0?')
     const inThread = ask('Still nothing after an hour.', { reply: root.id, thread: root.id })
     const { sent } = answer(f.lead, inThread, 'Two agents start now.')
     expect(sent.replyTo).toBe(inThread.id)
     expect(sent.thread).toBe(root.id)
-    expect(owed()).toEqual([])
     expect(f.group('lead').answered?.find(a => a.id === inThread.id)?.thread).toBe(root.id)
   })
 
@@ -89,21 +85,12 @@ describe('the PM\'s answer', () => {
     expect(refusal(() => answer(f.lead, question, 'Still green after the batch.', { plain: true }))?.code).toBe(ALREADY_ANSWERED)
   })
 
-  it('to a message nobody owed is posted in its place and recorded, so a second one is refused', () => {
-    const { f, ask, answer, refusal } = setup()
-    const question = ask('Thanks all.')
-    f.group('lead').owed = undefined
-    const { sent } = answer(f.lead, question, 'You are welcome.')
-    expect(sent.replyTo).toBeNull()
-    expect(refusal(() => answer(f.lead, question, 'Again.'))?.code).toBe(ALREADY_ANSWERED)
-  })
 
-  it('by an Engineer leaves PM owed settlement alone but blocks a second answer', () => {
-    const { f, ask, answer, owed, refusal } = setup()
+  it('by an Engineer blocks a second answer', () => {
+    const { f, ask, answer, refusal } = setup()
     const question = ask('Is the fix in?')
     // The Engineer has work in the project, so it posts in its chat without joining it.
     answer(f.dev, question, 'I pushed it.')
-    expect(owed()).toEqual([question.id])
     expect(refusal(() => answer(f.lead, question, 'Merged at 21:00.'))?.code).toBe(ALREADY_ANSWERED)
   })
 
@@ -132,12 +119,11 @@ describe('in a project that answers people in threads', () => {
     return { ...s, projectId }
   }
 
-  it('puts a plain answer and an answer to a person\'s main-chat message in its thread, and settles it', () => {
-    const { f, ask, answer, owed } = threaded()
+  it('puts a plain answer and an answer to a person\'s main-chat message in its thread', () => {
+    const { f, ask, answer } = threaded()
     const question = ask('Can the board show who works?')
     const { sent } = answer(f.lead, question, 'Yes, from tonight.', { plain: true })
     expect(sent.replyTo).toBe(question.id)
-    expect(owed()).toEqual([])
     const second = ask('And the costs?')
     const { sent: answered } = answer(f.lead, second, 'Tomorrow.')
     expect(answered.replyTo).toBe(second.id)

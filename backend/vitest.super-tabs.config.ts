@@ -65,7 +65,6 @@ export default defineConfig({ test: {
     'integration/superTabInstructions.test.ts',
     'integration/superTabInstructionsRebase.test.ts',
     'integration/superTabProjectRules.test.ts',
-    'integration/superTabTaskLines.test.ts',
     'integration/superTabDeletion.test.ts',
     'integration/communityReports.test.ts',
     'integration/superTabMachineNames.test.ts',

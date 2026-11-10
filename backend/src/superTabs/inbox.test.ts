@@ -1,18 +1,16 @@
 /**
- * The PM's inbox (task #3403, anh Dee's Swarm redesign, 11-05): its digest starts with what it owes people, oldest first, each
- * with where to answer it, before the notices.
+ * The PM's inbox (task #3403, anh Dee's Swarm redesign, 11-05): people's new messages and its crew's needs, each with where to
+ * answer it, before the notices.
  */
 import { describe, expect, it } from 'vitest'
 import type { Command } from './commands.js'
 import { digestText } from './noticeDigest.js'
-import { crewNeedLine, gathersForInbox, INBOX_CAPABILITY, inboxSection, OWED_LINES_MAX, owedLines, personLine } from './inbox.js'
+import { crewNeedLine, gathersForInbox, INBOX_CAPABILITY, inboxSection, personLine } from './inbox.js'
 import type { Author } from './model.js'
 import { CREW_NEED_KIND } from './crewNeeds.js'
 import { agentProjectId, projectsOf } from './projects.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 import { swarmUsernames } from './usernames.js'
-
-const MINUTE = 60_000
 
 function setup() {
   const f = stepsFixture()
@@ -23,55 +21,21 @@ function setup() {
   return { f, ask, project }
 }
 
-describe('the owed asks at the top of the PM\'s inbox', () => {
-  it('lists each ask oldest first, who asked, how long ago and where, with how to answer it', () => {
-    const { f, ask, project } = setup()
-    const first = ask('Is the release out?')
-    f.tick(10 * MINUTE)
-    const second = ask('And the hotfix?')
-    f.tick(2 * MINUTE)
-    const lines = owedLines(f.state, project(), f.now)
-    expect(lines[0]).toBe('Owed asks (2, oldest 12m). Answer each once, in its place: harness super-tab answer GROUP MESSAGE_ID TEXT OPERATION_ID.')
-    const name = swarmUsernames(f.state).get('owner')!
-    expect(lines.slice(1)).toEqual([`- from ${name}, 12m ago (message ${first} in lead)`, `- from ${name}, 2m ago (message ${second} in lead)`])
-    expect(lines.join('\n')).not.toContain('@example.com')
-  })
 
-  it('is empty when nothing is owed', () => {
-    const { f, project } = setup()
-    expect(owedLines(f.state, project(), f.now)).toEqual([])
-  })
-
-  it('names at most OWED_LINES_MAX asks and says how many more', () => {
-    const { f, ask, project } = setup()
-    for (let i = 0; i < OWED_LINES_MAX + 3; i++) ask(`Ask ${i}`)
-    const lines = owedLines(f.state, project(), f.now)
-    expect(lines).toHaveLength(OWED_LINES_MAX + 2)
-    expect(lines.at(-1)).toBe('And 3 more owed: the board lists them all.')
-  })
-
-  it('comes before the notices in the digest', () => {
-    const text = digestText(new Date('2026-11-05T15:00:00Z'), ['- #12: Done'], 0, false, ['Owed asks (1, oldest 3m). Answer…', '- from ken, 3m ago (message m in lead)'])
-    expect(text.split('\n')).toEqual(['Owed asks (1, oldest 3m). Answer…', '- from ken, 3m ago (message m in lead)', '',
-      'Notices since 15:00 UTC (1). Read one in full: harness super-tab message GROUP MESSAGE_ID.', '- #12: Done'])
-  })
-})
-
-// Task #3545 (follow-up of #3403): the PM's inbox lists, in this order, what it owes people, people's new messages, its crew's
-// needs and then the results and notices, each section left out when empty.
+// Task #3545 (follow-up of #3403): the PM's inbox lists, in this order, people's new messages, its crew's needs and then the
+// results and notices, each section left out when empty.
 describe('the sections of the PM\'s inbox', () => {
   const since = new Date('2026-11-06T09:00:00Z')
 
-  it('lists owed asks, people\'s messages, crew needs and results in that order, leaving out empty ones', () => {
-    const text = digestText(since, ['- #12: Done (message d in t)'], 0, false, ['Owed asks (1, oldest 3m). Answer…', '- from ken, 3m ago (message m in lead)'],
+  it('lists people\'s messages, crew needs and results in that order, leaving out empty ones', () => {
+    const text = digestText(since, ['- #12: Done (message d in t)'], 0, false,
       { people: ['- ken: Is it out? (message p in lead)'], crew: ['- Dev needs ken: Which port? (message c in lead)'] })
     expect(text.split('\n')).toEqual([
-      'Owed asks (1, oldest 3m). Answer…', '- from ken, 3m ago (message m in lead)', '',
       'New from people (1). Answer each once, in its place: harness super-tab answer GROUP MESSAGE_ID TEXT OPERATION_ID.', '- ken: Is it out? (message p in lead)', '',
       'Crew needs (1). Ask the person yourself and bring the answer back to the agent.', '- Dev needs ken: Which port? (message c in lead)', '',
       'Notices since 09:00 UTC (1). Read one in full: harness super-tab message GROUP MESSAGE_ID.', '- #12: Done (message d in t)'])
     // No results: no notices header; no people or crew: no such section.
-    expect(digestText(since, [], 0, false, [], { people: ['- ken: Hi (message p in lead)'] }).split('\n')).toEqual([
+    expect(digestText(since, [], 0, false, { people: ['- ken: Hi (message p in lead)'] }).split('\n')).toEqual([
       'New from people (1). Answer each once, in its place: harness super-tab answer GROUP MESSAGE_ID TEXT OPERATION_ID.', '- ken: Hi (message p in lead)'])
   })
 

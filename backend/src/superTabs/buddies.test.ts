@@ -612,7 +612,6 @@ describe('a Buddy\'s proposal to the PM', () => {
       source: { kind: 'buddy-proposal', personId: 'peer', buddyId: 'buddy', ownerMessageId: 'ask',
         goal: 'Sync edits made offline', scope: 'Desktop drafts only; no phone yet', priority: 'high' } })
     expect(posted.some(m => m.author.kind === 'agent' && m.conversationId === f.app.conversationId)).toBe(false)
-    expect(f.state.conversations.find(c => c.id === f.app.conversationId)!.owed ?? []).toContainEqual(expect.objectContaining({ id: home[0]!.id, personId: 'peer' }))
   })
 
   it('takes words up to a chat message\'s length, never cut at 80', () => {

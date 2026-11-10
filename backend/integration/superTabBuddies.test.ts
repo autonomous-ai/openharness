@@ -868,7 +868,6 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     const created = await open(details.id)
     const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === String(created.result.conversationId))!
     expect(stored.requesterId).toBe(peer.sub)
-    expect(stored.cards?.line).toMatchObject({ messageId: proposal, conversationId: 'lead' })
     expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: stored.id } })).data).toMatchObject({ ledger: { proposal: { messageId: proposal } } })
   })
 

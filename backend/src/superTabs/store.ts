@@ -1,10 +1,9 @@
 import { v3Stopping, withdrawV3Stops } from './agentStops.js'
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
-import { legacyAsks } from './boardRights.js'
 import { canReadProject } from './projects.js'
 import { proposalMeasures, proposalMessageMeasures } from './proposalMetrics.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
-import { pmAcceptsMessage, legacyProposalId, type LegacyProposalAsk } from './proposalCards.js'
+import { pmAcceptsMessage, legacyProposalId } from './proposalCards.js'
 import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { isRetiredCommand, opensRetiredStep, REFUSED_TO_PEOPLE, RETIRED_STEP, retiredAnswer } from './retired.js'
@@ -62,7 +61,7 @@ import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, refuseOthersIn
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
 import { crewNeedOf } from './crewNeeds.js'
 import { swarmUsernames } from './usernames.js'
-import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, owedLines, personLine, turnInboxHost, type InboxSection } from './inbox.js'
+import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, personLine, turnInboxHost, type InboxSection } from './inbox.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
 import { LEAD_NAME } from './leadStart.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
@@ -79,7 +78,6 @@ import { tasksHoldingMoves } from './ruleGuard.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { finishedWakes } from './crewTimes.js'
 import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
-import { endedReply, taskLineChats } from './taskLine.js'
 import { groupsOf } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, readBy, withoutHints } from './parts/indexed.js'
@@ -846,25 +844,6 @@ export class SuperTabStore {
     return { row, parts, state }
   }
 
-  /** Only named, still-owed originals; deleted text, a former membership or a private audience never becomes a public card. */
-  private async legacyProposalBodies(tx: Transaction, state: SuperTabState, projectId: string): Promise<LegacyProposalAsk[]> {
-    const project = projectsOf(state).find(p => p.id === projectId)!
-    const asks = legacyAsks(state, project).slice(0, 100)
-    if (!asks.length) return []
-    const rows = await readBy(tx, 'SuperTabMessage', 'id', [
-      { $match: { tabId: state.id, _id: { $in: asks.map(a => a.messageId) }, deletedAt: null } },
-      { $project: { _id: 0, id: '$_id', conversationId: 1, author: 1, text: 1, source: 1 } },
-    ]) as unknown as Array<{ id: string; conversationId: string; author: Author; text: string; source?: unknown }>
-    return asks.flatMap(ask => {
-      const row = rows.find(r => r.id === ask.messageId), sender = row?.author as unknown as Author | undefined
-      const group = state.conversations.find(c => c.id === ask.conversationId)
-      const member = state.people.find(p => p.id === ask.personId)
-      if (!row || row.source || !row.text.trim() || row.text.length > 32000 || row.conversationId !== ask.conversationId
-        || !sender || sender.kind !== 'person' || sender.id !== ask.personId || sender.membershipGeneration !== member?.generation
-        || !group || group.kind || group.audience || !canReadGroup(state, { kind: 'person', userId: ask.personId, email: '' }, group)) return []
-      return [{ ...ask, text: row.text, generation: member!.generation }]
-    })
-  }
 
   /** Loads again with more named groups, agents or starts when the first load lacks one a command needs. */
   private async ensure(tx: Transaction, loaded: Loaded, named: Named): Promise<Loaded> {
@@ -949,10 +928,6 @@ export class SuperTabStore {
         buddyChat(command.projectId, row.author.id)
         swarmChat(row.author.id)
       }
-    }
-    if (command.type === 'project.boardMode' && command.on) {
-      const project = projectsOf(state).find(p => p.id === command.projectId)
-      if (project) groupIds.push(...legacyAsks(state, project).slice(0, 100).map(a => legacyProposalId(project.id, a.messageId)))
     }
     // Legacy proposal mirrors can be archived after conversion. Load the exact mirror even then, so a second
     // conversion cannot manufacture a fresh task without the original person's decision. Same bounded message-id read
@@ -1751,13 +1726,6 @@ export class SuperTabStore {
           source: found.source as Record<string, unknown> | null })
         if (proposal) context.proposal = { ...row(proposal), ...root ? { root: row(root) } : {} }
       }
-      if (command.type === 'conversation.create' && command.requestMessageId) {
-        // By id within this tab: the person's chat message the new group answers (commands.ts requestOf checks where it is).
-        const request = await tx.superTabMessage.findFirst({ where: { id: command.requestMessageId, tabId },
-          select: { id: true, conversationId: true, author: true, source: true, replyTo: true } })
-        if (request) context.request = { id: request.id, conversationId: request.conversationId, author: request.author as unknown as Author,
-          source: request.source, replyTo: request.replyTo }
-      }
       if (command.type === 'buddy.propose') {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
         // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.
@@ -1806,7 +1774,6 @@ export class SuperTabStore {
       const decisionId = command.type === 'route.override' || command.type === 'route.modelResult' ? command.decisionId
         : command.type === 'agent.start' ? command.routeDecisionId : undefined
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
-      if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
@@ -3129,7 +3096,7 @@ export class SuperTabStore {
   }
 
   /** The projects a person may pick a main project from, in Cmd-N and when joining (projectList.ts, task #4540): only those they
-   *  read. A project's chat holds its pulse; a quiet one is not in the first load, so the readable ones missing are loaded by id
+   *  read. A project's chat names its Lead; a quiet one is not in the first load, so the readable ones missing are loaded by id
    *  (at most the Swarm's 100 projects). */
   async projectList(user: AuthUser, tabId: string, invitedTo?: string): Promise<ProjectList> {
     this.personOnly(user)
@@ -3962,7 +3929,7 @@ export class SuperTabStore {
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
         const lines = (section: InboxSection) => notices.filter(n => n.section === section).map(n => n.line)
         const text = digestText(notices[0]!.delivery.createdAt, lines('results'), more, notices.some(n => n.otherAccount),
-          led ? owedLines(state, projectOf(state, led.id), this.now()) : [], { people: lines('people'), crew: lines('crew') })
+          { people: lines('people'), crew: lines('crew') })
         written.push(digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length))
         // By status too: two polls racing digest each row once. One by one: no `in` on this hot collection (hotFilters).
         for (const { delivery } of notices) await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'digested' } })
@@ -4469,10 +4436,7 @@ export class SuperTabStore {
     let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       ended = []
-      let loaded = await this.load(tx, user, tabId)
-      // The stop says Not building this in its task's project-chat thread (below): that chat is read when the load left it out.
-      const lines = taskLineChats(loaded.state)
-      if (lines.length) loaded = await this.ensure(tx, loaded, { groupIds: lines })
+      const loaded = await this.load(tx, user, tabId)
       const state = cloneData(loaded.state)
       const before = { agents: state.agents, conversations: cloneData(state.conversations) }
       const group = state.conversations.find(c => c.assignment?.id === assignmentId)
@@ -4509,9 +4473,6 @@ export class SuperTabStore {
             author: author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId }),
             text: `Stopped\n\n${assignment.result}`, replyTo: null, recipients: lead ? [lead] : [] })
         }
-        // And its project chat's thread says Not building this, as a stop a command records does (task #2693).
-        notices.push(...endedReply(state, group, stableId('task-line-stopped', tabId, assignmentId),
-          worker && author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId })))
       }
       const sequences = numberMessages(state, notices, this.now())
       // A confirmed stop finishes its worker; no command reads that decision now, so it touches

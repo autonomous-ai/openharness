@@ -869,8 +869,6 @@ describe('PM person receipt eyes', () => {
     expect(after.messages.find(m => m.id === message)?.reactions).toEqual([])
     expect((await deliveryOf(message, f.lead)).status).toBe('delivered')
     expect((await deliveryOf(message, f.lead)).answeredAt).toBeNull()
-    const state = await f.timed.read(owner, f.tab)
-    expect(state.state.conversations.find(c => c.id === 'lead')?.owed?.map(a => a.id)).toContain(message)
   })
 
   it('does not add eyes for worker receipts or agent-authored input to the PM', async () => {

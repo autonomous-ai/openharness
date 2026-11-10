@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
-import { canChat, legacyAsks, steers, switched } from './boardRights.js'
-import { owedLines } from './inbox.js'
-import { holdOf } from './pulse.js'
+import { canChat, steers, switched } from './boardRights.js'
 
 // Task #3819 (Phase 2 of docs/plans/2026-11-06-buddy-board-final-spec.md, Ken and anh Dee 11-06): a project's owner switches
 // it to the Board way of working; in a switched project writing in its chat is a per-project Can chat right, and priority and
@@ -221,13 +219,6 @@ describe('a paused task', () => {
     return group
   }
 
-  it('is held with its reason until the pause is cleared', () => {
-    const f = boardFixture()
-    const group = paused(f)
-    expect(holdOf(group, '2026-11-06')).toEqual({ reason: 'paused: Wait for the release' })
-    delete group.paused
-    expect(holdOf(group, '2026-11-06')).toBeNull()
-  })
 
   // Readycheck's review: a start into the task went past the pause.
   it('refuses starting an agent on it, whoever asks', () => {
@@ -236,44 +227,5 @@ describe('a paused task', () => {
     expect(() => f.run({ type: 'agent.start', request: { conversationId: group.id, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' }))
       .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
-  })
-})
-
-describe('the PM\'s owed asks in a switched project', () => {
-  it('a person\'s message there owes the PM nothing', () => {
-    const f = boardFixture()
-    f.run({ type: 'project.canChat', projectId: f.app.projectId, personId: 'c', granted: true })
-    const ask = () => f.run({ type: 'message.send', conversationId: f.app.conversationId, text: 'Can you look at this?', replyTo: null, recipientIds: [f.pm] }, granted)
-    // Not switched: the ask is owed.
-    ask()
-    expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/Owed asks/)
-
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    // The ask from before the switch stays until its card exists (legacyAsks); a new one is never owed.
-    expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/before this project switched/)
-    const before = f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0
-    ask()
-    expect(f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0).toBe(before)
-  })
-})
-
-describe('switching a project on', () => {
-  it('hands over every message still owed to its PM, oldest first, and keeps each until its card exists', () => {
-    const f = boardFixture()
-    const ask = (text: string, actor: Actor) => f.run({ type: 'message.send', conversationId: f.app.conversationId, text, replyTo: null, recipientIds: [f.pm] }, actor).messageId as string
-    const first = ask('First', member), second = ask('Second', granted)
-    expect(legacyAsks(f.state, f.project())).toEqual([
-      { messageId: first, conversationId: f.app.conversationId, personId: 'd', at: 1000, thread: first },
-      { messageId: second, conversationId: f.app.conversationId, personId: 'c', at: 1000, thread: second },
-    ])
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    // No card is made here yet (#3817 makes them): the asks stay, so nothing is dropped.
-    expect(legacyAsks(f.state, f.project()).map(a => a.messageId)).toEqual([first, second])
-    // Readycheck's review: until their cards exist, the PM still sees them, while a message after the switch owes nothing.
-    const owed = owedLines(f.state, f.project(), 1000).join('\n')
-    expect(owed).toContain(first)
-    expect(owed).toContain(second)
-    const after = ask('After the switch', projectOwner)
-    expect(owedLines(f.state, f.project(), 1000).join('\n')).not.toContain(after)
   })
 })

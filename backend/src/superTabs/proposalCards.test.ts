@@ -138,14 +138,6 @@ describe('proposal card creation', () => {
     expect(GROUP_FIELDS.always).toContain('proposal')
   })
 
-  it('imports an unanswered legacy message once with stable identity and original words', async () => {
-    const cards = await import('./proposalCards.js')
-    const f = fixture(), ask = { messageId: 'legacy-ask', conversationId: 'lead', personId: peer.userId, text: 'Please keep these exact words', at: NOW - 1000 }
-    const id = cards.importLegacyProposal(f.state, f.state.projects![0]!, ask, NOW)
-    expect(cards.importLegacyProposal(f.state, f.state.projects![0]!, ask, NOW)).toBe(id)
-    expect(f.state.conversations.filter(c => c.id === id)).toHaveLength(1)
-    expect(f.card(id)).toMatchObject({ requesterId: peer.userId, proposal: { text: ask.text, legacyMessageId: 'legacy-ask', createdAt: NOW - 1000 } })
-  })
 })
 
 const acceptedTask = { goal: 'Keep drafts', changes: 'Persist offline edits', constraints: 'No dependencies', owns: ['backend/src/drafts.ts'] }

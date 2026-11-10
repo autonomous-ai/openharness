@@ -74,8 +74,6 @@ export interface ProgressView {
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
 export interface Derived {
-  /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
-  pulse?: Record<string, import('../pulse.js').Pulse>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
@@ -306,8 +304,7 @@ export interface HostAgentRow {
    *  `hash`): no document yet, so the built-in template. */
   instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
   lead: boolean
-  /** A PM's own row: the oldest message a person sent it that it has not answered (timeChecks.ts owedAsk), and how long it may
-   *  owe one while it hangs before its host restarts it. Null on every other row, and while it owes nothing. */
+  /** v3's restart of a PM that hung on an unanswered message: null since Swarm v4, for a host from before that reads it. */
   owed: { messageId: string; since: number; restartAfterMs: number } | null
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null

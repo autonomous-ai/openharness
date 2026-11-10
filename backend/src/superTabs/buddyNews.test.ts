@@ -171,13 +171,12 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
       title: 'Offline edits', brief: 'Save edits offline.', checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: reply.id } as Command,
     agentActor(f.pm), loaded(reply, root))
 
-    it('links the proposal itself: its person asked, its row is the task\'s only line, its Buddy is credited', () => {
+    it('links the proposal itself: its person asked, nothing is written in the project chat, its Buddy is credited', () => {
       const f = setup(), [root, details] = stored(f)
       const created = open(f, details, root)
       const group = f.state.conversations.find(c => c.id === created.result.conversationId)!
       expect(group.requesterId).toBe('peer')
       expect(group.ledger?.proposal).toEqual({ buddyId: 'buddy', messageId: root.id })
-      expect(group.cards?.line).toMatchObject({ messageId: root.id, conversationId: f.app.conversationId })
       expect(created.messages.filter(m => m.conversationId === f.app.conversationId)).toEqual([])
     })
 

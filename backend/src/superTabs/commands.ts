@@ -1,7 +1,5 @@
 import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, rejectTaskApproval, REQUESTER_LEFT, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
-import { legacyProposalId, migrateLegacyProposals, type LegacyProposalAsk, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
-import { handoffAsk, pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
-import { linesOf } from './statusCard.js'
+import { legacyProposalId, pmAcceptsMessage, applyProposalAction, authorizeProposalAction, authorizePersonProposal, cardPriority, createPersonProposal, createProposalCard, proposalCreateSchema, proposalFields, proposalRoot } from './proposalCards.js'
 import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
 import { crewMoveFailed, takeOverCrewMember } from './crewKeep.js'
 import { moveTimingRow } from './crewTimes.js'
@@ -19,12 +17,12 @@ import { keepUsernames, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, nameFromAccount } from './personNames.js'
 import { z } from 'zod'
 import {
-  activeWork, actorKey, agent, author, projectPullRequestUrl, UNLINKS_KEPT, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, author, conversation, crossProjectActive, fail, isLeads, person, stableId, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, seenMachineIds, SuperTabError, swarmGridName, visibleState, AGENT_ONLY, forRecipients,
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type Person, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { endSteps, isStep, stepEndedRows } from './steps.js'
+import { endSteps, stepEndedRows } from './steps.js'
 import { noteWriter } from './stuck.js'
 import { routeRecordSchema, routeTitle, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -43,12 +41,11 @@ import { processOf, type ProjectProcess } from './process.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { reportGroups, summarize } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
-import { PULL_REQUEST_URL, recordAsked, recordPost, recordProposal, recordReportedModel } from './leaderboard/record.js'
+import { recordAsked, recordPost, recordProposal, recordReportedModel } from './leaderboard/record.js'
 import { reactionSchema, type ReactionTarget } from './reactions.js'
 import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
-import { syncTaskLines } from './taskLine.js'
 import { tellBuddies } from './buddyNews.js'
-import { bindPullRequestCards, bindTaskCard, pullRequestCard } from './cards.js'
+import { bindPullRequestCards, bindTaskCard } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
@@ -285,17 +282,14 @@ export const commandSchema = z.discriminatedUnion('type', [
     audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
     proposalMessageId: id.optional(),
-    // A person's own message in the project chat that asked for the work: it stays the task's root (Dee, 2026-11-03).
+    // The person's message in the project chat an older PM opens a task from: its root in the task lines Swarm v4 removed
+    // (2026-11-10). An older CLI still sends it, and it is taken and kept nowhere. Delete it on or after 2026-12-10.
     requestMessageId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
-  // A wrong link taken off a task, with its reason kept in the task's history (task #3953): by the project's coordinator or the
-  // task's Engineer, never a pull request whose merge the task recorded.
-  z.object({ type: z.literal('conversation.unlink'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
-    reason: z.string().trim().min(1).max(300) }).strict(),
   // `launchRefused`: the model and effort a Product Manager's own-machine launch asked for, which that machine refused before
   // launching anything, so it runs its engine's own model (Desktop AgentCreationAttempt; leadStart.ts launchRefusedLine).
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(),
@@ -415,7 +409,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
     // settles and routes as a reply to that message does, and opens no thread. Never with replyTo.
     answers: id.optional(),
-    // The PM entrusts this owed project-chat ask to the one project agent explicitly addressed by this post in its task.
+    // `handoff` gave an owed ask to the agent this post names, in the owed asks Swarm v4 removed (2026-11-10): an older CLI's PM
+    // still sends it, and it is taken and kept nowhere. Delete it on or after 2026-12-10.
     handoff: id.optional(),
     // The answer to the message in `answers` (answers.ts, task #3403): placed in that message's thread when it is a reply in
     // one, else right below it, and refused when it was answered already. Only with `answers`.
@@ -495,7 +490,6 @@ export const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'proposal.merge': ['reason'],
   'person.tell': ['text'],
   'task.reject': ['reason'],
-  'conversation.unlink': ['reason'],
   'project.create': ['name', 'brief'],
   'project.rename': ['name'],
   'project.report': ['text'],
@@ -548,8 +542,6 @@ export function withoutCredentials(command: Command, removed: CredentialKind[]):
 /** A message row a group names as its proposal, as the store loads it. */
 interface ProposalRow { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
 export interface CommandContext {
-  /** Indexed original bodies verified by the store for the staged Board handover. */
-  legacyProposals?: LegacyProposalAsk[]
   operationId: string
   now: number
   /** For a terminal request: its agent's session is confidential in some Swarm, read by the store (confidential.ts). */
@@ -591,8 +583,6 @@ export interface CommandContext {
   proposal?: ProposalRow & {
     /** When the named row is a reply with no source of its own: the row it replies to (proposalNamed). */
     root?: ProposalRow }
-  /** The chat message a new group names as its request (conversation.create requestMessageId), loaded from this tab by the store. */
-  request?: { id: string; conversationId: string; author: Author; source: unknown; replyTo: string | null }
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
   proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
     /** Whether it went to a thread session, which the main Buddy never hears: the main Buddy proposes for none of those. */
@@ -915,16 +905,6 @@ function proposalOf(state: SuperTabState, project: SwarmProject, proposal: Propo
     : undefined
   return { buddyId: main?.id ?? buddyId!, messageId: proposal.id, ...personId ? { personId } : {} }
 }
-/** The person's own top-level message in [project]'s chat that asked for a new group; anything else reads as unknown. */
-function requestOf(state: SuperTabState, project: SwarmProject, request: CommandContext['request']): { messageId: string; personId: string } {
-  const author = request?.author
-  const member = author?.kind === 'person' ? state.people.find(p => p.id === author.id && p.generation === author.membershipGeneration) : undefined
-  if (!request || request.conversationId !== project.leadConversationId || request.replyTo || request.source || !member
-    || !canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
-    fail('REQUEST_UNKNOWN', 'Name a person\'s own message in this project\'s chat, or leave the request out.', 400)
-  }
-  return { messageId: request.id, personId: member.id }
-}
 /** The person a proposal was sent for, while they are still in the Swarm and read [project]; otherwise nobody, so a person
  *  who left or lost the project is never credited and opening the group still works (the PM is told to name someone). */
 function proposalRequester(state: SuperTabState, project: SwarmProject, personId: string | undefined): string | undefined {
@@ -946,20 +926,10 @@ function open(state: SuperTabState, conversationId: string) {
 export const REGULAR_AGENT_CAPABILITY = 'regularAgent'
 
 /** Pure policy/state transition. The store commits its state, messages and delivery records in one transaction. */
-/** One command, then each task's line brought up to date (taskLine.ts), whichever way the command returned. */
 export function applyCommand(original: SuperTabState, actor: Actor, input: Command, context: CommandContext): CommandEffects {
   const effects = applyCommandOnce(original, actor, input, context)
-  // Who moved the task, for a line its project's coordinator cannot sign and for the Buddy's news; nobody when the actor is
-  // no longer a member (a command that removed them).
-  let sender: Author | undefined
-  try { sender = author(effects.state, actor) } catch { sender = undefined }
-  syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
   refuseOthersInPrivateChat(effects.state, effects.messages, original)
   for (const row of effects.messages) row.recipients = row.recipients.filter(id => pmAcceptsMessage(effects.state, id, row.source))
-  // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
-  // of the conversation the command names when it names one (it moves no other), else for every project.
-  const only = pulseProjectOf(effects.state, input)
-  recordPulse(effects.state, context.now, only, linesOf(original, context.now, only))
   return effects
 }
 
@@ -1823,8 +1793,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       { kind: 'buddy-proposal', personId: owner.id, buddyId: self.id, ownerMessageId: key,
         goal: p.goal, scope: p.scope, priority: p.priority }, attachments)
     effects.messages.at(-1)!.author = { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation }
-    const relayed = effects.messages.at(-1)!
-    owe(state, home, { ...relayed, thread: relayed.thread ?? null }, context.now)
     // Its own id: this command's id is the proposal's, and a second row with it rolls the command back. Marked with its project,
     // so it goes from view as a PM's line does when its person loses that project (buddySessions.ts lostProjectRow).
     if (isSwarmBuddy(self)) effects.messages.push({ id: stableId('proposal-sent', operationId), conversationId: chat.id, author: sender,
@@ -2071,10 +2039,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'project.boardMode': {
       const project = boardOwned(command.projectId)
-      if (command.on) {
-        project.boardMode = true
-        effects.messages.push(...migrateLegacyProposals(state, project, context.legacyProposals ?? [], context.now))
-      }
+      if (command.on) project.boardMode = true
       else delete project.boardMode
       break
     }
@@ -2573,13 +2538,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const proposal = command.proposalMessageId ? proposalOf(state, project, proposalNamed(context.proposal)) : undefined
       // A Buddy's proposal keeps its goal and scope for the task's brief (anh Dee, task #2926); one the PM writes wins.
       const brief = written || (proposal ? proposalBrief(proposalNamed(context.proposal)?.source) : '')
-      if (command.requestMessageId && (command.proposalMessageId || command.audience)) {
-        fail('INVALID_REQUEST', 'A request message opens a task of its own: leave out proposalMessageId and audience.', 400)
-      }
-      const request = command.requestMessageId ? requestOf(state, project, context.request) : undefined
-      if (request) settleRequest(state, project, actor.kind === 'agent' ? actor.agentId : null, request.messageId)
       const requesterId = command.requesterId ? requester(state, project, command.requesterId)
-        : proposalRequester(state, project, proposal?.personId) ?? request?.personId ?? (actor.kind === 'person' ? actor.userId : undefined)
+        : proposalRequester(state, project, proposal?.personId) ?? (actor.kind === 'person' ? actor.userId : undefined)
       // An agent's task says its goal, when it is done, its priority and who asked (taskContract.ts, task #3389). A private chat
       // is no task of its own; a Buddy's proposal supplies its brief, priority and person.
       if (actor.kind === 'agent' && prioritized) {
@@ -2619,8 +2579,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const noRequester = !requesterId && actor.kind === 'agent' ? command.noRequesterReason : undefined
       if (noRequester && state.conversations.at(-1)!.ledger) state.conversations.at(-1)!.ledger!.noRequesterReason = noRequester
       if (proposal) recordProposal(state.conversations.at(-1)!, { buddyId: proposal.buddyId, messageId: proposal.messageId })
-      // The asker's message is the task's root; its thread takes the task's replies (taskLine.ts).
-      if (request) state.conversations.at(-1)!.cards = { line: { messageId: request.messageId, conversationId: project.leadConversationId } }
       result.conversationId = operationId
       result.number = number
       if (prioritized) {
@@ -2658,29 +2616,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         }
       }
       else delete group.requesterId
-      break
-    }
-    case 'conversation.unlink': {
-      chatOnly(command.conversationId)
-      const group = open(state, command.conversationId), project = groupProject(state, group)
-      if (isStep(group) || group.id === project.leadConversationId) fail('UNLINK_TASK_ONLY', 'Only a task has links to take off: name a task, not a chat or a step.', 400)
-      // Only the project's coordinator and the task's Engineer; a person is neither (the PM acts for them).
-      if (actor.kind !== 'agent' || (ledProject(state, actor.agentId)?.id !== project.id && group.assignment?.agentId !== actor.agentId)) {
-        fail('FORBIDDEN', 'Only the project\'s coordinator or the task\'s Engineer takes a pull request off a task.', 403)
-      }
-      const repositoryUrl = groupRepositoryUrl(state, group)
-      const pullRequestUrl = projectPullRequestUrl(command.pullRequestUrl, repositoryUrl)
-        ?? fail('PULL_REQUEST_REPOSITORY', 'This pull request is not in the project\'s repository.', 400)
-      if (!group.pullRequestUrls?.includes(pullRequestUrl)) fail('NOT_LINKED', 'This task does not link that pull request.', 404)
-      if (pullRequestCard(group, pullRequestUrl)?.mergedAt !== undefined) fail('MERGED_LINK', 'This task recorded that pull request as merged: its merge stays on the task.', 409)
-      group.pullRequestUrls = group.pullRequestUrls.filter(url => url !== pullRequestUrl)
-      if (group.codePullRequestUrls) group.codePullRequestUrls = group.codePullRequestUrls.filter(url => url !== pullRequestUrl)
-      if (group.cards) group.cards = { ...group.cards, pullRequests: group.cards.pullRequests?.filter(card => card.url !== pullRequestUrl),
-        recorded: group.cards.recorded?.filter(url => url !== pullRequestUrl) }
-      group.unlinkedPullRequests = [...(group.unlinkedPullRequests ?? []).filter(entry => entry.url !== pullRequestUrl),
-        { url: pullRequestUrl, by: actorKey(actor), reason: command.reason, at: context.now }].slice(-UNLINKS_KEPT)
-      const by = agentDisplayName(state.agents, actor.agentId) ?? agent(state, actor.agentId).name
-      message(group.id, `${by} unlinked ${pullRequestUrl} from this task: ${command.reason}`, [], null, SYSTEM_ROW)
       break
     }
     case 'conversation.archive': {
@@ -3790,9 +3725,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('FORBIDDEN', 'This agent does not participate in the conversation.', 403)
       }
       if (context.reaction?.messageId !== command.messageId) fail('NOT_FOUND', 'This message is unavailable.', 404)
-      // It changes nothing anyone sees; it settles what it acknowledges.
+      // It changes nothing anyone sees.
       result.changed = command.on
-      settleReaction(state, group, actor.agentId, command.messageId, command.on)
       // It is how an agent acknowledges (ACK_ONLY refuses the post), so it settles the agent's delivery of that message.
       if (command.on) effects.settles = { messageId: command.messageId, agentId: actor.agentId }
       break
@@ -3805,7 +3739,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     case 'message.delete':
       Object.assign(result, { changed: true }, deleteMessage(open(state, command.conversationId), actor, command.messageId, context.messageChange))
-      settleDeleted(open(state, command.conversationId), command.messageId)
       break
     case 'member.avatar':
       setMemberAvatar(state, actor, command.avatar)
@@ -3977,13 +3910,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Apply the Board's PM boundary before reporting delivery or recording work that depends on who heard the post.
       const excludedPm = command.agentOnly ? [] : recipients.filter(id => !pmAcceptsMessage(state, id, undefined))
       recipients = recipients.filter(id => !excludedPm.includes(id))
-      if (command.handoff) {
-        if (command.agentOnly || group.audience || group.kind || isBuddyChat(group)) fail('ASK_HANDOFF_PUBLIC', 'Hand off an ask in a public post to its project agent.', 400)
-        handoffAsk(state, group, poster?.id ?? null, command.handoff, addressed)
-      }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId} in its thread.` : text
-      message(group.id, postText, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged)
+      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
       if (command.answers) effects.messages.at(-1)!.answers = command.answers
       // Whom a stuck line in a task tags, with its requester (stuck.ts, task #3915).
@@ -4026,21 +3954,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // Its project on the row itself, so the row hides once its person loses that project (buddySessions.ts lostProjectRow).
       if (session?.inSession) Object.assign(effects.messages.at(-1)!, { buddySession: true, ...(session.project ? { buddyProject: session.project } : {}) })
       recordPost(state, group, actor, { replyTo: command.replyTo ?? command.answers ?? null, text, reply: context.reply }, context.now)
-      // What the PM owes (pulse.ts): a person's message that reached it, settled by its answer in the message's place.
+      // The PM's answer is recorded for the message `answer` names (answers.ts).
       if (!command.agentOnly) {
-        const sent = effects.messages.find(m => m.id === operationId)!
         const root = command.replyTo && context.reply && !context.reply.agentOnly ? context.reply.thread ?? context.reply.id : null
-        if (actor.kind === 'person') {
-          owe(state, group, { id: sent.id, author: sent.author, recipients, thread: root, source: sent.source }, context.now)
-          if (isProjectChat(state, group)) recordChatAsk(group, sent.id, context.now)
-        }
-        else {
-          const owedBefore = group.owed ?? []
-          settleReply(state, group, actor.agentId, { answers: command.answers ?? null, thread: root })
-          const settled = owedBefore.filter(ask => !group.owed?.some(left => left.id === ask.id))
-          // The PM's answer is recorded for the asks it settled, and for the message `answer` names though nobody owed it.
-          const asked = command.answer && leadsGroup(state, group, actor.agentId) ? [{ id: (command.answers ?? command.replyTo)! }] : []
-          recordAnswered(group, [...settled, ...asked.filter(a => !settled.some(s => s.id === a.id))], sent.id, root, context.now)
+        if (actor.kind === 'person' && isProjectChat(state, group)) recordChatAsk(group, operationId, context.now)
+        else if (actor.kind === 'agent' && command.answer && leadsGroup(state, group, actor.agentId)) {
+          recordAnswered(group, [{ id: (command.answers ?? command.replyTo)! }], operationId, root, context.now)
         }
       }
       if (chatPost) {

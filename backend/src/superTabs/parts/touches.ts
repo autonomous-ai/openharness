@@ -165,9 +165,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       if (command.proposalMessageId) head()
       break
     }
-    case 'conversation.unlink':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)

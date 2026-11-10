@@ -94,25 +94,6 @@ export function proposalRoot(state: SuperTabState, card: Conversation, id: strin
     recipients: card.leadId ? [card.leadId] : [], source: { kind: 'proposal-card', priority: card.priority } }
 }
 export const legacyProposalId = (projectId: string, messageId: string): string => stableId('legacy-proposal', projectId, messageId)
-export interface LegacyProposalAsk { messageId: string; conversationId: string; personId: string; text: string; at: number; generation?: string }
-/** Caller loads this stable id (including dormant cards) before importing; no scan or second interpretation of consent. */
-export function importLegacyProposal(state: SuperTabState, project: SwarmProject, ask: LegacyProposalAsk, now: number): string {
-  requireBoard(project)
-  const id = legacyProposalId(project.id, ask.messageId)
-  if (state.conversations.some(c => c.id === id)) return id
-  const member = person(state, ask.personId)
-  const original = state.conversations.find(c => c.id === ask.conversationId)
-  if (!original || original.kind || original.audience || groupProject(state, original).id !== project.id
-    || (ask.generation && member.generation !== ask.generation)) fail('NOT_FOUND', 'The original request is unavailable.', 404)
-  const card = createProposalCard(state, project, { personId: member.id, generation: member.generation }, {
-    title: ask.text.trim().slice(0, 160) || 'Earlier request', text: ask.text, goal: ask.text.slice(0, 4000),
-    why: 'Imported unanswered request; details remain to be clarified.', doneWhen: 'To be clarified on this card.',
-    evidence: ['Original project message'], priority: 'P2',
-  }, id, now)
-  card.proposal!.legacyMessageId = ask.messageId
-  card.proposal!.createdAt = ask.at
-  return id
-}
 
 export const MAX_CARD_QUESTIONS = 20
 export const MAX_CARD_SENDERS = 50
@@ -242,20 +223,3 @@ export function pmAcceptsMessage(state: SuperTabState, recipientId: string, sour
   return !project?.boardMode || !!source && typeof source === 'object' && typeof (source as { kind?: unknown }).kind === 'string'
 }
 
-/** Verified originals are supplied by the store in bounded primary-key batches. Keep every other ask owed. */
-export function migrateLegacyProposals(state: SuperTabState, project: SwarmProject, originals: LegacyProposalAsk[], now: number): MessageDraft[] {
-  const messages: MessageDraft[] = []
-  for (const ask of originals) {
-    const id = legacyProposalId(project.id, ask.messageId)
-    const existed = state.conversations.some(c => c.id === id)
-    importLegacyProposal(state, project, ask, now)
-    if (!existed) {
-      const card = state.conversations.find(c => c.id === id)!
-      messages.push(proposalRoot(state, card, stableId(id, 'root'), author(state, { kind: 'person', userId: ask.personId, email: '' })))
-    }
-    const original = state.conversations.find(c => c.id === ask.conversationId)!
-    original.owed = (original.owed ?? []).filter(a => a.id !== ask.messageId)
-    if (!original.owed.length) delete original.owed
-  }
-  return messages
-}

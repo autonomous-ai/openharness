@@ -23,6 +23,8 @@ export const RETIRED_COMMANDS = [
   // Task records and the crew dispatch (2026-11-10): a task is the project's GitHub issue, and an agent works on what its person asks.
   'work.assign', 'work.status', 'work.cancel', 'work.define', 'work.queue', 'work.priority', 'work.pause', 'work.resume', 'work.lane',
   'member.start', 'member.helper',
+  // A task's pull request taken off it (2026-11-10): a task is the project's GitHub issue, which links its own.
+  'conversation.unlink',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
