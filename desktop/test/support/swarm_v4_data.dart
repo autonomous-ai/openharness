@@ -183,6 +183,16 @@ SwarmGitHub swarmV4GitHub({
   bool Function()? signedOut,
 }) => SwarmGitHub(
   run: (arguments) async {
+    // The channel's feed reads three REST lists with `gh api -i` (Swarm v4): nothing is in them here, and they are not among the
+    // calls these tests count.
+    if (arguments.contains('-i')) {
+      return ProcessResult(
+        1,
+        0,
+        'HTTP/2.0 200 OK\r\nEtag: W/"none"\r\n\r\n[]',
+        '',
+      );
+    }
     calls?.add(arguments);
     if (signedOut?.call() ?? false) {
       return ProcessResult(

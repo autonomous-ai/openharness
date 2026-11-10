@@ -1989,6 +1989,9 @@ class SuperTabMessage {
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      recipientIds = List.unmodifiable(
+        (row['recipientIds'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -2043,6 +2046,14 @@ class SuperTabMessage {
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;
+
+  /// The agents it was sent to (backend `recipientIds`): the ones its words name, with `--to`, or `@Name`. Empty for a post
+  /// that names nobody, and from a backend that does not send them.
+  final List<String> recipientIds;
+
+  /// An agent's post that is to other agents: Swarm v4's channel draws it on its own row, as talk ("Pip to Juno"). It reads the
+  /// message alone, so a roster that changes regroups no row.
+  bool get namesAgents => fromAgent && recipientIds.isNotEmpty;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

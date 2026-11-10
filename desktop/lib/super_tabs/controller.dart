@@ -2112,6 +2112,9 @@ class SuperTabController extends ChangeNotifier {
     (_messages[id] ?? const <SuperTabMessage>[]).where(_listed),
   );
 
+  /// Whether [id]'s newest page has been read, or drawn from the saved view: before it, no messages is not an empty chat.
+  bool messagesRead(String id) => _messages[id] != null;
+
   /// What [messages] lists, newest first, read lazily from what is held: no
   /// copy, so a caller that stops at the first it needs reads only that far.
   /// For a read on every build (the Buddy bar's Start again, task #3256): a

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
@@ -73,6 +74,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.grouped = false,
     this.joinsBelow = false,
     this.oneOnOne = false,
+    this.to = const [],
     this.onReply,
     this.onOpenAgent,
     this.onOpenReply,
@@ -178,6 +180,9 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The chat has one other party (a Buddy chat, an agent chat): no names and
   /// no faces, as a one-on-one iMessage draws it.
   final bool oneOnOne;
+
+  /// The teammates a post is to ([superTabPostTo]): its name reads "Pip to Juno", so the channel reads as the team talking.
+  final List<String> to;
   final VoidCallback? onReply, onOpenAgent;
 
   /// Follows the quote to the original, given this row so that the way back
@@ -641,6 +646,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     // would push it down.
     final phone = workspaceIsCompact(context);
     final finger = phone && named;
+    final nameStyle = DesktopChrome.text(
+      size: SwarmType.nameSize,
+      height: SwarmType.bodyLine / SwarmType.nameSize,
+      color: DesktopChrome.muted,
+    );
     final slack = finger ? 12.0 : 0.0;
     // One sender's bubbles sit close; a new sender starts a group gap down.
     final above = widget.grouped
@@ -794,16 +804,39 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                               crossAxisAlignment:
                                                   WrapCrossAlignment.center,
                                               children: [
-                                                _name(
-                                                  DesktopChrome.text(
-                                                    size: SwarmType.nameSize,
-                                                    height:
-                                                        SwarmType.bodyLine /
-                                                        SwarmType.nameSize,
-                                                    color: DesktopChrome.muted,
+                                                if (widget.to.isEmpty)
+                                                  _name(nameStyle, finger)
+                                                else
+                                                  // "Pip to Juno" is one phrase: the name and who it is to stay on a line,
+                                                  // each giving way to the other.
+                                                  Row(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Flexible(
+                                                        child: _name(
+                                                          nameStyle,
+                                                          finger,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(
+                                                        width: SwarmLayout
+                                                            .namePhraseGap,
+                                                      ),
+                                                      Flexible(
+                                                        child: Text(
+                                                          'to ${widget.to.join(', ')}',
+                                                          key: ValueKey(
+                                                            'super-message-to-${message.id}',
+                                                          ),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: nameStyle,
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
-                                                  finger,
-                                                ),
                                                 if (widget.thread?.askTag
                                                     case final tag?)
                                                   Text(
