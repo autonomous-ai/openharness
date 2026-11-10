@@ -126,9 +126,9 @@ Read it before starting any task. This plan does not repeat its reasons.
 - **A page that needs a person:** no waiting tool. The tool reply names the challenge and tells the agent to ask in
   chat. No tool waits longer than 60 s, inside both engines' defaults (Codex 300 s, Claude Code 120 s before it moves
   a call to the background), so no timeout setting is added.
-- **Stream profiles:** `direct` Tight q6/c2 at most 15 fps; `turn` and `relay` q3/c6 at most 5 fps. The daemon
-  enforces them (Task 13b). The relay budget is per machine, sized for two viewers on the relay profile at the
-  container's screen size scrolling at once; the second spike gives the number.
+- **Stream profiles:** `direct` Tight q6/c2 at most 15 fps; `turn` q3/c6 at most 5 fps; `relay` q3/c6 at most 2 fps.
+  The daemon enforces them (Task 13b). The relay budget is 512 KB/s per machine (pending the PM's agreement); pacing
+  shares it. The page acks bytes after noVNC has taken them, so the window bounds what is not drawn yet.
 - **Stream numbers** (relay budget, pacing, credit window, chunk size): taken from Task 0's report. Tasks that need
   them say so. The relay budget is per machine; the daemon paces the total of its relayed browser bytes under it.
 - **Release order:** backend → CLI → Desktop. Fields, frames and the kind are only added. The Desktop release with
@@ -955,7 +955,7 @@ Added after the first spike measured the stream (spec § "Stream profiles by rou
     (-256 to -247) with the profile's.
   - It holds each `FramebufferUpdateRequest` until `1000 / fps` ms after the previous one it let through; a newer
     request replaces a held one. Every other message passes at once, in order.
-- Profiles: `direct` q6/c2/15 fps; `turn` and `relay` q3/c6/5 fps (Global Constraints).
+- Profiles: `direct` q6/c2/15 fps; `turn` q3/c6/5 fps; `relay` q3/c6/2 fps (Global Constraints).
 
 - [ ] **Step 1: Write the failing tests:**
   - `the handshake passes through unchanged`;

@@ -776,8 +776,8 @@ Saving a change that needs it restarts the browser; the login stays.
      `podman exec -i harness-browser-<agentId> socat STDIO TCP:127.0.0.1:5900`: one exec per open viewer, at most 4
      per browser.
    - The stream exists only while a panel is open. Closing the panel, or losing the connection, ends the exec.
-   - **Stream profiles by route** *(call; draft, two numbers wait for the second spike)*. The first spike measured,
-     while a page scrolls without stopping (Wikipedia, 201 images), Tight encoding:
+   - **Stream profiles by route** *(call; the relay budget waits for the PM)*. The first spike measured, while a page
+     scrolls without stopping (Wikipedia, 201 images), Tight encoding:
 
      | Screen, quality/compression, frame cap | Mean | Peak |
      |---|---|---|
@@ -788,26 +788,44 @@ Saving a change that needs it restarts the browser; the login stays.
      | 1280x720, q3/c6, 5 fps | 200 KB/s | 330 KB/s |
      | any, at rest | 1-9 KB/s | 20 KB/s |
 
-     Text stayed sharp in all of them; only photos lost detail. The frame cap cuts bytes far more than quality or
-     size does. The screen size is the container's (a setting) and cannot differ per viewer, so a route changes only
+     The second spike measured the default screen, 1920x1080, with Google Chrome on arm64:
+
+     | 1920x1080, quality/compression, frame cap | Mean | Peak |
+     |---|---|---|
+     | q6/c2, none | 2.6 MB/s | 4.7 MB/s |
+     | q6/c2, 10 fps | 1.4 MB/s | 3.6 MB/s |
+     | q6/c2, 5 fps | 860 KB/s | 1.9 MB/s |
+     | q3/c6, 10 fps | 1.0 MB/s | 2.3 MB/s |
+     | q3/c6, 5 fps | 620 KB/s | 1.2 MB/s |
+     | q3/c6, 2 fps | 270 KB/s | 480 KB/s |
+     | any, at rest | 6-16 KB/s | |
+
+     Text stayed sharp in all of them; only photos lost detail. At 1080p a frame cap saves less than at 720p, because
+     each capped update carries more (105-173 KB). No setting fits the relay's terminal budget (about 140 KB/s) while
+     scrolling. The screen size is the container's (a setting) and cannot differ per viewer, so a route changes only
      quality and frame rate:
 
      | Route | Quality/compression | Frame cap |
      |---|---|---|
-     | `direct` | q6/c2 | 15 fps |
-     | `turn` | q3/c6 | 5 fps |
-     | `relay` | q3/c6 | 5 fps |
+     | `direct` | q6/c2 | 15 fps (about 2 MB/s scrolling) |
+     | `turn` | q3/c6 | 5 fps (about 620 KB/s scrolling) |
+     | `relay` | q3/c6 | 2 fps (about 270 KB/s scrolling) |
 
      - **The daemon on the agent's machine enforces the profile**, not the page: clients never decide it. It reads the
        RFB messages the viewer sends (they have fixed shapes), replaces the quality and compression levels in
        `SetEncodings` with the route's, and holds each `FramebufferUpdateRequest` until the route's frame interval has
        passed since the last one. Keys, pointer and clipboard pass at once.
-     - **The relay budget** for browser bytes is per machine: the `relay` profile at 1920x1080 for two viewers
-       scrolling at once (`<spike 2: bytes per second of 1920x1080 q3/c6 at 5 fps>` × 2). Pacing shares it between the
-       machine's relayed streams. At rest a viewer costs 1-9 KB/s. The PR reports relay bytes per open minute, scrolling
-       and at rest, and the project's PM agrees the budget before the stream ships.
-     - **The bridge** must carry the `direct` profile: `<spike 2: bytes per second through the JavaScript channel on
-       macOS>`. If it cannot, the `direct` cap drops to what it carries.
+     - **The relay budget** for browser bytes is per machine: 512 KB/s, enough for one viewer scrolling on the `relay`
+       profile with room for its peaks, and for several at rest (6-16 KB/s each). Pacing shares it between the
+       machine's relayed streams, so two viewers scrolling at once each get less. The PR reports relay bytes per open
+       minute, scrolling and at rest, and the project's PM agrees the budget before the stream ships.
+     - **The bridge** carries the `direct` profile with room to spare: the second spike measured 30-58 MB/s through the
+       JavaScript channel on macOS, and the real viewer page kept up with the recorded stream at 2x its speed
+       (5.2 MB/s), with the Flutter UI thread's p95 frame under 1 ms. Messages of 8 KiB from the page caused slow
+       frames; 32 KiB do not.
+     - **The credit window bounds what the page has not drawn yet**, not only what is on the wire. Fed faster than it
+       draws, noVNC queues the bytes and disconnects at 40 MiB ("Receive queue buffer exceeded"). So the page sends
+       `agent_browser_ack` after noVNC has taken the bytes, and Dart only relays it.
      - Still to measure on a built stream (Task 20's bench, before the PR is ready): terminal echo p95 against the
        credit window with a browser stream open, on each route. If no window keeps the echo within 50 ms, browser
        bytes get their own P2P data channel and relay socket.
