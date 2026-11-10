@@ -862,7 +862,9 @@ void main() {
       final docs = f.app.machineStates['m']!.agents.firstWhere(
         (a) => a.id == 'docs',
       );
-      await tester.runAsync(() => swarmAttachAgent(f.app, tabId, 'm', docs));
+      final done = swarmAttachAgent(f.app, tabId, 'm', docs);
+      await joined(tester);
+      await done;
       expect(f.connection.joins, hasLength(2));
       expect(
         f.connection.joins[0]['operationId'],
