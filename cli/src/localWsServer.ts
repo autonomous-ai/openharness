@@ -27,7 +27,7 @@ const DAEMON_PLATE = 'daemon_plate'
 export const LOCAL_WS_PATH = '/api/local-ws'
 export const LOCAL_WS_PROTOCOL_VERSION = 1
 
-const MAX_JSON_BYTES = 512 * 1024
+const MAX_JSON_BYTES = LOCAL_JSON_MAX_BYTES
 const LOCAL_IDLE_DEADLINE_MS = 40_000
 // The `ws` library enforces this on EVERY message on this socket, JSON or binary — so it has to
 // cover the largest binary frame this transport carries, not just JSON control frames. That is a
@@ -36,6 +36,7 @@ const LOCAL_IDLE_DEADLINE_MS = 40_000
 const MAX_WS_MESSAGE_BYTES = TERMINAL_LOCAL_PASTE_MAX_PAYLOAD_BYTES + 4_096
 
 import type { WindowVoiceReply } from './cable/windowRoute.js'
+import { LOCAL_JSON_MAX_BYTES } from './lib/localJsonLimit.js'
 
 export interface LocalWsBackend {
   /** `tool`: `harness pair` or the harnessd MCP server — answered like any local client, never presence. */
@@ -521,8 +522,20 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       return
     }
 
+    // A JSON frame past MAX_JSON_BYTES is refused by name, with its size and the limit, before the close (1009, too big): closed
+    // with no word, an agent that posted a long log heard only "The connection to Harness closed." (Q3, 2026-11-10).
+    const tooLarge = (raw: RawData, isBinary: boolean): boolean => {
+      if (isBinary || serviceLink) return false
+      const bytes = binaryBytes(raw).byteLength
+      if (bytes <= MAX_JSON_BYTES) return false
+      ws.send(JSON.stringify({ type: 'frame_too_large', payload: { error: 'FRAME_TOO_LARGE', bytes, limit: MAX_JSON_BYTES } }))
+      close(1009, 'frame too large')
+      return true
+    }
+
     ws.on('message', (raw, isBinary) => {
       chain = chain.then(() => {
+        if (tooLarge(raw, isBinary)) return
         if (!selected) return selectMachine(raw, isBinary)
         if (serviceLink) {
           if (isBinary) { serviceLink.receiveBinary(binaryBytes(raw)); return }

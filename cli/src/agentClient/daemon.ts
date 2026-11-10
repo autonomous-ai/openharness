@@ -6,6 +6,7 @@
  * the paired relay (`machine_select` naming it).
  */
 import { randomUUID } from 'node:crypto'
+import { LOCAL_JSON_MAX_BYTES, tooLargeText } from '../lib/localJsonLimit.js'
 import { WebSocket } from 'ws'
 import { env } from '../config/env.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -94,6 +95,12 @@ export async function openDaemon(where: Where, machineId: string = where.machine
       if (binary) return
       let frame: { type?: string; payload?: Record<string, unknown> }
       try { frame = JSON.parse(raw.toString()) } catch { return }
+      // The daemon refused a frame too large for it, and closes the line: what waits on it hears why.
+      if (frame.type === 'frame_too_large') {
+        const bytes = Number(frame.payload?.bytes)
+        failAll(new AgentClientError('REQUEST_TOO_LARGE', tooLargeText(Number.isFinite(bytes) ? bytes : LOCAL_JSON_MAX_BYTES + 1)))
+        return
+      }
       if (frame.type === 'machine_select_error') {
         failAll(new AgentClientError(String(frame.payload?.error ?? 'MACHINE_UNAVAILABLE'), 'That machine is not reachable now. `harness machines` lists which are online.'))
         socket.close()
@@ -107,12 +114,16 @@ export async function openDaemon(where: Where, machineId: string = where.machine
           request: (type, payload = {}, timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((done, fail) => {
             if (closed) { fail(new AgentClientError('DISCONNECTED', 'The connection to Harness closed.')); return }
             const requestId = randomUUID()
+            const text = JSON.stringify({ type, payload: { ...payload, requestId } })
+            // Past what the daemon's socket takes, said here with its size: sent, the daemon would refuse it and close the line.
+            const bytes = Buffer.byteLength(text)
+            if (bytes > LOCAL_JSON_MAX_BYTES) { fail(new AgentClientError('REQUEST_TOO_LARGE', tooLargeText(bytes))); return }
             const timer = setTimeout(() => {
               waiting.delete(requestId)
               fail(new AgentClientError('TIMEOUT', `Harness did not answer ${type} in time. Try again.`))
             }, timeoutMs)
             waiting.set(requestId, { done, fail, timer })
-            socket.send(JSON.stringify({ type, payload: { ...payload, requestId } }))
+            socket.send(text)
           }),
         })
         return
