@@ -188,8 +188,8 @@ void main() {
 
     // The sheet's work: a pull reads the Swarm again, then the older chats.
     await tester.tap(walk.key('swarm-project-menu'));
-    await walk.waitFor(walk.key('swarm-project-menu-status'));
-    await tester.tap(walk.key('swarm-project-menu-status'));
+    await walk.waitFor(walk.key('swarm-project-menu-work'));
+    await tester.tap(walk.key('swarm-project-menu-work'));
     await walk.waitFor(walk.key('swarm-conversation-g0'));
     pulled = Completer<void>();
     await tester.fling(

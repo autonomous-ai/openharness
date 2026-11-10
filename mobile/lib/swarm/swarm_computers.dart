@@ -241,21 +241,24 @@ class AppSwarmComputers extends ChangeNotifier
   );
 
   /// The harnesses on them, told of on their own: a change there is no
-  /// computer coming or going for Swarm's reads.
+  /// computer coming or going for Swarm's reads. Made when first asked for;
+  /// none once disposed, as the app's state it listens to may be gone.
   @override
-  late final AppSwarmAgents agents = AppSwarmAgents(notifier);
+  AppSwarmAgents? get agents =>
+      _disposed ? null : _agents ??= AppSwarmAgents(notifier);
+  AppSwarmAgents? _agents;
 
   @override
   void dispose() {
     _disposed = true;
     notifier.removeListener(_changed);
-    agents.dispose();
+    _agents?.dispose();
     super.dispose();
   }
 }
 
 /// The app's harnesses for Swarm ([SwarmAgents]), from [agentIndex]: told of
-/// when how many work or wait — Search's dots — or the list itself, changes.
+/// when how many work changes.
 class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
   AppSwarmAgents(this.notifier) {
     notifier.addListener(_changed);
@@ -263,39 +266,16 @@ class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
   }
 
   final AppNotifier notifier;
-  int? _working, _waiting;
-  List<AgentEntry>? _index;
+  int? _working;
 
   @override
   int? get working => _working;
 
-  @override
-  List<SwarmAgentRef> get agents => [
-    for (final entry in visibleAgents(agentIndex(notifier)))
-      if (entry.isOpenable)
-        (
-          machineId: entry.machineId,
-          agentId: entry.agent.id,
-          name: entry.agent.displayName,
-          machine: entry.machineName,
-          engine: entry.agent.engineDisplayName ?? entry.agent.engine,
-          working: entry.isWorking,
-          waiting: entry.isWaiting,
-        ),
-  ];
-
   void _changed() {
     final index = notifier.machinesAnswered ? agentIndex(notifier) : null;
     final working = index?.where((entry) => entry.isWorking).length;
-    final waiting = index?.where((entry) => entry.isWaiting).length;
-    if (working == _working &&
-        waiting == _waiting &&
-        identical(index, _index)) {
-      return;
-    }
+    if (working == _working) return;
     _working = working;
-    _waiting = waiting;
-    _index = index;
     notifyListeners();
   }
 
@@ -304,10 +284,6 @@ class AppSwarmAgents extends ChangeNotifier implements SwarmAgents {
     Navigator.of(context)
         .push(phoneRoute((_) => AgentsListPage(notifier: notifier))),
   );
-
-  @override
-  void open(BuildContext context, SwarmAgentRef agent) =>
-      openAgent(context, notifier, agent.machineId, agent.agentId);
 
   @override
   void dispose() {

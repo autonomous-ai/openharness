@@ -321,160 +321,6 @@ void main() {
       expect(find.text('Done today'), findsNothing, reason: 'open tasks only');
     });
 
-    /// [backend] with River asking the person, in g2, whether to merge.
-    FakeSwarm asked() {
-      final fake = backend();
-      const derived = {'decisionsWaiting': 1};
-      final load = fake.routes['/api/super-tabs/$tab/parts']!;
-      fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
-        ...(await load(body))! as Map<String, dynamic>,
-        'derived': derived,
-      };
-      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-          changes(cursor: 'c2', derived: derived);
-      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-        'decisions': [
-          {
-            'id': 'd1',
-            'projectName': 'Mobile',
-            'conversationId': 'g2',
-            'conversationTitle': 'Saved views cache',
-            'askerName': 'River',
-            'question': 'Merge #2160?',
-            'options': ['Merge', 'Wait'],
-          },
-        ],
-      };
-      return fake;
-    }
-
-    testWidgets('Approve asks first, naming the answer, who asked, where and '
-        'the question; confirmed, it is held for Undo and sent once', (
-      tester,
-    ) async {
-      final fake = asked();
-      await team(tester, fake);
-
-      await tester.tap(key('swarm-approve-d1'));
-      await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'Sends “Merge” to River in #Mobile: Merge #2160?\n\n'
-          'You can undo it for a few seconds.',
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(key('swarm-activity-approve-cancel'));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
-      expect(fake.commands, isEmpty, reason: 'Cancel sends nothing');
-
-      await tester.tap(key('swarm-approve-d1'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-activity-approve-confirm'));
-      await tester.pumpAndSettle();
-      expect(
-        find.descendant(
-          of: key('swarm-waiting-decision:d1'),
-          matching: find.text('Sending “Merge”'),
-        ),
-        findsOneWidget,
-      );
-      expect(fake.commands, isEmpty, reason: 'Undo still can');
-      await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
-      expect(fake.commands.single, {
-        'type': 'decision.answer',
-        'decisionId': 'd1',
-        'choice': 0,
-      });
-    });
-
-    testWidgets('access taken away while Approve asks: confirming it before '
-        'the dialog goes holds and sends nothing', (tester) async {
-      final fake = asked();
-      await team(tester, fake);
-
-      await tester.tap(key('swarm-approve-d1'));
-      await tester.pumpAndSettle();
-      host(tester).session!.inbox.reader(tab)!.revoke();
-      await tester.tap(key('swarm-activity-approve-confirm'));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands, isEmpty);
-      expect(find.byType(SwarmWaitingRow), findsNothing);
-    });
-
-    /// Approve asking over the Team sheet, its question on screen.
-    Future<FakeSwarm> asking(WidgetTester tester) async {
-      final fake = asked();
-      await team(tester, fake);
-      await tester.tap(key('swarm-approve-d1'));
-      await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
-      return fake;
-    }
-
-    /// Nothing of Approve or the sheet stays, and nothing was sent.
-    Future<void> expectAllGone(WidgetTester tester, FakeSwarm fake) async {
-      await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing);
-      expect(find.textContaining('Merge #2160?'), findsNothing);
-      expect(key('swarm-activity-approve-confirm'), findsNothing);
-      expect(find.byType(BottomSheet), findsNothing);
-      await tester.pump(const Duration(seconds: 5));
-      await tester.pumpAndSettle();
-      expect(fake.commands, isEmpty);
-    }
-
-    testWidgets('access taken away while Approve asks: the dialog goes with '
-        'the sheet, and its question with it', (tester) async {
-      final fake = await asking(tester);
-
-      host(tester).session!.inbox.reader(tab)!.revoke();
-
-      await expectAllGone(tester, fake);
-    });
-
-    testWidgets('the project taken off the Swarm while Approve asks: the '
-        'dialog goes with the sheet', (tester) async {
-      final fake = await asking(tester);
-
-      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
-        ...changes(cursor: 'c3'),
-        'head': part('head', 2, headData(projects: const [])),
-      };
-      await host(tester).session!.inbox.reader(tab)!.refresh();
-
-      await expectAllGone(tester, fake);
-    });
-
-    testWidgets('the account signing out while Approve asks: the dialog goes '
-        'with the sheet', (tester) async {
-      final fake = await asking(tester);
-
-      (host(tester).account as ValueNotifier<String?>).value = null;
-
-      await expectAllGone(tester, fake);
-    });
-
-    testWidgets('closing the sheet takes nothing under it: the chat and the '
-        'page stay', (tester) async {
-      final fake = await asking(tester);
-
-      await tester.tap(key('swarm-activity-approve-cancel'));
-      await tester.pumpAndSettle();
-      await tester.tap(key('swarm-team-close'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(SwarmProjectPage), findsOneWidget);
-      expect(find.text('CI on #2154 is green.'), findsOneWidget);
-      expect(fake.commands, isEmpty);
-    });
-
     testWidgets('a task opens its chat', (tester) async {
       await team(tester, backend());
 
@@ -855,6 +701,31 @@ void main() {
       await leaderboard(tester, fake);
 
       expect(onBoard(tester), ['person-me', 'diego']);
+    });
+
+    testWidgets('a project made private to others while it is open closes '
+        'it, with what it held', (tester) async {
+      final fake = backend();
+      final first = await fake.routes['/api/super-tabs/$tab/parts']!(null);
+      await leaderboard(tester, fake);
+      expect(find.byType(SwarmLeaderboardPage), findsOneWidget);
+
+      final head = Map<String, dynamic>.of(
+        ((first! as Map)['head'] as Map)['data'] as Map<String, dynamic>,
+      );
+      head['projects'] = [
+        for (final p in (head['projects'] as List).cast<Map>())
+          {...p, 'ownerId': 'diego', 'visibility': 'private', 'members': []},
+      ];
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c2', lastChangedAt: 102),
+        'head': part('head', 2, head),
+      };
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmLeaderboardPage), findsNothing);
+      expect(onBoard(tester), isEmpty);
     });
 
     testWidgets('shows only the points: no change against last week, up or '

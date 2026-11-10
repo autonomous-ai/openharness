@@ -150,8 +150,8 @@ void main() {
         await tester.tap(walk.keyStarting('swarm-project-').first);
         await walk.waitFor(walk.key('swarm-project-menu'));
         await tester.tap(walk.key('swarm-project-menu'));
-        await walk.waitFor(walk.key('swarm-project-menu-status'));
-        await tester.tap(walk.key('swarm-project-menu-status'));
+        await walk.waitFor(walk.key('swarm-project-menu-work'));
+        await tester.tap(walk.key('swarm-project-menu-work'));
         await walk.waitFor(walk.key('swarm-sheet-team'));
         await tester.tap(walk.key('swarm-sheet-team'));
         await walk.waitFor(walk.keyStarting('swarm-open-terminal-'));
@@ -227,10 +227,10 @@ void main() {
       await walk.waitFor(walk.key('swarm-project-menu'));
       await walk.shot('project');
       await tester.tap(walk.key('swarm-project-menu'));
-      await walk.waitFor(walk.key('swarm-project-menu-status'));
+      await walk.waitFor(walk.key('swarm-project-menu-work'));
       await walk.wait();
       await walk.shot('project-menu');
-      await tester.tap(walk.key('swarm-project-menu-status'));
+      await tester.tap(walk.key('swarm-project-menu-work'));
       await walk.waitFor(walk.key('swarm-team-close'));
       await walk.wait();
       await walk.shot('project-work');
