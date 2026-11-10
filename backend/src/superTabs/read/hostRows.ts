@@ -73,12 +73,15 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     resume,
     agent: target,
     ...(buddySleepManaged(state, target) ? { buddySleepManaged: true as const } : {}),
-    // The owner's host adds the machine any agent of theirs runs on, a Lead or a plain v4 agent (Swarm v4: a Personal Swarm may hold only
-    // plain agents, which lead nothing). Never for a Buddy: a Buddy-only record is not the machine in the Swarm. An agent of the owner
-    // there still joins it, which makes the record an ordinary machine (commands.ts machine.contribute ifMissing; security review 2 of
-    // #2234). Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins. Never a
-    // machine its person took out of the Swarm (removedMachines): an older host adds it back on this word alone (cli host.ts).
+    // The Swarm owner's host adds the machine any live agent of theirs runs on, in any Swarm they own: a Lead, or a plain v4 agent, which
+    // leads nothing (a Personal Swarm may hold nothing else, and never got its machine). Since #4120 a machine takes only its own person's
+    // agents, so this adds no one else's work to it. Never for a Buddy: a Buddy-only record is not the machine in the Swarm; an agent of the
+    // owner there still joins it, which makes the record an ordinary machine (commands.ts machine.contribute ifMissing; security review 2
+    // of #2234). Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins. Never
+    // a machine its person took out of the Swarm (removedMachines): an older host adds it back on this word alone (cli host.ts); a person
+    // who wants it back adds it.
     joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !isBuddy(target)
+      && state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
       && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly) && !state.removedMachines?.some(r => r.machineId === machineId)
       && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub)),
     skillMode: home ? skillModeOf(home) : 'orchestration',
