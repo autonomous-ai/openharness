@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { authorOf, checksOf, GitHubMerge, ledProjects, verdicts } from './githubMerge.js'
+import { authorOf, checksOf, GitHubMerge, ledProjects, recordedAuthors, verdicts } from './githubMerge.js'
 import type { Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 
@@ -509,8 +509,9 @@ describe('the rule\'s parts', () => {
     const { readers, twoReads } = verdicts([comment('Juno, 14:20, to **Pip**: READ-OK f6edb44'), comment('**Faye** (PM): HOLD 1234567 wait'),
       comment('READ-OK abcdef0', { user: { login: 'kenmore' } }), comment('Harness, 14:31: merged. READ-OK on f6edb44 by juno, checks green.'),
       comment('Kai, 14:00: TWO READS for this one')], '', { writers: [], opener: '', team: new Set() })
-    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno', ownLogin: false },
-      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false } })
+    const at = '2026-11-09T12:00:00Z'
+    expect(Object.fromEntries(readers)).toEqual({ juno: { verdict: 'READ-OK', sha: 'f6edb44', name: 'Juno', ownLogin: false, at },
+      faye: { verdict: 'HOLD', sha: '1234567', name: 'Faye', ownLogin: false, at }, kenmore: { verdict: 'READ-OK', sha: 'abcdef0', name: 'kenmore', ownLogin: false, at } })
     expect(twoReads).toBe(true)
   })
 
@@ -546,5 +547,131 @@ describe('the rule\'s parts', () => {
     const read = async () => ({ projects: [{ id: 'app', leadConversationId: 'lead', repository: { repositoryUrl: 'https://github.com/acme/app' } }] })
     expect(await ledProjects({ me: 'dee', live: async () => true, read, roster: async () => [row] })).toHaveLength(1)
     expect(await ledProjects({ me: 'dee', live: async () => false, read, roster: async () => [row] })).toEqual([])
+  })
+})
+
+// A verdict made by command (githubVerdict.ts) is recorded with the backend as its agent's. The merger counts that agent, not
+// the name the comment opens with: the signature reads one or two plain words, so "Đức Anh" or "Atlas Reed Two" on the login
+// that opened the pull request read as unsigned and counted for nothing (review of #3902).
+describe('the merger counts the agent the backend recorded for a verdict', () => {
+  function recordedSetup(names: Record<string, string>) {
+    const github = fakeGitHub()
+    // Pip builds and Đức Anh reads; Juno is the PM.
+    const crew: Crew = { builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+      { id: 'anh', name: 'Đức Anh', label: 'builder:đức-anh', machineId: 'mac', engine: 'codex' }], machines: [] }
+    const clock = { now: Date.parse('2026-11-09T07:31:00Z') }
+    const authors = vi.fn(async (_project: { repo: string }, ids: string[]) => Object.fromEntries(ids.filter(id => names[id]).map(id => [id, { name: names[id]! }])))
+    const log = vi.fn()
+    const merger = new GitHubMerge({ projects: async () => [{ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }],
+      crew: async () => crew, get: github.get, send: github.send, now: () => clock.now, log, authors })
+    return { github, merger, clock, authors, log, merges: () => github.sent.filter(s => s.method === 'PUT'),
+      comments: () => github.sent.filter(s => s.method === 'POST').map(s => String((s.body as Json).body)) }
+  }
+  const from = (id: number, body: string, at = '2026-11-09T07:00:00Z'): Json => ({ id, body, author_association: 'MEMBER', user: { login: 'deehw' }, created_at: at })
+
+  it('takes a recorded verdict as its agent\'s, however the comment signs, from the login that opened the pull request too', async () => {
+    const f = recordedSetup({ 'issue:501': 'Đức Anh' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(501, `Đức Anh, 14:20: READ-OK ${HEAD}`)])
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+    expect(f.comments()).toEqual([expect.stringMatching(/merged\. READ-OK on f6edb44 by Đức Anh, checks green\.$/)])
+    expect(f.authors).toHaveBeenCalledWith(expect.objectContaining({ repo: 'acme/app', tabId: 'tab' }), ['issue:501'])
+  })
+
+  it('counts the recorded agent over the name typed: its own writer\'s verdict is none, whoever it says it is', async () => {
+    const f = recordedSetup({ 'issue:502': 'Pip' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(502, `Juno, 14:20: READ-OK ${HEAD}`)])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+  })
+
+  // Review of #3906.
+  it('lets only a recorded READ-OK lift a recorded HOLD: the same name typed by hand does not', async () => {
+    const f = recordedSetup({ 'issue:601': 'Juno', 'issue:603': 'Juno' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(601, `Juno, 14:20: HOLD ${HEAD}\n\na.ts:1 fix it`), from(602, `Juno, 14:25: READ-OK ${HEAD}`, '2026-11-09T07:05:00Z')])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    f.github.repo.comments.set(4, [...f.github.repo.comments.get(4)!, from(603, `Juno, 14:30: READ-OK ${HEAD}`, '2026-11-09T07:10:00Z')])
+    f.clock.now += 60_000
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  it('takes a comment changed since it was written as typed by hand: its record was of other words', async () => {
+    const f = recordedSetup({ 'issue:801': 'Đức Anh' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [{ ...from(801, `Đức Anh, 14:20: READ-OK ${HEAD}`), updated_at: '2026-11-09T07:20:00Z' }])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+  })
+
+  it('counts a recorded reader from the login that opened the pull request only when it is one of the team', async () => {
+    const f = recordedSetup({ 'issue:950': 'Bud' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(950, `Bud, 14:20: READ-OK ${HEAD}`)])
+    await settle(f)
+    expect(f.merges()).toEqual([])
+  })
+
+  it('asks again for a comment it had no record of, so a record made late is read, and does not say unsigned before the record can be there', async () => {
+    const names: Record<string, string> = {}
+    const f = recordedSetup(names)
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    // Written two seconds ago: its record may not be made yet, so nothing is said of it.
+    f.github.repo.comments.set(4, [from(701, `Juno Reed Two, 14:20: READ-OK ${HEAD}`, new Date(f.clock.now - 2_000).toISOString())])
+    await f.merger.tick()
+    expect(f.comments()).toEqual([])
+    // No record after two minutes: typed by hand, and said so.
+    f.clock.now += 3 * 60_000
+    await f.merger.tick()
+    expect(f.comments()).toEqual([expect.stringContaining('is unsigned')])
+    // The reader ran the command again and the record was made: read within ten minutes, with no restart.
+    names['issue:701'] = 'Juno'
+    f.clock.now += 11 * 60_000
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  it('leaves a backend that does not answer alone for a while, and names the repository when it says so', async () => {
+    const f = recordedSetup({})
+    f.authors.mockRejectedValue(new Error('Could not reach this Super Tab.'))
+    f.github.repo.comments.set(4, [from(504, `Juno, 14:20: READ-OK ${HEAD}`)])
+    for (let pass = 0; pass < 4; pass++) { await f.merger.tick(); f.clock.now += 5_000 }
+    expect(f.authors).toHaveBeenCalledTimes(1)
+    expect(f.log.mock.calls.map(call => String(call[0])).filter(line => line.includes('AUTHORS_UNREAD'))).toEqual([
+      '[super-tab] verdicts are read as typed · AUTHORS_UNREAD acme/app: Could not reach this Super Tab.'])
+    f.clock.now += 60_000
+    await f.merger.tick()
+    expect(f.authors).toHaveBeenCalledTimes(2)
+  })
+
+  it('asks the backend once for a comment it knows, and reads names as typed while the backend cannot be asked, saying so once', async () => {
+    const f = recordedSetup({ 'issue:501': 'Đức Anh' })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [from(501, `Đức Anh, 14:20: READ-OK ${HEAD}`), from(503, 'Thanks, rebased.')])
+    await f.merger.tick()
+    f.clock.now += 60_000
+    await f.merger.tick()
+    // Only a comment that gives a verdict is asked about, and one answered is not asked about again.
+    expect(f.authors.mock.calls.map(call => call[1])).toEqual([['issue:501']])
+    const down = recordedSetup({})
+    down.authors.mockRejectedValue(new Error('Could not reach this Super Tab.'))
+    down.github.repo.comments.set(4, [from(504, `Juno, 14:20: READ-OK ${HEAD}`)])
+    await settle(down)
+    expect(down.merges()).toHaveLength(1)
+    expect(down.log.mock.calls.filter(call => String(call[0]).includes('AUTHORS_UNREAD'))).toHaveLength(1)
+  })
+})
+
+describe('who the backend recorded for a project\'s comments', () => {
+  it('asks as the project\'s PM, for the repository and the ids in the backend\'s form, and reads each name', async () => {
+    const ask = vi.fn(async (_path: string) => ({ authors: { 'issue:501': { agentId: 'a1', name: 'Đức Anh' }, 'issue:502': { agentId: 'a2' } } }))
+    const authors = await recordedAuthors(ask)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, ['issue:501', 'issue:502', 'issue:503'])
+    expect(ask).toHaveBeenCalledExactlyOnceWith('/api/super-tabs/tab/github-comments?repository=acme%2Fapp&ids=issue%3A501,issue%3A502,issue%3A503&asAgentId=juno')
+    expect(authors).toEqual({ 'issue:501': { name: 'Đức Anh' }, 'issue:502': { name: '' } })
+    expect(await recordedAuthors(async () => null)({ repo: 'acme/app', pm: 'Juno', tabId: 'tab', pmAgentId: 'juno', projectId: 'app' }, ['issue:1'])).toEqual({})
   })
 })
