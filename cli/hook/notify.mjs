@@ -899,6 +899,7 @@ function commTruncatedPrefixOf(seen, want) {
 }
 
 function processMatchScore(row, engine, ownership, allowAgentHint = false) {
+  if (engine === 'hermes' && hermesGatewayProcess(row)) return 0
   const executable = programName(row.executable)
   const entrypoint = processEntrypoint(row.args).toLowerCase()
   const entrybase = programName(entrypoint)
@@ -1592,16 +1593,31 @@ function linuxOwnerBirth(pid) {
   } catch { return null }
 }
 
+/** Hermes' shared gateway (`<python> -m hermes_cli.main [--profile <name>] gateway …`), which runs every session's
+ * hooks. Copy of cli/src/lib/processTable.ts `hermesGatewayProcess`. */
+function hermesGatewayProcess(row) {
+  const tokens = argvTokens(row.args || '')
+  const entrypoint = processEntrypoint(row.args || '')
+  if (entrypoint !== 'hermes_cli.main' && programName(entrypoint) !== 'hermes') return false
+  let index = tokens.indexOf(entrypoint) + 1
+  if (index <= 0) return false
+  if (tokens[index] === '--profile' || tokens[index] === '-p') index += 2
+  return tokens[index] === 'gateway'
+}
+
 async function callerOwns(identity, current) {
   const rows = await processRows()
   if (!rows) return false
-  const parents = new Map(rows.map((row) => [row.pid, row.parentPid]))
+  const byPid = new Map(rows.map((row) => [row.pid, row]))
   let pid = process.ppid
   const visited = new Set()
   while (pid > 0 && !visited.has(pid)) {
     if (pid === identity.pid) return current()
     visited.add(pid)
-    pid = parents.get(pid) || 0
+    const row = byPid.get(pid)
+    // A hook from Hermes' gateway sits under whichever pane started it, and belongs to none of them.
+    if (row && hermesGatewayProcess(row)) return false
+    pid = row?.parentPid || 0
   }
   return false
 }
