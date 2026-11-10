@@ -3326,6 +3326,20 @@ class _SuperTabViewState extends State<SuperTabView>
       ? null
       : c.snapshot?.agents.where((a) => a.chatId == group.id).firstOrNull;
 
+  /// What a person's latest message to their agent waits for while the agent's session is gone (its computer is off), until
+  /// the agent answers or is back; null otherwise.
+  String? _offlineNote(SuperTabConversation? group) {
+    if (!widget.board || group == null) return null;
+    final agent = _chatAgent(group);
+    if (agent == null || agent.downSince == null) return null;
+    final last = c.messages(group.id).lastOrNull;
+    final waiting =
+        c.outgoing(group.id).isNotEmpty || (last != null && c.isOwn(last));
+    if (!waiting) return null;
+    final name = _agentName(agent);
+    return '${widget.machineName(agent.machineId)} is off. $name reads this when it is back.';
+  }
+
   /// An agent chat's name, which its person clicks to rename it; anyone else's reads as text.
   Widget _agentTitle(SuperTabAgent agent) {
     final name = Text(
@@ -5811,6 +5825,16 @@ class _SuperTabViewState extends State<SuperTabView>
             );
           },
         ),
+        // A person's message to their agent whose computer is off waits on the server: said once, under it.
+        if (_offlineNote(group) case final note?)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+            child: Text(
+              note,
+              key: const ValueKey('swarm-agent-offline-note'),
+              style: DesktopChrome.metadata(),
+            ),
+          ),
         // A chat kept to read gets one muted bar in place of the box, so
         // nothing looks typeable: a closed group, or an older Buddy chat in a
         // project, which also leads to the one Buddy (Lead's design review,
