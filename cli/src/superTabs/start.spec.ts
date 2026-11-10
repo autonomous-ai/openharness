@@ -16,9 +16,6 @@ const claudeAccount = vi.hoisted(() => ({ signedIn: true as boolean | null }))
 vi.mock('../lib/engineAccount.js', async (original) => ({ ...await original<object>(), engineAccount: async () => ({ signedIn: claudeAccount.signedIn, lastUsedAt: null }) }))
 const prepared = vi.hoisted(() => ({ value: { ready: [] as string[], missing: [] as string[] } }))
 vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => prepared.value, trustBuddyHome: async () => {} }))
-// Whether this process is an old Harness Team account (team/config.ts): never, unless a test says so.
-const teamAccount = vi.hoisted(() => ({ value: false }))
-vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => teamAccount.value }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A Buddy's start as its owner's own machine's host dispatches it (task #2832): the Swarm's record of the machine and the
  *  account signed in there both its owner's. */
@@ -468,7 +465,6 @@ describe('a Buddy launches only on its owner\'s own machine', () => {
 
   const refusals: [string, (f: ReturnType<typeof fixture>) => Record<string, unknown>][] = [
     ['not dispatched by its machine\'s own host', () => ({})],
-    ['in an old Harness Team account', () => { teamAccount.value = true; return { signedIn: 'peer' } }],
     ['with another account signed in here', () => ({ signedIn: 'owner' })],
     ['with no account signed in here', () => ({ signedIn: null })],
     ['on a machine the Swarm records as another person\'s', f => { Object.assign(f.start, { machineOwnerId: 'owner' }); return { signedIn: 'peer' } }],
@@ -479,15 +475,13 @@ describe('a Buddy launches only on its owner\'s own machine', () => {
     for (const engine of ['claude', 'codex']) {
       const f = fixture()
       ownStart(f, engine)
-      try {
-        const input = given(f)
-        const result = await startAgent({ tabId: 'tab', startId: 'start', ...input } as never, f.scoped, where, f.open)
-        expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_NOT_OWN_MACHINE })
-        expect(launches(f)).toBe(false)
-        expect(existsSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')))).toBe(false)
-        expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
-        expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_NOT_OWN_MACHINE }) }))
-      } finally { teamAccount.value = false }
+      const input = given(f)
+      const result = await startAgent({ tabId: 'tab', startId: 'start', ...input } as never, f.scoped, where, f.open)
+      expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_NOT_OWN_MACHINE })
+      expect(launches(f)).toBe(false)
+      expect(existsSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')))).toBe(false)
+      expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
+      expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_NOT_OWN_MACHINE }) }))
     }
   })
 })

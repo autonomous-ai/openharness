@@ -44,7 +44,6 @@ import { Mailbox, type MailboxAgent } from './mailbox.js'
 import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
 import { RELAYED_TAB, relayedText, relayRefusal, TOLD_TAB, tellRefusal, toldText, type RelayTarget } from './tell.js'
 import { buddyGrantLive, buddyReadsOf } from '../lib/buddyGuard.js'
-import { isTeamAccount } from '../team/config.js'
 import { PERSON_AGENT_ID, REPLIED_TAB, replyRefusal } from './replyLocal.js'
 import { messagesRpc, RefusedError, type Rpc } from './rpc.js'
 import { RequestStore } from './requestStore.js'
@@ -240,8 +239,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   const replyOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).programsReply
   /** A person's Buddy here, by this machine's registry: a Swarm session of role buddy (#2626). */
   const isBuddy = (session: RegisteredSession | undefined): session is RegisteredSession => session?.swarmSkill?.role === 'buddy'
-  /** Whether that Buddy's person is proven with it on this machine now: never on a Team account, which no person signs in to. */
-  const buddyGranted = options.buddyGranted ?? ((session: RegisteredSession) => !!session.swarmSkill && !!session.cwd && !isTeamAccount()
+  /** Whether that Buddy's person is proven with it on this machine now. */
+  const buddyGranted = options.buddyGranted ?? ((session: RegisteredSession) => !!session.swarmSkill && !!session.cwd
     && buddyGrantLive(buddyReadsOf(session.swarmSkill.key), session.cwd, now()))
   /** What a Buddy would pass words to, from this machine's registry: every live harness, terminals included, so each is named. */
   const relayTarget = (buddy: RegisteredSession, agentId: string): RelayTarget | null => {

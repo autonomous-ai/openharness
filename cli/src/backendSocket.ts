@@ -492,15 +492,10 @@ export class BackendSocket {
   /** The Wi-Fi device's sessions and requests, as the gateway hands them on, for its service with the
    *  devices (core/wifi.ts, services/wifi.ts). */
   private wifi?: WifiCore['fromGateway']
-  /** Off on an old Harness Team account's daemon (core/main.ts devicesOff): the Mac owner's daemon serves the Wi-Fi device.
-   *  Nothing of it is wired, and nothing is sent to it. */
-  private wifiOff = false
-  disableWifi(): void { this.wifiOff = true; this.wifi = undefined }
-  useWifi(wifi: WifiCore['fromGateway']): void { if (!this.wifiOff) this.wifi = wifi }
+  useWifi(wifi: WifiCore['fromGateway']): void { this.wifi = wifi }
   /** The Wi-Fi device's answers and events, sealed to one session; and which identity's app said hello on
    *  one. Through the gateway, guarded as every frame of the core's is. */
   deviceFrame(connId: string, type: string, payload: Record<string, unknown>): void {
-    if (this.wifiOff) return
     this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false)
   }
   deviceClient(connId: string, identity: string | null): void { this.toGateway('device', (gateway) => gateway.deviceClient(connId, identity)) }

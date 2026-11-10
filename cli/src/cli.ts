@@ -3109,15 +3109,6 @@ switch (cmd) {
       }, flags.includes('--json')))
       .then((code) => { process.exitCode = code }).catch(onError)
     break
-  case 'team':
-    // An old Team account's boot job (set up before 2026-11-07, on macOS, Linux and Windows) still runs `team __start <file>`
-    // before its daemon, which then stops itself once no agent runs (superTabs/inCore/teamRetire.ts). It does nothing and
-    // exits 0, quietly: the job's next step, the daemon, starts as before, and its log gets no usage text. Any other `team`
-    // is an unknown command (the command was removed, anh Dee, 2026-11-10).
-    if (rest[0] === '__start') break
-    console.error(`Unknown command: ${cmd}`)
-    usage(1)
-    break
   case 'reset':
     resetCommand().catch(onError)
     break

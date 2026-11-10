@@ -17,7 +17,10 @@ import './lib/connectWait.js'
 import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv
-if (command === '__swarm-shell-guard') {
+if ((await import('./team/bootGuard.js')).isOldTeamAccount()) {
+  // An old Harness Team account's boot job: it ends here, quietly, before anything loads (team/bootGuard.ts).
+  process.exit(0)
+} else if (command === '__swarm-shell-guard') {
   // The Swarm's shell guard is gone (anh Dee, 2026-11-09), but an agent a release before started still runs its hook before
   // each tool, as its engine was told at launch, and Codex fails a tool call whose hook fails: the call is read, so the engine's
   // write never breaks, and allowed by printing nothing. Nothing else is loaded. Goes on 2026-12-10, 30 days on, when every

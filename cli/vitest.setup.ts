@@ -62,9 +62,9 @@ process.env.HARNESS_STORE_CATALOG_URL ??= 'http://127.0.0.1:9/catalog.json'
 // Last: everything above is in place, so `config/testIsolation.ts` may let `env.ts` load.
 process.env.HARNESS_TEST_ISOLATED = '1'
 
-// The Mac running these may have a real Harness Team account, whose root-owned config says the owner's agents get a private
-// temporary folder (lib/agentTmp.ts): on such a Mac every launch's environment would differ from a spec's. A spec that passes
-// its own deps tests the real thing, and one that wires it in sets what this answers.
+// A Swarm agent's launch makes its private temporary folder and adds it to the engine's arguments (lib/agentTmp.ts), which
+// every launch spec would otherwise have to name. A spec that passes its own deps tests the real thing, and one that wires it
+// in sets what this answers.
 vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('./src/lib/agentTmp.js')>()
   return {
@@ -72,8 +72,5 @@ vi.mock('./src/lib/agentTmp.js', async (importOriginal) => {
     agentTmpLaunch: vi.fn((engine: Parameters<typeof real.agentTmpLaunch>[0], skill: Parameters<typeof real.agentTmpLaunch>[1],
       deps?: Parameters<typeof real.agentTmpLaunch>[2]) => deps ? real.agentTmpLaunch(engine, skill, deps) : { env: {}, args: [] }),
     agentTmpRoot: vi.fn((deps?: Parameters<typeof real.agentTmpRoot>[0]) => deps ? real.agentTmpRoot(deps) : null),
-    buddyTmpEnv: vi.fn((engine: Parameters<typeof real.buddyTmpEnv>[0], root: string, deps?: Parameters<typeof real.buddyTmpEnv>[2]) =>
-      deps ? real.buddyTmpEnv(engine, root, deps) : {}),
-    buddyTmpOf: vi.fn((root: string, deps?: Parameters<typeof real.buddyTmpOf>[1]) => deps ? real.buddyTmpOf(root, deps) : null),
   }
 })

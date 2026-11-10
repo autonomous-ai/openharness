@@ -1,12 +1,12 @@
 /**
- * What setup made, written root-owned to /Library/Application Support/Harness/team.json (on Linux /etc/harness/team.json)
- * and read by the team daemon (whether it is a Team account, which stops itself: superTabs/inCore/teamRetire.ts). Setup and `harness team` were removed on 2026-11-10; the file stays on computers set up before. Nothing in it is secret:
- * names and paths. On Linux `label` and `plist` name the systemd unit and its file.
+ * What setup made, written root-owned to /Library/Application Support/Harness/team.json (on Linux /etc/harness/team.json,
+ * on Windows C:\ProgramData\Harness\team.json). Setup and `harness team` were removed on 2026-11-10; the file stays on
+ * computers set up before, until the person removes the account (Desktop asks), and names what is to go. Nothing in it is
+ * secret: names and paths. On Linux `label` and `plist` name the systemd unit and its file.
  */
 import { readFileSync } from 'node:fs'
 import { TEAM_CONFIG_FILE, TEAM_CONFIG_FILES, carriedBackendEnv, checkPort, pathCheck, userCheck } from './layout.js'
 import { checkSid } from '../lib/windows/sid.js'
-import { userInfo } from 'node:os'
 
 export interface TeamConfig {
   version: 1
@@ -79,10 +79,4 @@ export function readTeamConfig(path: string = teamConfigFile(),
   } catch {
     return null
   }
-}
-
-/** Whether this process runs as the Harness Team account its Mac's root-owned config names. An account whose name
- *  cannot be read is not it. */
-export function isTeamAccount(config: () => TeamConfig | null = () => readTeamConfig(), user: () => string = () => userInfo().username): boolean {
-  try { return config()?.user === user() } catch { return false }
 }

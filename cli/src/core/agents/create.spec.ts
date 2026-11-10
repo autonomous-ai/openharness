@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { agentTmpLaunch, buddyTmpEnv } from '../../lib/agentTmp.js'
+import { agentTmpLaunch } from '../../lib/agentTmp.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -34,9 +34,6 @@ import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
 vi.mock('../../lib/buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
-// Nor does the account the gate runs under matter: a Harness Team account is refused by prepareBuddyFolder before any launch, which
-// lib/swarmSkills.spec.ts tests on its own. These launches are the owner's, so the account boundary is fixed to "not a Team account".
-vi.mock('../../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => false }))
 vi.mock('../../lib/gitProject.js', async (real) => ({ ...await real<object>(), harnessMadeWorktree: vi.fn(async () => false) }))
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -273,17 +270,6 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ swarmRole: 'agent', permissionMode: 'teamWritten', bypassPermission: false }))).toMatchObject({ ok: true })
     expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]).toMatchObject({ permissionMode: 'teamWritten' })
-  })
-
-  // A Buddy's folder of its own, named for the folder it runs in, and never the owner's agents' shared one.
-  it('gives a Buddy its own private temporary folder, and the launch\'s own variables win', async () => {
-    vi.mocked(installedDsh).mockReturnValueOnce(installed() as never).mockReturnValueOnce(installed() as never)
-    vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'mine' })
-    const calls = vi.mocked(agentTmpLaunch).mock.calls.length
-    expect(await setup().create(request({ dsh: 'blender', swarmRole: 'buddy' }))).toMatchObject({ ok: true })
-    expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', expect.any(String))
-    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one', HARNESS_DSH: 'blender' })
-    expect(vi.mocked(agentTmpLaunch).mock.calls.length).toBe(calls)
   })
 
   // A Buddy launches like its owner's own session (Ken, 11-04, task #2832): on a shared model it keeps the grid's web tools,
