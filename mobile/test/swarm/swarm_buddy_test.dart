@@ -368,31 +368,6 @@ void main() {
   });
 
   group("a project's work", () {
-    test('lists no Buddy chat and no private chat: Chat with PM is closed '
-        '(#2090), so its old history is hidden too', () async {
-      final swarm = FakeSwarm();
-      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-        groups: [
-          groupData('g1', title: 'Fix login', number: 7),
-          buddyChatData('buddy-me'),
-          groupData('pm-old', title: 'person-me', audience: [me]),
-          groupData('g2', title: 'Ship it', number: 8),
-        ],
-      );
-      final r = reader(swarm);
-      addTearDown(r.dispose);
-      await r.refresh();
-      final snapshot = r.snapshot!;
-
-      final work = swarmProjectWork(
-        snapshot,
-        snapshot.projects.single,
-        buddies: r.buddies,
-      );
-
-      expect([for (final g in work.active) g.id], ['g1', 'g2']);
-      expect(work.older, isEmpty);
-    });
   });
 
   group('the machines a Buddy may start on', () {

@@ -64,9 +64,6 @@ class SwarmTeamGlance {
   };
 }
 
-/// "1 human", "3 humans".
-String swarmHumans(int count) => count == 1 ? '1 human' : '$count humans';
-
 const _finished = {'done', 'stopped', 'cancelled'};
 
 /// The team of [snapshot], or of its project [projectId]: an agent is in the

@@ -10,21 +10,17 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'swarm_invites.dart' show swarmMayInvite;
-import 'swarm_leaderboard.dart' show swarmProjectPeople;
-import 'swarm_project_team.dart' show swarmProjectHeads;
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart' show SwarmComputers;
-import 'team_glance.dart';
 
 /// A project's details, from a tap on its name in its chat's header, as a
-/// channel's name opens them in Slack (Tony, 2026-11-03): its #name over who
-/// is on it; quick actions — its chat's Notifications ([onNotifications]),
+/// channel's name opens them in Slack (Tony, 2026-11-03): its #name; quick
+/// actions — its chat's Notifications ([onNotifications]),
 /// Invite for the Swarm's owner alone ([onInvite], [swarmMayInvite]), and
 /// Open terminal for someone who may write, by the menu's rule
-/// (`swarmTerminalAction`); then Work, Team with who is on it, and
-/// Leaderboard. A tap closes the sheet and hands back what it opens, for the
+/// (`swarmTerminalAction`); then Leaderboard. A tap closes the sheet and hands back what it opens, for the
 /// page to open once the sheet is gone; the terminal opens at once, as the
 /// menu's does.
 class SwarmProjectDetailsSheet extends StatelessWidget {
@@ -33,8 +29,6 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
     required this.reader,
     required this.projectId,
     required this.terminal,
-    required this.onWork,
-    required this.onTeam,
     required this.onLeaderboard,
     this.onNotifications,
     this.onInvite,
@@ -47,7 +41,7 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
   /// write, or with the project gone.
   final PhoneSheetActionOf terminal;
 
-  final VoidCallback onWork, onTeam, onLeaderboard;
+  final VoidCallback onLeaderboard;
 
   /// Null while the project chat is not read.
   final VoidCallback? onNotifications;
@@ -66,10 +60,6 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
         // The page closes it: blank meanwhile.
         return const SizedBox.shrink();
       }
-      final heads = swarmProjectHeads(
-        humans: swarmProjectPeople(snapshot, project).length,
-        agents: swarmTeamGlance(snapshot, projectId: projectId).agents.length,
-      );
       final term = terminal(
         PhoneShellScope.maybeOf(context),
         SwarmScope.computersOf(context),
@@ -127,18 +117,6 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
                     .copyWith(height: 1.25),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpace.xs,
-                AppSpace.xs,
-                AppSpace.xs,
-                0,
-              ),
-              child: Text(
-                heads,
-                style: AppType.caption(color: AppPalette.textSecondary),
-              ),
-            ),
             if (quick.isNotEmpty) ...[
               const SizedBox(height: AppSpace.l),
               Row(
@@ -154,19 +132,6 @@ class SwarmProjectDetailsSheet extends StatelessWidget {
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _row(
-                  'work',
-                  LucideIcons.listChecks300,
-                  'Work',
-                  () => choose(onWork),
-                ),
-                _row(
-                  'team',
-                  LucideIcons.users300,
-                  'Team',
-                  () => choose(onTeam),
-                  value: heads,
-                ),
                 _row(
                   'leaderboard',
                   LucideIcons.trophy300,
