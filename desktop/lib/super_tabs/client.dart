@@ -63,8 +63,9 @@ class SuperTabClient {
   /// A tab's selected conversation changed, by a click here or by a device.
   final void Function(SuperTabController)? onSelection;
 
-  /// A new message in a chat the reader set to All new messages
-  /// ([SuperTabChatNotices]), with the Swarm, the chat and how far it goes.
+  /// A new message in a chat the reader set to All new messages, or in an
+  /// agent's own chat with them ([SuperTabChatNotices]), with the Swarm, the
+  /// chat and how far it goes.
   final void Function(String tabId, SuperTabConversation group, int sequence)?
   onChatMessage;
 
@@ -892,7 +893,9 @@ class SuperTabClient {
       // A read mark moved here, or a message arrived: told only when which agents ask moves.
       var asking = const <String>[];
       controller.addListener(() {
-        final now = [for (final g in superTabAgentsAsking(controller)) g.id];
+        final now = [
+          for (final (_, chat) in superTabAgentsAsking(controller)) chat.id,
+        ];
         if (listEquals(now, asking)) return;
         asking = now;
         changed();

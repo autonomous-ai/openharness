@@ -8,7 +8,8 @@ import 'controller.dart';
 import 'model.dart';
 
 /// What tells the person about a new message in a chat they set to All new
-/// messages: the operating system, on Desktop only. The notice
+/// messages, or from one of their agents in its own chat with them: the
+/// operating system, on Desktop only. The notice
 /// names the chat, not its newest message, and a click opens that chat in its
 /// Swarm [tabId] (Diego, 2026-11-03: it carried neither, so a click did nothing).
 void Function(String tabId, SuperTabConversation group, int sequence)?
@@ -22,7 +23,8 @@ superTabChatNotice(SystemNotifications system, {bool web = kIsWeb}) => web
       );
 
 /// A system notice for each new message in a chat set to All new messages
-/// ([SuperTabNotify.all]), as Slack's channel setting does: when the chat's
+/// ([SuperTabNotify.all]), as Slack's channel setting does, and in an agent's
+/// own chat with the reader unless it is muted: when the chat's
 /// newest main-stream message moves past what the reader has read, and the
 /// chat is not the one open. The first look at a chat is not news. One per
 /// controller.
@@ -66,7 +68,10 @@ class SuperTabChatNotices {
       final before = _seen[group.id];
       _seen[group.id] = top;
       if (before == null || top <= before) continue;
-      if (controller.notifyOf(group.id) != SuperTabNotify.all) continue;
+      final level = controller.notifyOf(group.id);
+      if (level == SuperTabNotify.muted) continue;
+      // An agent's own chat with its person tells each new message: the agent asks them there (Swarm v4).
+      if (level != SuperTabNotify.all && !group.isAgentChat) continue;
       if (controller.selectedId == group.id && openChatRead) continue;
       if (top <= controller.readMark(group.id)) continue;
       unawaited(_tell(group, before, top));

@@ -12,6 +12,7 @@ import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'support/super_tab_swarm.dart' show addAskingAgent, swarm;
 
 void main() {
   test('work that waits on a person reads as people say it', () {
@@ -149,6 +150,41 @@ void main() {
     await showReadView(tester, c);
     expect(chatTicks(), isTrue);
     await closeReadView(tester, c);
+  });
+
+  // Swarm v4: an agent reaches its person only in its own chat, so its words
+  // there are told as All new messages are, whatever the chat's setting,
+  // unless it is muted.
+  test('an agent\'s own chat tells its person of each new message, unless '
+      'muted', () async {
+    final server = swarm();
+    addAskingAgent(server, 'kai');
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    final told = <String>[];
+    SuperTabChatNotices.of(c)
+      ..chatShown = (() => false)
+      ..onMessage = (group, _) => told.add(group.id);
+    void fromKai(String text) {
+      server.append(text, conversationId: 'agent-chat-kai', agent: true);
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'kai',
+        'name': 'kai',
+      };
+    }
+
+    fromKai('Ship it?');
+    await c.refresh();
+    await pumpEventQueue();
+    expect(told, ['agent-chat-kai']);
+    await c.setNotify('agent-chat-kai', SuperTabNotify.muted);
+    fromKai('Still there?');
+    await c.refresh();
+    await pumpEventQueue();
+    expect(told, ['agent-chat-kai']);
+    await c.flush();
   });
 
   // Task #2219: All new messages goes quiet only while the open chat is read on screen.

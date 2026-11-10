@@ -230,7 +230,9 @@ void main() {
     'nothing of v3 tags, decisions, reminders or Activity is read',
     (tester) async {
       final (server, c, _) = await open(tester);
-      List<String> asking() => [for (final g in superTabAgentsAsking(c)) g.id];
+      List<String> asking() => [
+        for (final (_, chat) in superTabAgentsAsking(c)) chat.id,
+      ];
       Future<void> tap(String k) async {
         await tester.tap(key(k));
         await tester.runAsync(
