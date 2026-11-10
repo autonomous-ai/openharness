@@ -7,7 +7,6 @@ typedef enum {
     HT_CHARACTER_OFFLINE, HT_CHARACTER_ASLEEP, HT_CHARACTER_BOOPED, HT_CHARACTER_LISTENING,
     HT_CHARACTER_MOODS
 } ht_character_mood_t;
-typedef struct { uint8_t stage, colour, mark; } ht_companion_style_t;
 typedef struct {
     int8_t look;
     uint8_t hands, level, mail; // 0: no letter, 1: holding, 2: briefly lifting it.
@@ -22,7 +21,6 @@ typedef struct {
 } ht_character_reaction_t;
 typedef struct {
     const char *recipient, *status, *hint, *detail;
-    ht_companion_style_t companion_style;
     /*
      * Three facts a creature has no use for, and the Focus skin is built out of.
      *

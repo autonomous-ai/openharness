@@ -8,8 +8,7 @@ import tempfile
 native = Path(__file__).resolve().parent / '../main/ui/habitat'
 source = re.sub(r'^#include .*\n', '', (native/'layout_bench.c').read_text(), flags=re.M)
 code = r'''
-#include "octopus.h"
-#include "ascii_clip.h"
+#include "focus.h"
 #include "reference48/reference.h"
 #include "reference79/reference.h"
 #include <assert.h>
@@ -74,10 +73,9 @@ with tempfile.TemporaryDirectory(prefix='harness-layout-bench-') as d:
     for baseline in [48,79,82]:
         defines=[f'-DDEVICE_LAYOUT_BASELINE{baseline}=1'] if baseline!=48 else []
         sources=[f'reference{baseline}/terminal_ref.c'] if baseline!=82 else []
-        if baseline==48: sources+=['reference48/octopus_ref.c']
         subprocess.run(['cc','-std=c11', '-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror','-O1','-g','-DDEVICE_LAYOUT_BENCH=1',*defines,
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),'-I',str(native),'-I',str(Path(__file__).resolve().parent),
-        str(out/'bench.c'),*[str(native/f) for f in ['octopus.c','ascii_clip.c','octopus_font.c','tim.c','character_motion.c','character_layout.c','terminal.c','fonts.c']],
+        str(out/'bench.c'),*[str(native/f) for f in ['focus.c','focus_faces.c','focus_marks.c','lvgl_fonts.c','lvgl_icons.c','pets.c','character_motion.c','character_layout.c','terminal.c','fonts.c','../../pet_store.c','../../elapsed.c']],
         *[str(Path(__file__).resolve().parent/f) for f in sources],
         '-o',str(out/'bench')],check=True)
         subprocess.run([str(out/'bench')],check=True)

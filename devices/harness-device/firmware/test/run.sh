@@ -15,27 +15,22 @@ trap 'rm -rf "$out"' EXIT
 
 # The vectors are generated, not written. Regenerating first means a stale file cannot pass as agreement.
 python3 "$here/../scripts/gen_cable_vectors.py" --check
-python3 "$here/../scripts/gen_tux_moods.py" --check
 python3 "$here/../scripts/gen_pets.py" --check
 python3 "$here/../scripts/gen_arc_geometry.py" --check
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -I "$here/../main" -o "$out/test_character" "$here/test_character.c" "$here/../main/pet_store.c" "$here/../main/elapsed.c" \
-   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
-   "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
+   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/character_motion.c" \
+   "$here/../main/ui/habitat/character_layout.c" \
    "$here/../main/ui/habitat/focus.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/lvgl_icons.c" "$here/../main/ui/habitat/focus_marks.c" "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/pets.c" \
-   "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
-   "$here/../main/ui/habitat/ascii_clip.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_character" "$here/vectors/pet_min.hpet"
 # The same source again, only the custom-pet cases, under the address sanitizer: a pack read after it is freed.
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,undefined}" \
    -I "$here/../main" -o "$out/test_character_asan" "$here/test_character.c" "$here/../main/pet_store.c" "$here/../main/elapsed.c" \
-   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
-   "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
+   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/character_motion.c" \
+   "$here/../main/ui/habitat/character_layout.c" \
    "$here/../main/ui/habitat/focus.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/lvgl_icons.c" "$here/../main/ui/habitat/focus_marks.c" "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/pets.c" \
-   "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
-   "$here/../main/ui/habitat/ascii_clip.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
 "$out/test_character_asan" "$here/vectors/pet_min.hpet" --custom-only
 python3 "$here/test_character_preferences.py"
@@ -135,65 +130,25 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
    -o "$out/test_supertab" "$here/test_supertab.c" "$here/../main/ui/habitat/supertab.c"
 "$out/test_supertab"
 
-cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_tim" "$here/test_tim.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
-"$out/test_tim"
-
-cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_octopus" "$here/test_octopus.c" "$here/../main/ui/habitat/octopus.c" \
-   "$here/../main/ui/habitat/octopus_font.c" "$here/../main/ui/habitat/ascii_clip.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
-"$out/test_octopus"
-
-cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -I "$here/../main/ui/habitat" -I "$here" -o "$out/test_renderer_reference" \
-   "$here/test_renderer_reference.c" "$here/reference48/terminal_ref.c" "$here/reference48/octopus_ref.c" \
-   "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/ascii_clip.c" \
-   "$here/../main/ui/habitat/octopus_font.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
-"$out/test_renderer_reference"
-
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" -DDEVICE_LAYOUT_BENCH=1 \
-   -o "$out/test_ascii_scene" "$here/test_ascii_scene.c" "$here/../main/ui/habitat/octopus.c" \
-   "$here/../main/ui/habitat/octopus_font.c" "$here/../main/ui/habitat/ascii_clip.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
+   -o "$out/test_ascii_scene" "$here/test_ascii_scene.c" "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_ascii_scene"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_glyph_cache" "$here/test_glyph_cache.c" "$here/../main/ui/habitat/octopus.c" \
-   "$here/../main/ui/habitat/octopus_font.c" "$here/../main/ui/habitat/ascii_clip.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
+   -o "$out/test_glyph_cache" "$here/test_glyph_cache.c" "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_glyph_cache"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -DDEVICE_LAYOUT_BENCH=1 -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_raster_ascii" "$here/test_raster_ascii.c" "$here/../main/ui/habitat/octopus.c" \
-   "$here/../main/ui/habitat/octopus_font.c" "$here/../main/ui/habitat/ascii_clip.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
+   -o "$out/test_raster_ascii" "$here/test_raster_ascii.c" "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_raster_ascii"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -DDEVICE_LAYOUT_BENCH=1 -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_damage_delta" "$here/test_damage_delta.c" "$here/../main/ui/habitat/octopus.c" \
-   "$here/../main/ui/habitat/octopus_font.c" "$here/../main/ui/habitat/ascii_clip.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
+   -o "$out/test_damage_delta" "$here/test_damage_delta.c" "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_damage_delta"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -DDEVICE_LAYOUT_BENCH=1 -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_damage_bands" "$here/test_damage_bands.c" "$here/../main/ui/habitat/octopus.c" \
-   "$here/../main/ui/habitat/octopus_font.c" "$here/../main/ui/habitat/ascii_clip.c" "$here/../main/ui/habitat/tim.c" "$here/../main/ui/habitat/character_motion.c" "$here/../main/ui/habitat/character_layout.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
+   -o "$out/test_damage_bands" "$here/test_damage_bands.c" "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
 "$out/test_damage_bands"
-
-cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -DDEVICE_LAYOUT_BENCH=1 -o "$out/test_ascii_clip" "$here/test_ascii_clip.c" "$here/../main/ui/habitat/ascii_clip.c"
-"$out/test_ascii_clip"
-python3 "$here/test_octopus_art.py"
-
-cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_creature_gallery" "$here/test_creature_gallery.c" \
-   "$here/../main/ui/habitat/creature_gallery.c" "$here/../main/ui/habitat/creature_font.c" \
-   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
-"$out/test_creature_gallery"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_selection" "$here/test_selection.c" "$here/../main/ui/habitat/selection.c"
@@ -253,11 +208,9 @@ if [[ -n "${IDF_PATH:-}" ]]; then
         "$here/../main/cable_scroll.c" "$IDF_PATH/components/json/cJSON/cJSON.c"
     "$out/test_cable_scroll"
     python3 "$here/test_cable_json_parse.py"
-    python3 "$here/test_companion_protocol.py"
     python3 "$here/test_cable_identity.py"
     python3 "$here/test_cable_supertab.py"
     python3 "$here/test_cable_models.py"
     python3 "$here/test_cable_outbound.py"
 fi
 
-python3 "$here/test_companions.py"

@@ -1,7 +1,6 @@
 // Opt-in ESP32 service-time measurements before the live renderer starts.
 // Fixed local scenes only: no app actions, microphone or fabricated contacts.
-#include "octopus.h"
-#include "ascii_clip.h"
+#include "focus.h"
 #include "layout_bench.h"
 #ifdef DEVICE_LAYOUT_BASELINE82
 #define BASELINE_LABEL "regions82"
@@ -47,13 +46,12 @@ void ht_layout_raster(const ht_scene_t *scene, ht_rect_t region, uint16_t *out)
     else ht_raster(scene, region, out);
 #endif
 }
-static void make_scene(ht_scene_t *scene, const ht_tim_face_t *face, uint8_t frame,
+// One scene builder for both renderers: the Focus face. The reference renderers are the captured
+// terminal compositors (test/reference48, reference79), so the A/B times the compositor, not the face.
+static void make_scene(ht_scene_t *scene, const ht_character_face_t *face, uint8_t frame,
                         uint16_t ink, const char *recap)
 {
-#if !defined(DEVICE_LAYOUT_BASELINE79) && !defined(DEVICE_LAYOUT_BASELINE82)
-    if (reference_renderer) { ht48_octopus_face(scene, face, frame, ink, recap); return; }
-#endif
-    ht_octopus_face(scene, face, frame, ink, recap);
+    ht_focus_face(scene, face, frame, ink, recap);
 }
 static void find_damage(const ht_scene_t *before, const ht_scene_t *after, ht_damage_t *out)
 {
@@ -124,14 +122,14 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
     }
     vTaskDelay(pdMS_TO_TICKS(200));
     static const char *layouts[] = {"straight", "curved", "reading"};
-    static const char *events[] = {"animation", "name", "status", "gaze", "recap"};
+    static const char *events[] = {"name", "activity", "chat", "engine", "recap"};
     static const char *names[] = {"Deploy latest firmware", "Mobile app build and deploy"};
     static const char *summary = "The update is installed. Voice input now sends to the selected agent. The result stays in the center.";
+    // The reading face hides the status and the working line, so there the activity and engine events change the recap instead.
+    static const char *summary2 = "The update is installed. Voice input now sends to the selected pane. The result stays in the center.";
     uint32_t model[SAMPLES], damage_us[SAMPLES], raster_us[SAMPLES], total[SAMPLES], bytes[SAMPLES];
     ESP_LOGI("layout-bench", "BEGIN 4800 samples; CPU and request-to-final-DMA service time; excludes queue, sensor, panel scanout and voice; actual " BASELINE_LABEL " versus " CURRENT_LABEL " ABBA; 40 per block");
     ht_arc_fast_sampling(true); ht_glyph_cache_enable(true); ht_damage_fast_ascii(true); ht_raster_fast_ascii(true); ht_arc_tight_bounds(true);
-    ht_octopus_fast_scene(true);
-    ht_ascii_clip_short_runs(true);
     checkpoint("before");
     uint32_t touches = touch_activity_generation();
     for (int pass = 0; pass < 2; pass++) for (int mode_order = 0; mode_order < 2; mode_order++) {
@@ -145,8 +143,9 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
             for (int order = 0; order < 3; order++) {
                 int layout = pass ? 2 - order : order;
                 for (int event = 0; event < 5; event++) {
-                    ht_tim_face_t f = {.recipient=names[0], .status="Inbox 2 / Working",
-                        .mood=HT_TIM_WORKING, .straight_title=layout==0,
+                    ht_character_face_t f = {.recipient=names[0], .status="Inbox 2 / Working",
+                        .hint="", .tab="Deploy", .engine="claude", .activity="Coalescing", .detail="", .chat="Chat with PM", .clock_ms=0,
+                        .mood=HT_CHARACTER_WORKING, .straight_title=layout==0, .focus=true,
                         .foreground=0xffff, .dim=ht_rgb(0x909990), .ink=ht_rgb(0xb9ed80)};
                     ht_scene_clear(a, ht_rgb(0x080c08));
                     make_scene(a, &f, 0, ht_rgb(0xc8a9f0), layout==2 ? summary : NULL);
@@ -158,14 +157,18 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
                             goto done;
                         }
                         esp_task_wdt_reset();
-                        f.recipient=names[event==1 ? (i+1)%2 : 0];
-                        f.status=event==2 && !(i%2) ? "Inbox 2 / Wandering" : "Inbox 2 / Working";
-                        f.pose.look=event==3 ? (i%2 ? -1 : 1) : 0;
-                        uint8_t frame=event==0 ? (i+1)%HT_OCTOPUS_FRAMES : 0;
+                        // Only text changes: the captured .48/.79 compositors know text and arc runs, not the pet's
+                        // sprites, so the A/B moves words the way a working dial does.
+                        f.recipient=names[event==0 ? (i+1)%2 : 0];
+                        bool second=(i+1)%2;
+                        f.activity=event==1 && second ? "Pondering" : "Coalescing";
+                        f.chat=event==2 && second ? "PM" : "Chat with PM";
+                        f.engine=event==3 && second ? "codex" : "claude";
+                        uint8_t frame=0;
                         bool reading = event==4 ? ((i+1)%2 ? layout!=2 : layout==2) : layout==2;
                         int64_t start=esp_timer_get_time();
                         ht_scene_clear(b,a->background);
-                        make_scene(b,&f,frame,ht_rgb(0xc8a9f0),reading ? summary : NULL);
+                        make_scene(b,&f,frame,ht_rgb(0xc8a9f0),reading ? (layout==2 && (event==1 || event==3) && second ? summary2 : summary) : NULL);
                         int64_t modeled=esp_timer_get_time();
                         find_damage(a,b,&damage);
                         int64_t damaged=esp_timer_get_time();

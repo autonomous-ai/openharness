@@ -41,7 +41,7 @@ static void tick(ht_character_t *c, uint32_t now, ht_character_mood_t mood,
 
 static void clocks(void)
 {
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
+    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
         ht_character_t c = {0}; assert(ht_character_select(&c, id));
         tick(&c, UINT32_MAX - 49, HT_CHARACTER_WORKING, false, true, false, 0);
         tick(&c, 50, HT_CHARACTER_WORKING, false, true, false, 0);
@@ -95,10 +95,10 @@ static void clocks(void)
         ht_character_motion_t before = c.motion;
         assert(ht_character_select(&c, id));
         assert(!memcmp(&before, &c.motion, sizeof before));
-        assert(!ht_character_select(&c, HT_CHARACTER_COUNT) && c.id == (ht_character_id_t)id);
-        assert(!ht_character_select(&c, (ht_character_id_t)-1));
-        assert(ht_character_select(&c, (id + 1) % HT_CHARACTER_ILLUSTRATED_TIM));
-        assert(!c.motion.initialized && !c.motion.reaction.initialized);
+        // Focus is the only character: any other id, however odd, selects it and keeps its motion.
+        assert(ht_character_select(&c, HT_CHARACTER_COUNT) && c.id == HT_CHARACTER_FOCUS);
+        assert(ht_character_select(&c, (ht_character_id_t)-1) && c.id == HT_CHARACTER_FOCUS);
+        assert(!memcmp(&before, &c.motion, sizeof before));
         tick(&c, 10000, (ht_character_mood_t)255, false, true, false, 0);
         assert(c.motion.reaction.mood == HT_CHARACTER_IDLE);
     }
@@ -111,7 +111,7 @@ static void portraits(void)
     ht_character_face_t f = {.recipient = "Parser helper", .status = "Working", .hint = "tap to talk",
         .detail = "A carried paragraph", .foreground = 0xffff, .ink = 0xafe0, .dim = 0x7777, .roomy_reading = true};
     ht_scene_clear(&a, ht_rgb(0x181818)); redraw(NULL, &a);
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
+    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
         ht_character_select(&c, id);
         for (int size = HT_CHARACTER_FULL; size <= HT_CHARACTER_QUICK; size++) {
             for (int mood = HT_CHARACTER_IDLE; mood < HT_CHARACTER_MOODS; mood++) {
@@ -162,7 +162,7 @@ static void portraits(void)
 
 static void delivery_and_caption(void)
 {
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
+    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
         ht_character_t c = {0}; ht_character_select(&c, id);
         c.motion.next_ms = 1000;
         assert(!ht_character_delivery_tick(&c, 100, true, 0, true)); // Restored mail only holds.
@@ -192,44 +192,6 @@ static void delivery_and_caption(void)
     ht_character_caption_tick(&c, 1701, "b", true); assert(!c.activity && c.opacity == 255);
     assert(ht_character_caption_ink(0xffff, 0x18c3, 0) == 0x18c3);
     assert(ht_character_caption_ink(0xffff, 0x18c3, 255) == 0xffff);
-}
-
-/*
- * ht_character_layout()'s recap contract: four roomy rows, ninety characters, an ellipsis past that.
- *
- * Only the skins that GO THROUGH that layout are measured here. Focus owns its whole face and has
- * its own grid — three recap rows, because the fourth slot is its status line — so measuring it
- * against these numbers would be testing one layout with another layout's ruler. focus_face() below
- * is its ruler.
- */
-static void recap_budget(void)
-{
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) for (int unicode = 0; unicode < 2; unicode++)
-        for (int length = 89; length <= 91; length++) {
-            if (id == HT_CHARACTER_FOCUS) continue;
-            ht_character_t c = {0}; ht_character_select(&c, id);
-            ht_character_face_t f = {.roomy_reading=true, .single_label=true, .foreground=0xffff};
-            char input[400] = "", visible[400] = "";
-            for (int i = 0; i < length; i++) strcat(input, unicode ? "\xc3\xa9" : "x");
-            ht_scene_t scene; ht_scene_clear(&scene, 0);
-            ht_character_face(&scene, &c, &f, 0xffff, input);
-            int rows = 0, chars = 0;
-            for (int i = 0; i < scene.count; i++) if (scene.runs[i].font == &ht_mono_28) {
-                if (scene.runs[i].text[0]) rows++;
-                strcat(visible, scene.runs[i].text);
-            }
-            for (const char *p = visible; *p; chars++) {
-                uint32_t cp = ht_utf8_next(&p);
-                assert(cp == (unicode ? 0xe9u : 'x') || cp == '.');
-            }
-            assert(rows <= 4 && chars <= 90);
-            if (length <= 90) assert(!strcmp(input, visible));
-            else assert(!strcmp(visible + strlen(visible) - 3, "..."));
-            ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
-            for (int y=0;y<HT_HEIGHT;y++) for (int x=0;x<HT_WIDTH;x++)
-                if (full[y*HT_WIDTH+x])
-                    assert((x-233)*(x-233)+(y-233)*(y-233)<230*230);
-        }
 }
 
 /*
@@ -2284,9 +2246,8 @@ int main(int argc, char **argv)
     fclose(fp);
     assert(vec_len > 22 && vec_len < sizeof vec_buf);
     if (argc > 2 && !strcmp(argv[2], "--custom-only")) { custom_pet(); return 0; }
-    assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
-    assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
-    clocks(); portraits(); delivery_and_caption(); recap_budget(); focus_face();
+    assert(HT_CHARACTER_COUNT == 1 && !strcmp(ht_character_name(HT_CHARACTER_FOCUS), "Focus"));
+    clocks(); portraits(); delivery_and_caption(); focus_face();
     focus_relaxing(); focus_builder(); footer_layout(); inbox_layout(); custom_pet();
-    printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
+    printf("Characters: Focus, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }

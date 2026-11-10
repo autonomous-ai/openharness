@@ -12,14 +12,9 @@
 #include "gestures.h"
 #include "character.h"
 #include "focus.h"
-#include "perf_bench.h"
 #include "command_face.h"
 #include "theme.h"
 #include "focus_faces.h"
-#ifdef DEVICE_CREATURE_GALLERY
-#include "creature_gallery.h"
-static ht_gallery_t gallery;
-#endif
 #include "ui_screens.h"
 #include "display.h"
 #include "audio_client.h"
@@ -276,28 +271,6 @@ static ht_draft_t draft;
 static bool selection_emit(const ht_select_command_t *command, void *ctx);
 static ht_gesture_t gesture;
 static ht_character_t character;
-static ht_character_id_t device_skin, desktop_companion = HT_CHARACTER_COUNT;
-static bool follow_companion = true, companion_celebrating;
-/*
- * FOCUS ONLY, until the companion skins are finished (owner, 2026-09-30). The device build defines
- * HABITAT_FOCUS_ONLY (main/CMakeLists.txt): whatever skin or companion the flash holds, the glass
- * wears Focus, the app is told so, and a frame asking for another is taken as asking for nothing.
- * The stored choice is left alone, so dropping the define brings it back as it was.
- */
-
-static ui_companion_t desktop_identity, celebration_identity;
-static uint32_t celebration_began;
-static char celebration_tokens[8][96], celebration_label[64];
-static unsigned celebration_next;
-static void select_companion(void)
-{
-    const ui_companion_t *identity=companion_celebrating?&celebration_identity:&desktop_identity;
-    ht_character_id_t selected=companion_celebrating?ht_character_companion(identity->id):desktop_companion;
-    ht_character_select(&character, follow_companion && selected < HT_CHARACTER_COUNT ? selected : device_skin);
-    character.companion_style=(ht_companion_style_t){
-        .stage=!strcmp(identity->version,"0.1")?0:!strcmp(identity->version,"1.0")?1:2,
-        .colour=identity->colour<0?255:(uint8_t)identity->colour,.mark=identity->mark};
-}
 static ht_character_caption_t home_caption;
 static action_t pressed_action;
 static bool queue(action_t a);
@@ -962,7 +935,7 @@ static bool is_question(const char *id)
 }
 static uint16_t color(unsigned rgb)
 {
-    // Hardware brightness dims text and illustrated pixels equally.
+    // Hardware brightness dims text and artwork pixels equally.
     unsigned b = 100;
     if (rgb == HT_THEME_CANVAS) {
         // RGB565 has an extra green bit. Independently truncating a dim gray
@@ -1309,9 +1282,6 @@ static void surface_tick(uint32_t now)
         s.error_until = 0;
         change();
     }
-    if (companion_celebrating && (now-celebration_began>=2400 || s.view!=HOME || s.quiet || !follow_companion || display_is_asleep() || character_mood()==HT_CHARACTER_ATTENTION)) {
-        companion_celebrating=false; select_companion(); change();
-    }
     if (s.view == TABS && !display_is_asleep()) {
         if (ht_tab_carousel_tick(&tab_carousel, now)) change();
         tabs_sync();
@@ -1358,7 +1328,7 @@ static void surface_tick(uint32_t now)
     }
     ht_character_mood_t mood = s.view == VOICE ?
         (!s.voice_start_pending && !s.voice_waiting && audio_client_recording() ? HT_CHARACTER_LISTENING : HT_CHARACTER_WORKING) :
-        companion_celebrating ? HT_CHARACTER_DONE : character_mood();
+        character_mood();
     if (ht_character_tick(&character, now, mood, s.quiet, visible,
                            s.touch_down && !s.touch_cancelled, s.last_x,
                            mood == HT_CHARACTER_LISTENING ? audio_client_input_level() : 0, s.character_activity))
@@ -1898,14 +1868,13 @@ static void render_home(ht_scene_t *f)
     s.bell_unread = unread;
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
         // The lower text seat belongs to notifications and useful status.
-        // A companion's name lives in the desktop Zoo, not a permanent footer.
-        .hint = companion_celebrating && !bell && !status[0] ? celebration_label : "",
+        .hint = "",
         .tab = tab_index >= 0 ? s.tabs[tab_index].name : "",
         .engine = a ? a->engine : "",
         .activity = activity,
         .elapsed = since,
         .detail = "",
-        .mood = companion_celebrating ? HT_CHARACTER_DONE : character_mood(), .pose = character.motion.reaction.pose,
+        .mood = character_mood(), .pose = character.motion.reaction.pose,
         .asking = a && is_question(a->id),
         .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,   // the pet's loop
         .notice_ms = bell ? s.notice_ms : 0,
@@ -2848,12 +2817,6 @@ static struct {
 } settings_pending;
 bool habitat_scene_take(ht_scene_t *f)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    // App snapshots never choose a scene in this visual-only build.
-    pet_store_release_frame();
-    if (!s.ready) return false;
-    return ht_gallery_take(&gallery, f, ms());
-#endif
     if (!s.ready || !s.dirty || s.bulk)
         return false;
     s.dirty = false;
@@ -2957,10 +2920,6 @@ bool habitat_scene_take(ht_scene_t *f)
 
 static bool queue(action_t a)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    (void)a;
-    return false; // Never enqueue a desktop or audio action in the visual study.
-#endif
     // Background read receipts must never occupy the last touch/audio slot or
     // replace the screen with a cable-busy warning. Retry quietly next tick.
     if (a.kind == A_NOTICE_READ)
@@ -3169,10 +3128,6 @@ static const ht_lead_t *voice_lead(const char *id, int value)
 }
 static void dispatch(action_t a)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    (void)a;
-    return; // Defense in depth: no voice, commands, approvals, or pane navigation.
-#endif
     switch (a.kind) {
     case A_DRAFT_EDIT:
     case A_DRAFT_APPEND:
@@ -3759,14 +3714,11 @@ static void worker(void *unused)
             display_unlock();
             if (fields & UI_SETTING_BRIGHTNESS)
                 config_save_brightness((uint8_t)((want.brightness * 255 + 50) / 100));
-            if (fields & UI_SETTING_CHARACTER && !config_save_habitat_character(want.character))
-                ui_cable_toast("Character changed; saving failed.");
-            if (fields & (UI_SETTING_QUIET | UI_SETTING_STRAIGHT_TITLE | UI_SETTING_FOCUS_FACE | UI_SETTING_FOLLOW_COMPANION)) {
+            if (fields & (UI_SETTING_QUIET | UI_SETTING_STRAIGHT_TITLE | UI_SETTING_FOCUS_FACE)) {
                 // Bit 1 was rim scrolling and is RETIRED, not reused: devices in the field still
                 // hold it set, and a new preference on that bit would inherit their answer.
                 uint8_t options = (uint8_t)((want.focus_face ? 1 : 0) |
-                                            (want.quiet ? 4 : 0) | (want.straight_title ? 8 : 0) |
-                                            (want.follow_companion ? 0 : 16));
+                                            (want.quiet ? 4 : 0) | (want.straight_title ? 8 : 0));
                 if (!config_save_habitat_options(options))
                     ui_cable_toast("Preference changed; saving failed.");
             }
@@ -3818,13 +3770,6 @@ static bool swarm_scroll_reportable(uint32_t held)
 }
 void habitat_touch(bool down, int x, int y, uint32_t now)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    if (s.ready) {
-        ht_gallery_touch(&gallery, down, x, y, now);
-        habitat_render_notify();
-    }
-    return;
-#endif
     if (!s.ready)
         return;
     bool surface = s.view == HOME || s.view == AGENT;
@@ -4135,10 +4080,6 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
 }
 void habitat_touch_cancel(void)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    ht_gallery_cancel(&gallery);
-    return;
-#endif
     bool visible = s.touch_down || s.pressed >= 0;
     input_cancel();
     s.touch_down = false; // driver swallows the rest of this contact until a trustworthy UP
@@ -4146,9 +4087,6 @@ void habitat_touch_cancel(void)
 }
 uint32_t habitat_next_wake_ms(void)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    return display_is_asleep() ? 1000 : ht_gallery_wake(&gallery, ms());
-#endif
     uint32_t delay = 1000, now = ms();
     if (!s.ready)
         return delay;
@@ -4203,10 +4141,6 @@ uint32_t habitat_next_wake_ms(void)
 }
 void habitat_tick(void)
 {
-#ifdef DEVICE_CREATURE_GALLERY
-    if (s.ready && !display_is_asleep()) ht_gallery_tick(&gallery, ms());
-    return;
-#endif
     if (!s.ready)
         return;
     uint32_t now = ms();
@@ -4299,31 +4233,15 @@ void ui_init(void)
     s.muted = config_load_muted();
     memset(&character, 0, sizeof character);
     memset(&home_caption, 0, sizeof home_caption);
-    uint8_t saved_character = config_load_habitat_character((uint8_t)ht_character_default());
-    if (!ht_character_select(&character, (ht_character_id_t)saved_character))
-        ht_character_select(&character, ht_character_default());
-    device_skin = character.id <= HT_CHARACTER_FOCUS ? character.id : ht_character_default();
-    desktop_companion = HT_CHARACTER_COUNT;
-    ht_character_select(&character, device_skin);
+    // Focus is the only character. Whatever an older firmware saved (Tim, Tux, a companion) is not read.
+    ht_character_select(&character, HT_CHARACTER_FOCUS);
     ESP_LOGI("habitat", "character %s; shared moods and controls", ht_character_name(character.id));
     uint8_t options = config_load_habitat_options();
-    follow_companion = !(options & 16);
-#ifdef HABITAT_FOCUS_ONLY
-    device_skin = HT_CHARACTER_FOCUS;
-    follow_companion = false;
-    ht_character_select(&character, device_skin);
-#endif
     s.focus_face = (options & 1) != 0;
     s.quiet = (options & 4) != 0;
     s.straight_title = (options & 8) != 0;
-#ifdef HABITAT_FOCUS_ONLY
     s.straight_title = true;   // the app no longer offers Edge text: straight across (owner, 2026-10-01)
-#endif
     s.ready = true;
-#ifdef DEVICE_CREATURE_GALLERY
-    ht_gallery_init(&gallery, ms());
-    ESP_LOGI("gallery", "20 text creatures / local only; swipe X creature, Y mood or speed, tap replay");
-#endif
     s.loading = true;
     s.view = HOME;
     s.dirty = true;
@@ -4350,13 +4268,7 @@ void ui_settings_read(ui_settings_t *out)
     display_lock();
     out->brightness = (uint8_t)s.brightness;
     out->muted = s.muted;
-    out->character = (uint8_t)device_skin;
-    out->follow_companion = follow_companion;
-    const char *species = follow_companion ? ht_character_species(desktop_companion) : NULL;
-    if (species) {
-        snprintf(out->companion, sizeof out->companion, "%s", species);
-        out->companion_details=desktop_identity;
-    }
+    out->character = UI_CHARACTER_FOCUS_WIRE;
     out->quiet = s.quiet;
     out->straight_title = s.straight_title;
     out->focus_face = s.focus_face;
@@ -4378,14 +4290,6 @@ bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, 
         if (error) snprintf(error, cap, "Brightness is 0 to 100.");
         return false;
     }
-    if (fields & UI_SETTING_CHARACTER) {
-        ht_character_t probe;
-        memset(&probe, 0, sizeof probe);
-        if (want->character > HT_CHARACTER_FOCUS || !ht_character_select(&probe, (ht_character_id_t)want->character)) {
-            if (error) snprintf(error, cap, "This device has no such character.");
-            return false;
-        }
-    }
     if ((fields & UI_SETTING_VOICELANG) && !memchr(want->voicelang, '\0', sizeof want->voicelang)) {
         if (error) snprintf(error, cap, "Language code is too long.");
         return false;
@@ -4396,12 +4300,8 @@ bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, 
         s.brightness = want->brightness;
         display_set_brightness((uint8_t)((want->brightness * 255 + 50) / 100));
     }
-#ifdef HABITAT_FOCUS_ONLY
-    fields &= ~(uint32_t)(UI_SETTING_CHARACTER | UI_SETTING_FOLLOW_COMPANION | UI_SETTING_STRAIGHT_TITLE);
-#endif
-    if (fields & UI_SETTING_CHARACTER) device_skin = (ht_character_id_t)want->character;
-    if (fields & UI_SETTING_FOLLOW_COMPANION) follow_companion = want->follow_companion;
-    select_companion();
+    // Focus is the only face, and it always draws straight across: those two rows are not the app's to change.
+    fields &= ~(uint32_t)(UI_SETTING_CHARACTER | UI_SETTING_STRAIGHT_TITLE);
     if (fields & UI_SETTING_FOCUS_FACE) s.focus_face = want->focus_face;
     if (fields & UI_SETTING_QUIET) s.quiet = want->quiet;
     if (fields & UI_SETTING_STRAIGHT_TITLE) s.straight_title = want->straight_title;
@@ -4419,51 +4319,6 @@ bool ui_settings_apply(const ui_settings_t *want, uint32_t fields, char *error, 
 void ui_settings_changed(void)
 {
     cable_client_report_settings();
-}
-bool ui_set_companion_identity(const ui_companion_t *identity)
-{
-    ht_character_id_t id=ht_character_companion(identity?identity->id:NULL);
-    if (identity && (id==HT_CHARACTER_COUNT || identity->colour < -1 || identity->colour>5 || identity->mark>4 ||
-        (strcmp(identity->version,"0.1") && strcmp(identity->version,"1.0") && strcmp(identity->version,"2.0")))) return false;
-    display_lock();
-    desktop_companion=id; companion_celebrating=false;
-    desktop_identity=identity?*identity:(ui_companion_t){.colour=-1};
-    select_companion(); change(); display_unlock();
-    ESP_LOGI("companion","desktop=%s uid=%s version=%s colour=%d mark=%u",identity?identity->id:"none",
-        identity?identity->uid:"",identity?identity->version:"",identity?identity->colour:-1,identity?identity->mark:0);
-    return true;
-}
-bool ui_set_companion(const char *species)
-{
-    if (!species) return ui_set_companion_identity(NULL);
-    if (ht_character_companion(species)==HT_CHARACTER_COUNT) return false;
-    ui_companion_t identity={.colour=-1};
-    snprintf(identity.id,sizeof identity.id,"%s",species);
-    snprintf(identity.uid,sizeof identity.uid,"%s",species);
-    snprintf(identity.name,sizeof identity.name,"%s",species);
-    snprintf(identity.version,sizeof identity.version,"2.0");
-    return ui_set_companion_identity(&identity);
-}
-bool ui_companion_celebrate(const ui_companion_t *identity,const char *kind,const char *token)
-{
-    if (!identity || !token || !token[0] || strlen(token)>=sizeof celebration_tokens[0] ||
-        (!kind || (strcmp(kind,"hatch") && strcmp(kind,"grow"))) ||
-        ht_character_companion(identity->id)==HT_CHARACTER_COUNT || identity->colour < -1 || identity->colour > 5 || identity->mark > 4 ||
-        (strcmp(identity->version,"0.1") && strcmp(identity->version,"1.0") && strcmp(identity->version,"2.0"))) return false;
-    display_lock();
-    bool seen=false;
-    for (unsigned i=0;i<8;i++) if (!strcmp(token,celebration_tokens[i])) seen=true;
-    if (!seen) {
-        snprintf(celebration_tokens[celebration_next++%8],sizeof celebration_tokens[0],"%s",token);
-        // A sleeping/reading/quiet dial consumes the event without scheduling a later surprise.
-        if (follow_companion && s.connected && !s.quiet && !s.nap && s.view==HOME && !display_is_asleep() && !s.touch_down && character_mood()!=HT_CHARACTER_ATTENTION) {
-            celebration_identity=*identity; companion_celebrating=true; celebration_began=ms();
-            snprintf(celebration_label,sizeof celebration_label,"%.24s %s",identity->name,!strcmp(kind,"hatch")?"hatched!":"grew!");
-            select_companion(); change();
-            ESP_LOGI("companion","milestone=%s token=%s",kind,token);
-        }
-    }
-    display_unlock(); return true;
 }
 void ui_set_brightness(uint8_t level)
 {
@@ -4488,9 +4343,6 @@ void ui_set_connected(bool value)
     display_lock();
     if (!value) {
         sw.opened = false;
-        desktop_companion = HT_CHARACTER_COUNT;
-        desktop_identity=(ui_companion_t){.colour=-1}; companion_celebrating=false;
-        select_companion();
         input_cancel();
         s.voice_retry_until = 0;
         s.pending_machine[0] = 0;
@@ -6158,45 +6010,3 @@ void ui_boot_pressed(void)
     display_unlock();
 }
 
-#ifdef DEVICE_OCTOPUS_BENCH
-// Local fixtures only. No setting is saved and no action is sent to the desktop.
-void habitat_bench_prepare(bool animate)
-{
-    (void)animate; // The benchmark switches only the shared body clock.
-    display_lock();
-    habitat_touch_cancel();
-    s.quiet = s.nap = s.focus_face = s.straight_title = false;
-    s.pet_pose = 0;
-    s.notice_count = 0;
-    s.tab_count = 0;
-    s.connected = true;
-    s.loading = false;
-    s.voice_open = false;
-    memset(&s.q, 0, sizeof s.q);
-    memset(&character.motion, 0, sizeof character.motion);
-    view(HOME);
-    display_bump_activity();
-    display_wake();
-    display_unlock();
-}
-void habitat_bench_reader(void)
-{
-    display_lock();
-    dispatch((action_t){.kind = A_READER});
-    display_unlock();
-}
-void habitat_bench_question(const cJSON *questions)
-{
-    display_lock();
-    s.q.loading = s.q.pending = false;
-    s.q.error[0] = 0;
-    COPY(s.q.name, "Benchmark question");
-    question_load(questions);
-    view(QUESTION);
-    display_unlock();
-}
-bool habitat_bench_pressed(void)
-{
-    return s.touch_down && character.motion.reaction.pose.pressed;
-}
-#endif

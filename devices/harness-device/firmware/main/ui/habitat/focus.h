@@ -3,11 +3,10 @@
 #include "character_types.h"
 
 /*
- * The Focus skin: the work, not a companion.
+ * The Focus skin: the work, not a companion, and the dial's only character.
  *
- * Tim and Tux are portraits with words arranged around them, so ht_character_layout() owns the seats
- * and hands the artwork one rectangle. Focus has no artwork — the arrangement IS the skin — so it
- * takes the whole face through the `face` pointer in character.c's registry.
+ * Focus has no portrait — the arrangement IS the skin — so it takes the whole face through the `face`
+ * pointer in character.c's one-row registry.
  */
 void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
                    const char *recap);

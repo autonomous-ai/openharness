@@ -1,7 +1,5 @@
-#include "illustrated.h"
 // Direct text -> RGB565 -> QSPI DMA. No LVGL initialization or object pool.
 #include "runtime.h"
-#include "perf_bench.h"
 #ifdef DEVICE_LAYOUT_BENCH
 #include "layout_bench.h"
 #endif
@@ -285,9 +283,6 @@ static uint32_t paint(const ht_scene_t *next, const ht_damage_t *damage)
     if (pending)
         wait_dma();
     int64_t finished = esp_timer_get_time();
-#ifdef DEVICE_OCTOPUS_BENCH
-    octopus_perf_paint(raster_us, (uint32_t)(finished - started));
-#endif
     portENTER_CRITICAL(&stats_lock);
     stats.frames++;
     stats.bytes += damage->pixels * 2;
@@ -367,19 +362,12 @@ static void render_task(void *arg)
 #endif
         render_progress(RENDER_MODEL);
         display_lock();
-#ifdef DEVICE_OCTOPUS_BENCH
-        int64_t model_started = esp_timer_get_time();
-#endif
         habitat_tick();
         bool fresh = habitat_scene_take(&scenes[front ^ 1]);
         uint32_t receipt = habitat_scene_receipt();
         uint32_t wake_ms = habitat_next_wake_ms();
 #ifdef DEVICE_RENDER_STRESS
         if (stress_wake_ms < wake_ms) wake_ms = stress_wake_ms;
-#endif
-#ifdef DEVICE_OCTOPUS_BENCH
-        uint32_t model_us = (uint32_t)(esp_timer_get_time() - model_started);
-        ht_perf_tag_t tag = octopus_perf_capture(&scenes[front ^ 1], fresh);
 #endif
         display_unlock();
         unsigned brightness = atomic_load(&requested_brightness);
@@ -403,19 +391,9 @@ static void render_task(void *arg)
                 scenes[front ^ 1] = scenes[front];
             ht_damage_t damage;
             render_progress(RENDER_DAMAGE);
-#ifdef DEVICE_OCTOPUS_BENCH
-            int64_t damage_started = esp_timer_get_time();
-#endif
-            ht_illustrated_prepare(&scenes[front ^ 1]);
             ht_damage(painted && !force ? &scenes[front] : NULL, &scenes[front ^ 1], &damage);
-#ifdef DEVICE_OCTOPUS_BENCH
-            uint32_t damage_us = (uint32_t)(esp_timer_get_time() - damage_started);
-#endif
             if (damage.count)
                 paint(&scenes[front ^ 1], &damage);
-#ifdef DEVICE_OCTOPUS_BENCH
-            octopus_perf_commit(tag, damage.pixels * 2, model_us, damage_us);
-#endif
             front ^= 1;
             painted = true;
             if (receipt) habitat_scene_presented(receipt);
@@ -441,7 +419,6 @@ static void render_task(void *arg)
 }
 void display_init(void)
 {
-    ht_illustrated_init();
     model_lock = xSemaphoreCreateRecursiveMutex();
     dma_done = xSemaphoreCreateBinary();
     assert(model_lock && dma_done);
@@ -472,8 +449,8 @@ void display_init(void)
         assert(pixels[i]);
     }
     display_bump_activity();
-    // The ROM inflater keeps its Huffman tables on the calling task's stack.
-    // Illustrated companions can become active at any time over the USB link.
+    // 24576 was sized for the ROM inflater of the companion art, which is gone; Task 8 of the
+    // round-dial-resources plan re-measures it.
     assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 24576, NULL, 5, &renderer, 1) ==
            pdPASS);
     touch_init();

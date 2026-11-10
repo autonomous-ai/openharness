@@ -1,8 +1,8 @@
 diff --git a/devices/harness-device/firmware/main/CMakeLists.txt b/devices/harness-device/firmware/main/CMakeLists.txt
-index 044187a11..1825dabf5 100644
+index 46f5bb4..635effd 100644
 --- a/devices/harness-device/firmware/main/CMakeLists.txt
 +++ b/devices/harness-device/firmware/main/CMakeLists.txt
-@@ -123,6 +123,11 @@ if(DEVICE_HABITAT_ORANGE)
+@@ -107,6 +107,11 @@ if(DEVICE_HABITAT_ORANGE)
      target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT_ORANGE=1)
  endif()
  
@@ -11,11 +11,11 @@ index 044187a11..1825dabf5 100644
 +    target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT_FO=1)
 +endif()
 +
- # Focus and nothing else until the companion skins are finished (owner, 2026-09-30); the host tests
- # build without it and keep covering every skin. -DDEVICE_ALL_SKINS=1 lifts it for a build.
- if(NOT DEVICE_ALL_SKINS)
+ if(DEVICE_PERF_BENCH)
+     target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_PERF_BENCH=1)
+ endif()
 diff --git a/devices/harness-device/firmware/main/ui/habitat/focus.c b/devices/harness-device/firmware/main/ui/habitat/focus.c
-index 9cd5f93b8..9da15e8df 100644
+index 9562698..3415a79 100644
 --- a/devices/harness-device/firmware/main/ui/habitat/focus.c
 +++ b/devices/harness-device/firmware/main/ui/habitat/focus.c
 @@ -2,6 +2,7 @@
@@ -123,7 +123,7 @@ index 9cd5f93b8..9da15e8df 100644
      bool working = !has_recap && f->activity && *f->activity;
      bool retry = !has_recap && !working && f->status && *f->status;
  
-@@ -1013,10 +1082,10 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
+@@ -1016,10 +1085,10 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
          status_fitted(line, sizeof line, f, lf, NULL, COL_W);
          ht_lv_label_t l;
          ht_lv_label(&l, lf, line, COL_W, 1, false);
@@ -136,7 +136,7 @@ index 9cd5f93b8..9da15e8df 100644
      else no_text(s, sf);
  
      // Nothing yet: said in the resting grey. With nothing standing above it (no pet, no mark: design 2026-10-06
-@@ -1035,7 +1104,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
+@@ -1038,7 +1107,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
      if (scene && !taken) {
          char arc[HT_TEXT_BYTES];
          status_fitted(arc, sizeof arc, f, NULL, &ht_arc_inter_lower, HT_ARC_SPAN);
@@ -147,7 +147,7 @@ index 9cd5f93b8..9da15e8df 100644
          // the bell pill (y 400, notices > 0; this face has no bubble to tell them) or a footer control (y 389..439)
 diff --git a/devices/harness-device/firmware/main/ui/habitat/glance.h b/devices/harness-device/firmware/main/ui/habitat/glance.h
 new file mode 100644
-index 000000000..a5187142c
+index 0000000..a518714
 --- /dev/null
 +++ b/devices/harness-device/firmware/main/ui/habitat/glance.h
 @@ -0,0 +1,93 @@
@@ -245,7 +245,7 @@ index 000000000..a5187142c
 +    return g->count ? g->shown[0].value : 0;
 +}
 diff --git a/devices/harness-device/firmware/main/ui/habitat/theme.h b/devices/harness-device/firmware/main/ui/habitat/theme.h
-index 33df179cb..8e139f087 100644
+index 33df179..8e139f0 100644
 --- a/devices/harness-device/firmware/main/ui/habitat/theme.h
 +++ b/devices/harness-device/firmware/main/ui/habitat/theme.h
 @@ -7,11 +7,17 @@
@@ -286,21 +286,19 @@ index 33df179cb..8e139f087 100644
  #define HT_THEME_QUESTION  0xe5e510u
  #define HT_THEME_FAILED    0xcd3131u
 diff --git a/devices/harness-device/firmware/test/run.sh b/devices/harness-device/firmware/test/run.sh
-index 28003c37e..5da526063 100644
+index d19dcaa..bac58b0 100644
 --- a/devices/harness-device/firmware/test/run.sh
 +++ b/devices/harness-device/firmware/test/run.sh
-@@ -39,6 +39,16 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,u
+@@ -34,6 +34,14 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,u
     "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
  "$out/test_character_asan" "$here/vectors/pet_min.hpet" --custom-only
  python3 "$here/test_character_preferences.py"
 +# The glance line (glance.h) and the Focus face that draws it.
 +cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
 +   -I "$here/../main" -o "$out/test_glance" "$here/test_glance.c" "$here/../main/pet_store.c" "$here/../main/elapsed.c" \
-+   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
-+   "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
++   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/character_motion.c" \
++   "$here/../main/ui/habitat/character_layout.c" \
 +   "$here/../main/ui/habitat/focus.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/lvgl_icons.c" "$here/../main/ui/habitat/focus_marks.c" "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/pets.c" \
-+   "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
-+   "$here/../main/ui/habitat/ascii_clip.c" \
 +   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
 +"$out/test_glance"
  
@@ -308,7 +306,7 @@ index 28003c37e..5da526063 100644
     -I "$here/../main" -o "$out/test_elapsed" "$here/test_elapsed.c" "$here/../main/elapsed.c"
 diff --git a/devices/harness-device/firmware/test/test_glance.c b/devices/harness-device/firmware/test/test_glance.c
 new file mode 100644
-index 000000000..83882d375
+index 0000000..83882d3
 --- /dev/null
 +++ b/devices/harness-device/firmware/test/test_glance.c
 @@ -0,0 +1,100 @@
@@ -413,10 +411,10 @@ index 000000000..83882d375
 +    return 0;
 +}
 diff --git a/devices/harness-device/firmware/test/test_touch_ui.py b/devices/harness-device/firmware/test/test_touch_ui.py
-index 71ab1a04f..a921d73d7 100644
+index ecb56c3..4872b8c 100644
 --- a/devices/harness-device/firmware/test/test_touch_ui.py
 +++ b/devices/harness-device/firmware/test/test_touch_ui.py
-@@ -2158,7 +2158,7 @@ int main(int argc, char **argv) {
+@@ -3617,7 +3617,7 @@ int main(int argc, char **argv) {
              assert(from && ALERT_AT(0) && BLUE_BOX() < 0 && COUNT("1") < 0 && scene.count == runs);
              for (int i = 0; i < scene.count; i++) {
                  assert(scene.runs[i].font != &ht_lv_montserrat_14.base || !scene.runs[i].text[0]);   // no bell pill
@@ -425,7 +423,7 @@ index 71ab1a04f..a921d73d7 100644
              }
              // its next step, or the working scene's next frame if that comes first
              assert(s.pet_next_ms > from && s.pet_next_ms <= from + S);
-@@ -2759,6 +2759,11 @@ int main(int argc, char **argv) {
+@@ -4211,6 +4211,11 @@ int main(int argc, char **argv) {
              ui_project_emit("a", "sess", "summary", "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.",
                              "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.");
              fake_ms = 1200; scene_take(); DESIGN("recap");
@@ -437,7 +435,7 @@ index 71ab1a04f..a921d73d7 100644
              DESIGN_HOME(); s.agents[0].busy = true; strcpy(s.agents[0].tool, "Coalescing");
              fake_ms = 1200; scene_take(); s.agents[0].busy_ms = 1; fake_ms = 34000 + 1200; scene_take(); DESIGN("working");
              {
-@@ -2798,6 +2803,7 @@ int main(int argc, char **argv) {
+@@ -4259,6 +4264,7 @@ int main(int argc, char **argv) {
  '''
  extra_sources = []
  extra_includes = ['-DDEVICE_HABITAT_ORANGE=1'] if os.environ.get('HABITAT_TEST_ORANGE') else []
