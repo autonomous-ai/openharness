@@ -74,6 +74,12 @@ describe('a read\'s verdict, made by command', () => {
     expect(t.sent).toEqual([])
   })
 
+  it('refuses an agent with no name, which could sign nothing', async () => {
+    const t = setup()
+    expect(await refusal(t.run(t.ok, { ...t.juno, name: '  ' }))).toEqual({ code: 'AGENT_UNNAMED', message: 'This agent has no name to sign a verdict with.' })
+    expect(t.asked).toEqual([])
+  })
+
   it('refuses a repository that is no project of the reader\'s before it asks GitHub anything', async () => {
     const t = setup()
     expect(await refusal(t.run({ ...t.ok, repository: 'other/thing' }))).toEqual({ code: 'REPOSITORY_NOT_PROJECT',

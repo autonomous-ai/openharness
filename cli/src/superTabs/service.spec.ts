@@ -1035,3 +1035,42 @@ describe('a task\'s steps in messages', () => {
     expect(answer.value.messages.map(m => m.id)).toEqual(['s1'])
   })
 })
+
+// A reader's verdict is made by command in its own pane (githubVerdict.ts): the daemon posts it and tells the backend whose it is.
+describe('a verdict by command', () => {
+  const HEAD = 'f6edb44c0ffee0000000000000000000000000ab'
+  function verdictSetup() {
+    const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
+    const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native', displayName: 'Juno' }
+    const state = { agents: [agent], projects: [{ id: 'app', repository: { repositoryUrl: 'https://github.com/Acme/App.git' } }] }
+    const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true,
+      data: path.includes('/github-comments') ? { recorded: true } : swarmData(agent, path, state) } }))
+    const core = fakeCore({ account: { backend: call }, agents: { byAgent: vi.fn(() => ({ agentId: 'native' }) as never) } })
+    const sent: Array<{ path: string; body: unknown }> = []
+    const github = { get: vi.fn(async (path: string) => ({ status: 200, etag: null, resetAt: null,
+      body: path.includes('/comments') ? [] : { state: 'open', head: { sha: HEAD, ref: 'pip/12' }, labels: [{ name: 'builder:pip' }] } })),
+      send: vi.fn(async (_method: string, path: string, body?: unknown) => { sent.push({ path, body })
+        return { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } }) }
+    const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, github: () => github })
+    const read = (extra: Record<string, unknown> = {}) => service.requests.super_tabs({ action: 'read', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 27,
+      verdict: 'READ-OK', sha: 'f6edb44', text: 'Ran the tests.', ...extra }, owner)
+    return { service, call, sent, github, agentId, read }
+  }
+  it('posts it under the calling agent\'s name on its project\'s repository, and records the comment as that agent\'s', async () => {
+    const t = verdictSetup()
+    expect(await t.read()).toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', head: HEAD, posted: true } })
+    expect(t.sent).toEqual([{ path: '/repos/acme/app/issues/27/comments', body: { body: expect.stringMatching(new RegExp(`^Juno, \\d\\d:\\d\\d: READ-OK ${HEAD}\\n\\nRan the tests\\.$`)) } }])
+    expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
+    t.service.port.stop()
+  })
+  it('refuses a request that is no verdict, a repository of no project of the agent\'s, and another computer\'s caller, and posts nothing', async () => {
+    const t = verdictSetup()
+    expect(await t.read({ sha: 'HEAD' })).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await t.read({ repository: 'other/thing' })).toMatchObject({ error: 'REPOSITORY_NOT_PROJECT', status: 422 })
+    expect(await t.service.requests.super_tabs({ action: 'read', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 27, verdict: 'READ-OK', sha: 'f6edb44', text: '' },
+      { local: false, owner: true, accountOwner: true })).toMatchObject({ error: 'AGENT_LOCAL_ONLY' })
+    expect(t.sent).toEqual([])
+    expect(t.github.get).not.toHaveBeenCalled()
+    t.service.port.stop()
+  })
+})

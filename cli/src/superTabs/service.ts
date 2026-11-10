@@ -16,9 +16,10 @@ import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
-import { GitHubMentions, watchedAgents } from './githubMentions.js'
+import { GitHubMentions, repositorySlug, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
-import { githubRest } from './githubRest.js'
+import { githubRest, type GitHubGet, type GitHubSend } from './githubRest.js'
+import { postVerdict, verdictAsked } from './githubVerdict.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, type LedProject } from './githubMerge.js'
 import { crewOf } from './assign/crew.js'
@@ -119,6 +120,8 @@ export interface SuperTabServiceOptions {
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
   /** What gives the tasks of the projects whose PM runs here to their builders (superTabs/githubAssign.ts), for a spec. */
   githubAssign?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubAssign, 'start' | 'stop'>
+  /** GitHub as this computer's own gh login (superTabs/githubRest.ts), for a spec. */
+  github?: () => { get: GitHubGet; send: GitHubSend }
   /** What reports what this computer's person's agents shipped to the Swarm's leaderboard (superTabs/shipping.ts), for a spec. */
   shipping?: (core: CoreApi) => Pick<ShippingReporter, 'start' | 'stop'>
 }
@@ -158,7 +161,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
-  const github = githubRest()
+  const github = (options.github ?? githubRest)()
   // GitHub for this computer's person's v4 agents (githubMentions.ts).
   const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
     watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
@@ -423,6 +426,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // One per Buddy on this machine; a machine runs a few at most, so a small cap only guards against a leak.
           for (const oldest of buddySince.keys()) { if (buddySince.size <= 64) break; buddySince.delete(oldest) }
           return { ok: true, value: { lastChangedAt: read.lastChangedAt, summary } }
+        }
+        // A reader's verdict on a pull request (`read ok|hold`, githubVerdict.ts): posted with this computer's gh under the
+        // calling agent's name, on a repository of a project it reads, and recorded with the backend as that agent's.
+        if (payload.action === 'read') {
+          const asked = verdictAsked(payload)
+          if (!asked) return { error: 'INVALID_REQUEST' }
+          const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
+          return { ok: true, value: await postVerdict({ get: github.get, send: github.send,
+            record: async (repository, commentId) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) } },
+            { name: String(agent.displayName ?? agent.name ?? ''), repositories }, asked) }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
