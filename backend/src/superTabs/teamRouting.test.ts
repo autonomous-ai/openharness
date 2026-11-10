@@ -295,15 +295,14 @@ describe('one machine: a Mac and its Harness Team account', () => {
 
 describe('one machine: the Mac\'s agent slots', () => {
   it('are shared by the Mac and its Harness Team account while an agent is still there', () => {
-    const f = swarm(), group = f.group()
+    const f = swarm()
     Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm', maxAgents: 2 })
     f.machine('mate-mac').maxAgents = 2
     f.member('mine', 'mate-mac', 'mate', f.mine)
     f.member('team-agent', 'mate-team', 'mate')
-    // One on the owner's daemon and one left in the team account: the Mac's two slots are taken, whichever side asks.
+    // One on the owner's daemon and one left in the team account: the Mac counts both, whichever side asks.
     expect(machineSlots(f.state, f.machine('mate-mac'))).toBe(2)
     expect(machineSlots(f.state, f.machine('mate-team'))).toBe(2)
-    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, mate, f.pooled('mate-mac')))?.code).toBe('MACHINE_FULL')
     // A machine without a team account counts only its own.
     expect(machineSlots(f.state, f.machine('owner-mac'))).toBe(0)
   })

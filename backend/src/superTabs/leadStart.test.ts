@@ -11,7 +11,7 @@ const MINUTE = 60_000
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
+const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 const PASSED: MachinePrivacy = { mode: 'account', passed: true, checkedAt: NOW - MINUTE }
 const REPO = 'https://github.com/example/app'
@@ -363,7 +363,7 @@ describe('the machine a Product Manager starts on', () => {
 
   it('full, refuses it rather than placing it on another', () => {
     const f = swarm()
-    f.machine('owner-mac').maxAgents = 0
+    f.machine('owner-mac').observation!.resources.memoryUsedBytes = 64e9
     expect(refusal(() => f.lead('owner-mac'))?.code).toBe('MACHINE_FULL')
     expect(f.state.starts ?? []).toEqual([])
   })
