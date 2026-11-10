@@ -13,6 +13,9 @@ import { agentChatId } from './agentKind.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 
+/** The PM's own chat with its person, where the person talks to it. */
+const pmChat = (f: ReturnType<typeof stepsFixture>) => f.state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(f.lead))!.id
+
 function setup() {
   const f = stepsFixture()
   const post = (by: string, on: string, text: string, recipientIds: string[] = [], reply?: { id: string; author: never }) =>
@@ -71,7 +74,8 @@ describe('an agent post that reaches no agent', () => {
     expect(sent(f, f.dev, f.task, [f.lead])).not.toHaveProperty('reachedNoAgent')
     expect(sent(f, f.lead, f.task)).not.toHaveProperty('reachedNoAgent')
     expect(sent(f, f.dev, f.task, [f.dev], true)).not.toHaveProperty('reachedNoAgent')
-    expect(sent(f, null, f.task, [])).not.toHaveProperty('reachedNoAgent')
+    // A person posts in their own chat with their agent (agentsOnly.test.ts).
+    expect(sent(f, null, pmChat(f), [])).not.toHaveProperty('reachedNoAgent')
   })
 })
 
@@ -145,8 +149,8 @@ describe('an agent\'s thread reply', () => {
     storedAssignment(f.state, step, reviewer, f.now)
     const verdict = post(reviewer, step, 'Ready to merge: With fixes', [f.dev])[0]!
     expect(to(post(f.dev, step, 'Fixed, please re-check.', [], { id: verdict.id, author: verdict.author as never }))).toEqual([[reviewer]])
-    const asked = f.run({ type: 'message.send', conversationId: 'lead', text: 'Is the fix out?', replyTo: null, recipientIds: [] } as Command, owner).messages[0]!
-    expect(to(post(f.dev, 'lead', 'Yes, since 14:00.', [], { id: asked.id, author: asked.author as never }))).toEqual([[]])
+    // A person's message there from before only agents posted in a project's channel.
+    expect(to(post(f.dev, 'lead', 'Yes, since 14:00.', [], { id: 'm-person', author: { kind: 'person', id: 'owner' } as never }))).toEqual([[]])
   })
 })
 
@@ -187,30 +191,6 @@ describe('the PM\'s deliveries in a fixture hour', () => {
   })
 })
 
-// Task #3114 (Ken, 11-05): his reply under Hawthorn3's "Done" in #3022 reached Hawthorn3 alone, whose work there was over, and
-// no one who could act on it. A person's reply to the agent whose assignment there is done reaches the PM too.
-describe('a person\'s reply to an agent', () => {
-  const reply = (f: ReturnType<typeof stepsFixture>, on: string, author: string, text: string) =>
-    f.run({ type: 'message.send', conversationId: on, text, replyTo: 'm-agent', recipientIds: [] } as Command, owner,
-      { reply: { id: 'm-agent', conversationId: on, author: { kind: 'agent', id: author } as never, createdAt: 0, thread: 'm-agent' } }).messages
-      .filter(m => m.source?.kind !== 'system').map(m => m.recipients)
-  it('reaches that agent alone while its work in the task is open', () => {
-    const f = stepsFixture()
-    expect(reply(f, f.task, f.dev, 'Release it now?')).toEqual([[f.dev]])
-  })
-  it('reaches that agent and the PM once its work in the task is done', () => {
-    const f = stepsFixture()
-    storedStatus(f.state, f.task, 'done', 'Done, PR #12')
-    expect(reply(f, f.task, f.dev, 'Release it now?')).toEqual([[f.dev, f.lead]])
-  })
-  it('reaches the agent alone when the done work is another agent\'s', () => {
-    const f = stepsFixture()
-    const other = f.add('other', f.task)
-    storedStatus(f.state, f.task, 'done', 'Done')
-    expect(reply(f, f.task, other, 'Thanks, and the fixture?')).toEqual([[other]])
-  })
-})
-
 // A post to an agent whose session is down stays queued for it, as it must; its sender is told, in the command's result every CLI
 // prints, instead of hearing nothing (tester Q3, 2026-11-09).
 describe('a post to an agent whose session is down', () => {
@@ -228,8 +208,9 @@ describe('a post to an agent whose session is down', () => {
     const done = sent(f, f.dev, [other])
     expect(done.result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
     expect(done.messages.filter(m => m.source?.kind !== 'system').map(m => m.recipients)).toEqual([[other]])
-    // A person's post to the agent says it too.
-    expect(sent(f, null, [other]).result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
+    // A person's post to their agent, in their own chat with it, says it too.
+    down(f, ['dev'])
+    expect(sent(f, null, [], { conversationId: pmChat(f) }).result.offline).toBe(`${name(f, f.lead)} is offline; it will read this when it is back.`)
   })
 
   it('names two with "and", and three with commas, and says "they"', () => {

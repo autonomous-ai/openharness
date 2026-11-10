@@ -7,8 +7,6 @@ import { ledProject } from './projects.js'
 export const COORDINATOR_NAME = 'Product Manager'
 
 export const roleNameSchema = z.string().trim().min(1).max(40)
-/** A change's summary, on one line. */
-export const summarySchema = z.string().trim().min(1).max(200).regex(/^[^\r\n]*$/, 'Summarize the change in one line.')
 
 /** The role name [target] goes by: the one it was started with, else what it is. Read only, so agents started without a name
  *  need no write. */

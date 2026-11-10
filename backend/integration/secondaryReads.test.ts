@@ -60,14 +60,17 @@ function stores(secondaryUrl = secondaryReadsUrl(uri)) {
 async function fixture(store: SuperTabStore) {
   const run = (command: Command) => store.execute(owner, tab, { operationId: randomUUID(), command })
   const tab = (await store.create(owner, randomUUID(), 'Secondary reads')).id
-  await run({ type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
+  const lead = String((await run({ type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config,
+    lead: true })).result.agentId)
+  /** A command as the Lead, on its machine's person's account: only agents post in a project's channel (agentsOnly.test.ts). */
+  const asLead = (command: Command) => store.execute(host, tab, { operationId: randomUUID(), command }, lead)
   const rows: Prisma.SuperTabMessageCreateManyInput[] = Array.from({ length: 250 }, (_, i) => {
     const id = `${tab}-m${String(i).padStart(4, '0')}`
     return { id, tabId: tab, conversationId: 'lead', sequence: 1000 + i, author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' },
       text: `row ${i}`, replyTo: null, recipientIds: [], mentions: [], thread: id }
   })
   await db.superTabMessage.createMany({ data: rows })
-  return { tab, run }
+  return { tab, asLead }
 }
 
 const ids = (page: { messages: Array<{ id: string }> }) => page.messages.map(m => m.id)
@@ -149,13 +152,13 @@ describe('the edge check', () => {
 describe('reads that must see the latest write', () => {
   it('stay on the primary: the newest page, a newer page, one message, the change feed and a write with its reads', async () => {
     const s = stores()
-    const { tab, run } = await fixture(s.store)
+    const { tab, asLead } = await fixture(s.store)
     s.clear()
     const first = await s.reads.firstLoad(owner, tab)
     const newest = await s.store.messages(owner, tab, 'lead', {})
     await s.store.messages(owner, tab, 'lead', { after: 1200, afterId: `${tab}-m0200` })
     await s.store.messages(owner, tab, 'lead', { messageId: `${tab}-m0010` })
-    await run({ type: 'message.send', conversationId: 'lead', text: 'a new one', replyTo: null, recipientIds: [] })
+    await asLead({ type: 'message.send', conversationId: 'lead', text: 'a new one', replyTo: null, recipientIds: [] })
     const changed = await s.reads.changes(owner, tab, first.cursor)
     expect(newest.messages).toHaveLength(100)
     expect(changed).toBeTruthy()
@@ -165,16 +168,6 @@ describe('reads that must see the latest write', () => {
 })
 
 describe('reports', () => {
-  it('costs read their decisions on the secondary and who may read them on the primary', async () => {
-    const s = stores()
-    const { tab } = await fixture(s.store)
-    s.clear()
-    const summary = await s.store.costSummary(owner, tab, 7)
-    expect(summary).toMatchObject({ days: 7, truncated: false })
-    expect(models(s.secondary)).toEqual(['SuperTabRouteDecision'])
-    expect(s.primary.some(o => o.model === 'SuperTabRouteDecision')).toBe(false)
-  })
-
   it('the leaderboard reads its people\'s names on the secondary', async () => {
     const s = stores()
     const { tab } = await fixture(s.store)

@@ -69,8 +69,10 @@ async function swarm(w: World, name: string, made = WIPE_CUTOFF - DAY) {
   await execute({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'PM', configuration: config, lead: true }, host)).result.agentId)
   const worker = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false }, host)).result.agentId)
-  await execute({ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] })
-  await w.store.upload(member, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) })
+  // The PM's message and file: only agents post in a project's channel (agentsOnly.test.ts).
+  await w.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null,
+    recipientIds: [] } }, lead)
+  await w.store.upload(host, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) }, lead)
   await db.superTab.update({ where: { id: tab }, data: { createdAt: new Date(made) } })
   return { tab, execute, machineId, lead, worker }
 }

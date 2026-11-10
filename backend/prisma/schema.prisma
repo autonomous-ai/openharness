@@ -1443,8 +1443,8 @@ model RoutingPolicy {
 }
 
 /// A task's earlier attempt, as work.define and work.assign replaced it. Written no more since those commands went (Swarm v4,
-/// 2026-11-10); still read by a task's attempts (store.ts) until routing goes (S8). Its rows go with the old collections
-/// (migration/dropCollections.ts REMOVED_COLLECTIONS), which needs the owner's go.
+/// 2026-11-10), read no more since routing went (S8, 2026-11-11). Its rows go with the old collections
+/// (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
 model SuperTabAttempt {
   id              String   @id @map("_id")
   tabId           String
@@ -1455,8 +1455,8 @@ model SuperTabAttempt {
   @@index([tabId, conversationId, createdAt])
 }
 
-/// One `harness super-tab route` decision (superTabs/routeRecord.ts). Deleted 90 days after createdAt on each write (routeDecisions.ts
-/// RETENTION_MS; the costs report reads 90 days). Stored trimmed (routeRecord.ts storedRecord).
+/// One `harness super-tab route` decision, as v3 routing stored it (trimmed). Written and read no more since routing went (Swarm v4 S8, 2026-11-11); nothing removes its rows now: they go with the
+/// old collections (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
 model SuperTabRouteDecision {
   id             String    @id @map("_id")
   tabId          String
@@ -1478,8 +1478,9 @@ model SuperTabRouteDecision {
   @@index([tabId, assignmentId])
 }
 
-/// How one model did on one kind of job in one week of one project of a Swarm (superTabs/evidence/store.ts): counts and sums
-/// only, never a person, an agent or task text. `id` is the hash of the Swarm, project, engine, model, kind and week. Kept 180 days.
+/// How one model did on one kind of job in one week of one project of a Swarm: counts and sums only, never a person, an agent or
+/// task text. `id` is the hash of the Swarm, project, engine, model, kind and week. Written and read no more since routing went (Swarm v4 S8, 2026-11-11); nothing removes its rows now: they go with the
+/// old collections (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
 model SuperTabModelEvidence {
   id                 String   @id @map("_id")
   tabId              String
@@ -1516,8 +1517,8 @@ model SuperTabModelEvidence {
 }
 
 /// One model's last ten first-review results on one kind of job in one project of a Swarm, oldest first: [{ a: assignment id, at: its start,
-/// passed }] (superTabs/evidence/store.ts). Routing reads it for a model under 50% and its recovery. Kept 180 days after its
-/// last change.
+/// passed }]. Written and read no more since routing went (Swarm v4 S8, 2026-11-11); nothing removes its rows now: they go with the
+/// old collections (migration/dropCollections.ts REMOVED_COLLECTIONS, slice S19).
 model SuperTabModelRecent {
   id        String   @id @map("_id")
   tabId     String
@@ -1596,9 +1597,9 @@ model SuperTabInstructionsRevision {
   @@index([tabId, projectId, revision])
 }
 
-// A project's rules record (superTabs/policy.ts), one row per saved revision: the newest is the record, the rest its history.
-// Removed: the save that writes revision N deletes revisions <= N - 50 of its project (policyStore.ts writeRules, MAX_RULES_REVISIONS);
-// a deleted project takes its rows; the Swarm purge takes the tab's (purge.ts). A row is at most 16 KB of rules plus its diff.
+// A project's v3 rules record, one row per saved revision. Written and read no more since rules.set went (Swarm v4 S8,
+// 2026-11-11); the Swarm purge takes a tab's rows (purge.ts), the rest go with the old collections (slice S19). A row is at most
+// 16 KB of rules plus its diff.
 // `writtenBy` is a person's or the project's PM's id (`writtenByKind`), `askedBy` the person whose words it carries, `askedIn`
 // the chat message the PM passed on (null when a person saved). id = stableId(tabId, projectId, revision): two saves of one
 // revision collide on it, and one retries into RULES_STALE.
