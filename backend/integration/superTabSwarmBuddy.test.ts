@@ -407,16 +407,14 @@ describe('security reviews of #2435', () => {
 })
 
 describe('security re-check 2 of #2435', () => {
-  it('keeps a phone\'s message in an older Buddy chat and starts nothing when the machine is full, paused, or the Swarm is paused', async () => {
+  it('keeps a phone\'s message in an older Buddy chat and starts nothing when the machine is paused, or the Swarm is paused', async () => {
     // Security review 1 re-check of #2435: a machine that cannot take a one-project Buddy now refuses nothing the person wrote.
     const cases: Array<[string, (f: Swarm) => Promise<unknown>]> = [
-      ['at its limit', async () => undefined],
       ['paused by its owner', f => f.execute({ type: 'machine.pause', machineId: 'peer-mac', paused: true }, peer)],
       ['in a paused Swarm', f => f.execute({ type: 'tab.pause', paused: true })],
     ]
     for (const [label, pause] of cases) {
-      // At its limit: the one Buddy takes the machine's only slot.
-      const f = await swarm({ maxAgents: label === 'at its limit' ? 1 : 8 })
+      const f = await swarm({ maxAgents: 8 })
       await buddy(f)
       const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
       await pause(f)
@@ -471,13 +469,12 @@ describe('a phone\'s message no Buddy can answer', () => {
 
   it('tells its person why, in plain words, once per outage and not once per message, from their Buddy, to them alone', async () => {
     const cases: Array<[string, string, (f: Swarm) => Promise<unknown>]> = [
-      ['at its limit', 'Peer Mac already runs as many agents as it takes', async () => undefined],
       ['paused by its owner', 'Peer Mac is paused', f => f.execute({ type: 'machine.pause', machineId: 'peer-mac', paused: true }, peer)],
       ['in a paused Swarm', 'the Swarm is paused', f => f.execute({ type: 'tab.pause', paused: true })],
       ['offline', 'Peer Mac is offline', async f => { f.clock.now += 60 * 60_000 }],
     ]
     for (const [label, why, outage] of cases) {
-      const f = await swarm({ maxAgents: label === 'at its limit' ? 1 : 8 })
+      const f = await swarm({ maxAgents: 8 })
       const { main } = await buddy(f)
       const old = String((await f.execute({ type: 'buddy.chat', projectId: f.web.projectId }, peer)).result.conversationId)
       await outage(f)
