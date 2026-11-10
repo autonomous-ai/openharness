@@ -9,7 +9,7 @@
  * leaves nothing behind.
  */
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -23,6 +23,7 @@ import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { resolveDshCommand } from './materialize.js'
 import { DSH_SHELL_UNAVAILABLE, dshShellAvailable, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
+import { removePath } from '../lib/removePath.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
 import { INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 
@@ -311,9 +312,7 @@ export function gitStartFailure(error: NodeJS.ErrnoException, platform: NodeJS.P
 function placeAt(id: string, from: { tmpDir: string } | { linkTo: string }): string {
   const dir = dshInstallDir(id)
   mkdirSync(dirname(dir), { recursive: true, mode: 0o700 })
-  let existing: ReturnType<typeof lstatSync> | null = null
-  try { existing = lstatSync(dir) } catch { existing = null }
-  if (existing) rmSync(dir, { recursive: true, force: true })
+  removePath(dir)
   if ('tmpDir' in from) renameSync(from.tmpDir, dir)
   else symlinkSync(from.linkTo, dir)
   return dir
@@ -518,12 +517,8 @@ export function removeDsh(id: string): { ok: true } | { ok: false; error: string
   if (!unlock) return dshBusy(id)
   try {
     try {
-      // A linked install is a symlink: remove the link, never the checkout it points at.
-      let isLink = false
-      try { isLink = lstatSync(record.dir).isSymbolicLink() } catch { isLink = false }
-      // unlink, not rmSync: Node 25 refuses a non-recursive rm of a link to a directory (EISDIR).
-      if (isLink) unlinkSync(record.dir)
-      else if (existsSync(record.dir)) rmSync(record.dir, { recursive: true, force: true })
+      // A linked install is a symlink: the link goes, never the checkout it points at.
+      removePath(record.dir)
     } catch (error) {
       // Only system errors reach here (EACCES, EBUSY).
       return { ok: false, error: 'REMOVE_FAILED', detail: (error as Error).message }
