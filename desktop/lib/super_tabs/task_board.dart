@@ -172,7 +172,10 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
       });
       // Their pull requests after them: the cards show first, and a read of these that fails keeps the last chips.
       try {
-        final pulls = await widget.github.pulls(repository);
+        final pulls = await widget.github.pulls(
+          repository,
+          team: SwarmPull.teamOf(widget.controller.snapshot, repository),
+        );
         if (mounted && repository == _repository) {
           setState(() => _pulls = pulls);
         }

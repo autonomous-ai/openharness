@@ -504,7 +504,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Review (green checks, no READ-OK on its head yet) in the accent, Failing and
   Conflict in the error red, Held (a reader's last word is a HOLD) in `warn`,
   and Merging (a READ-OK on its head from someone other than its builder, two
-  for TWO READS, checks green) in `online`; in a narrow column the word
+  for TWO READS, checks green; from the login that opened it only one signed by
+  another of the Swarm's agents, as Harness merges) in `online`; in a narrow column the word
   shortens, never the task's number. No pull request, no chip. The open pull
   requests are one GraphQL read after the issues (the newest 50), and a read
   of them that fails keeps the last chips. The board shows what it last read at once
