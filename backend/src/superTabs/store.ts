@@ -5242,7 +5242,8 @@ export class SuperTabStore {
   private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[]; decisions?: DecisionRow[] },
     messages: MessageDraft[]): void {
     const tell = this.hooks.phoneNotices
-    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length)) return
+    // Any row may be an agent's words in its 1:1 chat (push/notices.ts chatNotices).
+    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length && !messages.length)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {

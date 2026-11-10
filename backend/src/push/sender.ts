@@ -9,7 +9,7 @@ import type { PushDevice } from './devices.js'
  * key, one per thread for its reply, one per task for its decisions, so the app's notice replaces the push instead of
  * showing beside it. `quiet` shows it with no sound and no banner: it only replaces what that slot showed.
  *
- * `setting` is a tag's: the id of its person's setting for the chat, which drops it as it is sent when that chat is
+ * `setting` is a tag's, and an agent's 1:1 chat's: the id of its person's setting for the chat, which drops it as it is sent when that chat is
  * muted (push/muted.ts). The senders never send it.
  */
 export interface PhoneNotice {
