@@ -133,7 +133,7 @@ describe('the wipe in the worker', () => {
     } }
     purgeRecords.mockImplementation(async (_db, tabId) => { purged.push(tabId); rows.length = 0; return 'purged' })
     const stop = startSwarmWipe(db, store, { NODE_ENV: 'test', SUPER_TAB_ATTACHMENTS_BUCKET: '', SUPER_TAB_ATTACHMENTS_CREDENTIALS: '',
-      SUPER_TAB_ATTACHMENTS_PREFIX: '', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: '' }, 0)
+      SUPER_TAB_ATTACHMENTS_PREFIX: '', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: '', SUPER_TAB_AVATARS_BUCKET: '' }, 0)
     await vi.advanceTimersByTimeAsync(0)
     expect(calls).toBe(1)
     // Failed: the next pass waits twice as long.

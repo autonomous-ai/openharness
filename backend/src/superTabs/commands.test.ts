@@ -47,7 +47,10 @@ function fixture() {
   }
   const group = () => run({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits while offline.',
     checks: [{ description: 'Reconnect preserves the edits.', independent: true }] }).result.conversationId as string
-  return { run, invite, add, seat, group, get state() { return state } }
+  /** [lead]'s own chat with its person: where a person posts, as only agents post in a project's channel and its tasks' chats
+   *  (agentsOnly.test.ts). */
+  const pmChat = (lead: string) => state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(lead))!.id
+  return { run, invite, add, seat, group, pmChat, get state() { return state } }
 }
 
 /** Makes [machineId] [contributorId]'s own contributed computer, reporting now, so its agents take any project [contributorId]
@@ -212,7 +215,7 @@ describe('Super Tab collaboration policy', () => {
     expect(f.state.conversations.filter(c => c.kind !== 'agent-chat')).toHaveLength(2) // Lead and the group
   })
 
-  it('routes a human reply to its author, and does not create agent chatter loops', () => {
+  it('reaches only who an agent\'s post names, and refuses a reply to a message of another conversation', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
     const worker = f.add('worker')
@@ -220,19 +223,15 @@ describe('Super Tab collaboration policy', () => {
       { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }).messages[0]!
     // An agent's post reaches only who it names (#2963).
     expect(posted.recipients).toEqual([])
-    const reply = f.run({ type: 'message.send', conversationId: 'lead', text: 'Keep the local copy.', replyTo: posted.id, recipientIds: [] }, owner,
-      { reply: { id: posted.id, conversationId: 'lead', author: posted.author, createdAt: 0 } })
-    expect(reply.messages[0]!.recipients).toEqual([worker])
-    const fresh = f.run({ type: 'message.send', conversationId: 'lead', text: 'Continue.', replyTo: null, recipientIds: [] })
-    expect(fresh.messages[0]!.recipients).toEqual([lead])
-    expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Cross-group reply', replyTo: posted.id, recipientIds: [] }, owner,
+    expect(() => f.run({ type: 'message.send', conversationId: 'lead', text: 'Cross-group reply', replyTo: posted.id, recipientIds: [] },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' },
       { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author, createdAt: 0 } })).toThrow('Reply to a message in this conversation')
   })
 
   it('files a reply under its thread root, never a nested thread, and keeps a reply to a pre-thread message inline', () => {
     const f = fixture()
-    const lead = f.add('lead', 'owner', 'lead', true)
-    const root = f.run({ type: 'message.send', conversationId: 'lead', text: 'Should we do threads?', replyTo: null, recipientIds: [] }).messages[0]!
+    const lead = f.add('lead', 'owner', 'lead', true), worker: Actor = { kind: 'agent', agentId: f.add('worker'), machineOwnerId: 'host-owner' }
+    const root = f.run({ type: 'message.send', conversationId: 'lead', text: 'Should we do threads?', replyTo: null, recipientIds: [] }, worker).messages[0]!
     expect(root.thread).toBeUndefined()
     const first = f.run({ type: 'message.send', conversationId: 'lead', text: 'Yes.', replyTo: root.id, recipientIds: [] },
       { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }, { reply: { id: root.id, conversationId: 'lead', author: root.author, createdAt: 0, thread: root.id } }).messages[0]!
@@ -240,11 +239,11 @@ describe('Super Tab collaboration policy', () => {
     expect(first.alsoInChat).toBeUndefined()
     // A reply to a reply joins the root's thread.
     const second = f.run({ type: 'message.send', conversationId: 'lead', text: 'Agreed.', replyTo: first.id, recipientIds: [], alsoSend: true },
-      owner, { reply: { id: first.id, conversationId: 'lead', author: first.author, createdAt: 0, thread: root.id } }).messages[0]!
+      worker, { reply: { id: first.id, conversationId: 'lead', author: first.author, createdAt: 0, thread: root.id } }).messages[0]!
     expect(second).toMatchObject({ replyTo: first.id, thread: root.id, alsoInChat: true })
     // A message written before threads has none: a reply to it stays an inline quote.
     const inline = f.run({ type: 'message.send', conversationId: 'lead', text: 'Old question answered.', replyTo: 'old-message', recipientIds: [], alsoSend: true },
-      owner, { reply: { id: 'old-message', conversationId: 'lead', author: root.author, createdAt: 0, thread: null } }).messages[0]!
+      worker, { reply: { id: 'old-message', conversationId: 'lead', author: root.author, createdAt: 0, thread: null } }).messages[0]!
     expect(inline.replyTo).toBe('old-message')
     expect(inline.thread).toBeUndefined()
     expect(inline.alsoInChat).toBeUndefined()
@@ -331,12 +330,12 @@ describe('Super Tab collaboration policy', () => {
 
     it('refuses the skills mark anywhere but an agent\'s own agent-only notice', () => {
       const f = fixture()
-      f.add('lead', 'owner', 'lead', true)
+      const lead = f.add('lead', 'owner', 'lead', true)
       const build = f.group(), engineer = f.add('engineer', 'owner', build), other = f.add('other', 'owner', build)
-      const mark = (actor: Actor, recipientIds: string[], agentOnly?: true) => () => f.run(commandSchema.parse({ type: 'message.send', conversationId: build,
+      const mark = (actor: Actor, recipientIds: string[], agentOnly?: true, conversationId = build) => () => f.run(commandSchema.parse({ type: 'message.send', conversationId,
         text: 'Hidden.', replyTo: null, recipientIds, ...(agentOnly ? { agentOnly } : {}), notice: 'skills' }), actor)
       expect(mark(as(engineer), [engineer])).toThrow('A skills notice is an agent-only notice to the agent itself.')
-      expect(mark({ kind: 'person', userId: 'owner', email: 'owner@example.com' }, [engineer], true)).toThrow('An agent sends an agent-only notice to itself alone.')
+      expect(mark({ kind: 'person', userId: 'owner', email: 'owner@example.com' }, [lead], true, f.pmChat(lead))).toThrow('An agent sends an agent-only notice to itself alone.')
       expect(mark(as(engineer), [other], true)).toThrow('An agent sends an agent-only notice to itself alone.')
       expect(() => commandSchema.parse({ type: 'message.send', conversationId: build, text: 'x', replyTo: null, recipientIds: [engineer],
         agentOnly: true, notice: 'other' })).toThrow()
@@ -444,17 +443,15 @@ describe('Super Tab collaboration policy', () => {
       expect(send(f, as(engineer), build, [engineer], true).recipients).toEqual([engineer])
     })
 
+    // A person posts in their own chat with an agent alone (agentsOnly.test.ts): naming another agent there adds it to nothing.
     it('keeps a person\'s message from adding agents', () => {
       const f = fixture()
-      f.add('lead', 'owner', 'lead', true)
-      const build = f.group(), engineer = f.add('engineer', 'owner', build), other = f.group()
-      const before = [...f.state.conversations.find(c => c.id === other)!.agentIds]
-      expect(() => f.run({ type: 'message.send', conversationId: other, text: 'Take a look.', replyTo: null, recipientIds: [engineer] }))
+      const lead = f.add('lead', 'owner', 'lead', true)
+      const engineer = f.add('engineer', 'owner', f.group()), chat = f.pmChat(lead)
+      const before = [...f.state.conversations.find(c => c.id === chat)!.agentIds]
+      expect(() => f.run({ type: 'message.send', conversationId: chat, text: 'Take a look.', replyTo: null, recipientIds: [engineer] }))
         .toThrow(expect.objectContaining({ code: 'INVALID_RECIPIENT' }))
-      expect(f.state.conversations.find(c => c.id === other)!.agentIds).toEqual(before)
-      // In the task, the person names it as before.
-      expect(f.run({ type: 'message.send', conversationId: build, text: 'Take a look.', replyTo: null, recipientIds: [engineer] }).messages[0]!.recipients)
-        .toEqual([engineer])
+      expect(f.state.conversations.find(c => c.id === chat)!.agentIds).toEqual(before)
     })
 
     it('never adds a stopping agent', () => {
@@ -520,7 +517,7 @@ describe('Super Tab collaboration policy', () => {
       expect(post(lead, [], report.id).recipients).toEqual([worker])
     })
 
-    it('lets explicit recipients win and leaves replies to others and person routing alone', () => {
+    it('lets explicit recipients win and leaves replies to others alone', () => {
       const { f, lead, group, worker, other, as, post, history } = setup()
       storedAssignment(f.state, group, worker, 1000)
       expect(post(lead, [other]).recipients).toEqual([other])
@@ -528,9 +525,9 @@ describe('Super Tab collaboration policy', () => {
       const aside = post(other)
       expect(aside.recipients).toEqual([worker])
       expect(post(lead, [], aside.id).recipients).toEqual([other, worker])
-      const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
-      history.push({ author: { kind: 'person', id: 'owner' }, recipients: personMessage.recipients, id: personMessage.id })
-      expect(personMessage.recipients).toEqual([lead])
+      // A person's message there from before only agents posted in a task's chat.
+      const personMessage = { id: 'person-message', author: { kind: 'person', id: 'owner' } as Author }
+      history.push({ author: { kind: 'person', id: 'owner' }, recipients: [lead], id: personMessage.id })
       const reply = f.run({ type: 'message.send', conversationId: group, text: 'Ask the worker', replyTo: personMessage.id, recipientIds: [] }, as(lead), {
         reply: { id: personMessage.id, conversationId: group, author: personMessage.author, createdAt: 0 },
       }).messages[0]!
@@ -548,14 +545,14 @@ describe('Super Tab collaboration policy', () => {
       const below = answer(report)
       expect(below).toMatchObject({ replyTo: null, recipients: [worker] })
       expect(below.thread).toBeUndefined()
-      const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
-      // Answering a person reaches the task's assignee, as any unnamed post in a task does (#2963), and as a reply to them does.
-      expect(answer(personMessage).recipients).toEqual([worker])
+      // Answering a person's message there from before only agents posted reaches the task's assignee, as any unnamed post in a
+      // task does (#2963), and as a reply to them does.
+      expect(answer({ id: 'person-message', author: { kind: 'person', id: 'owner' } as Author }).recipients).toEqual([worker])
     })
 
     it('refuses an answer to a message it cannot find here, and an answer that is also a reply', () => {
-      const { f, lead, group, as } = setup()
-      const asked = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
+      const { f, lead, group, worker, as, post } = setup()
+      const asked = post(worker)
       const reply = { id: asked.id, conversationId: group, author: asked.author, createdAt: 0 }
       const send = (fields: { replyTo?: string | null; answers?: string }, context: Partial<CommandContext>) => () =>
         f.run({ type: 'message.send', conversationId: group, text: 'Done.', replyTo: null, recipientIds: [], ...fields } as Command, as(lead), context)
@@ -666,12 +663,13 @@ describe('Super Tab collaboration policy', () => {
   })
 
   it('allows discussion while paused and refuses new work, without mutating rejected state', () => {
-    const f = fixture()
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
     f.run({ type: 'tab.pause', paused: true })
     const before = JSON.stringify(f.state)
     expect(() => f.run({ type: 'project.create', name: 'More', visibility: 'public', brief: '' })).toThrow('paused')
     expect(JSON.stringify(f.state)).toBe(before)
-    expect(f.run({ type: 'message.send', conversationId: 'lead', text: 'Let’s reconsider.', replyTo: null, recipientIds: [] }).messages).toHaveLength(1)
+    expect(f.run({ type: 'message.send', conversationId: 'lead', text: 'Let’s reconsider.', replyTo: null, recipientIds: [] },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }).messages).toHaveLength(1)
   })
 
   it('rejects spoofed grant fields and execution identities', () => {
@@ -817,9 +815,8 @@ function routed() {
 }
 
 describe('the last action of the project\'s agents on a task', () => {
-  it('is recorded with its time by any agent\'s start there, by the coordinator\'s post, and by no person\'s', () => {
+  it('is recorded with its time by any agent\'s start there, and by the coordinator\'s post', () => {
     const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
-    f.run({ type: 'message.send', conversationId: group, text: 'A person posts.', replyTo: null, recipientIds: [] })
     expect(task().leadAction).toBeUndefined()
     const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
@@ -827,8 +824,6 @@ describe('the last action of the project\'s agents on a task', () => {
     expect(task().leadAction).toEqual({ kind: 'start', at: 3000 })
     // Its start keeps when it was asked for: a task whose start is never launched is orphaned 10 minutes on (liveness.ts).
     expect(f.state.starts!.at(-1)!.requestedAt).toBe(3000)
-    f.run({ type: 'message.send', conversationId: group, text: 'A person asks.', replyTo: null, recipientIds: [] }, owner, { now: 4500 })
-    expect(task().leadAction).toEqual({ kind: 'start', at: 3000 })
     // Another agent's post handles nothing: a person's held tag stays, and an unstarted start's clock runs on (final review).
     f.run({ type: 'message.send', conversationId: group, text: 'Progress.', replyTo: null, recipientIds: [] }, f.workerActor, { now: 5000 })
     expect(task().leadAction).toEqual({ kind: 'start', at: 3000 })
@@ -1088,17 +1083,19 @@ it('rejects embedded credentials in shared project metadata', () => {
 
 describe('message attachments', () => {
   const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
-  const send = (attachmentIds?: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
+  // A person sends files in their own chat with their agent (agentsOnly.test.ts).
+  const send = (attachmentIds?: string[], text = '', conversationId = 'lead'): Command =>
+    ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [], ...(attachmentIds ? { attachmentIds } : {}) })
   it('records verified files on the message and allows empty text with one', () => {
-    const f = fixture()
-    const sent = f.run(send(['file-1', 'file-1']), owner, { attachments: [file] })
+    const f = fixture(), chat = f.pmChat(f.add('lead', 'owner', 'lead', true))
+    const sent = f.run(send(['file-1', 'file-1'], '', chat), owner, { attachments: [file] })
     expect(sent.messages).toEqual([expect.objectContaining({ text: '', attachments: [file] })])
-    expect(f.run(send(undefined, 'Plain text.')).messages[0]).not.toHaveProperty('attachments')
+    expect(f.run(send(undefined, 'Plain text.', chat)).messages[0]).not.toHaveProperty('attachments')
   })
   it('refuses empty text without files and a file the store did not verify', () => {
-    const f = fixture()
-    expect(() => f.run(send())).toThrow('Write a message or attach a file.')
-    expect(() => f.run(send(['file-1']))).toThrow('Upload this file again')
+    const f = fixture(), chat = f.pmChat(f.add('lead', 'owner', 'lead', true))
+    expect(() => f.run(send(undefined, '', chat))).toThrow('Write a message or attach a file.')
+    expect(() => f.run(send(['file-1'], '', chat))).toThrow('Upload this file again')
     expect(() => commandSchema.parse(send(Array.from({ length: 11 }, (_, i) => `file-${i}`)))).toThrow()
   })
   it('resends a message with its files', () => {
@@ -1113,24 +1110,28 @@ describe('voice messages', () => {
   const voice = { durationMs: 81_000, waveform: new Array(48).fill(7), transcribed: true }
   const clip = { id: 'voice-1', name: 'Voice message.wav', mime: 'audio/wav', size: 2_592_044, url: 'https://cdn.example.test/super-tabs/tab/abc/Voice_message.wav', voice }
   const file = { id: 'file-1', name: 'screen.png', mime: 'image/png', size: 12, url: 'https://cdn.example.test/super-tabs/tab/abc/screen.png' }
-  const send = (attachmentIds: string[], text = ''): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [], attachmentIds })
+  /** [f]'s PM, and a voice message to it in its person's own chat with it (agentsOnly.test.ts). */
+  const toPm = (f: ReturnType<typeof fixture>) => {
+    const lead = f.add('lead', 'owner', 'lead', true), chat = f.pmChat(lead)
+    return { lead, send: (attachmentIds: string[], text = ''): Command => ({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [], attachmentIds }) }
+  }
   it('makes the clip\'s words the message\'s text, and keeps its facts on the file', () => {
-    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
+    const f = fixture(), { lead, send } = toPm(f)
     const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': 'Ship the parser today.' } })
     expect(sent.messages).toEqual([expect.objectContaining({ text: 'Ship the parser today.', attachments: [clip], recipients: [lead] })])
   })
   it('sends a clip with no words with an empty text', () => {
-    const f = fixture()
+    const f = fixture(), { send } = toPm(f)
     const quiet = { ...clip, voice: { ...voice, transcribed: false, failure: 'limit' as const } }
     expect(f.run(send(['voice-1']), owner, { attachments: [quiet] }).messages[0]).toMatchObject({ text: '', attachments: [quiet] })
   })
   it('sends a voice message alone: no typed text, tags or other files with it', () => {
-    const f = fixture()
+    const f = fixture(), { send } = toPm(f)
     expect(() => f.run(send(['voice-1'], 'and also this'), owner, { attachments: [clip] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE', status: 400 }))
     expect(() => f.run(send(['voice-1', 'file-1']), owner, { attachments: [clip, file] })).toThrow(expect.objectContaining({ code: 'VOICE_ALONE' }))
   })
   it('removes a credential spoken in it, as from typed text', () => {
-    const f = fixture()
+    const f = fixture(), { send } = toPm(f)
     const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
     const sent = f.run(send(['voice-1']), owner, { attachments: [clip], voiceWords: { 'voice-1': `the token is ${token}` } })
     expect(sent.messages[0]!.text).toBe(`the token is ${CREDENTIAL_MARKER}`)
@@ -1279,17 +1280,6 @@ describe('any agent of the project', () => {
     expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(engineer)
   })
 
-  it('joins a shared agent and records its first message with distinct stable rows', () => {
-    const { f } = project()
-    const joined = f.run({ type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: 'shared-with-first-message', name: 'Shared',
-      configuration: config, lead: false, initialMessage: 'Fix the bug' }, owner, { contribution: f.contribution })
-    const initial = joined.messages.find(message => message.text === 'Fix the bug')!
-    const notice = joined.messages.find(message => message.text.includes('added "Shared" to the project'))!
-    expect(f.state.agents.map(agent => agent.id)).toContain(joined.result.agentId)
-    expect(initial.id).toBe(joined.result.messageId)
-    expect(notice.id).not.toBe(initial.id)
-  })
-
   // Ken, 2026-11-02: a Reviewer was a member of the project chat next to the PM, so Desktop opened two terminals there and the
   // Reviewer posted an announcement in it. The project chat holds only its coordinator among agents, whoever adds one and by
   // whichever path; an announcement goes in its task, for the coordinator or its requester to repost.
@@ -1360,8 +1350,8 @@ describe('any agent of the project', () => {
       const { f, engineer, reviewer, chat } = working()
       const members = [...chat().agentIds]
       for (const agentId of [engineer, reviewer]) {
-        // Each routing case has a fresh ask: main chat now permits two posts per ask (#3598).
-        const asked = f.run(post('Can someone check the login bug?')).messages[0]!
+        // A person's ask there from before only agents posted in a project's channel.
+        const asked = { id: `asked-${agentId}`, author: { kind: 'person', id: 'owner' } as Author }
         const line = f.run(post('I am on it.'), actorOf(agentId)).messages.at(-1)!
         expect(line).toMatchObject({ conversationId: 'lead', author: { kind: 'agent', id: agentId }, replyTo: null, recipients: [] })
         const reply = f.run(post('Found it: the token expired.', asked.id), actorOf(agentId),
@@ -1426,29 +1416,6 @@ describe('any agent of the project', () => {
       expect(chat().agentIds).toContain(done.agentId)
     })
 
-    // River, 2026-11-04 (#2924): a person answering an agent's line in main, in its thread or right below it, reaches that agent
-    // as a delivery; it joins nothing. Right below, the coordinator is told too, as a new ask there may be its.
-    it('delivers a person\'s reply to the agent whose line it answers, in its thread or right below it', () => {
-      const { f, engineer, chat, assigned } = working()
-      const members = [...chat().agentIds]
-      const line = f.run(post('I am on it.'), actorOf(engineer)).messages.at(-1)!
-      const inThread = f.run(post('Thanks, which build?', line.id), owner,
-        { reply: { id: line.id, conversationId: 'lead', author: line.author, createdAt: 0, thread: line.id } }).messages.at(-1)!
-      expect(inThread).toMatchObject({ replyTo: line.id, thread: line.id, recipients: [engineer] })
-      const below = f.run(post('Also the phone build, please.'), owner, { above: { author: line.author } }).messages.at(-1)!
-      expect(below.recipients).toEqual([engineer, f.lead])
-      // Below a person's or the coordinator's line, or with nothing read above it, the coordinator alone, as before.
-      expect(f.run(post('And the web?'), owner, { above: { author: below.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
-      expect(f.run(post('And the web?'), owner).messages.at(-1)!.recipients).toEqual([f.lead])
-      expect(chat().agentIds).toEqual(members)
-      // An agent whose work there ended is not told: the coordinator hears it, as any post there.
-      const done = assigned('ended')
-      const ended = f.run(post('Done here.'), actorOf(done.agentId)).messages.at(-1)!
-      done.task.assignment!.status = 'cancelled'
-      expect(f.run(post('Wait, one more?', ended.id), owner,
-        { reply: { id: ended.id, conversationId: 'lead', author: ended.author, createdAt: 0, thread: ended.id } }).messages.at(-1)!.recipients).toEqual([f.lead])
-      expect(f.run(post('Hello?'), owner, { above: { author: ended.author } }).messages.at(-1)!.recipients).toEqual([f.lead])
-    })
   })
 
   // Ken, 2026-11-02: nothing recorded who put the Reviewer in the project chat. Each agent added to or removed from a chat
@@ -2551,8 +2518,8 @@ describe('Product Managers chat, removed (Dee, 2026-10-31)', () => {
 
   it('leaves project chats, workgroups and their recipients as before', () => {
     const { f, lead, worker, docs, docsLead } = swarm()
-    expect(f.run(send('lead', 'Status?')).messages[0]!.recipients).toEqual([lead])
-    expect(f.run(send(docs.conversationId, 'Docs status?')).messages[0]!.recipients).toEqual([docsLead])
+    expect(f.run(send('lead', 'Status?', [lead]), as(worker)).messages[0]!.recipients).toEqual([lead])
+    expect(f.run(send(docs.conversationId, 'Docs status?'), as(docsLead)).messages[0]!.recipients).toEqual([])
     const group = f.group()
     expect(visibleState(f.state, as(worker)).conversations.map(c => c.id)).toEqual(expect.arrayContaining(['lead', group]))
   })
@@ -2719,9 +2686,8 @@ describe('Lead mentions', () => {
     expect(f.run(send('lead', []), as(lead)).messages[0]).not.toHaveProperty('mentions')
   })
 
-  it('lets the PM and any other agent tag, and refuses another project’s Lead and the removed Leads conversation; a person tags (mentions.test.ts)', () => {
+  it('lets the PM and any other agent tag, and refuses another project’s Lead and the removed Leads conversation', () => {
     const { f, lead, secret } = swarm(), group = f.group(), worker = f.add('worker', 'owner', group)
-    expect(f.run(send(group, ['peer'])).messages[0]!.mentions).toEqual(['peer'])
     // Swarm v4 routes no tag through the PM: the worker tags the person.
     expect(f.run(send(group, ['peer']), as(worker)).messages.flatMap(m => m.mentions ?? [])).toEqual(['peer'])
     expect(() => f.run(send(group, ['owner']), as(secret.lead))).toThrow('This conversation is unavailable.')
@@ -2752,9 +2718,10 @@ describe('credentials in Swarm chat', () => {
   const kept = `Here is my login: ${CREDENTIAL_MARKER}\nand the deploy token ${CREDENTIAL_MARKER} for the release.`
   const send = (text: string, conversationId = 'lead'): Command => ({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] })
 
+  // A person posts in their own chat with their agent (agentsOnly.test.ts).
   it('stores a person\'s message without the credentials, keeps the rest and tells the sender what went', () => {
     const f = fixture(), lead = f.add('lead', 'owner', 'lead', true)
-    const input = send(pasted)
+    const input = send(pasted, f.pmChat(lead))
     const sent = f.run(input)
     expect(sent.messages).toEqual([expect.objectContaining({ text: kept, recipients: [lead] })])
     expect(sent.result).toEqual({ messageId: sent.messages[0]!.id, credentialNotice: notice,
@@ -2762,7 +2729,7 @@ describe('credentials in Swarm chat', () => {
     expect(JSON.stringify([sent.messages, f.state])).not.toContain(github)
     expect(JSON.stringify([sent.messages, f.state])).not.toContain(jwt)
     // The caller's command is left as it was; only what is stored changes.
-    expect(input).toEqual(send(pasted))
+    expect(input).toEqual(send(pasted, f.pmChat(lead)))
   })
 
   it('treats an agent\'s post the same: agents echo credentials from their terminals', () => {
@@ -2777,7 +2744,7 @@ describe('credentials in Swarm chat', () => {
   it('leaves a message without credentials, and its result, exactly as before', () => {
     const f = fixture()
     const text = 'Merged a3f1c9e27b5d4f80916e2c3b7a8d9e0f1a2b3c4d; id 123e4567-e89b-12d3-a456-426614174000, see https://github.com/example/project/pull/1680'
-    const sent = f.run(send(text))
+    const sent = f.run(send(text, f.pmChat(f.add('lead', 'owner', 'lead', true))))
     expect(sent.messages[0]!.text).toBe(text)
     expect(sent.result).toEqual({ messageId: sent.messages[0]!.id })
   })

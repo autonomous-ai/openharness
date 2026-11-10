@@ -68,7 +68,7 @@ describe('live cards', () => {
     const id = f.create()
     const peer: Actor = { kind: 'person', userId: 'peer', email: 'ivy@example.com' }
     f.state.people.push({ id: 'peer', email: peer.email, role: 'collaborator', generation: 'first' })
-    f.post(id, `Opened ${PR}`)
+    f.post(id, `Opened ${PR}`, f.as(f.add('Kai', id)))
     expect(f.group(id).cards?.pullRequests).toHaveLength(1)
     f.group(id).audience = { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] }
     const seen = visibleState(f.state, peer, 1000)

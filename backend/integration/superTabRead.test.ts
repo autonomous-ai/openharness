@@ -571,7 +571,7 @@ describe('host form (design 4.10)', () => {
     const { cursor } = await fullRead(s.tabId)
     await command(s.tabId, { type: 'conversation.agent', conversationId: s.more.lonerGroup, agentId: s.more.loner, present: false, lead: false })
     await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Once' })
-    await command(s.tabId, { type: 'message.send', conversationId: s.more.lonerGroup, text: 'Twice', replyTo: null, recipientIds: [] })
+    await command(s.tabId, { type: 'conversation.rename', conversationId: s.more.lonerGroup, title: 'Twice' })
     clock = Date.now()
     const tab = (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === s.tabId)
     expect(tab?.roster.find((r: { agent?: { id: string } }) => r.agent?.id === s.more.loner)).toMatchObject({ active: false })
@@ -917,8 +917,9 @@ describe('what a read costs the database (group 3b)', () => {
     const s = await scene(f => bulky(f))
     clock = Date.now()
     const cursor = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.cursor
+    // The worker's post: only agents post in a task's chat (agentsOnly.test.ts).
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'One post', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     let groups: string[] = []
     const bytes = await databaseBytes(async () => {
@@ -939,7 +940,7 @@ describe('what a read costs the database (group 3b)', () => {
     const first = (await post({ full: true })).json().data as { cursor: string; tabs: Array<{ tabId: string; etag: string }> }
     const etag = first.tabs.find(t => t.tabId === s.tabId)!.etag
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     let answer: Record<string, unknown> | undefined
     const bytes = await databaseBytes(async () => {
@@ -1017,7 +1018,7 @@ describe('what a read costs the database (group 3b)', () => {
     expect(idle.tabs).toEqual([])
     expect(newestReads()).toEqual([])
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } }, s.worker)
     clock = Date.now()
     const woken = (await hosts.changes(owner, machineId, { cursor: idle.cursor })).tabs
     const posted = (await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.changedAt.getTime()

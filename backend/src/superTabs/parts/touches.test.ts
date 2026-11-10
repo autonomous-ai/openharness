@@ -35,7 +35,10 @@ const has = (touches: Array<{ kind: string; key: string }>, kind: string, key: s
 describe('the parts a command touches (design section 1.2, column T)', () => {
   it('touches the actor\'s own part on every command', () => {
     const f = swarm(), a = f.group('A')
-    expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Hi', replyTo: null, recipientIds: [] }).touches, 'member', 'owner')).toBe(true)
+    // A person posts in their own chat with their agent (agentsOnly.test.ts).
+    const chat = f.run({ type: 'agent.new', kind: 'regular', name: 'Ada', machineId: 'owner-mac', engine: 'claude', local: true } as Command, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).effects.result.conversationId as string
+    expect(has(f.run({ type: 'message.send', conversationId: chat, text: 'Hi', replyTo: null, recipientIds: [] }).touches, 'member', 'owner')).toBe(true)
     expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Hi', replyTo: null, recipientIds: [] }, f.agentActor(a.worker)).touches, 'agent', a.worker)).toBe(true)
   })
 

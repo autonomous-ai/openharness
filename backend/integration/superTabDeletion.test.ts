@@ -75,8 +75,10 @@ async function swarm(w: ReturnType<typeof world>, name = 'Lampos') {
   await execute({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'PM', configuration: config, lead: true }, host)).result.agentId)
   const worker = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false }, host)).result.agentId)
-  const hello = String((await execute({ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] })).result.messageId)
-  await w.store.upload(member, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) })
+  // The PM's message and file: only agents post in a project's channel (agentsOnly.test.ts).
+  const hello = String((await w.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'hello',
+    replyTo: null, recipientIds: [] } }, lead)).result.messageId)
+  await w.store.upload(host, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) }, lead)
   return { tab, execute, machineId, lead, worker, hello }
 }
 
@@ -241,7 +243,7 @@ describe('the purge', () => {
 
     const g = await swarm(w, 'Flaky')
     await g.execute({ type: 'swarm.delete', name: 'Flaky' })
-    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs' }
+    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs', avatars: null, avatarPrefix: 'super-tabs' }
     expect((await purgeDeletedSwarms(db, broken, w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS)).waiting).toBeGreaterThanOrEqual(1)
     expect(await db.superTabAttachment.count({ where: { tabId: g.tab } })).toBe(1)
     expect(await db.superTab.count({ where: { id: g.tab } })).toBe(1)
@@ -292,7 +294,9 @@ describe('while a Swarm is deleted', () => {
     const w = world(), tab = (await w.store.create(owner, randomUUID(), 'Racing', 'public')).id
     const invitation = await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' } })
     await w.store.execute(member, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    // The member's post read the Swarm before the delete committed, and writes after it.
+    // The member's new task read the Swarm before the delete committed, and writes after it. (A person's write: a person posts
+    // in no project channel, agentsOnly.test.ts.)
+    const groups = await db.swarmGroup.count({ where: { tabId: tab } })
     let deleted = false
     const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (deleted) return
@@ -300,9 +304,9 @@ describe('while a Swarm is deleted', () => {
       await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Racing' } })
     }), () => w.clock.now)
     expect(await refusal(() => racing.execute(member, tab, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: 'lead', text: 'after the delete', replyTo: null, recipientIds: [] } }))).toEqual(MISSING)
+      command: { type: 'conversation.create', title: 'After the delete', brief: '', checks: [] } }))).toEqual(MISSING)
     expect(deleted).toBe(true)
-    expect(await db.superTabMessage.count({ where: { tabId: tab, text: 'after the delete' } })).toBe(0)
+    expect(await db.swarmGroup.count({ where: { tabId: tab } })).toBe(groups)
   })
 
   /** A Swarm with a group archived by hand (so it may sleep), a finished start past its keeping,
@@ -422,7 +426,7 @@ describe('the purge, everywhere', () => {
     w.clock.now += 1000
     await fresh.execute({ type: 'swarm.delete', name: 'Fresh' })
     const after = w.clock.now + SWARM_DELETE_GRACE_MS + PURGE_MARGIN_MS
-    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs' }
+    const broken = { chat: { delete: async () => { throw Object.assign(new Error('storage down'), { code: 503 }) } }, prefix: 'super-tabs', avatars: null, avatarPrefix: 'super-tabs' }
     // The stuck one fails first; afterwards, with room for one Swarm a pass, the fresh one is next, not the stuck one again.
     await db.superTabAttachment.deleteMany({ where: { tabId: fresh.tab } })
     await purgeDeletedSwarms(db, broken, after - 1000, 1)

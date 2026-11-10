@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import { logger } from '../utils/logger.js'
-import { attachmentsFromEnv, errorCode, trimPrefix, type Attachments, type AttachmentStore } from './attachments.js'
+import { AVATAR_PURPOSE, attachmentsFromEnv, SharedAvatarStore, errorCode, trimPrefix, type Attachments, type AttachmentStore } from './attachments.js'
 import { readBy } from './parts/indexed.js'
 import { imageFacts, thumbKeyOf } from './thumbnails.js'
 import { ms } from './parts/light.js'
@@ -26,14 +26,18 @@ export const PURGED_BY_TAB_ID = ['superTabMessage', 'superTabReaction', 'superTa
 
 /** Removes one stored object; one already gone counts as removed. */
 export interface FileRemover { delete(objectKey: string): Promise<void> }
-/** Where a Swarm's files are and how each goes: in `prefix/<tabId>/`. */
-export interface PurgeFiles { chat: FileRemover | null; prefix: string }
+/** Where a Swarm's files are and how each goes: chat files in `prefix/<tabId>/`, avatars in `avatarPrefix/<tabId>/`. */
+export interface PurgeFiles { chat: FileRemover | null; prefix: string; avatars: FileRemover | null; avatarPrefix: string }
 
-const removerOf = (store: AttachmentStore): FileRemover | null =>
-  'delete' in store && typeof store.delete === 'function' ? store as unknown as FileRemover : null
+const removerOf = (store: AttachmentStore | null | undefined): FileRemover | null => {
+  if (!store) return null
+  if (store instanceof SharedAvatarStore) return removerOf(store.store)
+  return 'delete' in store && typeof store.delete === 'function' ? store as unknown as FileRemover : null
+}
 export function purgeFiles(attachments: Attachments | null): PurgeFiles | null {
   if (!attachments) return null
-  return { chat: removerOf(attachments.store), prefix: trimPrefix(attachments.prefix) }
+  return { chat: removerOf(attachments.store), prefix: trimPrefix(attachments.prefix), avatars: removerOf(attachments.avatars ?? null),
+    avatarPrefix: trimPrefix(attachments.avatarPrefix ?? attachments.prefix) }
 }
 
 const folder = (prefix: string, tabId: string) => [prefix, tabId].filter(Boolean).join('/') + '/'
@@ -42,10 +46,11 @@ const folder = (prefix: string, tabId: string) => [prefix, tabId].filter(Boolean
  *  the next one carries on, its record kept so it is found again. */
 async function purgeAttachments(db: PrismaClient, tabId: string, files: PurgeFiles | null, page: number): Promise<boolean> {
   for (;;) {
-    const rows = await db.superTabAttachment.findMany({ where: { tabId }, select: { id: true, objectKey: true, image: true }, take: page })
+    const rows = await db.superTabAttachment.findMany({ where: { tabId }, select: { id: true, objectKey: true, purpose: true, image: true }, take: page })
     for (const row of rows) {
-      const remover = files?.chat ?? null
-      const own = files ? row.objectKey.startsWith(folder(files.prefix, tabId)) : false
+      const avatar = row.purpose === AVATAR_PURPOSE
+      const remover = files ? avatar ? files.avatars : files.chat : null
+      const own = files ? row.objectKey.startsWith(folder(avatar ? files.avatarPrefix : files.prefix, tabId)) : false
       // A key outside this Swarm's folder is never another's to remove from here: its record goes, the object stays.
       if (remover && own) {
         try {

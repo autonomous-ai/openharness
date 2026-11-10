@@ -12,7 +12,6 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type Agent, type Author, type CommandEffects, type Conversation, type Person, type SuperTabState,
 } from './model.js'
 import { endSteps, stepEndedRows } from './steps.js'
-import { noteWriter } from './stuck.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { agentsNamedIn, checkMentions, MAX_MENTIONS, namedIn, saysName, textTags, withTags } from './mentions.js'
 import { leadOf, TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
@@ -28,7 +27,7 @@ import { deleteMessage, editMessage, type MessageChangeTarget } from './messageE
 import { bindPullRequestCards } from './cards.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isProjectChat, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, mutableProjects, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -470,6 +469,14 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
   return state.conversations.some(c => c.assignment?.agentId === agentId && !c.archived && c.id !== group.id && !c.kind && !c.audience
     && !['lost', 'stopped', 'cancelled'].includes(c.assignment.status) && groupProject(state, c).id === project.id)
 }
+/** New project's opening request (Desktop launch.dart startInSwarm): its creator posts it, with its files, in the new project's
+ *  channel right before lead.start, and the PM reads it there when it joins. Only while the channel holds no message and no PM
+ *  was asked for or holds it. Goes when New project hands its request to the PM's own 1:1 chat, which needs lead.start to create
+ *  that chat and return its id. */
+function openingRequest(state: SuperTabState, userId: string, group: Conversation): boolean {
+  const project = projectsOf(state).find(p => p.leadConversationId === group.id)
+  return !!project && ownsProject(state, userId, project) && !project.lead && !group.leadId && !group.lastMessageSequence
+}
 /** Who may post in a conversation may also upload a file to it. Writer access is checked by `author(state, actor, true)`. The
  *  open group [actor] may post in, and the agent that posting there adds to it (`joining`, else null): an agent of the group's
  *  project that is not in it joins it (joinsProject). An agent with work in the project posts in its project chat without joining
@@ -478,6 +485,14 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
  *  to an upload is not a yes to the post that sends it: that asks again, of the Swarm as it is then. */
 export function postable(state: SuperTabState, actor: Actor, conversationId: string): { group: Conversation; joining: string | null } {
   const group = open(state, conversationId)
+  // Swarm v4 (anh Dee, 2026-11-08): a project's channel and its tasks' chats are agents only. People read them and talk to their
+  // own agents, each in a chat of its own (a conversation with a kind); an agent passes its person's decision on. The apps only
+  // hid the composer, so an older app, the phone and the web still posted there (2026-11-09). A post, an upload and a voice
+  // message all ask this. Exempt: a Personal Swarm, whose Desktop still starts a project's PM on the person's first message in its
+  // chat (leadWaiting, lead.claim); the exemption goes when the Personal Swarm v4 (every pane an agent under Your Team) lands.
+  if (actor.kind === 'person' && !group.kind && !isPersonalSwarm(state) && !openingRequest(state, actor.userId, group)) {
+    fail('AGENTS_ONLY', 'Only agents post in a project\'s channel. Talk to your agents.', 403)
+  }
   if (actor.kind !== 'agent' || group.agentIds.includes(actor.agentId)) return { group, joining: null }
   if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return { group, joining: null }
   if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
@@ -1403,6 +1418,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A new PM's first request is its person's first line in their chat with it (Swarm v4: only agents post in the channel).
       if (command.initialMessage) {
         if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
+        // Elsewhere it is the person's post there, which agents only refuses as any other (postable).
+        if (!pmChat) postable(state, actor, group.id)
         message(pmChat ?? group.id, command.initialMessage)
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
@@ -1965,6 +1982,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'message.edit':
       // `command` is the cleaned one (withoutCredentials): the store writes this text, never the one it was sent.
       result.changed = editMessage(open(state, command.conversationId), actor, command.messageId, command.text, context.messageChange)
+      // The author's new words where only agents post are refused as a post is (postable); a delete only takes words away.
+      postable(state, actor, command.conversationId)
       if (result.changed) effects.messageEdit = { messageId: command.messageId, text: command.text }
       break
     case 'message.delete':
@@ -2084,8 +2103,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, mentions)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
       if (command.answers) effects.messages.at(-1)!.answers = command.answers
-      // Whom a stuck line in a task tags, with its requester (stuck.ts, task #3915).
-      if (actor.kind === 'person' && !command.agentOnly && !group.kind && !group.audience && !isProjectChat(state, group)) noteWriter(group, actor.userId)
       if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       // A recipient whose session is down keeps the delivery queued and reads it when it is back, and nothing else tells its sender
       // the post is waiting. Not an agent-only notice (the sender's own) or one told to stop.
