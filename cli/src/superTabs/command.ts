@@ -3,6 +3,7 @@ import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/da
 import { callerOf, type Frame } from '../agentClient/model.js'
 import { resolve } from 'node:path'
 import { uploadAttachments } from './attach.js'
+import { REPLY_TEXT_MAX } from './agentReplies.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -50,11 +51,15 @@ function postStdin(stdin: () => string, terminal: () => boolean): string {
 /** What the server takes of one post (backend superTabs/commands.ts `message.send`: 32,000 characters once trimmed). A longer
  *  one it refused with a field message, and from 512 KiB the daemon's socket closed on the request, so an agent that posted a
  *  long log heard only "The connection to Harness closed." (Q3, 2026-11-09). Said here, with the length, before anything is sent. */
-const POST_MAX_CHARS = 32_000
-/** A post refused before it was sent, with the operation id it was to go under: the agent's line names it as a sent one's does. */
+const POST_MAX_CHARS = REPLY_TEXT_MAX
+/** A number with its thousands marked, as the server's words are, whatever Intl this Node was built with. */
+const counted = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+/** A post refused before it was sent (`POST_TOO_LONG`), with the operation id it was to go under: the agent's line names it as a
+ *  sent one's does. */
 class PostTooLong extends Error {
+  readonly code = 'POST_TOO_LONG'
   constructor(length: number, readonly operationId: string) {
-    super(`This post is ${length.toLocaleString('en-US')} characters, and a post takes at most ${POST_MAX_CHARS.toLocaleString('en-US')}: `
+    super(`This post is ${counted(length)} characters, and a post takes at most ${counted(POST_MAX_CHARS)}: `
       + 'nothing was posted. Say it shorter, or put the rest in a file or a pull request and post its link.')
   }
 }
@@ -300,7 +305,10 @@ export async function superTabCommand(argv: readonly string[], deps: {
     print(JSON.stringify({ ...result, ...(operationId ? { operationId } : {}) }))
     return result.error ? 1 : 0
   } catch (error) {
-    if (error instanceof PostTooLong) operationId = error.operationId
+    if (error instanceof PostTooLong) {
+      print(JSON.stringify({ error: error.code, detail: error.message, operationId: error.operationId }))
+      return 1
+    }
     print(JSON.stringify({ error: error instanceof Error ? error.message : String(error), ...(operationId ? { operationId } : {}) }))
     return 1
   } finally { daemon?.close() }
