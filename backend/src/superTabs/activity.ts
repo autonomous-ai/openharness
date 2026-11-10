@@ -19,7 +19,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
 import { agentOnly, isLeads, stableId, type Actor, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { SESSION_ENDED_KIND } from './buddySessions.js'
-import { canReadGroup, projectOf } from './projects.js'
+import { canReadGroup, isProjectChannel, projectOf } from './projects.js'
 import { groupsBy, readBy } from './parts/indexed.js'
 import type { ThreadFacet } from './pageReads.js'
 import type { ReplyRow } from '../push/notices.js'
@@ -77,9 +77,9 @@ export interface ReplyFanout { state: SuperTabState; threads: ReadonlyMap<string
  *  `fanout`); a Swarm notice in a thread (a row with a source) tells only the starter and the author of the message it quotes,
  *  as before; without `fanout` every reply tells only those two. Never the reply's author, nor a person tagged in the reply
  *  itself (the tag tells them, mentions.ts), nor one who unfollowed the thread (readMarks.ts writeThreadFollow) or muted the
- *  chat (chatSettings.ts); with `fanout`, never a person no longer in the Swarm or who cannot read the chat now, and a chat
- *  its state does not hold tells only those two. A notice for
- *  agents alone, or a Buddy session's ended line, is nobody's activity. A root or quoted message counts only in the reply's own
+ *  chat (chatSettings.ts; with `fanout`, a project's channel's mute does not hold, projects.ts isProjectChannel); with
+ *  `fanout`, never a person no longer in the Swarm or who cannot read the chat now, and a chat its state does not hold tells
+ *  only those two. A notice for agents alone, or a Buddy session's ended line, is nobody's activity. A root or quoted message counts only in the reply's own
  *  chat. Each row keeps its message's `sequence` (from `sequences`) and whether it is also in the chat, so a thread or chat mark
  *  reads it (markActivityThreadRead). The starter's row of a person's reply `rings` when no reply there rang them before
  *  (rangThreads): the phone's push and its own notice are for that row alone.
@@ -125,11 +125,13 @@ export async function writeReplyActivity(tx: Tx, tabId: string, messages: Messag
     { $match: { _id: { $in: markIds } } }, { $project: { _id: 1, follow: 1 } },
   ] }) as unknown as Array<{ _id: string; follow?: boolean | null }>
   const unfollowed = new Set(marks.filter(mark => mark.follow === false).map(mark => mark._id))
-  // Muted chats: by the setting rows' ids, as the marks above (chatSettings.ts writeChatSetting names them).
-  const settingIds = [...new Set(recipients.flatMap(({ message, people }) => people.map(personId => stableId(tabId, message.conversationId, personId, 'notify'))))]
-  const settings = await tx.superTabChatSetting.aggregateRaw({ pipeline: [
+  // Muted chats: by the setting rows' ids, as the marks above (chatSettings.ts writeChatSetting names them); none read for a
+  // chat whose mute does not hold.
+  const settingIds = [...new Set(recipients.flatMap(({ message, people }) => !fanout || !isProjectChannel(fanout.state, message.conversationId)
+    ? people.map(personId => stableId(tabId, message.conversationId, personId, 'notify')) : []))]
+  const settings = settingIds.length ? await tx.superTabChatSetting.aggregateRaw({ pipeline: [
     { $match: { _id: { $in: settingIds } } }, { $project: { _id: 1, notify: 1 } },
-  ] }) as unknown as Array<{ _id: string; notify?: string }>
+  ] }) as unknown as Array<{ _id: string; notify?: string }> : []
   const muted = new Set(settings.filter(row => row.notify === 'muted').map(row => row._id))
   const data = recipients.flatMap(({ message: m, people, ringing }) => {
     return people.filter(personId => !unfollowed.has(stableId(tabId, m.conversationId, m.thread!, personId))
