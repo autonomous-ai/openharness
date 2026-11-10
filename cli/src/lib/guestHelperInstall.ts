@@ -136,7 +136,7 @@ export async function installGuestHelper(options: GuestHelperInstallOptions = {}
   // every service sharing the edge host's process, must not carry them (src/leanEntry.spec.ts).
   if (platform === 'win32') {
     const { installWindowsGuestHelper } = await import('./windows/guestHelperInstallWin.js')
-    return installWindowsGuestHelper(options, GUEST_HELPER_PROMPT)
+    return installWindowsGuestHelper(options)
   }
   if (platform !== 'darwin' && platform !== 'linux') {
     return { ok: false, code: 'UNSUPPORTED', message: 'Sharing this computer needs macOS or Linux.' }

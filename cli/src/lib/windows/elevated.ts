@@ -9,21 +9,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
 import { ps } from './powershellQuote.js'
-import { WHOAMI_USER_ARGS, windowsUserSid } from './whoami.js'
 
 export type AdminResult =
   | { ok: true; stdout: string }
   /** [status]: the script's own exit status, when it stopped with one. */
   | { ok: false; code: 'CANCELLED' | 'FAILED'; message: string; status?: number }
 
-export interface AdminScript {
-  script: string
-  /** Files the script installs from the staging folder, by name. */
-  files?: Record<string, string>
-}
-
-/** Builds the script once the staging folder exists (the script names it), then runs it elevated. */
-export type RunAdmin = (build: (stageDir: string) => AdminScript, prompt: string) => Promise<AdminResult>
+/** Runs [script] elevated, in a staging folder only [ownerSid] (this process's own account, as `whoami /user` read it:
+ *  lib/windows/whoami.ts), SYSTEM and Administrators can open. */
+export type RunAdmin = (script: string, ownerSid: string) => Promise<AdminResult>
 
 export interface AdminDeps {
   runner?: GuestRunner
@@ -78,19 +72,14 @@ const UAC_CANCELLED = 1223
  * Windows: User Account Control's prompt (Windows PowerShell's own, signed), for `run.ps1` in a staging folder only the
  * owner, SYSTEM and Administrators can open. Inheritance is removed first, before anything is written in it.
  */
-async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, build: (stageDir: string) => AdminScript): Promise<AdminResult> {
+async function runElevatedOnWindows(runner: GuestRunner, stageDir: string, script: string, ownerSid: string): Promise<AdminResult> {
   // Every principal by SID. The owner's from this process's own token: a bare name could resolve to a same-named
   // domain or local account. SYSTEM's and Administrators' names change with the language of Windows.
-  const who = await runner('whoami', WHOAMI_USER_ARGS, { timeoutMs: 30_000 })
-  const ownerSid = who.code === 0 ? windowsUserSid(who.stdout) : null
-  if (!ownerSid) return { ok: false, code: 'FAILED', message: 'Could not read this account\'s SID (whoami /user).' }
   const acl = await runner('icacls', [stageDir, '/inheritance:r', '/grant:r', `*${ownerSid}:(OI)(CI)F`, '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F'],
     { timeoutMs: 30_000 })
   if (acl.code !== 0) {
     return { ok: false, code: 'FAILED', message: `Could not make the staging folder private: ${(acl.stderr || acl.stdout).trim() || `icacls exited ${acl.code}`}` }
   }
-  const { script, files = {} } = build(stageDir)
-  for (const [name, content] of Object.entries(files)) writeFileSync(join(stageDir, name), content)
   // With a byte order mark: Windows PowerShell 5.1 reads a script without one in the computer's ANSI code page.
   writeFileSync(join(stageDir, 'run.ps1'), `﻿${script}`)
   const elevated = join(stageDir, 'elevated.ps1')
@@ -120,8 +109,8 @@ export function windowsAdminRunner(deps: AdminDeps = {}): RunAdmin {
   const runner = deps.runner ?? runGuestCommand
   const makeStage = deps.makeStage ?? (() => mkdtempSync(join(tmpdir(), 'harness-admin-')))
   const removeStage = deps.removeStage ?? ((dir: string) => rmSync(dir, { recursive: true, force: true }))
-  return async (build) => {
+  return async (script, ownerSid) => {
     const stageDir = makeStage()
-    try { return await runElevatedOnWindows(runner, stageDir, build) } finally { removeStage(stageDir) }
+    try { return await runElevatedOnWindows(runner, stageDir, script, ownerSid) } finally { removeStage(stageDir) }
   }
 }

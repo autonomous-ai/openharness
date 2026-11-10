@@ -35,10 +35,6 @@ export interface TeamConfig {
   createdAt: string
 }
 
-export function teamConfigJson(config: TeamConfig): string {
-  return `${JSON.stringify(config, null, 2)}\n`
-}
-
 /** Where setup wrote the Team config on [platform]: the one place every reader looks. */
 export function teamConfigFile(platform: NodeJS.Platform = process.platform): string {
   return Object.hasOwn(TEAM_CONFIG_FILES, platform) ? TEAM_CONFIG_FILES[platform as keyof typeof TEAM_CONFIG_FILES] : TEAM_CONFIG_FILE

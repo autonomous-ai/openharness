@@ -18,8 +18,7 @@ import type { RunAdmin } from './elevated.js'
 import type { GuestHelperInstallOptions, GuestHelperInstallResult, GuestHelperStatus, GuestHelperStatusDeps } from '../guestHelperInstall.js'
 
 /** The Windows one-time install: the proven UAC runner, the guest tree/task, one prompt. */
-export async function installWindowsGuestHelper(options: GuestHelperInstallOptions,
-  prompt: string): Promise<GuestHelperInstallResult> {
+export async function installWindowsGuestHelper(options: GuestHelperInstallOptions): Promise<GuestHelperInstallResult> {
   if (process.env.HARNESS_WINDOWS_GUESTS === '0') {
     return { ok: false, code: 'UNSUPPORTED', message: 'Sharing this computer is turned off on this build.' }
   }
@@ -36,7 +35,7 @@ export async function installWindowsGuestHelper(options: GuestHelperInstallOptio
   const script = buildWindowsGuestInstallScript({ owner, ownerHome, ownerSid, processor, version: String(WINDOWS_GUEST_SETUP_VERSION),
     ptySrc: ptyHostBinary(), nodeSrc: dirname(managedNodePath()) })
   const admin: RunAdmin = options.admin ?? (await import('./elevated.js')).windowsAdminRunner({ runner })
-  const result = await admin(() => ({ script }), prompt)
+  const result = await admin(script, ownerSid)
   if (result.ok) return { ok: true }
   return { ok: false, code: result.code, message: result.message }
 }

@@ -260,7 +260,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         // A Desktop from before team machines went asks why its Mac's Harness Team account has not joined, and sends Retry
         // (machines.dart, until its own removal; delete on or after 2026-12-10). No Team account joins any more: nothing to say.
-        if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') return { ok: true }
+        if (payload.action === 'teamJoinStatus' || payload.action === 'teamJoinRetry') return asker.local ? { ok: true } : { error: 'OWNER_REQUIRED' }
         if (payload.action === 'swarmRole') {
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
           // In the wire's values, which the core reads in either set (inCore/role.ts) and a core from before role kinds in

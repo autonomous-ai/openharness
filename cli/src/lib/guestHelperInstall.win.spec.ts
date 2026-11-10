@@ -9,7 +9,7 @@ const whoami = async () => ({ code: 0, stdout: `"HOST\\\\owner","${SID}"\n`, std
 describe('installing guest sharing on Windows', () => {
   it('asks once, with the owner SID, the guest tree and the setup task', async () => {
     let script = ''
-    const admin = vi.fn<RunAdmin>(async (build) => { script = build('C:\\\\stage').script; return { ok: true, stdout: '' } })
+    const admin = vi.fn<RunAdmin>(async (run, ownerSid) => { script = run; expect(ownerSid).toBe(SID); return { ok: true, stdout: '' } })
     const result = await installGuestHelper({ platform: 'win32', owner: 'owner', ownerHome: 'C:\\Users\\owner', runner: whoami, admin })
     expect(result).toEqual({ ok: true })
     expect(admin).toHaveBeenCalledTimes(1)

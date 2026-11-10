@@ -37,8 +37,7 @@ const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
 // include tools from pending starts. An uncommon tool first named by a start remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
-/** After a backend refuses a new field (harnessProgress, from before task leases), how long the reading goes without it before the field is offered again: a backend deployed meanwhile
- *  is heard from within this long. */
+/** How long a tool the probe could not verify stays unverified before it is probed again. */
 const UNVERIFIED_TOOL_TTL_MS = 60_000
 /** How long a session's folder stands as clean or not before git is asked again: a minute bounds the work to one
  *  `git status` per running session a minute, and the backend stops an idle worker only on a report under 2 minutes old. */

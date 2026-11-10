@@ -1,7 +1,7 @@
 /**
  * This process's own Windows account, as `whoami` prints it: guest sharing's installer names its owner by SID in the
- * ACLs it sets (lib/windows/guestHelperInstallWin.ts), and the administrator prompt hands the SID to its script
- * (lib/admin.ts).
+ * ACLs it sets and its elevated runner makes its staging folder the owner's by it (lib/windows/guestHelperInstallWin.ts,
+ * ./elevated.ts).
  */
 import { checkSid } from './sid.js'
 
