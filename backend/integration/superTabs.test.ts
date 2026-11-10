@@ -752,7 +752,8 @@ describe('Super Tabs on a real Mongo replica set', () => {
     // Started and assigned in a task: the project chat holds only its coordinator among agents (#2207).
     const task = String((await run(tab, { type: 'conversation.create', title: 'Pool work', brief: '', checks: [] })).result.conversationId)
     const request = { conversationId: task, machineId: 'pool-host', engine: 'codex', name: 'Builder', cwd: '/project', worktree: true,
-      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+      // 15 GiB each, with 28 GB free: room for one (saved counts hold no start back since 2026-11-10).
+      requirements: { memoryBytes: 15 * 1024 ** 3, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
     await expect(asHost(tab, { type: 'agent.start', request: { ...request, cwd: '/private' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     await expect(asHost(tab, { type: 'agent.start', request: { ...request, permissionMode: 'full' } })).rejects.toMatchObject({ code: 'OUTSIDE_CONTRIBUTION' })
     const starts = await Promise.allSettled([asHost(tab, { type: 'agent.start', request }), asHost(tab, { type: 'agent.start', request })])
@@ -3018,7 +3019,7 @@ it('releases a finished worker through its execution host, cancels deliveries an
   expect(machineSlots(after, after.machines![0]!)).toBe(1)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
   const delayed = (await store.read(owner, tab)).state
-  expect(delayed.machines![0]!.availableSlots).toBe(3)
+  expect(machineSlots(delayed, delayed.machines![0]!)).toBe(1)
   expect(await db.superTabDelivery.count({ where: { tabId: tab, agentId: worker, status: { in: ['queued', 'claimed', 'uncertain'] } } })).toBe(0)
   expect((await rosterRows(store, host, 'test-host')).some(r => r.agent?.id === worker)).toBe(false)
   // Re-contribution reserves a new runtime; ordinary removal must not reuse its old stop proof.
@@ -3030,14 +3031,14 @@ it('releases a finished worker through its execution host, cancels deliveries an
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [{ harnessId: native, generation: 'old-generation' }] })
   const stillReserved = (await store.read(owner, tab)).state
-  expect(stillReserved.machines![0]!.availableSlots).toBe(2)
+  expect(machineSlots(stillReserved, stillReserved.machines![0]!)).toBe(2)
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [reservation] })
   const physicallyStopped = (await store.read(owner, tab)).state
-  expect(physicallyStopped.machines![0]!.availableSlots).toBe(3)
+  expect(machineSlots(physicallyStopped, physicallyStopped.machines![0]!)).toBe(1)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
   const delayedAgain = (await store.read(owner, tab)).state
-  expect(delayedAgain.machines![0]!.availableSlots).toBe(3)
+  expect(machineSlots(delayedAgain, delayedAgain.machines![0]!)).toBe(1)
 })
 
 it('fences a shared native session globally while its release is pending', async () => {
