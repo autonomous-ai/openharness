@@ -38,8 +38,7 @@ Future<bool> confirmDiscard(
       context,
       title: untracked ? 'Move to Trash?' : 'Discard changes?',
       message: untracked
-          ? '$what isn’t in Git yet. It goes to the Trash, where you can '
-                'restore it.'
+          ? '$what isn’t in Git. It can be restored from the Trash.'
           : 'The changes to $what will be lost. This cannot be undone.',
       choices: [(untracked ? 'Move to Trash' : 'Discard', true, _Tone.danger)],
     ) ==
@@ -50,7 +49,7 @@ Future<bool> confirmTrash(BuildContext context, String name) async =>
     await _ask(
       context,
       title: 'Move to Trash?',
-      message: '“$name” goes to the Trash, where you can restore it.',
+      message: '“$name” can be restored from the Trash.',
       choices: const [('Move to Trash', true, _Tone.danger)],
     ) ==
     true;

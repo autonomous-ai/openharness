@@ -953,7 +953,7 @@ class _EmptyDevices extends StatelessWidget {
             const SizedBox(height: 18),
             Text(
               returning
-                  ? 'Connect a device by USB-C to a computer running Harness. It will appear here automatically.'
+                  ? 'Connect a device by USB-C to a computer running Harness.'
                   : 'Your agents, at a glance. A quiet chime when they need you. Make a home for every Harness on your desk.',
               style: DesktopChrome.text(color: DesktopChrome.muted),
             ),

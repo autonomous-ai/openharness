@@ -250,6 +250,7 @@ void main() {
           allOf(
             contains('Harness is running (v9.9.9)'),
             contains('still scanning for agents'),
+            endsWith('Retry in a moment.'),
           ),
         ),
       ),

@@ -1219,7 +1219,7 @@ class DaemonBrain extends ChangeNotifier {
     'UNTOUCHABLE' => 'the daemon never drives that one.',
     'UI_ONLY' || 'LOCAL_SOCKET_REQUIRED' =>
       'keys count only from a window on this computer.',
-    'UNSUPPORTED' => 'harnessd cannot answer that yet.',
+    'UNSUPPORTED' => 'this harnessd cannot answer that. update it.',
     final String code when code.startsWith('MACHINE_') =>
       'that machine is ${code.substring(8).toLowerCase()}.',
     _ => detail ?? 'the answer did not go through.',
@@ -1359,7 +1359,7 @@ class DaemonBrain extends ChangeNotifier {
         _talkRequest = null;
         _talkTimer = null;
         _talkPhase = DaemonTalkPhase.failed;
-        _talkError = 'The companion is taking longer to connect. Open the full conversation to check before sending again.';
+        _talkError = 'The companion is slow to connect. Open the full conversation before sending again.';
         notifyListeners();
       });
     } else {

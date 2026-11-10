@@ -269,15 +269,15 @@ class _AgentMessagesViewState extends State<AgentMessagesView> {
       );
     } else if (log == null) {
       body = const SkeletonList(rows: 3, semanticsLabel: 'Loading messages');
+    } else if (messages.isEmpty && log.reached) {
+      // Empty means empty (anh Dee, 11-07).
+      body = const SizedBox.shrink();
     } else if (messages.isEmpty) {
       body = Padding(
         padding: const EdgeInsets.symmetric(vertical: 24),
         child: Text(
-          log.reached
-              ? 'No messages yet. Agents in this tab send them with '
-                    '`harness send`.'
-              : 'Could not read this tab’s messages. Check that Harness is '
-                    'running on this computer, then try again.',
+          'Could not read this tab’s messages. Check that Harness is '
+          'running on this computer, then try again.',
           key: const ValueKey('agent-messages-empty'),
           textAlign: TextAlign.center,
           style: DesktopChrome.text(size: 13, color: DesktopChrome.muted),

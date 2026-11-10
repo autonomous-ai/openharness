@@ -397,6 +397,13 @@ class _ActionState extends State<_Action> {
     final working = notifier.signingOut
         ? 'Signing out…'
         : (url == null ? 'Signing in…' : 'Waiting for your browser');
+    // Under the button only what it does not already say.
+    final note = notifier.signingOut
+        ? null
+        : message ??
+              (url == null
+                  ? null
+                  : 'Finish signing in in your browser, then return here.');
     // The button the person pressed. A sign-out has none, and neither has a
     // sign-in started away from these buttons.
     final pressed = notifier.signingOut ? null : notifier.signInProvider;
@@ -417,20 +424,17 @@ class _ActionState extends State<_Action> {
             ),
             label: Text(working),
           ),
-        const SizedBox(height: 12),
-        Semantics(
-          liveRegion: true,
-          child: Text(
-            notifier.signingOut
-                ? 'Clearing your saved sign-in.'
-                : message ??
-                      (url == null
-                          ? 'Your workspace will open when sign-in is complete.'
-                          : 'Finish signing in in your browser, then return here.'),
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall,
+        if (note != null) ...[
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              note,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
-        ),
+        ],
         if (url != null || notifier.canCancelLogin) ...[
           const SizedBox(height: 12),
           Wrap(

@@ -109,16 +109,6 @@ class _TabPeopleState extends State<TabPeople> {
             rows: waiting,
             semanticsLabel: 'Loading harnesses',
           ),
-        if (rows.isEmpty && waiting == 0)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24),
-            child: Text(
-              'No harnesses in this tab yet.',
-              key: const ValueKey('tab-people-empty'),
-              textAlign: TextAlign.center,
-              style: DesktopChrome.text(size: 13, color: DesktopChrome.muted),
-            ),
-          ),
         ...rows,
         const SizedBox(height: 8),
         Padding(

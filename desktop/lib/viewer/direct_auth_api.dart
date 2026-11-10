@@ -104,8 +104,7 @@ class DirectAuthApi {
       token.startsWith('hnr_') || token.startsWith('htr_');
 
   static const _unavailable =
-      'Could not renew your sign-in. That is usually the sign-in service having a moment — '
-      'if it keeps happening, sign out and sign in again.';
+      'Could not renew your sign-in. If it keeps happening, sign out and sign in again.';
 
   /// [provider] is the account the SSO page opens on; without one it is the page's own chooser.
   Future<({String authorizeUrl, String tx})> authorizeNative(

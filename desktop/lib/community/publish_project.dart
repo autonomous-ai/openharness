@@ -58,7 +58,7 @@ Future<Map<String, dynamic>> buildPublicationDraft({
       'cover': cover,
     'contextNote': [
       _conversationNote(conversation, tail),
-      if (selection.pictured) 'The output is a picture of your viewer, taken just now. A fork opens the real thing.',
+      if (selection.pictured) 'The output is a picture of your viewer. A fork opens the viewer itself.',
       if (selection.leftOut.isNotEmpty) _leftOutNote(selection.leftOut),
       if (!selection.scannedAll)
         'This folder is larger than one harness, so only part of it was read.',

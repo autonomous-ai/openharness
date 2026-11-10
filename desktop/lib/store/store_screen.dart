@@ -912,29 +912,28 @@ class _Shelf$View extends StatelessWidget {
                 style: grid.AppType.body(color: grid.AppPalette.textSecondary),
               ),
               const SizedBox(height: 24),
-              if (entries.isEmpty)
+              if (entries.isNotEmpty)
+                StoreListing(
+                  entries: entries,
+                  ratingFor: (entry) =>
+                      store.ratingOf(StoreController.keyFor(entry)),
+                  onOpen: onOpen,
+                )
+              // A search's subtitle already counts 0 results, and a loaded
+              // shelf with nothing on it stays empty.
+              else if (shelf is! _Search &&
+                  (storeRunsNoHarness(context) || !loaded))
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 48),
                   child: Text(
-                    shelf is _Search
-                        ? 'No matching harnesses. Try a name or something you want to make.'
-                        : storeRunsNoHarness(context)
+                    storeRunsNoHarness(context)
                         ? kStoreOnAComputer
-                        : loaded
-                        ? 'Nothing here yet.'
                         : 'Asking this computer…',
                     style: grid.AppType.body(
                       height: 1.5,
                       color: grid.AppPalette.textSecondary,
                     ),
                   ),
-                )
-              else
-                StoreListing(
-                  entries: entries,
-                  ratingFor: (entry) =>
-                      store.ratingOf(StoreController.keyFor(entry)),
-                  onOpen: onOpen,
                 ),
               if (entries.isEmpty && shelf is _Search)
                 Wrap(
@@ -1671,14 +1670,6 @@ class _ProductPageState extends State<_ProductPage> {
                           ),
                         ],
                         const SizedBox(height: 16),
-                        if (page != null && page.reviews.isEmpty)
-                          Text(
-                            'No reviews yet. Be the first.',
-                            textAlign: TextAlign.center,
-                            style: grid.AppType.body(
-                              color: grid.AppPalette.textFaint,
-                            ),
-                          ),
                         for (final review
                             in page?.reviews ?? const <StoreReview>[])
                           Padding(

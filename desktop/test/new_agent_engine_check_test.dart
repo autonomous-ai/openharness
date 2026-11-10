@@ -96,10 +96,7 @@ void main() {
     // Failed checks remain distinct from a missing engine; creation can still
     // be attempted and troubleshooting stays in the optional details.
     expect(find.textContaining('Couldn’t check whether'), findsOneWidget);
-    expect(
-      find.textContaining('You can still try starting the harness.'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Retry, or start anyway.'), findsOneWidget);
     expect(find.textContaining('uses an older Harness CLI'), findsNothing);
     await tester.ensureVisible(find.byKey(const Key('new-agent-advanced')));
     await expandNewAgentAdvanced(tester);

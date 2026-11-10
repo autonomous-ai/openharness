@@ -1253,7 +1253,7 @@ class WsConn {
       if (token != null && token == _refreshedToken) {
         _closing = true;
         onStatus(ConnectionStatus.disconnected);
-        onAuthFailure('Your SSO session expired. Please sign in again.');
+        onAuthFailure('Your SSO session expired. Sign in again.');
         return;
       }
       unawaited(_refreshAndReconnect());
@@ -1307,7 +1307,7 @@ class WsConn {
     } catch (_) {
       _closing = true;
       onStatus(ConnectionStatus.disconnected);
-      onAuthFailure('Your SSO session expired. Please sign in again.');
+      onAuthFailure('Your SSO session expired. Sign in again.');
     }
   }
 

@@ -1162,7 +1162,7 @@ void main() {
         ..page = ((id) => marpPage(id, withMine: false, empty: true))
         ..failPut = StateError('offline');
       await _open(tester, store: store, initialHarness: 'autonomous/marp');
-      expect(find.text('No reviews yet. Be the first.'), findsOneWidget);
+      expect(find.textContaining('No reviews yet'), findsNothing);
       await tester.tap(_key('store-write-review'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
@@ -1202,7 +1202,6 @@ void main() {
         await _open(tester, store: store, initialHarness: 'autonomous/marp');
         expect(find.text('3.5 · 2 ratings'), findsOneWidget);
         expect(find.text('Reviews are unavailable right now.'), findsOneWidget);
-        expect(find.text('No reviews yet. Be the first.'), findsNothing);
       },
     );
   });
@@ -1291,7 +1290,8 @@ void main() {
         app.machineStates['machine-1']!.dsh.replace(const []);
         app.changed();
         await tester.pumpAndSettle();
-        expect(find.text('Nothing here yet.'), findsOneWidget);
+        expect(find.text('Asking this computer…'), findsNothing);
+        expect(find.text('Nothing here yet.'), findsNothing);
         // And with no machine left to ask, it is still asking.
         app.machineStates.clear();
         app.changed();

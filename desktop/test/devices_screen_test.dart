@@ -484,7 +484,8 @@ void main() {
       await tester.tap(faces);
       await tester.pumpAndSettle();
       expect(deviceFaces, hasLength(1));
-      expect(find.textContaining('New faces will appear'), findsOneWidget);
+      expect(find.text('Focus'), findsWidgets);
+      expect(find.textContaining('New faces will appear'), findsNothing);
       await tester.tap(find.text('Done'));
       await tester.pumpAndSettle();
       expect(

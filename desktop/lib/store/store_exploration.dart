@@ -48,9 +48,7 @@ const storeDisciplines = <String, StoreDiscipline>{
   'Coding': StoreDiscipline(
     name: 'Coding',
     headline: 'Start with what\nyou know.',
-    description:
-        'Build the feature. Try the idea. Follow a promising detour. '
-        'Your coding agents are right here, ready for the next thing.',
+    description: 'Build the feature. Try the idea. Follow a promising detour.',
     invitation: 'Your familiar tools. Room for bigger ideas.',
     color: Color(0xffcfedac),
     featured: ['codex', 'claude', 'cursor'],
@@ -179,7 +177,7 @@ const storeDisciplines = <String, StoreDiscipline>{
     headline: 'Make AI\nyour own.',
     description:
         'Run a model on your machine, compare what it can do, and find '
-        'a setup that fits your work. The next experiment can happen right at your desk.',
+        'a setup that fits your work.',
     invitation: 'Get to know what your own machines can do.',
     color: Color(0xffc8def5),
     featured: [
@@ -195,9 +193,7 @@ StoreDiscipline storeDiscipline(String name) =>
     StoreDiscipline(
       name: name,
       headline: 'A new craft\nis waiting.',
-      description:
-          'Explore a tool, try a small idea, and see what you can make. '
-          'There is always another direction to follow.',
+      description: 'Explore a tool. Try a small idea.',
       invitation: 'Bring your curiosity. Start with one small project.',
       color: const Color(0xffd6e6bc),
     );

@@ -140,12 +140,12 @@ class _SessionClosePromptState extends State<_SessionClosePrompt> {
                 const SizedBox(height: DesktopChrome.controlGap),
                 Text(
                   protectionReason != null
-                      ? 'You can close $scope. The ${coordinator ?? 'Product Manager'} will keep running.'
+                      ? 'The ${coordinator ?? 'Product Manager'} keeps running.'
                       : widget.error == null
-                      ? 'Stopping ${count == 1 ? 'this session' : 'all $count sessions'} will close $scope. History will be saved.'
+                      ? 'Stopping ${count == 1 ? 'this session' : 'all $count sessions'} closes $scope. History is saved.'
                       : widget.tabName == null
-                      ? 'You can close this pane. The session may still be running.'
-                      : 'You can close this tab. Some sessions may still be running.',
+                      ? 'The session may still be running.'
+                      : 'Some sessions may still be running.',
                   style: DesktopChrome.text(size: 13),
                 ),
                 const SizedBox(height: DesktopChrome.groupGap),

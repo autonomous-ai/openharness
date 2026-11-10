@@ -537,15 +537,15 @@ class _MachinesManagerState extends State<_MachinesManager> {
                             ),
                           if (_machineId == null &&
                               app.machineStates.isEmpty &&
-                              _machineQuery.text.isEmpty)
+                              _machineQuery.text.isEmpty &&
+                              (app.machinesLoading ||
+                                  app.machineListError != null))
                             Padding(
                               padding: const EdgeInsets.all(12),
                               child: Text(
                                 app.machinesLoading
                                     ? 'Loading machines…'
-                                    : app.machineListError != null
-                                    ? 'Machine list unavailable.'
-                                    : 'No machines available yet.',
+                                    : 'Machine list unavailable.',
                                 style: boxMonoStyle(color: kBoxFaint),
                               ),
                             ),

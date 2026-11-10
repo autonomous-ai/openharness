@@ -877,7 +877,7 @@ void main() {
         expect(find.text('2 sessions are still working.'), findsOneWidget);
         expect(
           find.text(
-            'Stopping all 3 sessions will close the tab “Release”. History will be saved.',
+            'Stopping all 3 sessions closes the tab “Release”. History is saved.',
           ),
           findsOneWidget,
         );
@@ -1019,10 +1019,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Stop not confirmed'), findsOneWidget);
-    expect(
-      find.text('You can close this tab. Some sessions may still be running.'),
-      findsOneWidget,
-    );
+    expect(find.text('Some sessions may still be running.'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
     await tester.tap(find.text('Keep open'));
     await tester.pumpAndSettle();
@@ -1104,7 +1101,7 @@ void main() {
       expect(find.text('1 session is still working.'), findsOneWidget);
       expect(
         find.text(
-          'Stopping all 2 sessions will close the tab “Release”. History will be saved.',
+          'Stopping all 2 sessions closes the tab “Release”. History is saved.',
         ),
         findsOneWidget,
       );

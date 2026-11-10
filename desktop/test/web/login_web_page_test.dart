@@ -15,7 +15,7 @@ import 'package:harness/widgets/web_download_button.dart';
 
 import '../support/web_ux_app.dart';
 
-const _failure = 'Could not complete sign-in. Please sign in again.';
+const _failure = 'Could not complete sign-in. Sign in again.';
 
 /// The browser's sign-in page in a window [size] big, as `main.dart` frames it.
 Future<WebUxApp> _open(

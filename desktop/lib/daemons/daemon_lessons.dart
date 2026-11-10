@@ -135,31 +135,30 @@ class DaemonHistoryReview {
   }
 
   String get title => switch (state) {
-    'complete' => 'A look back, complete',
-    'cancelled' => 'Your review is stopped',
-    'failed' => 'Your review needs another try',
-    'waiting' =>
-      error == 'cap' ? 'Taking a little pause' : 'Your review is waiting',
+    'complete' => 'Review complete',
+    'cancelled' => 'Review stopped',
+    'failed' => 'Review failed',
+    'waiting' => error == 'cap' ? 'Review paused' : 'Review waiting',
     _ => 'Looking back over $hours hours',
   };
   String get detail {
     if (state == 'waiting' && error == 'no-model') {
-      return 'Open your companion’s agent on the right. The review will use the model you choose there.';
+      return 'Open your companion’s agent on the right. The review uses its model.';
     }
     if (state == 'waiting' && error == 'cap') {
-      return '$reviewed of $total conversation turns reviewed. The rest will continue when the hourly review allowance resets.';
+      return '$reviewed of $total turns reviewed. The rest continue when the hourly allowance resets.';
     }
     if (state == 'waiting' && error == 'usage-limit') {
-      return 'Your chosen agent has reached its usage limit. Your conversations stay queued. Choose another agent above or retry later.';
+      return 'Your agent hit its usage limit. Choose another agent above, or retry later.';
     }
     if (state == 'failed') {
-      return 'The review could not finish. Your progress and any proposed lessons are kept. Retry to continue.';
+      return 'The review could not finish. Retry to continue; progress is kept.';
     }
     if (state == 'cancelled') {
-      return 'Any lessons already proposed are still here for you to review.';
+      return 'Proposed lessons are kept.';
     }
     if (state == 'complete' && total == 0) {
-      return 'No new dated conversation turns were found in this window. Previously reviewed turns are skipped.';
+      return 'No new conversation turns to review.';
     }
     return '$reviewed of $total conversation turns reviewed · $proposed ${proposed == 1 ? 'lesson' : 'lessons'} proposed.';
   }
@@ -220,19 +219,19 @@ class DaemonLearning {
       return 'Learning resumes when your companion is turned on.';
     }
     if (state == 'unsupported') {
-      return 'Background learning is not available with this connection yet. Your conversation and saved memories are kept.';
+      return 'Your conversation and saved memories are kept.';
     }
     if (state == 'unopened') {
       return 'Open your companion with OpenCode, Codex, or Claude Code.';
     }
     if (state != 'ready') {
-      return 'Finish setting up the agent on the right. Learning follows the model you choose there.';
+      return 'Finish setting up the agent on the right. Learning uses its model.';
     }
     if (pending > 0) {
-      return 'A useful lesson is waiting for your approval. It will be shared with your agents once you approve it.';
+      return 'A lesson is waiting for your approval.';
     }
     if (lastOutcome == 'usage-limit') {
-      return 'Your chosen model has reached its usage limit. Your observations are kept for a later review.';
+      return 'Your model hit its usage limit. Observations are kept for later.';
     }
     if (['failed', 'timeout', 'no-model'].contains(lastOutcome)) {
       return 'The last review could not finish. Your observations are queued for another try.';
@@ -241,9 +240,9 @@ class DaemonLearning {
       return '$queued ${queued == 1 ? 'observation is' : 'observations are'} waiting for a quiet moment to review.';
     }
     if (lastOutcome == 'nothing' || lastOutcome == 'no-template') {
-      return 'The last review found nothing worth saving yet. I’m watching for useful corrections and patterns in your work.';
+      return 'The last review found nothing worth saving.';
     }
-    return 'Watching for useful corrections and patterns in your work. Lessons are saved after you approve them.';
+    return 'Watching for corrections and patterns in your work.';
   }
 }
 
@@ -298,7 +297,7 @@ class DaemonLessons extends ChangeNotifier {
     final detail = result['detail'];
     if (detail is String && detail.isNotEmpty) return detail;
     return switch (result['error']) {
-      'UNSUPPORTED' => 'this harnessd does not keep lessons yet.',
+      'UNSUPPORTED' => 'this harnessd does not keep lessons. update it.',
       'UNREACHABLE' || 'TIMEOUT' => 'harnessd did not answer.',
       'NOT_FOUND' => 'that lesson is gone.',
       'NONCE_REQUIRED' || 'PERSON_ONLY' || 'UNVERIFIED' => 'only you approve a lesson: its [y] while it is proposed, or a terminal.',
@@ -402,9 +401,7 @@ class DaemonLessons extends ChangeNotifier {
   Future<void> reviewRecent() async {
     final result = await _ask({'action': 'review_recent', 'hours': 24});
     if (_disposed) return;
-    _message = result['ok'] == true
-        ? 'Your review of the last 24 hours is queued. Lessons will appear here for your approval.'
-        : _words(result);
+    _message = result['ok'] == true ? 'Review queued' : _words(result);
     await refresh();
   }
 

@@ -421,11 +421,12 @@ void main() {
     });
   });
 
-  testWidgets('Tab invites with nothing says so', (tester) async {
+  testWidgets('Tab invites with nothing stays empty', (tester) async {
     await open(tester);
     await tester.pumpWidget(host(TabInvitesSection(notifier: app)));
     await settle(tester);
-    expect(find.text('No invitations.'), findsOneWidget);
+    expect(find.byType(TabInvitesSection), findsOneWidget);
+    expect(find.text('No invitations.'), findsNothing);
   });
 
   test('Tab invites is a Settings section found by its words', () {

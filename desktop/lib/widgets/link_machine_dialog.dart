@@ -671,9 +671,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
       child: _button('Refresh links', _refresh, first: true),
     ),
     if (app.linkedMachinesLoading && app.linkedMachines.isEmpty)
-      Text('Loading linked machines…', style: DesktopChrome.metadata())
-    else if (app.linkedMachines.isEmpty && app.linkedMachinesError == null)
-      Text('No machines linked yet.', style: DesktopChrome.metadata()),
+      Text('Loading linked machines…', style: DesktopChrome.metadata()),
     for (final machine in app.linkedMachines)
       Padding(
         padding: const EdgeInsets.only(top: 12, bottom: 4),
@@ -706,7 +704,7 @@ class _LinkMachineDialogState extends State<_LinkMachineDialog> {
       Text(
         clear
             ? 'Prevent new links using this password? Existing links and sessions stay connected.'
-            : 'Remove this computer’s saved link to ${_name(_unlinkTarget!)}? A new connection will need that machine’s password.',
+            : 'Remove this computer’s link to ${_name(_unlinkTarget!)}? Reconnecting needs that machine’s password.',
         style: DesktopChrome.text(color: DesktopChrome.muted),
       ),
     ];

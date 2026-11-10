@@ -379,7 +379,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
       return;
     }
     if (_emails.length + fresh.length > machineShareEmailsMax) {
-      _fieldSays('You can invite up to $machineShareEmailsMax people.');
+      _fieldSays('The limit is $machineShareEmailsMax people.');
       return;
     }
     final added = await _apply([..._emails, ...fresh], _sameDomain);
@@ -499,7 +499,7 @@ class MachineSharingFormState extends State<MachineSharingForm> {
     } else if (_folders.any((folder) => folder.path == path)) {
       problem = '${_folderName(path)} is already shared.';
     } else if (_folders.length >= machineSharedFoldersMax) {
-      problem = 'You can share up to $machineSharedFoldersMax folders.';
+      problem = 'The limit is $machineSharedFoldersMax folders.';
     }
     if (problem != null) {
       setState(() => _folderError = problem);

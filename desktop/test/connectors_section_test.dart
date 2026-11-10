@@ -109,6 +109,9 @@ void main() {
       expect(find.text('Needs harness login'), findsOneWidget);
       expect(find.textContaining('Run harness login'), findsOneWidget);
       expect(find.text('AVAILABLE  3'), findsOneWidget);
+      // Its count says the Connected group is empty; no line repeats it.
+      expect(find.text('CONNECTED  0'), findsOneWidget);
+      expect(find.textContaining('Nothing connected'), findsNothing);
     },
   );
 

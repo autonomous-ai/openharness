@@ -181,11 +181,7 @@ class StoreDiscover extends StatelessWidget {
                   ],
                   if (recent.isNotEmpty) ...[
                     const SizedBox(height: 28),
-                    const StoreExploreHeading(
-                      title: 'New & updated',
-                      subtitle:
-                          'The latest additions and updates in this release.',
-                    ),
+                    const StoreExploreHeading(title: 'New & updated'),
                     const SizedBox(height: 8),
                     StoreListing(
                       key: const ValueKey('store-recent-collection'),
@@ -291,15 +287,6 @@ class StoreDiscover extends StatelessWidget {
                     const SizedBox(height: 32),
                     const SkeletonBlock(
                       child: Skeleton(height: 160, radius: 16),
-                    ),
-                  ] else ...[
-                    const SizedBox(height: 32),
-                    Text(
-                      'Start with a coding agent. More disciplines will appear here as harnesses become available.',
-                      style: grid.AppType.body(
-                        height: 1.5,
-                        color: grid.AppPalette.textSecondary,
-                      ),
                     ),
                   ],
                 ],

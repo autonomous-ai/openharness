@@ -605,6 +605,9 @@ void main() {
     });
     await tester.pump();
     final review = find.byKey(const ValueKey('memory-review-recent'));
+    // Before any review there is only the action that starts one.
+    expect(find.text('A little time to look back'), findsNothing);
+    expect(find.text('Review 24 hours'), findsOneWidget);
     await tester.ensureVisible(review);
     await tester.tap(review);
     await tester.pump();
@@ -615,6 +618,7 @@ void main() {
       'ok': true,
     });
     await tester.pump();
+    expect(find.text('Review queued'), findsOneWidget);
     brain.receive('pair_result', {
       'requestId': sent.last.$2['requestId'],
       'ok': true,
@@ -631,7 +635,9 @@ void main() {
         },
       },
     });
-    await tester.pump();
+    // The reply lands in a microtask after this pump's frame; settle so the
+    // rebuild it schedules is drawn.
+    await tester.pumpAndSettle();
     expect(find.text('Looking back over 24 hours'), findsOneWidget);
     expect(find.text('Stop review'), findsOneWidget);
     expect(tester.widget<TextButton>(review).onPressed, isNull);
@@ -658,7 +664,7 @@ void main() {
     });
     await tester.pump();
     expect(
-      find.textContaining('Your chosen agent has reached its usage limit.'),
+      find.textContaining('Your agent hit its usage limit.'),
       findsOneWidget,
     );
     expect(find.text('Retry review'), findsOneWidget);
@@ -706,8 +712,8 @@ void main() {
       await tester.tap(find.text('Forget…'));
       await tester.pump();
       expect(sent, hasLength(1));
-      await tester.ensureVisible(find.text('Forget shared lesson'));
-      await tester.tap(find.text('Forget shared lesson'));
+      await tester.ensureVisible(find.text('Forget lesson'));
+      await tester.tap(find.text('Forget lesson'));
       await tester.pump();
       expect(sent.last.$2, containsPair('action', 'revert'));
       expect(sent.last.$2, containsPair('id', 'lesson-one'));

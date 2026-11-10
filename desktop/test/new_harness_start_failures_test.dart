@@ -177,7 +177,10 @@ void main() {
       expect(box.canCancelPending, isTrue);
       expect(box.error, 'Waiting for the selected model.');
       expect(box.requestDismiss(), isFalse);
-      expect(box.error, contains('will continue when the model is available'));
+      expect(
+        box.error,
+        'Your request waits for the model. Cancel request to drop it, or close again to leave it waiting.',
+      );
       await box.cancelPending();
       expect(box.checking, isTrue);
       expect(box.error, contains('Cancellation is not confirmed'));

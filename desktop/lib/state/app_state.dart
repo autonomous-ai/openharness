@@ -2077,7 +2077,7 @@ class AppNotifier extends ChangeNotifier {
     }
     return SuperTabFailure(
       'UPDATE_REQUIRED',
-      'The Swarm service needs an update before you can create a project. Your draft is saved.',
+      'The Swarm service needs an update to create projects. Your draft is saved.',
       statusCode: status,
     );
   }
@@ -2399,7 +2399,7 @@ class AppNotifier extends ChangeNotifier {
           : const {};
       throw SuperTabFailure(
         'CREATION_FAILED',
-        failure['detail'] as String? ?? result['error'] as String? ?? 'The machine could not start this harness. You can change its settings and try again.',
+        failure['detail'] as String? ?? result['error'] as String? ?? 'The machine could not start this harness. Change its settings and try again.',
       );
     }
     // Nothing will start for these either: a cancel that went through (its
@@ -6585,7 +6585,7 @@ class AppNotifier extends ChangeNotifier {
       currentUser = null;
       status = AppStatus.unauthenticated;
       if (viewer != null) {
-        _lastError = 'Could not complete sign-in. Please sign in again.';
+        _lastError = 'Could not complete sign-in. Sign in again.';
       }
       notifyListeners();
     }
@@ -6852,7 +6852,7 @@ class AppNotifier extends ChangeNotifier {
       currentUser = null;
       status = AppStatus.unauthenticated;
       if (viewer != null) {
-        _lastError = 'Could not complete sign-in. Please sign in again.';
+        _lastError = 'Could not complete sign-in. Sign in again.';
       }
       notifyListeners();
     }
@@ -7706,7 +7706,7 @@ class AppNotifier extends ChangeNotifier {
         _startDaemonSupervision(discovery);
         throw StateError(
           'Harness is running${probe.version == null ? '' : ' (v${probe.version})'} but is not '
-          'ready yet — ${probe.reason}. It usually finishes on its own; retry in a moment.',
+          'ready yet — ${probe.reason}. Retry in a moment.',
         );
       case LocalCliProbeState.down:
         _daemonGateFailed = true;
@@ -16141,8 +16141,7 @@ class AppNotifier extends ChangeNotifier {
     'INVALID_ENGINE' =>
       'Update the harness CLI on $machine to open this kind of pane.',
     // A guest's harness: its owner turns guest access on, and only Claude Code or Codex start.
-    'GUEST_NOT_ALLOWED' =>
-      'You can only start Claude Code or Codex on $machine.',
+    'GUEST_NOT_ALLOWED' => 'Only Claude Code and Codex can start on $machine.',
     'GUEST_UNSUPPORTED' ||
     'GUEST_HELPER_REQUIRED' ||
     'GUEST_UNAVAILABLE' ||
@@ -16587,7 +16586,7 @@ class AppNotifier extends ChangeNotifier {
       case 'unavailable':
         return creation._complete(
           'This harness started but is no longer available. '
-          'You can start a new one.',
+          'Start a new one.',
         );
       case 'failed':
         final failure = result['failure'];
@@ -17555,7 +17554,7 @@ class AppNotifier extends ChangeNotifier {
     final unknown = RestartAgentResult(
       error: resuming
           ? 'Still waiting for the Open response. Select the harness again to check status.'
-          : 'The restart is not confirmed yet. Check status, or close this prompt to inspect the terminal before restarting again.',
+          : 'The restart is not confirmed yet. Check status or the terminal before restarting again.',
     );
     final notStarted = RestartAgentResult(
       error: unknown.error,
@@ -17747,7 +17746,7 @@ class AppNotifier extends ChangeNotifier {
           'RESUME_UNAVAILABLE' => 'The saved conversation is unavailable. The harness can still be started fresh.',
           'RESUME_SESSION_MISMATCH' => 'The harness came back on a different conversation. The saved one is still kept.',
           'RESUME_FAILED' => 'The harness did not come back. Its output and conversation are kept.',
-          'IDENTITY_UNAVAILABLE' => 'The saved conversation could not be verified. Check that its agent account and project are still available, then retry. You can also start a new harness; the saved one is kept.',
+          'IDENTITY_UNAVAILABLE' => 'Could not verify the saved conversation; it is kept. Check its agent account and project and retry, or start a new harness.',
           'CWD_NOT_FOUND' || 'SESSION_FOLDER_GONE' => 'The project folder is unavailable. Restore it, then retry, or start a new harness in another folder.',
           'GRID_CREDENTIAL_REQUIRED' => 'Reconnect the model provider in Models, then retry. Your saved conversation is kept.',
           'ENGINE_NOT_INSTALLED' || 'ENGINE_UNAVAILABLE' =>
@@ -18549,7 +18548,8 @@ class AppNotifier extends ChangeNotifier {
       case 'unavailable':
         attempt._awaitingConfirmation = false;
         return const ForkAgentResult(
-          error: 'The fork was created but is no longer available. You can start another.',
+          error:
+              'The fork was created but is no longer available. Start another.',
         );
       case 'failed':
         final failure = result['failure'];

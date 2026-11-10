@@ -176,7 +176,10 @@ void main() {
         'selectedAgentId': null,
       });
       await tester.pumpAndSettle();
-      expect(find.textContaining('No recall activity'), findsOneWidget);
+      // Empty stays empty: no skeleton and no filler line.
+      expect(find.byType(SkeletonText), findsNothing);
+      expect(find.textContaining('No recall activity'), findsNothing);
+      expect(find.text('Refresh recall activity'), findsOneWidget);
       transport.invalidate();
       await tester.pumpAndSettle();
       expect(find.textContaining('No recall activity'), findsNothing);
@@ -412,7 +415,10 @@ void main() {
       await mount(tester);
       await tap(tester, 'Project knowledge');
       await tap(tester, 'Open notebook');
-      expect(find.textContaining('will be prepared'), findsOneWidget);
+      expect(
+        find.textContaining('waits until your companion is free'),
+        findsOneWidget,
+      );
       expect(find.text('Needs review · This project'), findsOneWidget);
       await tap(tester, 'Individual memories');
       await tap(tester, 'Read memory');

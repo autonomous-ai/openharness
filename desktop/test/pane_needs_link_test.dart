@@ -122,7 +122,7 @@ void main() {
     await pump(tester);
 
     expect(
-      find.textContaining('is not linked to this computer yet'),
+      find.textContaining('isn’t linked to this computer'),
       findsOneWidget,
     );
     expect(

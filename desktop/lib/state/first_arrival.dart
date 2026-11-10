@@ -190,7 +190,7 @@ class FirstArrival {
           )
           .firstOrNull;
       if (pane == null) {
-        return fail('The harness has not opened yet. Try again to check it.');
+        return fail('The harness has not opened yet. Try again.');
       }
       if (plan.typesStarterTask) {
         // An editable Flutter draft, not keystrokes sent to a terminal that may still be signing in.
@@ -217,7 +217,7 @@ class FirstArrival {
       }
       if (machine == null) {
         return fail(
-          'This computer has not connected yet. Try again when it is connected.',
+          'This computer has not connected yet. Try again once it connects.',
         );
       }
       final machineId = machine.machine.machineId;

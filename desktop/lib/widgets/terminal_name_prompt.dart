@@ -236,7 +236,7 @@ class _TerminalNamePromptState extends State<TerminalNamePrompt> {
                 Semantics(
                   liveRegion: true,
                   child: DesktopPromptMessage(
-                    _error ?? 'Saving name… You can close this dialog while it finishes.',
+                    _error ?? 'Saving name… Safe to close.',
                     color: _error == null ? DesktopChrome.muted : errorColor,
                   ),
                 ),

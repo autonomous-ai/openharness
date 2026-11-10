@@ -3048,7 +3048,7 @@ class _TerminalHeader extends StatelessWidget {
             ? terminalNotice(
                 label: 'View only',
                 icon: AppIcons.lock,
-                detail: 'You can watch this terminal. Typing is off.',
+                detail: 'Typing is off.',
               )
             : null);
     // A notice that carries its own way out owns the button — a machine that

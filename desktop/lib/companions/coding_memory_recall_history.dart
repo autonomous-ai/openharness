@@ -69,14 +69,11 @@ class _CodingMemoryRecallHistoryState extends State<CodingMemoryRecallHistory> {
         style: AppType.heading(color: AppPalette.textPrimary),
       ),
       const SizedBox(height: 8),
-      Text(
-        widget.recalls.isEmpty
-            ? 'No recent recall history is available for this version.'
-            : widget.recalls.any((recall) => recall['canGuideRecall'] == true)
-            ? 'Was this useful in that session? Feedback helps choose memories for matching work. Correct the memory separately if the fact is wrong.'
-            : 'Was this useful in that session? Your feedback stays with this version. Correct the memory separately if the fact is wrong.',
-        style: AppType.caption(color: AppPalette.textSecondary, height: 1.5),
-      ),
+      if (widget.recalls.isNotEmpty)
+        Text(
+          'Was this useful in that session? If the fact is wrong, correct the memory.',
+          style: AppType.caption(color: AppPalette.textSecondary, height: 1.5),
+        ),
       for (final recall in widget.recalls.take(expanded ? 10 : 3))
         _recall(context, recall),
       Wrap(
@@ -88,7 +85,7 @@ class _CodingMemoryRecallHistoryState extends State<CodingMemoryRecallHistory> {
               onPressed: widget.busy
                   ? null
                   : () => setState(() => expanded = !expanded),
-              child: Text(expanded ? 'Show fewer' : 'Show all recent recalls'),
+              child: Text(expanded ? 'Show fewer' : 'Show all'),
             ),
           TextButton(
             onPressed: widget.busy ? null : widget.onRefresh,
@@ -98,7 +95,7 @@ class _CodingMemoryRecallHistoryState extends State<CodingMemoryRecallHistory> {
       ),
       if (widget.recalls.isNotEmpty)
         Text(
-          'Up to 10 recent recalls from the last 30 days. Repeats in the same session and task context share one rating.',
+          'Up to 10 recalls from the last 30 days. Repeats in one session and task share a rating.',
           style: AppType.caption(color: AppPalette.textSecondary, height: 1.5),
         ),
     ],

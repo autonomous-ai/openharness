@@ -89,12 +89,7 @@ void main() {
     expect(find.text('Fetching…'), findsOneWidget);
     expect(_markOf(tester, 'Set up the toolchain'), _Mark.pending);
     expect(_markOf(tester, 'Check this machine'), _Mark.pending);
-    expect(
-      find.text(
-        'The first install takes a few minutes. You can keep using Harness.',
-      ),
-      findsOneWidget,
-    );
+    expect(find.text('The first install takes a few minutes.'), findsOneWidget);
     expect(find.byKey(const Key('dsh-install-failure')), findsNothing);
   });
 

@@ -1984,7 +1984,7 @@ class _PaneContent extends StatelessWidget {
         notice = terminalNotice(
           label: 'Starting',
           icon: AppIcons.terminal,
-          detail: 'You can answer setup prompts in this terminal while the agent starts.',
+          detail: 'Answer setup prompts below while it starts.',
           banner: true,
         );
       } else if (agent.launchState == 'failed') {
@@ -2150,8 +2150,8 @@ class _PaneContent extends StatelessWidget {
         title: agentName ?? machine.machine.displayName,
         icon: AppIcons.unlink,
         message:
-            '${machine.machine.displayName} is not linked to this computer yet. '
-            'Link it with the remote password set on that machine.',
+            '${machine.machine.displayName} isn’t linked to this computer. '
+            'Link it with its remote password.',
         onClose: single && !swarmMode ? null : close,
         // The way out, where the dead end was: the same card the Machines
         // panel's Connect row opens, asking for that machine's remote
@@ -2484,7 +2484,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
     // race between the drop landing and machine state loading. Conflating the two would send the
     // user to fix a machine that is perfectly fine.
     if (machine == null) {
-      _toast('Machine info not ready yet — try again in a moment');
+      _toast('Machine info isn’t ready. Try again in a moment.');
       return;
     }
     Uint8List raw;
@@ -2540,7 +2540,7 @@ class _FileDropZoneState extends State<_FileDropZone> {
     // this" — say so distinctly rather than falling through to the remote/upload branch below,
     // which would silently take the wire for what might actually be a local pane.
     if (machine == null) {
-      _toast('Machine info not ready yet — try again in a moment');
+      _toast('Machine info isn’t ready. Try again in a moment.');
       return;
     }
     // Local pane: the file already has a valid path on this same machine — nothing to transfer.

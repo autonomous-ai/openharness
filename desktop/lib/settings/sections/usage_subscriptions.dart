@@ -40,10 +40,9 @@ class _UsageSubscriptionsState extends State<UsageSubscriptions> {
       if (accounts.isEmpty) {
         return const EmptyState(
           icon: AppIcons.gauge,
-          title: 'No subscriptions yet',
+          title: 'No subscriptions',
           message:
-              'Claude Code and Codex usage shows here once one of your '
-              'computers is online and signed in to them.',
+              'Sign in to Claude Code or Codex on a computer that’s online.',
         );
       }
       return LaidOutListView(
