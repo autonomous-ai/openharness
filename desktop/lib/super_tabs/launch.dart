@@ -39,6 +39,10 @@ class SuperTabLaunch {
   final String swarmId, accountId, key;
   final Map<String, dynamic> saved;
 
+  /// Its form's destination: a start that goes on without the form opens nothing when it is done
+  /// ([HarnessLaunchIntegration.inBackground]).
+  HarnessLaunchIntegration? _destination;
+
   static Future<HarnessLaunchIntegration> open(
     AppNotifier app,
     Swarm tab,
@@ -231,6 +235,12 @@ class SuperTabLaunch {
               }
               try {
                 final prompt = await launch.prepare(machine, task, engine);
+                // What its row in the left pane shows while it starts without the form (swarm_starts.dart).
+                integration
+                  ..name = saved['agentName'] as String?
+                  ..projectId = saved['newProject'] == true
+                      ? saved['projectId'] as String?
+                      : null;
                 integration.swarmSkillMode =
                     saved['skillMode'] as String? ?? 'orchestration';
                 integration.swarmRole = saved['lead'] == true ? 'lead' : 'dev';
@@ -318,6 +328,7 @@ class SuperTabLaunch {
           ..leadMachines = leadMachines
           ..leadModels = leadModels
           ..newRepositoryOwners = newRepositoryOwners;
+    launch._destination = integration;
     if (recovering) {
       integration
         ..machineId = saved['machineId'] as String?
@@ -770,7 +781,7 @@ class SuperTabLaunch {
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
     checkAccount();
-    controller.select(conversationId);
+    if (_destination?.inBackground != true) controller.select(conversationId);
     await app.superTabs.storage.delete(key);
   }
 
@@ -1329,10 +1340,13 @@ class SuperTabLaunch {
       );
     }
     // Its person goes on in their chat with it: a PM's own chat since Swarm v4, as only agents post in the project's channel.
+    // A start that went on without its form opens nothing: they go in when they choose (anh Dee, 2026-11-10).
     final joined = controller.snapshot?.agents
         .where((a) => a.machineId == machine && a.harnessId == harnessId)
         .firstOrNull;
-    controller.select(joined?.chatId ?? saved['conversationId'] as String);
+    if (_destination?.inBackground != true) {
+      controller.select(joined?.chatId ?? saved['conversationId'] as String);
+    }
     await app.superTabs.storage.delete(key);
   }
 

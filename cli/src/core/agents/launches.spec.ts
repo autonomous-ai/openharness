@@ -1177,9 +1177,10 @@ describe('agent_resume and agent_restart', () => {
     expect(vi.mocked(resume!).mock.calls).toEqual([['a1'], ['a1', 'plan']])
   })
 
-  it('refuse a resume that would trade Team-written work\'s mode for another: its project settings stay off (audit H2)', async () => {
+  // Backend #3872: no agent is Team-written now; a saved mode never holds a resume to it.
+  it('resume an agent in the mode asked for, whatever mode it saved', async () => {
     const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : undefined })
-    expect(await run.relaunch('agent_resume', { agentId: 'written', permissionMode: 'full' })).toStrictEqual({ error: 'INVALID_PERMISSION_MODE' })
+    expect(await run.relaunch('agent_resume', { agentId: 'written', permissionMode: 'full' })).toMatchObject({ resumed: true })
   })
 
   it('refuse a request with no agent, on a machine that cannot relaunch, and a permission mode a restart has no use for', async () => {
@@ -1274,12 +1275,11 @@ describe('agent_restart with launchArgs', () => {
     expect(restart).toHaveBeenCalledWith('a1', [])
   })
 
-  it('refuses a flag Harness sets, a non-string, a Team-written agent, an unknown agent and a non-owner, restarting nothing', async () => {
-    const run = setup({ byAgent: (id: string) => id === 'written' ? { ...session('written'), permissionMode: 'teamWritten' } : id === 'a1' ? session('a1') : undefined })
+  it('refuses a flag Harness sets, a non-string, an unknown agent and a non-owner, restarting nothing', async () => {
+    const run = setup({ byAgent: (id: string) => id === 'a1' ? session('a1') : undefined })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: '--model x' }))
       .toStrictEqual({ error: 'INVALID_LAUNCH_ARGS', detail: '--model is set by Harness and can\'t be added here.' })
     expect(await run.relaunch('agent_restart', { agentId: 'a1', launchArgs: 5 })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
-    expect(await run.relaunch('agent_restart', { agentId: 'written', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_restart', { agentId: 'gone', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
     expect(run.restart).not.toHaveBeenCalled()
   })
@@ -1317,7 +1317,7 @@ describe('agent_restart with launchArgs', () => {
   })
 
   // A harness a bad flag left stopped lives in the stopped-agents store, not the registry (resumeAgentService.ts).
-  it('resumes a stopped agent with them: its engine and Team-written mode are read from the stopped store', async () => {
+  it('resumes a stopped agent with them: its engine is read from the stopped store', async () => {
     const stopped = { ...session('a1'), engine: 'codex' as const }
     const resume = vi.fn(async () => ({ ok: true as const, session: stopped, resumed: true }))
     const run = setup({ byAgent: () => undefined, stoppedAgent: (id) => id === 'a1' ? stopped : undefined }, { resume })
@@ -1325,8 +1325,6 @@ describe('agent_restart with launchArgs', () => {
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model=x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model_reasoning_effort=high' })).toMatchObject({ resumed: true })
     expect(resume).toHaveBeenCalledExactlyOnceWith('a1', undefined, ['-c', 'model_reasoning_effort=high'])
-    const written = setup({ byAgent: () => undefined, stoppedAgent: () => ({ ...stopped, permissionMode: 'teamWritten' }) })
-    expect(await written.relaunch('agent_resume', { agentId: 'a1', launchArgs: '--chrome' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_resume', { agentId: 'nowhere', launchArgs: '--chrome' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
   })
 

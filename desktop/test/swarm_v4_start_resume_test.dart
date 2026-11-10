@@ -11,8 +11,9 @@ import 'super_tab_new_agent_words_test.dart'
     show mountSwarm, tapNewAgent, unmountSwarm;
 
 /// Two journeys of Swarm v4 a person clicks through in Desktop (readiness rows 1 and 10): starting an agent from Your Team's +
-/// with Claude Code and a request, which lands them in its chat; and a stopped agent, opened from Your Team, whose Terminal
-/// shows Resume and brings its session back.
+/// with Claude Code and a request, which goes on while they work and is a row they open into its chat (anh Dee, 2026-11-10:
+/// "when it's done i can go in and use it"); and a stopped agent, opened from Your Team, whose Terminal shows Resume and
+/// brings its session back.
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
@@ -40,7 +41,7 @@ void main() {
   }
 
   testWidgets(
-    '+ in Your Team, Claude Code, a request and New agent: it starts here as "You are <name>." and its chat opens',
+    '+ in Your Team, Claude Code, a request and New agent: it starts here as "You are <name>.", and its row opens its chat',
     (tester) async {
       final folders = <ProjectFolderRequest>[];
       final f = await mountSwarm(
@@ -62,6 +63,18 @@ void main() {
       await tester.pump();
       await tester.tap(key('new-harness-field-start'));
       final c = f.app.superTabs.peek(tabId)!;
+      // It goes on without the form; once it has joined, its row is in Your Team.
+      await until(tester, () => f.connection.joins.isNotEmpty);
+      await until(
+        tester,
+        () => c.snapshot!.agents.any(
+          (a) => key('super-agent-${a.id}').evaluate().isNotEmpty,
+        ),
+      );
+      final listed = c.snapshot!.agents.firstWhere(
+        (a) => key('super-agent-${a.id}').evaluate().isNotEmpty,
+      );
+      await tester.tap(key('super-agent-${listed.id}'));
       await until(
         tester,
         () =>

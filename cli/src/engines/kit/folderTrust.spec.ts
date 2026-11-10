@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
 import { launch as claude } from '../claude/launch.js'
 import { launch as codex } from '../codex/launch.js'
-import { acceptedIn, forgetTrustIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './folderTrust.js'
+import { acceptedIn, recordAcceptanceIn, recordSettingIn, recordTrustIn, trustsIn } from './folderTrust.js'
 
 /** Whether this account may link to a file: Windows lets it only with Developer Mode or as an administrator (Window of Tim,
  *  #3815), and a person there with neither has no such link to write through. */
@@ -89,60 +89,6 @@ describe('preTrustClaudeProject', () => {
     const target = JSON.parse(readFileSync(join(home, 'dotfiles', 'claude.json'), 'utf8'))
     expect(target.projects['/Users/example/harnesses/harness-2'].hasTrustDialogAccepted).toBe(true)
     expect(readdirSync(join(home, 'dotfiles'))).toEqual(['claude.json'])
-  })
-})
-
-// Task #4353: the trust a Team-written start saved for its worktree goes with that worktree, and nothing else does.
-describe('forgetTrustIn', () => {
-  it('clears the trust flag of that one folder and keeps every other key of the file', () => {
-    const home = mkdtempSync(join(tmpdir(), 'forget-'))
-    const file = join(home, '.claude.json')
-    try {
-      writeFileSync(file, JSON.stringify({ userID: 'u', projects: {
-        '/repo': { hasTrustDialogAccepted: true, allowedTools: ['Bash'] },
-        '/repo/worktree': { hasTrustDialogAccepted: true, allowedTools: [], lastCost: 1 },
-        '/other': { hasTrustDialogAccepted: true } } }, null, 2))
-      expect(forgetTrustIn(claude.trust!, file, '/repo/worktree')).toBe('forgotten')
-      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ userID: 'u', projects: {
-        '/repo': { hasTrustDialogAccepted: true, allowedTools: ['Bash'] },
-        '/repo/worktree': { allowedTools: [], lastCost: 1 },
-        '/other': { hasTrustDialogAccepted: true } } })
-      // Nothing left to clear: the file is not written again.
-      const before = readFileSync(file, 'utf8')
-      expect(forgetTrustIn(claude.trust!, file, '/repo/worktree')).toBe('absent')
-      expect(forgetTrustIn(claude.trust!, file, '/never')).toBe('absent')
-      expect(readFileSync(file, 'utf8')).toBe(before)
-    } finally { rmSync(home, { recursive: true, force: true }) }
-  })
-
-  it('leaves a file that is missing, unreadable or not the engine\'s shape as it is, and skips a TOML engine', () => {
-    const home = mkdtempSync(join(tmpdir(), 'forget-'))
-    const file = join(home, '.claude.json')
-    try {
-      expect(forgetTrustIn(claude.trust!, file, '/w')).toBe('skipped')
-      expect(readdirSync(home)).toEqual([])
-      for (const text of ['{not json', '[]', '{"projects":[]}', '{"projects":{"/w":"yes"}}']) {
-        writeFileSync(file, text)
-        expect(forgetTrustIn(claude.trust!, file, '/w')).toBe('skipped')
-        expect(readFileSync(file, 'utf8')).toBe(text)
-      }
-      const toml = join(home, 'config.toml'), config = '[projects."/w"]\ntrust_level = "trusted"\n'
-      writeFileSync(toml, config)
-      expect(forgetTrustIn(codex.trust!, toml, '/w')).toBe('skipped')
-      expect(readFileSync(toml, 'utf8')).toBe(config)
-    } finally { rmSync(home, { recursive: true, force: true }) }
-  })
-
-  it.skipIf(!canLinkFiles)('writes through a linked settings file, keeping the link', () => {
-    const home = mkdtempSync(join(tmpdir(), 'forget-'))
-    try {
-      const real = join(home, 'dotfiles.json'), file = join(home, '.claude.json')
-      writeFileSync(real, JSON.stringify({ projects: { '/w': { hasTrustDialogAccepted: true } } }))
-      symlinkSync(real, file, 'file')
-      expect(forgetTrustIn(claude.trust!, file, '/w')).toBe('forgotten')
-      expect(lstatSync(file).isSymbolicLink()).toBe(true)
-      expect(JSON.parse(readFileSync(real, 'utf8'))).toEqual({ projects: { '/w': {} } })
-    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 })
 
