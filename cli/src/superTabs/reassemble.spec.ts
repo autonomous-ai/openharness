@@ -47,16 +47,13 @@ describe('the old Swarm state, rebuilt from parts', () => {
     expect(list(reassemble(storeOf(first)).agents)[1].limitedUntil).toBe('2026-10-26T12:00:00.000Z')
   })
 
-  it('shows the role on Custom skills, none when its kind has no role there, and no role elsewhere', () => {
+  // The custom role sets go with backend S18: an older backend's derived role is shown on no agent, whatever its project's skills.
+  it('shows no role on any agent, whatever its project\'s skills', () => {
     const first = readFixture<FirstLoad>('parts-lead')
     const project = list((first.head!.data as Json).projects)[0]
-    project.skillMode = 'custom'
     project.skillSet = 'custom'
-    first.derived.agents![FIXTURE.leadId].roleId = 'lead-role'
-    expect(list(reassemble(storeOf(first)).agents).map(a => a.roleId)).toEqual(['lead-role', null])
-    const plain = readFixture<FirstLoad>('parts-lead')
-    ;(plain.agents[0].data as Json).roleId = 'left-from-custom'
-    expect(list(reassemble(storeOf(plain)).agents)[0]).not.toHaveProperty('roleId')
+    Object.assign(first.derived.agents![FIXTURE.leadId]!, { roleId: 'lead-role' })
+    for (const agent of list(reassemble(storeOf(first)).agents)) expect(agent).not.toHaveProperty('roleId')
   })
 
   // Backend S11 (#3827): the count of a person's waiting tags is gone (a message still names whom it tags), and nothing

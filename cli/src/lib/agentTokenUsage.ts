@@ -20,7 +20,7 @@ type Checkpoint = {
   output: OutputLedger;
   work: SessionWorkLedger; sourceSession: string | null;
   usage: [number, number, number];
-  /** Per model: uncached input, output, cache read, cache write. What the Swarm prices an attempt by (backend costs/). */
+  /** Per model: uncached input, output, cache read, cache write. */
   models: Record<string, Buckets>
   /** The model Codex's latest turn settings named: its token counts carry none of their own. */
   codexModel: string | null
