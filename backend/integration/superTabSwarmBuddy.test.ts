@@ -486,15 +486,15 @@ describe('a project session', () => {
     expect(await db.superTabMessage.count({ where: { tabId: f.tab, replyTo: sentId } })).toBe(0)
   })
 
-  /** [group]'s work done by a builder of the owner's: it ships then (leaderboard/record.ts recordStatus). Swarm v4 records no
-   *  merge (2026-11-10), which shipped it before. */
-  async function ship(f: Swarm, group: string) {
-    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
-      configuration: config, lead: false })).result.agentId)
-    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })).result.assignmentId)
-    await f.execute({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped.' }, owner, builder)
+  /** [group] shipped by its merge as a Swarm recorded one before Swarm v4 (leaderboard/brought.ts shippedByMerge), which records
+   *  none (2026-11-10): the kept leaderboard still reads the merges stored before. */
+  async function ship(f: Swarm, group: string, pr: string) {
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: group } })
+    const data = row.data as { ledger?: Record<string, unknown>; pullRequestUrls?: string[] }
+    await db.swarmGroup.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(),
+      data: { ...data, pullRequestUrls: [pr], ledger: { ...data.ledger, mergedAt: f.clock.now, shippedAt: f.clock.now } } as object } })
   }
-  /** peer's session proposes in web, the PM opens the group from it and its work ships; the session then ends. */
+  /** peer's session proposes in web, the PM opens the group from it and its PR merges; the session then ends. */
   async function shippedFromSession(f: Swarm, { endBeforeOpen = false } = {}) {
     const { chat, main } = await buddy(f)
     const { thread, agentId } = await projectSession(f, chat, f.web.projectId, 'Let us plan web offline sync')
@@ -505,7 +505,7 @@ describe('a project session', () => {
     if (endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'Offline sync', brief: 'Web keeps edits offline.',
       checks: [{ description: 'Done', independent: false }], proposalMessageId: proposal }, owner, f.pms.web)).result.conversationId)
-    await ship(f, group)
+    await ship(f, group, 'https://github.com/example/app/pull/7')
     if (!endBeforeOpen) await f.execute({ type: 'buddy.sessionEnd', conversationId: chat, thread, reason: 'ended' }, peer)
     return { chat, main, agentId, group }
   }
@@ -548,7 +548,7 @@ describe('a project session', () => {
     await f.execute({ type: 'project.sharing', projectId: f.web.projectId, visibility: 'private', memberIds: [owner.sub] })
     const group = String((await f.execute({ type: 'conversation.create', projectId: f.web.projectId, title: 'T', brief: '', checks: [{ description: 'Done', independent: false }], proposalMessageId: proposal, requesterId: owner.sub },
       owner, f.pms.web)).result.conversationId)
-    await ship(f, group)
+    await ship(f, group, 'https://github.com/example/app/pull/8')
     const board = await new SwarmReads(f.store).leaderboard(owner, f.tab, f.web.projectId)
     expect(board.agents.filter(a => a.kind === 'buddy').map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([[main, 'Former Buddy', null, '']])
     expect(JSON.stringify(board)).not.toMatch(/Peer Mac|peer-mac/)
