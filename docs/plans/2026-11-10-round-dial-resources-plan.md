@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give back about 700 KB of image/PSRAM and up to about 65 KB of internal RAM on the round dial, and make the all-skins image boot again, with no visible change except Latin Extended-A letters outside Vietnamese drawing as their base letter.
+**Goal:** Make Focus the round dial's only mode (deleting Tim, Tux, the companions and their 4.6 MB pack, and the creature gallery), give back about 700 KB of image/PSRAM and up to about 65 KB of internal RAM, and change nothing visible except Latin Extended-A letters outside Vietnamese drawing as their base letter.
 
 **Architecture:**
 - Branch `chore/round-dial-resources` (worktree `.claude/worktrees/dialres`). One commit per task, each pinned by a host test where one can express it and proved by `idf.py size` / `nm` against a baseline.
-- Items that can only be judged on hardware (IRAM-to-flash, cJSON in PSRAM) land behind a keep-or-revert rule settled in the dial A/B of Task 14.
+- Items that can only be judged on hardware (IRAM-to-flash, cJSON in PSRAM) land behind a keep-or-revert rule settled in the dial A/B of Task 13.
 - Audit, with all numbers and file:line at `c1a711d1a` (re-find lines by text): `docs/plans/2026-11-10-round-dial-resources-audit.md`.
 
 **Tech Stack:** ESP-IDF 5.5.4 (ESP32-S3), C11, CMake, Python 3 generators (Pillow, fontTools) and host tests, `npx lv_font_conv@1.5.2`.
@@ -24,19 +24,21 @@
   - `env -u IDF_PATH make device-test`, plus every `FW/test/test_*.py` run as `IDF_PATH=~/esp/esp-idf-5.5.4 python3 <file>`.
   - `test_cable_models.py` fails on macOS on main (clang `snprintf` macro redefinition), so it counts as "same as baseline".
   - New tests are plain `assert` scripts like the existing `test_*.py`; CI runs them by glob.
-- **`-DDEVICE_ALL_SKINS=1`:** behaviour is identical except for its storage (Task 13). Gates are `#ifdef HABITAT_FOCUS_ONLY` / `HABITAT_NO_COMPANION_ART` / `if(NOT DEVICE_ALL_SKINS)`.
+- **Focus is the only mode** (Diego, 2026-11-10). Task 3 deletes every other character, the companions, the creature gallery and the `DEVICE_ALL_SKINS` / `DEVICE_DEFAULT_CHARACTER` options. Later tasks build `default` and `probe` only.
 - **Stacks:** new sizes are ≥ 1.5× the measured peak. `ptt`, `beep`, main, `cable_link`, `cable_session`, `habitat_actions` and `habitat_touch` keep their sizes.
 - **Vietnamese** keeps U+0102 U+0103 U+0110 U+0111 U+0128 U+0129 U+0168 U+0169 from U+0100-U+017F, and every U+1EA0-U+1EF9 letter it has today.
 - **The default `partitions.csv` does not change.**
-- **No flash before Task 14, no push.**
+- **Host side of the companion feature** (`cli/src/cable/companionProtocol.ts`, `cableSession.ts` companion fields, `desktop` `kDeviceCompanionSkins`): not touched. It is a follow-up; the daemon already treats the fields as optional.
+- **No flash before Task 13, no push.**
+- **`samples/hackathon-fo/01-fo-glance/solution.patch`** may be regenerated in Task 3 so it still applies; nothing else outside `FW/` and `devices/harness-device/prototype/` changes.
 
 ## Review Focus
 
-- **A dial that saved Tux, or a companion, before** boots the Focus-only image. Expected: it draws Focus, and the host sees the same character name as before (Task 3 test).
+- **A dial that saved Tux, Tim or a companion before** boots the new image. Expected: it draws Focus (Task 3 test). A host that still sends `companion` frames gets them ignored, with no crash (Task 3).
 - **A format nano cannot print** (`%ll*`, `%j`, `%z`, `%t`, `%L`, `%a`). Expected: none in `FW/main`, and `_printf_float` is still linked for cJSON (Task 4).
 - **An array merged into another** but drawn with a different palette, size or element type. Expected: merged arrays are identical in type and body, and the existing pet, mark and face render tests still pass (Tasks 5-6).
 - **A word with a cut letter next to a kept one** (e.g. "Łódź Hà Nội"). Expected: base letters for the cut ones, the real glyphs for the kept ones, and no `?` (Task 7 test).
-- **A task near its new stack size** on a path the telemetry has not covered: a long voice message, a long Swarm list, the all-skins inflater. Expected: each keeps ≥ 1 KB free over the Task 14 runs, and render keeps 24 KB in all-skins.
+- **A task near its new stack size** on a path the telemetry has not covered: a long voice message, a long Swarm list. Expected: each keeps ≥ 1 KB free over the Task 13 runs.
 
 ---
 
@@ -44,7 +46,7 @@
 
 **Files:** none. Writes `/tmp/dialres-build/baseline.txt`.
 
-- [ ] **Step 1: Build.** Build `default`, `skins` (`-DDEVICE_ALL_SKINS=1`) and `probe` (`-DBOARD_PROBE=1`) and run `idf.py size` on each.
+- [ ] **Step 1: Build.** Build `default`, `probe` (`-DBOARD_PROBE=1`), `fault` (`-DDEVICE_RENDER_FAULT=1`) and `layout` (`-DDEVICE_LAYOUT_BENCH=1`), and run `idf.py size` on each.
   - Expected: all three build; the default total is about 3,369,871 B.
 - [ ] **Step 2: Symbols.** Save the `xtensa-esp32s3-elf-nm` names of each ELF to `/tmp/dialres-build/names-<name>.txt`.
 - [ ] **Step 3: Tests.**
@@ -69,25 +71,56 @@
 - [ ] **Step 4: Verify.** Test PASS, host tests, `default` build.
 - [ ] **Step 5: Commit** `round dial: stack telemetry lists the tasks the firmware runs`.
 
-### Task 3: The Focus-only image links only Focus (#1)
+### Task 3: Focus is the dial's only mode (#1, #7)
 
-**Files:** Modify `FW/main/ui/habitat/character.c` (registry `characters[]`, `ht_character_species`, `ht_character_tick`, and any other direct call into `ht_tux_*` / `ht_octopus_*` / `ht_illustrated_*`). Create `FW/test/test_focus_only_link.py`.
+**Files:**
+- Delete (and `git grep` each name first; anything still referenced from what stays is a ruling, not a deletion):
+  - `FW/main/ui/habitat/`: `tim.c/h`, `octopus.c/h`, `octopus_font.c`, `octopus_art.inc`, `tux.c/h`, `tux_moods.inc`, `illustrated.c/h`, `illustrated_cache.c`, `creature_gallery.c/h`, `creature_font.c`, `creature_art.inc`, `creature_clips.inc`, `perf_bench.c/h`, and `character_fonts.inc` if only these characters use it.
+  - `FW/assets/companions/`.
+  - `FW/scripts/`: `gen_octopus.py`, `gen_tux_moods.py`, `import_tux_moods.mjs`, `gen_companion_art.py`, `gen_creature_art.py`, `gen_creature_clips.py`, `gen_creature_font.py`, `analyze_octopus_perf.py`, and `gen_character_fonts.py` with `character_fonts.inc`.
+  - Their tests and references: `test_companions.c/.py`, `test_companion_protocol.py`, `test_creature_gallery.c`, `test_octopus_art.py`, `test/reference48/octopus*`, and every other test whose only subject is a deleted character.
+  - `devices/harness-device/prototype/habitat/` inputs used only by the deleted generators (`assets/tux/`, `assets/creature-references/`), and `CREATURE_GALLERY*.md`, `CREATURE_REFERENCES.md`, `TUX.md`.
+- Modify:
+  - `character.h` / `character.c`:
+    - The registry holds Focus only; `HT_CHARACTER_COUNT` is 1.
+    - Delete `ht_character_species`, `ht_character_companion`, `species[]`, `companion_style`, `ht_character_default`'s Tim/Tux branches, and the illustrated tick path.
+    - Any id read from NVS means Focus.
+  - `ui_habitat.c`:
+    - Delete `desktop_companion`, `follow_companion`, `companion_celebrating`, `desktop_identity`, `celebration_identity`, `select_companion`, the skin/character choice, the `HABITAT_FOCUS_ONLY` blocks (their Focus side stays, unconditionally) and every `DEVICE_CREATURE_GALLERY` hook.
+    - The skin setting always reports Focus.
+  - `ui_screens.h`: delete `ui_companion_t`, `follow_companion`, `companion`, `companion_details`, `UI_SETTING_FOLLOW_COMPANION`, `ui_set_companion*` and `ui_companion_celebrate`.
+  - `cable_client.c`:
+    - Delete `companion_json`, `companion_parse`, the `followCompanion` / `companion` / `companionProtocol` / `companionDetails` fields, and the `companion` / celebration message cases.
+    - Those messages now fall through to the unknown-message path.
+  - `config_store.h`: bit 4 becomes "reserved (was: do not follow the desktop companion)". Do not reuse it.
+  - `display_habitat.c`: delete `ht_illustrated_prepare` / `init` and the `DEVICE_OCTOPUS_BENCH` hooks.
+  - `character_motion.c`, `audio_capture.c`: delete the octopus-bench and gallery hooks.
+  - `main/CMakeLists.txt`:
+    - Delete the files' entries, the `DEVICE_ALL_SKINS` / `COMPANION_ART` / `EMBED_FILES` / `HABITAT_FOCUS_ONLY` / `HABITAT_NO_COMPANION_ART` / `DEVICE_DEFAULT_CHARACTER` / `DEVICE_OCTOPUS_BENCH` / `DEVICE_CREATURE_GALLERY` blocks, and those names in the other benches' guards.
+    - The layout and transport benches, render fault/stress, `DEVICE_HABITAT_ORANGE` and `BOARD_PROBE` stay.
+  - `test/run.sh` and the mixed tests (`test_character.c`, `test_character_preferences.py`, `test_device_settings.py`, `test_touch_ui.py`, `test_voice_ui.py`, `test_touch_driver.py`, `test_layout_bench.py`, …): remove only the cases about deleted characters, companions or the gallery. Every Focus case stays. `test_touch_driver.py`, which builds the touch task against the gallery, is retargeted to Focus.
+  - Docs: `FW/README.md`, `FW/scripts/flash-station.sh` and `prototype/habitat/README.md`: only the lines that name the deleted things.
+  - `samples/hackathon-fo/01-fo-glance/solution.patch`: if `git apply --check` stops applying because its CMake context named the deleted blocks, regenerate the patch so it applies, with the same changes. Ledger it.
+- Create: `FW/test/test_focus_only.py`.
 
 **Interfaces:**
-- Produces: under `HABITAT_FOCUS_ONLY`, every `ht_character_id_t` resolves to Focus's tick/draw/face, each row keeps its own `name`, and `ht_character_species()` returns false.
+- Produces: `HT_CHARACTER_FOCUS` is the only `ht_character_id_t` (value 0). `ht_character_select(c, any)` selects Focus.
 
-- [ ] **Step 1: Failing test** `test_focus_only_link.py`.
-  - Compile `character.c` to an object twice, with the `-I`/`-D` flags `run.sh` uses for `test_character`: once with `-DHABITAT_FOCUS_ONLY=1`, once without.
-  - Run `nm -u` on each.
-  - Assert that the FOCUS_ONLY object has no undefined symbol starting with `ht_tux_`, `ht_illustrated_` or `ht_octopus_`.
-  - Assert that the other object references `ht_tux_draw`.
+- [ ] **Step 1: Failing test** `test_focus_only.py`.
+  - `git grep -i -e illustrated -e companion_art -e followCompanion -e companionProtocol -e companionDetails -e DEVICE_ALL_SKINS -e HABITAT_FOCUS_ONLY -e ht_tux_ -e ht_octopus_ -e ht_tim_ -e creature_gallery -- FW/main FW/CMakeLists.txt` finds nothing.
+  - `HT_CHARACTER_COUNT == 1`.
+  - A slice of `character.c` compiled with an NVS value of 7 (an old companion id), following the `test_character_preferences.py` pattern, selects Focus.
 - [ ] **Step 2: Run it.** Expected: FAIL.
-- [ ] **Step 3: Gate `character.c`.** Under `#ifdef HABITAT_FOCUS_ONLY`, apply the Interfaces block. The `#else` side is today's code, unchanged.
-- [ ] **Step 4: Verify.** Test PASS, host tests (they build without the flag).
+- [ ] **Step 3: Delete and edit** as listed, rebuilding and testing as you go.
+- [ ] **Step 4: Verify.**
+  - Test PASS, `env -u IDF_PATH make device-test`, and every `test_*.py`.
+  - The commit message lists the test files and cases removed. Every one of them is about a deleted character.
+  - `git apply --check samples/hackathon-fo/01-fo-glance/solution.patch` applies.
 - [ ] **Step 5: Measure.**
-  - `default`: total down by ≈ 270 KB, and no `ht_tux_` / `ht_illustrated_` / `ht_octopus_` in `nm`.
-  - `skins`: totals unchanged.
-- [ ] **Step 6: Commit** `round dial: the Focus-only image links only Focus`.
+  - `default`: total down by ≈ 270 KB.
+  - `nm` has no `ht_tux_` / `ht_illustrated_` / `ht_octopus_` / `ht_tim_`.
+  - `probe`, `fault` (`-DDEVICE_RENDER_FAULT=1`) and `layout` (`-DDEVICE_LAYOUT_BENCH=1`) build.
+- [ ] **Step 6: Commit** `round dial: Focus is the only mode; delete Tim, Tux, the companions and the creature gallery`.
 
 ### Task 4: newlib nano printf (#4)
 
@@ -164,12 +197,12 @@
 **Files:** Modify `FW/main/ui/habitat/display_habitat.c` (`habitat_render`), `FW/main/app_main.c` (`proj_refresh`) and `FW/main/audio_client_habitat.c` (`voice_capture`, `voice_send`).
 
 - [ ] **Step 1: Render stack.**
-  - `HABITAT_RENDER_STACK` = 12288 under `HABITAT_NO_COMPANION_ART`, else 24576.
-  - Update the comment: the 24 KB is the ROM inflater's, and only the companion pack uses it.
+  - `habitat_render` takes 12288.
+  - Update the comment: the old 24 KB was for the ROM inflater, which only the deleted companion pack used.
 - [ ] **Step 2: Other stacks.**
   - `proj_refresh` 4096, `voice_capture` 4096, `voice_send` 4096.
   - Each gets a comment naming its measured peak (2,248 / 2,576 / 2,404 B, from the dials' `STACK` and `alive` lines, fw ≥ 0.0.94).
-- [ ] **Step 3: Verify.** Host tests. Build `default` and `skins`; `skins` keeps 24576 for render.
+- [ ] **Step 3: Verify.** Host tests, and the `default` build.
 - [ ] **Step 4: Commit** `round dial: render, refresh and voice stacks sized from their measured peaks`.
 
 ### Task 9: Rare-path buffers to PSRAM; network leftovers out (#9, #13)
@@ -189,7 +222,7 @@
 - [ ] **Step 2: Move the buffers.** Edit the three files and run the host tests.
 - [ ] **Step 3: Remove the network leftovers.** Make the edits and run `idf.py reconfigure`.
   - Expected: `dependencies.lock` loses only `esp_websocket_client`.
-- [ ] **Step 4: Measure.** Build `default`, `skins` and `probe`.
+- [ ] **Step 4: Measure.** Build `default` and `probe`.
   - All build.
   - DIRAM `.bss` is down by ≈ 8.2 KB.
   - The network edits change no section size and no symbol, compared with a build of this tree before Step 3.
@@ -217,45 +250,15 @@
 
 **Files:** Modify `FW/CMakeLists.txt` (`set(MINIMAL_BUILD ON)` before `project()`, with the reason). Add components back to `BOARD_REQUIRES` only if the build demands them.
 
-- [ ] **Step 1: Build.** Build `default`, `skins` and `probe` (`skins` and `probe` must build).
+- [ ] **Step 1: Build.** Build `default` and `probe` (`probe` must build).
   - Expected: Flash ≈ 14 KB smaller.
   - Any missing component the build names goes back into `BOARD_REQUIRES`, ledgered.
-- [ ] **Step 2: Fault build.** Build `fault` (`-DDEVICE_RENDER_FAULT=1`). It is used in Task 14 to prove that logs and a fault report still reach the cable.
+- [ ] **Step 2: Fault build.** Build `fault` (`-DDEVICE_RENDER_FAULT=1`). It is used in Task 13 to prove that logs and a fault report still reach the cable.
 - [ ] **Step 3: Commit** `round dial: minimal build`.
 
-### Task 13: The all-skins image boots again: the pack in its own partition (#7)
+### Task 13: Proof on a dial, and the two A/B decisions
 
-**Files:**
-- Create `FW/partitions_skins.csv`:
-  - `nvs` and `otadata` as in `partitions.csv`
-  - `ota_0` at 0x20000, size 0x560000
-  - `ota_1` at 0x580000, size 0x560000
-  - `companions`, data/0x40, at 0xAE0000, size 0x500000
-- Modify `FW/main/CMakeLists.txt`:
-  - With `DEVICE_ALL_SKINS`: no `EMBED_FILES` pack.
-  - Point `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME` at `partitions_skins.csv`, through an `sdkconfig.skins` defaults file appended to `SDKCONFIG_DEFAULTS` when the flag is set.
-  - `esptool_py_flash_to_partition(flash "companions" "${pack}")`.
-- Modify `FW/main/ui/habitat/illustrated_cache.c`: replace the `_binary_companion_art_pack_*` symbols with `esp_partition_find_first(0x40, …, "companions")` + `esp_partition_mmap(..., ESP_PARTITION_MMAP_DATA, ...)` at init.
-  - A missing partition or a bad pack header falls back to `HABITAT_NO_COMPANION_ART` behaviour: Focus, as the Focus-only image does.
-- Create `FW/test/test_skins_partitions.py`.
-
-- [ ] **Step 1: Failing test** `test_skins_partitions.py`.
-  - `partitions_skins.csv` parses.
-  - No partitions overlap, and all end ≤ 16 MB.
-  - Each OTA slot ≥ 1.3 × the all-skins image without the pack (≈ 3.4 MB).
-  - `companions` ≥ the size of `assets/companions/companion_art.pack`.
-  - `partitions.csv` is byte-identical to `origin/main`'s.
-- [ ] **Step 2: Run it.** Expected: FAIL (no file).
-- [ ] **Step 3: Implement** as listed. Keep the default build's CMake path unchanged.
-- [ ] **Step 4: Verify.** Test PASS and host tests (`test_companions.py` reads the pack file, not the image).
-- [ ] **Step 5: Measure.**
-  - `skins`: image + PSRAM statics < 8,388,608 B.
-  - `default`: unchanged against Task 12.
-- [ ] **Step 6: Commit** `round dial: the all-skins image keeps its companion pack in a partition, so it fits PSRAM and boots`.
-
-### Task 14: Proof on a dial, and the two A/B decisions
-
-**Files:** none, except reverting Task 10 and/or Task 11 if their rule fails. A revert counts as a Task 14 commit.
+**Files:** none, except reverting Task 10 and/or Task 11 if their rule fails. A revert counts as a Task 13 commit.
 
 - [ ] **Step 1: Flash.** Build `default` with `-DPROJECT_VER=0.1.0-dev`. Flash it with the repo procedure:
   1. Quit Harness.
@@ -283,7 +286,3 @@
 - [ ] **Step 4: Fault build.** Flash the `fault` image.
   - Expected: the daemon log shows the dial's logs, and after the induced fault its report (last words / backtrace).
   - Then flash the final image back.
-- [ ] **Step 5: All skins.** If Diego has a spare dial, USB-flash `skins` to it.
-  - Expected: it boots and draws an illustrated companion when one is selected.
-  - Never push this image over OTA.
-  - Without a spare dial, record that this check is still open.

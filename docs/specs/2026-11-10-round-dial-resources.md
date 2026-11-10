@@ -8,14 +8,16 @@ The audit of main `c1a711d1a` (`docs/plans/2026-11-10-round-dial-resources-audit
 - about 700 KB of image that buys nothing;
 - about 65 KB of internal RAM that could come back;
 - a stack telemetry list that names a task which no longer exists;
-- an `-DDEVICE_ALL_SKINS=1` image that no longer fits PSRAM and so cannot boot.
+- skins and companions that no shipped dial can show, with an `-DDEVICE_ALL_SKINS=1` image that no longer even
+  boots.
 
 Diego asked for all of it (2026-11-10, "full").
 
 ## Goal
 
-Take all of it back with no visible change. The one exception is Latin Extended-A letters outside Vietnamese:
-they now draw as their base letter (ś as s), where today the face draws the letter itself.
+Take all of it back. Focus becomes the dial's only mode, as it already is on every shipped dial. The one visible
+change: Latin Extended-A letters outside Vietnamese now draw as their base letter (ś as s), where today the face
+draws the letter itself.
 
 ## In scope
 
@@ -28,11 +30,37 @@ Audit numbers in brackets.
 
 **Flash and PSRAM**
 
-2. **The Focus-only image links only Focus [#1, 270,293 B].**
-   - Under `HABITAT_FOCUS_ONLY` (every default build), the character registry and the illustrated tick no longer
-     reference Tim, Tux, the octopus or the illustrated companions.
-   - The registry keeps each character's name, so what the dial reports to the host is unchanged.
-   - `-DDEVICE_ALL_SKINS=1` keeps every character.
+2. **Focus is the dial's only mode [#1, #7] (Diego, 2026-11-10: "the device uses only Focus"; companions "no
+   longer used").** Everything that draws or selects another character goes:
+   - **ASCII Tim and the octopus:** `tim.c/h`, `octopus.c/h`, `octopus_font.c`, `octopus_art.inc`,
+     `gen_octopus.py`.
+   - **Tux:** `tux.c/h`, `tux_moods.inc`, `gen_tux_moods.py`, `import_tux_moods.mjs`.
+   - **The illustrated companions:** `illustrated.c/h`, `illustrated_cache.c`, `assets/companions/` (4.6 MB
+     pack), `gen_companion_art.py`.
+   - **Follow the desktop companion:** the setting bit, the `companion*` fields of the settings frame, the
+     `companion` frames, the celebration.
+   - **The creature gallery:** `creature_gallery.c/h`, `creature_font.c`, `creature_art.inc`,
+     `creature_clips.inc`, `gen_creature_*.py`.
+   - **The octopus bench:** `perf_bench.c/h`, `DEVICE_OCTOPUS_BENCH`, `analyze_octopus_perf.py`.
+   - **Character fonts:** `character_fonts.inc` and `gen_character_fonts.py`, if only those characters use them.
+   - **Build options:** `DEVICE_ALL_SKINS`, `DEVICE_DEFAULT_CHARACTER`, `HABITAT_FOCUS_ONLY`,
+     `HABITAT_NO_COMPANION_ART`. Their tests, test references and docs go too.
+
+   What stays:
+   - Focus and what it uses: `focus.c/h`, `focus_faces.c`, `focus_marks.c`, pets, `character_layout`,
+     `character_types`, `character_motion`.
+   - A one-row `character.c` registry, if keeping the `ht_character_*` calls is simpler than inlining Focus.
+
+   What a dial and the host see:
+   - **A saved skin:** a dial whose NVS holds a skin or companion id from before shows Focus.
+   - **The setting:** the skin setting reads Focus.
+   - **Settings frame:** it no longer carries `companionProtocol`, `followCompanion`, `companion` or
+     `companionDetails`. The daemon reads all of them as optional (`cli/src/cable/cableSession.ts`).
+   - **Companion frames:** a `companion` frame from the host is ignored, like any unknown message.
+   - **Desktop:** it already hides the companion feature (`kDeviceCompanionSkins = false`).
+
+   **Follow-up, not here:** the host side (`companionProtocol.ts`, the companion fields in `cableSession.ts`,
+   `kDeviceCompanionSkins`, any skin picker).
 3. **newlib nano printf [#4, 31,403 B].** `CONFIG_LIBC_NEWLIB_NANO_FORMAT=y`, after the two `%llu` in
    `ram_telemetry.c` become `%u`. No firmware format string uses a conversion nano lacks.
 4. **No duplicated generated data [#5, ~110 KB].**
@@ -60,7 +88,8 @@ Audit numbers in brackets.
    - These are kept only if the dial's `frame_max_us` stays within 10% of the old firmware's, in an A/B on one
      dial.
 8. **Smaller stacks where the dial's own telemetry shows the need [#3, #12].**
-   - `habitat_render`: 24,576 → 12,288 B unless `DEVICE_ALL_SKINS` (peak 5,596 B).
+   - `habitat_render`: 24,576 → 12,288 B (peak 5,596 B). The extra was for the ROM inflater, which only the deleted
+     companion pack used.
    - `proj_refresh`: 7,168 → 4,096 B (peak 2,248 B).
    - `voice_capture`: 5,120 → 4,096 B (peak 2,576 B).
    - `voice_send`: 5,120 → 4,096 B (peak 2,404 B).
@@ -81,15 +110,6 @@ Audit numbers in brackets.
     - The Wi-Fi, HTTP, TLS, LWIP and WebSocket `sdkconfig.defaults*` values go.
     - `mbedtls` (SHA-256 in `fw_update.c`), `app_update`, `esp_partition` and app rollback stay.
 
-**The all-skins image boots again [#7]**
-
-12. With `-DDEVICE_ALL_SKINS=1`, the companion pack (4.6 MB) no longer sits in the image (and so in PSRAM).
-    - The build uses its own partition table, `partitions_skins.csv`: two OTA slots of 0x560000 and a
-      `companions` data partition of 0x500000 that `idf.py flash` writes the pack into.
-    - `illustrated_cache.c` reads the pack through `esp_partition_mmap`.
-    - The default build keeps `partitions.csv` unchanged, so no shipped dial is touched.
-    - An all-skins dial is USB-flashed, as it is today.
-
 ## Decided, no change
 
 - **Partitions [#14].** The default table stays: changing it needs a USB reflash of every shipped dial, and
@@ -105,9 +125,10 @@ The thread/PM code, the host, the Pro (`devices/harness-pro`).
 
 **Image**
 - The default image is at least 600 KB smaller, and IRAM/DRAM are no larger.
-- `nm` shows no `ht_tux_`, `ht_illustrated_` or `ht_octopus_` symbols in the default ELF.
-- `-DDEVICE_ALL_SKINS=1` and `-DBOARD_PROBE=1` build.
-- The all-skins image plus its PSRAM statics fits in 8 MB PSRAM.
+- `nm` shows no `ht_tux_`, `ht_illustrated_`, `ht_octopus_` or `ht_tim_` symbols.
+- `-DBOARD_PROBE=1` and the remaining bench / render-fault builds still build.
+- `git grep -i "illustrated\|companion_art\|followCompanion\|companionProtocol\|DEVICE_ALL_SKINS\|octopus\|tux"`
+  finds nothing under `devices/harness-device/firmware/main` (outside generated pet data, if a pet is named so).
 
 **Internal RAM**
 - At least 40 KB more free at boot, by the dial's own `RAM tag=` line. Items 7 and 10 count only if their A/B
@@ -117,12 +138,11 @@ The thread/PM code, the host, the Pro (`devices/harness-pro`).
 - `make device-test` and every `firmware/test/test_*.py` pass, as CI runs them.
 - New tests pin:
   - the telemetry task list;
-  - the Focus-only link set;
+  - Focus as the only character, and a saved old skin falling back to it;
   - no unsupported `%` conversions;
   - no duplicate arrays in `pets.c` / `focus_marks.c` / `focus_faces.c`;
   - the kept Vietnamese letters;
   - the Inter base-letter fallback;
-  - the skins partition table and pack size.
 
 **On a dial** (USB flash, `-DPROJECT_VER=0.1.0-dev`)
 - **A/B:** 20 minutes on the baseline firmware, then 20 minutes on the new one, same use. Record `frame_max_us`,
@@ -135,14 +155,13 @@ The thread/PM code, the host, the Pro (`devices/harness-pro`).
   - every task in the new telemetry keeps at least 1 KB of stack free.
 - **Logs and panics:** a `MINIMAL_BUILD` image with `-DDEVICE_RENDER_FAULT=1` shows its logs and its fault
   report in the daemon log.
-- **All skins:** an `-DDEVICE_ALL_SKINS=1` image, USB-flashed to a spare dial, boots and draws an illustrated
-  companion. This is never pushed over OTA.
 
 ## Design
 
 - **Growth, read cost, scale:** none; fewer bytes everywhere.
 - **Compatibility:**
-  - The cable protocol is untouched; the daemon sees the same device. Character names reported are unchanged.
+  - The cable protocol is unchanged except that the dial no longer sends or reads the optional companion fields.
+    The daemon already treats them as optional. The skin setting always reads Focus.
   - Only text with Latin Extended-A letters outside Vietnamese changes on screen (base letter instead of the
     letter).
 - **Platforms:** the round dial only.
