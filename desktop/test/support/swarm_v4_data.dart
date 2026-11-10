@@ -176,10 +176,22 @@ ConversationServer swarmV4Server() {
 
 /// What `gh` answers for lampOS's issues in these tests, as GitHub's GraphQL does: three open tasks (one nobody has, one for
 /// the seventh builder, one the first builder is on), and #5759's text with its newest two comments, signed by their agents as
-/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does.
-SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
+/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does, and every call while
+/// [signedOut] says so fails as a `gh` that is not signed in does.
+SwarmGitHub swarmV4GitHub({
+  List<List<String>>? calls,
+  bool Function()? signedOut,
+}) => SwarmGitHub(
   run: (arguments) async {
     calls?.add(arguments);
+    if (signedOut?.call() ?? false) {
+      return ProcessResult(
+        0,
+        4,
+        '',
+        'To get started with GitHub CLI, please run:  gh auth login',
+      );
+    }
     final query = arguments
         .firstWhere((a) => a.startsWith('query='), orElse: () => '')
         .substring(6);

@@ -5,9 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/super_tabs/agent_info.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -237,6 +239,50 @@ void main() {
       }
     },
   );
+
+  testWidgets(
+    'tasks read before, then a board that cannot be read: both are shown, so none reads as current',
+    (tester) async {
+      var signedOut = false;
+      await show(
+        tester,
+        const Size(1440, 900),
+        github: swarmV4GitHub(signedOut: () => signedOut),
+      );
+      await tap(tester, key('swarm-info-button'));
+      expectRow(
+        'task',
+        '#5759 The two update rows were scored down for #5539 and #5476',
+      );
+      // Closed, then opened past the half minute in which a second read is not made: gh is signed out by now.
+      await tap(tester, key('swarm-info-close'));
+      signedOut = true;
+      await tester.pump(const Duration(seconds: 31));
+      await tap(tester, key('swarm-info-button'));
+      expectRow(
+        'task',
+        '#5759 The two update rows were scored down for #5539 and #5476',
+      );
+      expectRow('task', 'Sign in to GitHub: run gh auth login.');
+    },
+  );
+
+  test('the bar and Info name an engine as the rest of the app does', () {
+    String? named(String? engine) => swarmEngineName(
+      SuperTabAgent.fromJson({
+        'id': 'a',
+        'name': 'a',
+        'machineId': 'm',
+        'harnessId': 'h',
+        'contributorId': 'p',
+        'configuration': {'engine': ?engine},
+      }),
+    );
+    expect(named('claude'), 'Claude Code');
+    expect(named('codex'), 'Codex');
+    expect(named('opencode'), 'OpenCode');
+    expect(named(null), isNull);
+  });
 
   testWidgets('a board that cannot be read says why in the Task row', (
     tester,

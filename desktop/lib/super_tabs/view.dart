@@ -6379,6 +6379,7 @@ class _SuperTabViewState extends State<SuperTabView>
               machineName: widget.machineName(infoAgent.machineId),
               github: _github,
               app: widget.app,
+              refreshEvery: kUnderTest ? null : const Duration(minutes: 1),
               onClose: () => setState(() => _infoOpen = false),
             );
       // What a person opened beside the chat: where two panes do not fit, it takes the chat's place, under Chat, and comes

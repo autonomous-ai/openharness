@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
+
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -7,28 +10,28 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../state/app_state.dart';
-import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/engine_identity.dart';
 import 'agent_details.dart' show SuperTabAgentInfo;
 import 'controller.dart';
 import 'github_issues.dart';
 import 'model.dart';
 import 'task_board.dart';
 
-/// An agent's engine as its chat's bar names it: `Claude Code`, `Codex`, any other engine as it is, null when it has none.
-String? swarmEngineName(SuperTabAgent agent) =>
-    switch (agent.configuration['engine']) {
-      'codex' => 'Codex',
-      'claude' => 'Claude Code',
-      final String other when other.trim().isNotEmpty => other,
-      _ => null,
-    };
+/// An agent's engine as its chat's bar names it: `Claude Code`, else the app's one name for the engine (`Codex`, `OpenCode`),
+/// null when it has none.
+String? swarmEngineName(SuperTabAgent agent) => switch (agent.engine.trim()) {
+  '' => null,
+  'claude' => 'Claude Code',
+  final engine => engineIdentity(engine).label,
+};
 
 /// What the app already knows of an agent, beside its chat (Swarm v4, anh Dee 2026-11-09: "we need more info on the agent"):
 /// its person, the projects it is in and its part in each, the computer it runs on and whether that is up, its engine and
 /// model, what it is doing, the task it holds, and its folder, one short row each. A row the app has no value for is not
-/// drawn. The task is read from its projects' boards, the issues [SwarmTaskBoard] reads, with what was read last shown at
-/// once; the rest comes from the Swarm and from this computer's view of the agent's machine.
+/// drawn. The task is what its projects' boards hold for it, from the issues [SwarmTaskBoard] reads: what was read last at
+/// once, read again on opening and each minute while it is open; the rest comes from the Swarm and from this computer's
+/// view of the agent's machine, in the words the rest of the app uses ([SuperTabAgentInfo]).
 class SwarmAgentInfo extends StatefulWidget {
   const SwarmAgentInfo({
     super.key,
@@ -38,6 +41,7 @@ class SwarmAgentInfo extends StatefulWidget {
     required this.github,
     required this.onClose,
     this.app,
+    this.refreshEvery,
   });
 
   final SuperTabController controller;
@@ -51,34 +55,61 @@ class SwarmAgentInfo extends StatefulWidget {
   /// This computer's view of the agent's machine; without it, the rows only it knows are not drawn.
   final AppNotifier? app;
 
+  /// How often the boards are read again while Info is open, as the board does; null reads only on opening.
+  final Duration? refreshEvery;
+
   @override
   State<SwarmAgentInfo> createState() => _SwarmAgentInfoState();
 }
 
 class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
-  /// The issues its projects' boards say it holds: taken, and labelled for it.
-  List<SwarmIssue> _held = const [];
+  /// Why each board that could not be read was not, by repository, in the words GitHub's reader gives.
+  Map<String, String> _errors = const {};
 
-  /// Why a board could not be read, in the words GitHub's reader gives; null once every board read.
-  String? _error;
+  /// The repositories last read, to read again when the agent's projects change.
+  Set<String> _read = const {};
 
   /// Which read is the latest: an older answer that comes after it is dropped.
   int _reading = 0;
 
+  /// When Info last read each repository with a reader: opening it again within [_fresh] reads nothing new.
+  static final _readAtBy = Expando<Map<String, DateTime>>();
+  Map<String, DateTime> get _readAt =>
+      _readAtBy[widget.github] ??= <String, DateTime>{};
+  static const _fresh = Duration(seconds: 30);
+
+  Timer? _refresh;
+  late Listenable _changes;
+
   @override
   void initState() {
     super.initState();
-    unawaited(_read());
+    _changes = Listenable.merge([widget.controller, ?widget.app]);
+    unawaited(_readBoards(_repositories()));
+    if (widget.refreshEvery case final every?) {
+      _refresh = Timer.periodic(
+        every,
+        (_) => unawaited(_readBoards(_repositories(), always: true)),
+      );
+    }
   }
 
   @override
   void didUpdateWidget(SwarmAgentInfo old) {
     super.didUpdateWidget(old);
-    if (old.agent.id != widget.agent.id) {
-      _held = const [];
-      _error = null;
-      unawaited(_read());
+    if (old.controller != widget.controller || old.app != widget.app) {
+      _changes = Listenable.merge([widget.controller, ?widget.app]);
     }
+    if (old.agent.id != widget.agent.id) {
+      _errors = const {};
+      unawaited(_readBoards(_repositories()));
+    }
+  }
+
+  @override
+  void dispose() {
+    _refresh?.cancel();
+    super.dispose();
   }
 
   /// The projects the agent is in, each with whether it is that project's PM: the project the agent names, or whose channel
@@ -97,49 +128,62 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
     ];
   }
 
-  /// The issues of [issues] this agent holds: taken, with its `builder:<name>` label, matched without case as the board does.
-  List<SwarmIssue> _heldIn(List<SwarmIssue> issues) {
-    final names = {
-      widget.agent.name.toLowerCase(),
-      ?widget.agent.displayName?.toLowerCase(),
-    };
+  /// Its projects' repositories on GitHub.
+  Set<String> _repositories() => {
+    for (final (:project, pm: _) in _projects())
+      ?SwarmTaskBoard.repositoryOf(
+        widget.controller,
+        project.leadConversationId,
+      ),
+  };
+
+  /// The issues its boards hold for it, as they were last read: taken, with its `builder:<name>` label, the name the board
+  /// matches a label against.
+  List<SwarmIssue> _held(Set<String> repositories) {
+    final name = (widget.agent.displayName ?? widget.agent.name).toLowerCase();
     return [
-      for (final issue in issues)
-        if (issue.taken && names.contains(issue.agent?.toLowerCase())) issue,
+      for (final repository in repositories)
+        for (final issue in widget.github.kept(repository) ?? const [])
+          if (issue.taken && issue.agent?.toLowerCase() == name) issue,
     ];
   }
 
-  Future<void> _read() async {
+  /// Reads [repositories]' boards, all at once; one read within [_fresh] by another Info is not made again unless [always].
+  Future<void> _readBoards(
+    Set<String> repositories, {
+    bool always = false,
+  }) async {
+    _read = repositories;
+    final now = clock.now();
+    final due = [
+      for (final repository in repositories)
+        if (always ||
+            !(_readAt[repository]?.isAfter(now.subtract(_fresh)) ?? false))
+          repository,
+    ];
+    if (due.isEmpty) return;
     final agent = widget.agent, turn = ++_reading;
-    final repositories = {
-      for (final (:project, pm: _) in _projects())
-        ?SwarmTaskBoard.repositoryOf(
-          widget.controller,
-          project.leadConversationId,
-        ),
-    };
-    if (repositories.isEmpty) return;
-    // What the boards read last, at once.
-    setState(() {
-      _held = [
-        for (final repository in repositories)
-          ..._heldIn(widget.github.kept(repository) ?? const []),
-      ];
-    });
-    final held = <SwarmIssue>[];
-    String? error;
-    for (final repository in repositories) {
-      try {
-        held.addAll(_heldIn(await widget.github.issues(repository)));
-      } on SwarmGitHubError catch (failure) {
-        error = failure.message;
-        held.addAll(_heldIn(widget.github.kept(repository) ?? const []));
-      }
-      if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
+    for (final repository in due) {
+      _readAt[repository] = now;
     }
+    final answers = await Future.wait([
+      for (final repository in due)
+        widget.github
+            .issues(repository)
+            .then<String?>((_) => null)
+            .catchError(
+              (Object failure) => (failure as SwarmGitHubError).message,
+              test: (failure) => failure is SwarmGitHubError,
+            ),
+    ]);
+    if (!mounted || agent.id != widget.agent.id || turn != _reading) return;
     setState(() {
-      _held = held;
-      _error = error;
+      _errors = {
+        for (final (i, repository) in due.indexed) repository: ?answers[i],
+        // A board not read this time keeps what it said last.
+        for (final MapEntry(:key, :value) in _errors.entries)
+          if (!due.contains(key) && repositories.contains(key)) key: value,
+      };
     });
   }
 
@@ -176,7 +220,7 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
           ),
           Expanded(
             child: ListenableBuilder(
-              listenable: Listenable.merge([widget.controller, ?widget.app]),
+              listenable: _changes,
               builder: (context, _) => SelectionArea(
                 child: ListView(
                   padding: SwarmLayout.infoPadding,
@@ -190,42 +234,39 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
     );
   }
 
-  /// The state in a word, or null for what the app cannot say.
-  static String? _state(HarnessActivity? activity) => switch (activity) {
-    HarnessActivity.working => 'Working',
-    HarnessActivity.idle || HarnessActivity.done => 'Idle',
-    HarnessActivity.needsInput => 'Waiting',
-    HarnessActivity.starting => 'Starting',
-    HarnessActivity.paused => 'Stopped',
-    HarnessActivity.offline => 'Offline',
-    HarnessActivity.failed => 'Failed',
-    HarnessActivity.unknown || null => null,
-  };
-
-  static String? _text(String? value) =>
-      value == null || value.trim().isEmpty ? null : value.trim();
-
   List<Widget> _rows() {
     final agent = widget.agent, app = widget.app;
     final snapshot = widget.controller.snapshot;
-    // The model, the folder and what it is doing, as the rest of the app reads them.
+    // The model, the folder and what it is doing, in the words the rest of the app uses.
     final known = SuperTabAgentInfo(widget.controller, app, agent);
+    // An agent of a Mac's Team account runs on that Mac.
+    final place = snapshot?.placeOf(agent.machineId) ?? agent.machineId;
     final machine = app?.machines
-        .where((m) => m.machineId == agent.machineId)
+        .where((m) => m.machineId == place)
         .firstOrNull;
-    final owner = _text(
-      snapshot?.people
-          .where((p) => p.id == agent.contributorId)
-          .firstOrNull
-          ?.shownName,
-    );
-    // A session the Swarm says is down is offline, whatever this computer last heard.
-    final state = _state(
-      agent.downSince != null ? HarnessActivity.offline : known.activity,
-    );
+    final owner = snapshot?.people
+        .where((p) => p.id == agent.contributorId)
+        .firstOrNull
+        ?.shownName
+        .trim();
+    // What this computer knows of the session first; else the Swarm's word that it is down.
+    final state = known.status ?? (agent.downSince != null ? 'Offline' : null);
     final projects = _projects();
+    final repositories = _repositories();
+    if (!setEquals(repositories, _read)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !setEquals(_repositories(), _read)) {
+          unawaited(_readBoards(_repositories()));
+        }
+      });
+    }
+    final held = _held(repositories);
+    final errors = {
+      for (final MapEntry(:key, :value) in _errors.entries)
+        if (repositories.contains(key)) value,
+    };
     final computer = [
-      ?_text(widget.machineName),
+      if (widget.machineName.trim() case final name when name.isNotEmpty) name,
       ?switch (machine?.reportedOnline) {
         true => 'online',
         false => 'offline',
@@ -233,7 +274,8 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
       },
     ];
     return [
-      if (owner != null) _Fact('owner', 'Owner', Text(owner)),
+      if (owner != null && owner.isNotEmpty)
+        _Fact('owner', 'Owner', Text(owner)),
       if (projects.isNotEmpty)
         _Fact(
           'projects',
@@ -252,20 +294,20 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
         _Fact('engine', 'Engine', Text(engine)),
       if (known.model case final model?) _Fact('model', 'Model', Text(model)),
       if (state != null) _Fact('state', 'State', Text(state)),
-      if (_held.isNotEmpty)
+      // What the boards held when last read, and why one could not be read now: never stale without saying so.
+      if (held.isNotEmpty || errors.isNotEmpty)
         _Fact(
           'task',
-          _held.length == 1 ? 'Task' : 'Tasks',
+          held.length > 1 ? 'Tasks' : 'Task',
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              for (final issue in _held)
-                Text('#${issue.number} ${issue.title}'),
+              for (final issue in held) Text('#${issue.number} ${issue.title}'),
+              for (final error in errors)
+                Text(error, style: DesktopChrome.metadata()),
             ],
           ),
-        )
-      else if (_error case final error?)
-        _Fact('task', 'Task', Text(error)),
+        ),
       if (known.folder case final folder?)
         _Fact('folder', 'Folder', Text(folder, style: grid.AppType.mono())),
     ];
