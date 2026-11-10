@@ -290,6 +290,30 @@ Done when: lampOS's `joining.md` needs no line that overrules Harness; the built
 | A person's messages per landed change | Not counted | Counted from the first day |
 | The team | Went back to by hand on 9 Nov | Stays, after two weeks |
 
+## Who builds what in step 1
+
+Two sessions, split on 10 November along the one seam in the code.
+
+| | How a change lands | How an agent keeps working |
+|---|---|---|
+| Items | 3 the board's records, 4 who did it, 5 the train, then 7 the built-in text | 1 nothing stops unseen, 2 every message arrives, 6 allocation, then 8 the numbers |
+| Files in `cli/src/superTabs` | `githubMerge.ts`, the train, the record commands; and `cli/src/lib/swarmSkills.ts` | `host.ts`, `githubMentions.ts`, `githubAssign.ts`, `assign/`; the backend's delivery files; Desktop's agent rows |
+
+The seam, agreed before code:
+
+- **Commands.** `harness read ok <pull request>`, `harness read hold <pull request> "<file, line, fix>"` and
+  `harness take <issue>` are the landing side's. `harness inbox` is the working side's. Both go in
+  `cli/src/superTabs/command.ts`, each in a small pull request of its own, the landing side's first.
+- **An ask carries its answer.** Every ask the working side types ends with the one command that answers it, as the
+  `Answer:` line does today.
+- **Reads owed.** The working side asks readers. What a pull request still needs comes from the landing side
+  (`verdicts` and `sameChange` in `githubMerge.ts`, which `githubAssign.ts` imports today); their shape is kept when
+  records replace comments.
+- **States.** The working side owns an agent's state (at a task, working, waiting on a build, waiting on its person,
+  out of quota, idle, not running) and gives it by one function. The train agent and the reader asks use it.
+- **Shared files** (`command.ts`, `service.ts`): a change there is small and lands alone.
+- **The real test.** The two sessions sit on two computers, which is what allocation's first test and the gate need.
+
 ## Next
 
 **Step 2, the door opens.**
