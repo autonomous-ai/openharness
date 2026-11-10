@@ -19,7 +19,8 @@ import 'swarm_work_details_page.dart';
 /// The chat menu's Notifications rows (the desktop's chat menu, Slack's
 /// channel notifications): one per [SwarmNotify], the reader's own setting
 /// for chat [chatId] ticked (✓), kept on every device of theirs. A tap sets it
-/// ([swarmSetNotify]).
+/// ([swarmSetNotify]). A project's channel has no Muted
+/// ([SwarmReader.notifyOf]).
 PhoneSheetSection swarmNotifySection(
   BuildContext context,
   SwarmReader reader,
@@ -30,21 +31,23 @@ PhoneSheetSection swarmNotifySection(
     caption: 'Notifications',
     actions: [
       for (final level in SwarmNotify.values)
-        PhoneSheetAction(
-          icon: level == now
-              ? LucideIcons.check300
-              : switch (level) {
-                  SwarmNotify.all => LucideIcons.bellRing300,
-                  SwarmNotify.mentions => LucideIcons.atSign300,
-                  SwarmNotify.muted => LucideIcons.bellOff300,
-                },
-          label: level.label,
-          // The sheet draws no icons: the one set says so at its end.
-          value: level == now ? '✓' : null,
-          valueColor: AppPalette.textPrimary,
-          onTap: () =>
-              unawaited(swarmSetNotify(context, reader, chatId, level)),
-        ),
+        if (level != SwarmNotify.muted ||
+            reader.snapshot?.isProjectLead(chatId) != true)
+          PhoneSheetAction(
+            icon: level == now
+                ? LucideIcons.check300
+                : switch (level) {
+                    SwarmNotify.all => LucideIcons.bellRing300,
+                    SwarmNotify.mentions => LucideIcons.atSign300,
+                    SwarmNotify.muted => LucideIcons.bellOff300,
+                  },
+            label: level.label,
+            // The sheet draws no icons: the one set says so at its end.
+            value: level == now ? '✓' : null,
+            valueColor: AppPalette.textPrimary,
+            onTap: () =>
+                unawaited(swarmSetNotify(context, reader, chatId, level)),
+          ),
     ],
   );
 }

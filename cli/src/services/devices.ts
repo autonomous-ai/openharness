@@ -34,7 +34,6 @@ import { WindowSelection } from '../cable/windowSelection.js'
 import { WindowVisit } from '../cable/windowVisit.js'
 import { MachineListCache } from '../device/machineList.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
-import { machineKindsOf } from '../lib/e2ee/machineKinds.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRouter } from '../lib/voiceRouter.js'
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
@@ -122,12 +121,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // the trust group read; this copy writes no file of its own, so `machines.json` has one writer.
   const machines = new MachineListCache(() => core.account.machines(), () => core.machine.computerId(),
     (line) => log(`[cable] ${line}`), core.dataDir, () => null, false)
-  // The account's Harness Team account machines, as each list read says (docs/plans/2026-10-24-swarm-team-account.md):
-  // they run Swarm work only. Forgotten on a sign-out, which tells the list as null.
-  let teamMachines = new Set<string>()
-  machines.listen((body) => {
-    teamMachines = new Set([...machineKindsOf(body) ?? []].filter(([, kind]) => kind === 'team').map(([id]) => id))
-  })
   const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh: deps.refresh }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
@@ -381,9 +374,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       ended.delete(agentId)
       const who = cableHost.describe(agentId)
       // Decided once already, by the recaps (services/recaps.ts), for the phone as well: the dial follows it and
-      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here, and so is
-      // a Team machine's, whatever its card says: it runs Swarm work only (#2540's review: its own tier alerted).
-      if (event.tier && !onTeamMachine(event)) {
+      // nobody is asked again. A card without one (a cloud agent's, a recaps from before) is decided here.
+      if (event.tier) {
         tally(who?.name ?? '', event.tier, 'recaps', 'decided upstream', 0)
         void cable.summary(agentId, recap, event.text, event.tier, event.fullText, false)
         return
@@ -398,7 +390,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       began.delete(event.agentId); ended.delete(event.agentId)
       stats.take(event.agentId) // a failed turn's sums must not leak into the next turn
       starts.delete(event.agentId)
-      // A Swarm Reviewer on a Mac's Harness Team account failed every turn in 1-2 s (2026-10-28), and each failure took over
+      // A Swarm Reviewer failed every turn in 1-2 s (2026-10-28), and each failure took over
       // the round dial with the engine's raw error for 8 s. A Swarm's workers answer to their Lead, who hears of it in the
       // Swarm: one the person has not put on a tab ends its tile quietly, as a finished turn does, and never stays Working.
       const quiet = (): void => {
@@ -418,19 +410,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     }
   }
   /** An agent the Swarm started here, a Builder or Reviewer as it was (its record's Swarm role, and an agent started it, as
-   *  every Swarm start is), or any agent on a Harness Team account. The coordinator is the person's own agent leading the
+   *  every Swarm start is). The coordinator is the person's own agent leading the
    *  Swarm, and one the person started by hand is theirs whatever its role: their failures reach the dial as before. */
   const swarmWorker = (event: DialEvent): boolean => {
     const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
     const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
-    return role === 'agent' || onTeamMachine(event)
+    return role === 'agent'
   }
-  /** An agent on one of the account's Harness Team machines, which run Swarm work only. */
-  const onTeamMachine = (event: DialEvent): boolean => !!event.machineId && teamMachines.has(event.machineId)
-  /** Any Swarm agent, whatever its role (PM, Buddy, Builder, Reviewer, Tester): its registry row carries `swarmSkill`, or it runs
-   *  on a Harness Team account. Its news reaches the dial through the Swarm's cards, so its finished turn is silent. */
-  const swarmAgent = (event: DialEvent): boolean =>
-    (!event.machineId && !!core.agents.byAgent(event.agentId)?.swarmSkill) || onTeamMachine(event)
+  /** Any Swarm agent, whatever its role (PM, Buddy, Builder, Reviewer, Tester): its registry row carries `swarmSkill`. Its
+   *  news reaches the dial through the Swarm's cards, so its finished turn is silent. */
+  const swarmAgent = (event: DialEvent): boolean => !event.machineId && !!core.agents.byAgent(event.agentId)?.swarmSkill
   /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
    *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
   const WORKER_ANSWER_MS = 60_000

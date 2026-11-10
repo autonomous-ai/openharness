@@ -1,6 +1,7 @@
 import { sign } from 'node:crypto'
 import type { FcmAccount } from './keys.js'
-import { SEND_TIMEOUT_MS, SWARM_CHANNEL, SWARM_QUIET_CHANNEL, withTimeout, type Sender } from './sender.js'
+import { SEND_TIMEOUT_MS, SWARM_CHANNEL, SWARM_QUIET_CHANNEL, type Sender } from './sender.js'
+import { withTimeout } from '../lib/withTimeout.js'
 
 const SCOPE = 'https://www.googleapis.com/auth/firebase.messaging'
 /** An access token is used until this long before Google says it runs out. */
@@ -18,7 +19,7 @@ type GoogleError = { error?: { status?: string; details?: Array<{ errorCode?: st
 export function fcmSender(account: FcmAccount, options: { fetcher?: typeof fetch; now?: () => number; timeoutMs?: number } = {}): Sender {
   const fetcher = options.fetcher ?? fetch, now = options.now ?? Date.now, timeoutMs = options.timeoutMs ?? SEND_TIMEOUT_MS
   let access: { token: string; until: number } | null = null
-  const call = (url: string, init: RequestInit) => withTimeout(fetcher(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }), timeoutMs)
+  const call = (url: string, init: RequestInit) => withTimeout(() => fetcher(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }), timeoutMs)
   const accessToken = async () => {
     const at = now()
     if (access && at < access.until - RENEW_BEFORE_MS) return access.token

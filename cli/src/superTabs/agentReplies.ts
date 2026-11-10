@@ -1,8 +1,9 @@
 /**
  * A person's words in their agent's own 1:1 chat reach it as they typed them, and its answer comes back there without the
  * agent running anything (anh Dee, 2026-11-09: "it's a 1:1 conversation, why can't it be just the exact prompt?"). The host
- * owes that reply from the moment it types the message. When the agent's turn ends it reads the turn's final answer, and
- * posts it as the agent, right below the message, if the turn was asked what it typed.
+ * owes that reply from the moment it types the message. When a turn ends, its end names the turn by a hash of its prompt
+ * (core/turns/ends.ts); if that is what one of these messages was typed as, the host asks the core what that turn answered and
+ * posts it as the agent, right below the message.
  *
  * What is owed is a few ids and a hash of the words, never the words: it lives in the host's journal (`replies`), so a
  * restart in the middle of a long turn still posts the answer when the turn ends. A reply is taken off what is owed before
@@ -13,14 +14,14 @@
  * A reply the post of which failed for good (the server refuses it, or every try is spent) is never lost without a word: the
  * person is told in the same chat, from the agent, where the reply would have been, so they do not wait for it.
  *
- * Known limit: a message queued behind a running turn starts its own turn the moment the first ends, and an engine may have
- * written that prompt before the answer is read, so the first turn's answer is no longer the last turn the transcript shows.
- * That reply stays owed through that end (the last turn has said nothing yet) and is dropped, with a line saying so, when the
- * turn after it ends and answers: rather posted from the wrong turn, it is not posted.
+ * Each message is answered by its own turn, in the order the turns end. A follow-up queued behind a running turn begins the moment
+ * the first ends, with its prompt and perhaps its first words in the transcript before that end is heard: it neither stands in for
+ * the first's answer nor takes it away, as the answer is of the turn the end names and not of the transcript's last. A message whose
+ * turn went on without it (the engine took two messages into one turn, or its end was never heard: a daemon that was down) is dropped,
+ * with a line saying so, when the turn of a message typed after it ends.
  */
-import { createHash } from 'node:crypto'
 import type { CoreApi, TurnDelivery, TurnEnd } from '../core/api.js'
-import type { LastTurnText } from '../lib/normalize.js'
+import { promptHash } from '../lib/promptIdentity.js'
 import { cut } from './deliveryContext.js'
 import { backend, identifier, object, SuperTabHostError } from './wire.js'
 
@@ -54,7 +55,7 @@ export interface Owed {
   /** The message answered. The reply goes right below it, or in its thread when it is a reply in one, as the Answer line said. */
   messageId: string
   thread: boolean
-  /** A hash of what was typed, as `said` reads it: what the turn's prompt must be, and never the words themselves. */
+  /** A hash of what was typed (lib/promptIdentity.ts): the prompt of the turn that answers it, and never the words themselves. */
   asked: string
   at: number
 }
@@ -69,12 +70,6 @@ export interface RepliesDeps {
   /** A refusal no resend changes. */
   refused: (error: unknown) => boolean
 }
-
-/** What a prompt says, once the markers Claude Code records around a paste are off it and its spacing is one: Claude Code
- *  keeps a typed paste between `<pasted_content id=…>` tags, and an engine may space its lines as it likes. */
-const PASTE_MARKS = /<\/?pasted_content\b[^>]*>/g
-const said = (text: string): string => text.replace(PASTE_MARKS, ' ').replace(/\s+/g, ' ').trim()
-const hashOf = (text: string): string => createHash('sha256').update(said(text)).digest('hex').slice(0, 32)
 
 class Late extends Error { override readonly name = 'TIMEOUT' }
 /** [work] or a failure after [ms]. */
@@ -171,7 +166,7 @@ export class AgentReplies {
     const held = owed[entry.deliveryId]
     if (held) { held.harnessId = entry.harnessId; return }
     owed[entry.deliveryId] = { tabId: entry.tabId, agentId: entry.agentId, name: cut(entry.name, NAME_MAX - 1), harnessId: entry.harnessId, conversationId: String(message.conversationId),
-      messageId: String(message.id), thread: identifier(message.thread) && message.thread !== message.id, asked: hashOf(text), at: this.deps.now() }
+      messageId: String(message.id), thread: identifier(message.thread) && message.thread !== message.id, asked: promptHash(text), at: this.deps.now() }
     const mine = this.owedOf(entry.harnessId)
     for (const [id, old] of mine.slice(0, Math.max(0, mine.length - OWED_PER_AGENT))) this.drop(id, old, `more than ${OWED_PER_AGENT} are owed it`)
     const all = Object.entries(owed).sort((a, b) => a[1].at - b[1].at)
@@ -193,36 +188,48 @@ export class AgentReplies {
     this.commit()
   }
 
-  /** A live turn ended. Resolves once its reply, if it owed one, had its first try (and, when the server refused that for good,
-   *  the line that tells its person so). */
-  async ended(event: TurnEnd): Promise<void> {
-    if (this.stopped || !this.journal.replies) return
-    if (this.expire()) this.commit()
-    const first = this.owedOf(event.agentId)[0]
-    if (!first) return
-    let turn: LastTurnText | null
-    try { turn = await bounded(this.core.transcripts.lastTurn(event.sessionId), READ_WAIT_MS) } catch (error) {
-      this.log(`Could not read the answer of the turn that ended for agent ${first[1].agentId}: ${named(error)}.`)
-      return
-    }
-    if (this.stopped || !turn) return
-    // The last turn the transcript shows is the one this end answers when it has said something, to the prompt of one of
-    // these. One that has said nothing is a turn still at work (a queued follow-up begins the moment one ends, and its prompt
-    // may already be written) or one that said nothing, and neither is over for certain; a prompt that is none of these is a turn
-    // its person typed in the terminal, or an automatic one. Either way nothing is posted and what is owed stays owed.
-    const answer = turn.assistantText.trim()
-    // Read again: an earlier hearing of this end may have taken it while this read was out.
+  /** The reply owed for the turn [event] ended, among those owed its agent: the first of the messages that were typed what the turn
+   *  was asked, so that messages of the same words are answered in the order they were sent. */
+  private find(event: TurnEnd): { mine: Array<[string, Owed]>; at: number } {
     const mine = this.owedOf(event.agentId)
-    const asked = answer ? hashOf(turn.userMessage) : null
-    const at = asked ? mine.findIndex(([, owed]) => owed.asked === asked) : -1
-    if (at < 0) return
-    // Each message that waited behind this one had its turn after it, so the ones before it went without: it was queued
-    // and the engine took it into the turn that followed, or its turn was never seen.
+    return { mine, at: mine.findIndex(([, owed]) => owed.asked === event.prompt) }
+  }
+
+  /** Takes off what is owed the reply [event]'s turn answers, and with it each one owed before it: a message that waited behind
+   *  this one had its turn after it, so the ones before it went without, as the engine took two messages into one turn, or its
+   *  turn's end was never heard. Nothing is asked of any of them again. Null when none was owed. */
+  private take(event: TurnEnd): [string, Owed] | null {
+    const { mine, at } = this.find(event)
+    if (at < 0) return null
     for (const [id, older] of mine.slice(0, at)) this.none(id, older, 'its turn went on without it')
     const [id, owed] = mine[at]!
     this.remove(id)
     this.commit()
+    return [id, owed]
+  }
+
+  /** A live turn ended, which the core names by its prompt and its number. Resolves once the reply owed for it, if one is, had its
+   *  first try (and, when the server refused that for good, the line that tells its person so). */
+  async ended(event: TurnEnd): Promise<void> {
+    if (this.stopped || !this.journal.replies) return
+    if (this.expire()) this.commit()
+    // Taken before its answer is read: a second hearing of this end finds nothing, and the ends of two messages of the same words
+    // each take their own, in the order they were heard, whichever read comes back first. A turn nobody here asked, which its person
+    // typed in the terminal or was automatic, is no reason to read anything. A turn that is over has no later end that would try
+    // again, so an answer that cannot be read, or is none, costs the reply: said, and no more owed (its person is told when it was
+    // lost for a failure, as for a post that failed).
+    const taken = this.take(event)
+    if (!taken) return
+    const [id, owed] = taken
     if (event.aborted) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn was interrupted.`)
+    let answer: string | null
+    try { answer = await bounded(this.core.turns.answerOf(event), READ_WAIT_MS) } catch (error) {
+      this.log(`Could not read the answer of the turn that ended for agent ${owed.agentId}: ${named(error)}.`)
+      // Lost for good, so its person is told, as for a post that failed (unless the host is going).
+      return this.stopped ? undefined : this.tell(id, owed)
+    }
+    if (!answer) return this.log(`No reply posted for delivery ${id} of agent ${owed.agentId}: its turn ended without an answer.`)
+    if (this.stopped) return this.log(`Dropped the reply to delivery ${id} of agent ${owed.agentId}: the host stopped.`)
     await this.attempt(id, owed, answer.length > REPLY_TEXT_MAX ? cut(answer, REPLY_TEXT_MAX - 1) : answer, 0)
   }
 

@@ -17,7 +17,7 @@ import { HOOK_SCRIPT } from '../engines/kit/notifyHooks.js'
 import { GUEST_HELPER_PATH, runGuestCommand, type GuestRunner } from './guestAccounts.js'
 import { guestHelperScript, guestSudoersTemplate, helperScriptVersion } from './guestHelperAssets.js'
 import { managedNodePath } from './nodeRuntime.js'
-import type { RunAdmin } from '../team/admin.js'
+import type { RunAdmin } from './windows/elevated.js'
 
 export const GUEST_SUDOERS_PATH = '/etc/sudoers.d/harness-guests'
 export const GUEST_NODE_DIR = '/usr/local/lib/harness/node'
@@ -132,11 +132,11 @@ export interface GuestHelperInstallOptions {
 
 export async function installGuestHelper(options: GuestHelperInstallOptions = {}): Promise<GuestHelperInstallResult> {
   const platform = options.platform ?? process.platform
-  // Windows's script builders (and the Team imports they bring) are loaded only there: every other platform, and
+  // Windows's script builders are loaded only there: every other platform, and
   // every service sharing the edge host's process, must not carry them (src/leanEntry.spec.ts).
   if (platform === 'win32') {
     const { installWindowsGuestHelper } = await import('./windows/guestHelperInstallWin.js')
-    return installWindowsGuestHelper(options, GUEST_HELPER_PROMPT)
+    return installWindowsGuestHelper(options)
   }
   if (platform !== 'darwin' && platform !== 'linux') {
     return { ok: false, code: 'UNSUPPORTED', message: 'Sharing this computer needs macOS or Linux.' }

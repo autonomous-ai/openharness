@@ -164,6 +164,14 @@ export function projectsOf(state: SuperTabState): SwarmProject[] {
   }]
 }
 
+/** The projects' channels, each project's own chat (Swarm v4). A person's stored mute of one silences nothing (2026-11-10):
+ *  v4's project menu has no Notifications, so a channel muted before could never be unmuted. Desktop reads that mute as
+ *  Mentions only (SuperTabController.notifyOf, #3768), and so do reply rows and phone pushes (activity.ts
+ *  writeReplyActivity, push/notices.ts); the stored row stays as it is. */
+export function projectChannels(state: SuperTabState): Set<string> {
+  return new Set(projectsOf(state).map(p => p.leadConversationId))
+}
+
 export function projectOf(state: SuperTabState, projectId: string): SwarmProject {
   return projectsOf(state).find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
 }

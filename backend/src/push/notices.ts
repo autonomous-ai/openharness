@@ -1,7 +1,7 @@
 import { stableId, type MessageDraft, type SuperTabState } from '../superTabs/model.js'
 import { actorName } from '../superTabs/activity.js'
 import { taggerName } from '../superTabs/mentions.js'
-import { projectsOf } from '../superTabs/projects.js'
+import { projectChannels, projectsOf } from '../superTabs/projects.js'
 import { isSwarmBuddyChat } from '../superTabs/buddies.js'
 import type { PhoneNotice } from './sender.js'
 
@@ -63,6 +63,7 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
     subtitle: project(row.conversationId), body: BODY, link: linkOf(tabId, row.conversationId, row.messageId, row.threadId),
     slot: threadSlot(tabId, row.conversationId, row.threadId),
   }))
+  const channels = projectChannels(state)
   const tags = written.tags.filter(row => !row.holdUntil).flatMap((row): PhoneNotice[] => {
     const message = byId.get(row.messageId)
     if (!message || message.author.kind !== 'person') return []
@@ -71,8 +72,9 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
     const key = `mention:${row.id}`
     return [{ personId: row.personId, key, title: `${taggerName(state, message.author)} tagged you`,
       subtitle: project(row.conversationId), body: BODY, link: linkOf(tabId, row.conversationId, row.messageId, thread), slot: key,
-      // A tag in a chat its person muted rings nothing; that is read as it is sent, not in the write (push/muted.ts).
-      setting: stableId(tabId, row.conversationId, row.personId, 'notify') }]
+      // A tag in a chat its person muted rings nothing; that is read as it is sent, not in the write (push/muted.ts). A
+      // project's channel's mute does not hold (projects.ts projectChannels), so its tag carries no setting to weigh.
+      ...channels.has(row.conversationId) ? {} : { setting: stableId(tabId, row.conversationId, row.personId, 'notify') } }]
   })
   const asked = new Set<string>()
   const decisions = (written.decisions ?? []).map((row): PhoneNotice => {
