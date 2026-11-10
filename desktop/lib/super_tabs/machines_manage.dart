@@ -324,6 +324,16 @@ class _ManageMachineLine extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final narrow = constraints.maxWidth < 640;
+          final disk = narrow ? 112.0 : 150.0;
+          // The crew column is as wide as its faces and "12 asleep" (a narrow row's chip alone) at the reader's text size, and
+          // never wider than its old share of the free width (two sevenths narrow, half wide), so a name is never cut sooner
+          // than before; one column down the list. The rest is the name's.
+          final free =
+              constraints.maxWidth - (20 + 8 + 12 + 12 + disk + 12 + 32);
+          final crewWidth = min(
+            MediaQuery.textScalerOf(context).scale(narrow ? 72 : 128),
+            max(0.0, free * (narrow ? 2 / 7 : 1 / 2)),
+          );
           return Row(
             children: [
               SizedBox(
@@ -350,7 +360,6 @@ class _ManageMachineLine extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Expanded(
-                flex: 5,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -418,12 +427,8 @@ class _ManageMachineLine extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
-              // Wide enough for its faces and "12 asleep" (a narrow row's chip alone, at most an eighth of it), one column
-              // down the list: the rest is the name's.
               SizedBox(
-                width: narrow
-                    ? (constraints.maxWidth / 8).clamp(0, 72).toDouble()
-                    : 128,
+                width: crewWidth,
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Row(
@@ -501,7 +506,7 @@ class _ManageMachineLine extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               SizedBox(
-                width: narrow ? 112 : 150,
+                width: disk,
                 child: _MachineDisk(view: view),
               ),
               const SizedBox(width: 12),

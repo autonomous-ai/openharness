@@ -309,4 +309,28 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'at twice the text size the crew chips grow with it and stay whole',
+    (tester) async {
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await mount(tester, width: 880);
+      for (final id in ['mine', 'build', 'sleep', 'old']) {
+        expect(
+          tester
+              .renderObject<RenderParagraph>(
+                find.descendant(
+                  of: key('machines-crew-$id'),
+                  matching: find.byType(RichText),
+                ),
+              )
+              .didExceedMaxLines,
+          isFalse,
+          reason: id,
+        );
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
