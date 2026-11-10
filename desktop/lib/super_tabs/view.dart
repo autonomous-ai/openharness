@@ -57,6 +57,7 @@ import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
 import 'reminders.dart';
 import 'places.dart';
+import 'agent_state.dart';
 import 'attention.dart';
 import 'back_to_chat.dart';
 import 'controller.dart';
@@ -125,6 +126,7 @@ import 'task_groups.dart';
 import 'tasks_view.dart';
 import 'chat/chat_card.dart';
 import 'chat/chat_time.dart';
+import 'chat/column.dart';
 import 'chat/composer_pill.dart';
 import 'chat/send_button.dart';
 import 'voice_length.dart';
@@ -405,6 +407,19 @@ class _SuperTabViewState extends State<SuperTabView>
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
 
+  /// What each agent of Your Team is doing, its row's one line (agent_state.dart): read where an app is and the Swarm is laid
+  /// out as v4.
+  SwarmAgentStates? _states;
+
+  SwarmAgentStates? _agentStates() => widget.app == null || !widget.board
+      ? null
+      : SwarmAgentStates(
+          controller: c,
+          github: _github,
+          // A test never waits for the next read of a board.
+          boardEvery: kUnderTest ? null : const Duration(minutes: 1),
+        );
+
   /// What this computer's GitHub says of the pull requests on live cards.
   late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
     widget.app?.readPullRequestsStatus,
@@ -471,6 +486,7 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabChatNotices.of(c).chatShown = _chatShown;
     SuperTabPlaces.of(c).addListener(_takePlace);
     _registerDial();
+    _states = _agentStates();
     _changed();
   }
 
@@ -560,6 +576,8 @@ class _SuperTabViewState extends State<SuperTabView>
       _registerDial();
       _facts.dispose();
       _facts = SuperTabPullRequestFacts(widget.app?.readPullRequestsStatus);
+      _states?.dispose();
+      _states = _agentStates();
     }
     if (oldWidget.controller != c) {
       _board.dispose();
@@ -1103,9 +1121,9 @@ class _SuperTabViewState extends State<SuperTabView>
     return KeyEventResult.ignored;
   }
 
-  /// The region the view sits in (the quick switcher's) with the unread chat
-  /// keys added, so the keymap runs them: listed, rebindable, and ahead of
-  /// Move pane only while the chat has focus.
+  /// The region the view sits in, if any, with the unread chat keys added, so
+  /// the keymap runs them: listed, rebindable, and ahead of Move pane only
+  /// while the chat has focus.
   Widget _unreadKeys(Widget child) {
     final region = KeymapRegion.of(context);
     return KeymapRegion(
@@ -1217,6 +1235,7 @@ class _SuperTabViewState extends State<SuperTabView>
     c.threadPaneHidden();
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
+    _states?.dispose();
     _facts.dispose();
     _tasksLayout.dispose();
     c.removeListener(_changed);
@@ -2109,6 +2128,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar({String? boardProjectId}) => ProjectSidebar(
     board: widget.board,
     leaderboard: _board,
+    agentStates: _states,
     boardProjectId: boardProjectId,
     controller: c,
     compact: _phone,
@@ -5207,6 +5227,13 @@ class _SuperTabViewState extends State<SuperTabView>
     ),
   );
 
+  /// A v4 chat's rows, composer and the notes around them sit in one centred column ([SwarmChatColumn], anh Dee
+  /// 2026-11-09); the browser keeps its full width until it moves to v4. Everything the chat draws between its list and the
+  /// window's edge, a note under the list included, goes through here; the bars over the list and the buttons floating on it
+  /// stay the pane's width.
+  Widget _inColumn(Widget child) =>
+      widget.board ? SwarmChatColumn(child: child) : child;
+
   /// [underHeader]: the chat is under the middle's one-row header, which carries the Buddy's pickers.
   Widget _conversation(bool narrow, {bool underHeader = false}) {
     // The Desktop keeps an agent's chat open in a Swarm with no projects; with none open, there is nothing to load and
@@ -5346,50 +5373,53 @@ class _SuperTabViewState extends State<SuperTabView>
       return SuperTabDayMark(
         key: ValueKey(_rowKey(c.messageIdentity(message.id))),
         time: time,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (time != null &&
-                !DateUtils.isSameDay(
-                  time.toLocal(),
-                  previous?.createdAt?.toLocal(),
-                ))
-              _date(time),
-            if (time != null && SwarmChatTime.after(previous?.createdAt, time))
-              SwarmChatTime(
-                time,
-                key: ValueKey('swarm-chat-time-${message.id}'),
-              ),
-            if (message.id == _unread.lineAt(c.selectedId))
-              SuperTabNewMessagesLine(key: _unread.key),
-            // The message itself is kept in place: its
-            // date moves above earlier ones as they come.
-            _BuiltRow(
-              id: message.id,
-              rows: _built,
-              child: KeyedSubtree(
-                key: message.id == _target ? _targetKey : null,
-                child: SuperTabMessageHighlight(
-                  on: message.id == _lit || message.id == search?.current,
-                  match: search?.matching.contains(message.id) ?? false,
-                  child: pendingById.containsKey(message.id)
-                      ? _outgoingRow(
-                          pendingById[message.id]!,
-                          byId,
-                          grouped: joined,
-                          joinsBelow: joinsBelow,
-                        )
-                      : _message(
-                          message,
-                          joined,
-                          byId,
-                          showReceipt: message.id == latestOwn?.id,
-                          joinsBelow: joinsBelow,
-                        ),
+        child: _inColumn(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (time != null &&
+                  !DateUtils.isSameDay(
+                    time.toLocal(),
+                    previous?.createdAt?.toLocal(),
+                  ))
+                _date(time),
+              if (time != null &&
+                  SwarmChatTime.after(previous?.createdAt, time))
+                SwarmChatTime(
+                  time,
+                  key: ValueKey('swarm-chat-time-${message.id}'),
+                ),
+              if (message.id == _unread.lineAt(c.selectedId))
+                SuperTabNewMessagesLine(key: _unread.key),
+              // The message itself is kept in place: its
+              // date moves above earlier ones as they come.
+              _BuiltRow(
+                id: message.id,
+                rows: _built,
+                child: KeyedSubtree(
+                  key: message.id == _target ? _targetKey : null,
+                  child: SuperTabMessageHighlight(
+                    on: message.id == _lit || message.id == search?.current,
+                    match: search?.matching.contains(message.id) ?? false,
+                    child: pendingById.containsKey(message.id)
+                        ? _outgoingRow(
+                            pendingById[message.id]!,
+                            byId,
+                            grouped: joined,
+                            joinsBelow: joinsBelow,
+                          )
+                        : _message(
+                            message,
+                            joined,
+                            byId,
+                            showReceipt: message.id == latestOwn?.id,
+                            joinsBelow: joinsBelow,
+                          ),
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
@@ -5756,51 +5786,57 @@ class _SuperTabViewState extends State<SuperTabView>
                 ),
         ),
         if (composerError != null && !errorInRow)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(composerError, style: DesktopChrome.control()),
-                ),
-                if (c.hasPendingAction)
-                  TextButton(
-                    onPressed: c.saving ? null : () => unawaited(c.retry()),
-                    child: const Text('Retry'),
+          _inColumn(
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(composerError, style: DesktopChrome.control()),
                   ),
-              ],
+                  if (c.hasPendingAction)
+                    TextButton(
+                      onPressed: c.saving ? null : () => unawaited(c.retry()),
+                      child: const Text('Retry'),
+                    ),
+                ],
+              ),
             ),
           )
         else if (c.operationNotice != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              c.operationNotice!,
-              key: const ValueKey('super-operation-notice'),
-              style: DesktopChrome.control(),
+          _inColumn(
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                c.operationNotice!,
+                key: const ValueKey('super-operation-notice'),
+                style: DesktopChrome.control(),
+              ),
             ),
           ),
         if (reply != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 8, 16, 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SuperTabReplyPreview(
-                    author: 'Replying to ${_authorName(reply)}',
-                    text: superTabQuoteText(reply),
+          _inColumn(
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 16, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SuperTabReplyPreview(
+                      author: 'Replying to ${_authorName(reply)}',
+                      text: superTabQuoteText(reply),
+                    ),
                   ),
-                ),
-                fingerTarget(
-                  enabled: _phone,
-                  AppIconButton(
-                    icon: AppIcons.close,
-                    tooltip: 'Cancel reply',
-                    onPressed: () =>
-                        setState(() => _replies.remove(c.selectedId)),
+                  fingerTarget(
+                    enabled: _phone,
+                    AppIconButton(
+                      icon: AppIcons.close,
+                      tooltip: 'Cancel reply',
+                      onPressed: () =>
+                          setState(() => _replies.remove(c.selectedId)),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         if (group != null)
@@ -5809,26 +5845,28 @@ class _SuperTabViewState extends State<SuperTabView>
             builder: (context, _) => Column(
               children: [
                 for (final agent in _needsHuman(group))
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
-                    child: ListTile(
-                      key: ValueKey('super-needs-human-${agent.id}'),
-                      dense: true,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                  _inColumn(
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
+                      child: ListTile(
+                        key: ValueKey('super-needs-human-${agent.id}'),
+                        dense: true,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        tileColor: grid.AppPalette.warn.withValues(alpha: .08),
+                        leading: Icon(
+                          AppIcons.messageCircleQuestionMark,
+                          color: grid.AppPalette.warn,
+                          size: 18,
+                        ),
+                        title: Text(
+                          '${_agentName(agent)} needs you',
+                          style: DesktopChrome.control(medium: true),
+                        ),
+                        trailing: const Icon(AppIcons.arrowRight, size: 16),
+                        onTap: () => _openQuestion(group, agent),
                       ),
-                      tileColor: grid.AppPalette.warn.withValues(alpha: .08),
-                      leading: Icon(
-                        AppIcons.messageCircleQuestionMark,
-                        color: grid.AppPalette.warn,
-                        size: 18,
-                      ),
-                      title: Text(
-                        '${_agentName(agent)} needs you',
-                        style: DesktopChrome.control(medium: true),
-                      ),
-                      trailing: const Icon(AppIcons.arrowRight, size: 16),
-                      onTap: () => _openQuestion(group, agent),
                     ),
                   ),
               ],
@@ -5839,13 +5877,15 @@ class _SuperTabViewState extends State<SuperTabView>
           builder: (context, _) {
             final choices = _completionChoices;
             if (choices.isEmpty) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-              child: SuperTabCompletionList(
-                listKey: const ValueKey('super-composer-completions'),
-                choices: choices,
-                index: _mentionIndex.value,
-                rowKeys: _completionKeys,
+            return _inColumn(
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                child: SuperTabCompletionList(
+                  listKey: const ValueKey('super-composer-completions'),
+                  choices: choices,
+                  index: _mentionIndex.value,
+                  rowKeys: _completionKeys,
+                ),
               ),
             );
           },
@@ -5857,23 +5897,25 @@ class _SuperTabViewState extends State<SuperTabView>
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && widget.board && _agentsOnly(group))
-          // It holds the chat's focus in the composer's place, so the chat's keys (find, unread, the switcher) work.
+          // It holds the chat's focus in the composer's place, so the chat's keys (find and unread) work.
           Focus(
             focusNode: _focus,
             child: GestureDetector(
               onTap: _focus.requestFocus,
-              child: Container(
-                key: const ValueKey('super-agents-only'),
-                margin: SwarmLayout.agentsOnlyMargin,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: grid.AppSurface.recess,
-                  borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
-                ),
-                child: Text(
-                  'Only agents post here. To change what happens, talk to your agents.',
-                  style: DesktopChrome.metadata(),
+              child: _inColumn(
+                Container(
+                  key: const ValueKey('super-agents-only'),
+                  margin: SwarmLayout.agentsOnlyMargin,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: grid.AppSurface.recess,
+                    borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
+                  ),
+                  child: Text(
+                    'Only agents post here. To change what happens, talk to your agents.',
+                    style: DesktopChrome.metadata(),
+                  ),
                 ),
               ),
             ),
@@ -5938,43 +5980,45 @@ class _SuperTabViewState extends State<SuperTabView>
             // nowhere.
             key: const ValueKey('super-message-composer-row'),
             listenable: _composer,
-            builder: (context, field) => Padding(
-              // On a phone the box sits against the keyboard, with the width.
-              padding: _phone
-                  ? const EdgeInsets.all(grid.AppDesktop.controlGap)
-                  : EdgeInsets.fromLTRB(
-                      24,
-                      12,
-                      24,
-                      pastedFolders().isEmpty ? ProjectSidebar.footGap : 6,
-                    ),
-              child: _phone
-                  ? Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (c.offersChatSessions &&
-                            _chatSessions.contains(chatId) &&
-                            c.threadSessionBlocked == null)
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              bottom: grid.AppDesktop.controlGap,
-                            ),
-                            child: Text(
-                              'Starts its own thread and Buddy session',
-                              key: const ValueKey('super-chat-session-note'),
-                              style: DesktopChrome.metadata(
-                                color: DesktopChrome.muted,
+            builder: (context, field) => _inColumn(
+              Padding(
+                // On a phone the box sits against the keyboard, with the width.
+                padding: _phone
+                    ? const EdgeInsets.all(grid.AppDesktop.controlGap)
+                    : EdgeInsets.fromLTRB(
+                        24,
+                        12,
+                        24,
+                        pastedFolders().isEmpty ? ProjectSidebar.footGap : 6,
+                      ),
+                child: _phone
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (c.offersChatSessions &&
+                              _chatSessions.contains(chatId) &&
+                              c.threadSessionBlocked == null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                bottom: grid.AppDesktop.controlGap,
+                              ),
+                              child: Text(
+                                'Starts its own thread and Buddy session',
+                                key: const ValueKey('super-chat-session-note'),
+                                style: DesktopChrome.metadata(
+                                  color: DesktopChrome.muted,
+                                ),
                               ),
                             ),
+                          KeyedSubtree(
+                            key: const ValueKey('super-message-composer-box'),
+                            child: field!,
                           ),
-                        KeyedSubtree(
-                          key: const ValueKey('super-message-composer-box'),
-                          child: field!,
-                        ),
-                      ],
-                    )
-                  : field,
+                        ],
+                      )
+                    : field,
+              ),
             ),
             child: Focus(
               onKeyEvent: (node, event) {
@@ -6214,33 +6258,37 @@ class _SuperTabViewState extends State<SuperTabView>
             builder: (context, _) {
               final pasted = pastedFolders();
               if (pasted.isEmpty) return const SizedBox.shrink();
-              return Padding(
-                key: const ValueKey('super-folder-path-hint'),
-                padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        pasted.length == 1
-                            ? "This path is on this computer. Agents on other "
-                                  "computers can't open it."
-                            : "These paths are on this computer. Agents on "
-                                  "other computers can't open them.",
-                        style: DesktopChrome.metadata(),
+              return _inColumn(
+                Padding(
+                  key: const ValueKey('super-folder-path-hint'),
+                  padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          pasted.length == 1
+                              ? "This path is on this computer. Agents on other "
+                                    "computers can't open it."
+                              : "These paths are on this computer. Agents on "
+                                    "other computers can't open them.",
+                          style: DesktopChrome.metadata(),
+                        ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: _zipping.contains(chatId) || !writable || busy
-                          ? null
-                          : () =>
-                                unawaited(_attachFoldersAsZip(chatId, pasted)),
-                      child: Text(
-                        _zipping.contains(chatId)
-                            ? 'Zipping…'
-                            : 'Attach as zip',
+                      TextButton(
+                        onPressed:
+                            _zipping.contains(chatId) || !writable || busy
+                            ? null
+                            : () => unawaited(
+                                _attachFoldersAsZip(chatId, pasted),
+                              ),
+                        child: Text(
+                          _zipping.contains(chatId)
+                              ? 'Zipping…'
+                              : 'Attach as zip',
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             },

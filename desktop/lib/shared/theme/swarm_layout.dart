@@ -12,6 +12,9 @@ abstract final class SwarmLayout {
     vertical: 6,
   );
 
+  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane.
+  static const double chatColumn = 720;
+
   /// The strip that leads back to the chat when a pane has taken its place: the pill's room, in from the bar's side.
   static const EdgeInsets backPadding = EdgeInsets.symmetric(
     horizontal: barSide,

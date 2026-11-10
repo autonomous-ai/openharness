@@ -155,8 +155,6 @@ void main() {
               map.match(context, [KeyStroke.parse(prefix)]).command,
               inherits
                   ? null
-                  : prefix == 'ctrl+k' && context == KeymapContext.swarmChat
-                  ? 'swarm.quick_switcher'
                   : prefix == 'ctrl+k' && context.isPicker
                   ? 'picker.previous'
                   : command,
