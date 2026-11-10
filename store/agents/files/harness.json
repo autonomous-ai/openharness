@@ -1,0 +1,27 @@
+{
+  "spec": 1,
+  "id": "autonomous/files",
+  "name": "Files",
+  "category": "Documents",
+  "author": "Autonomous",
+  "description": "Browse a folder in the pane: read and edit Markdown and text files, look at pictures and PDFs, from this computer or another of yours. The agent beside it finds, sorts, summarises and writes them with you.",
+  "engine": "opencode",
+  "workspace": {
+    "init": "toolchain/init-workspace.sh"
+  },
+  "agent": {
+    "instructions": "AGENTS.md",
+    "skills": [
+      "skills"
+    ]
+  },
+  "toolchain": {
+    "setup": "toolchain/setup.sh",
+    "doctor": "toolchain/doctor.sh"
+  },
+  "viewer": {
+    "command": "./viewer.sh",
+    "url": "http://127.0.0.1:${port}/?file=${artifact}"
+  },
+  "verdict": ".harness/verdict.json"
+}

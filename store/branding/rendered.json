@@ -130,5 +130,11 @@
     "sourceSha256": "11e195634f1c67a34d98d24dcd4efab0eb0211a860317aec630a7a4661892394",
     "pngSha256": "057c8b1d978fb01e832016d75fd1038cdf5b3f36837ef184c329aafb7f8e3ba6",
     "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/files",
+    "sourceSha256": "819f0c414d3c4ee0f93e332f003648c79f8863183911d8446ce7dd12e1542ec3",
+    "pngSha256": "8dc08627cbfcd8d0263d0e2792b9502a36921d93df9cbee23715ac80c9bbe05e",
+    "renderer": "AppKit"
   }
 ]
