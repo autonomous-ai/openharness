@@ -279,8 +279,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       f.github.state.comments.set(30, [comment('Harness, 07:20, to **Kai Lee**: please read this pull request, and start your comment with READ-OK f6edb44 '
         + 'or HOLD f6edb44 (with the file, line and fix).', { created_at: '2026-11-09T07:20:00Z' }), comment('kai-lee, 07:25: READ-OK f6edb44', { created_at: '2026-11-09T07:25:00Z' })])
       await f.assigner.tick()
-      expect(asks(f)).toHaveLength(1)
-      expect(asks(f)[0]).not.toContain('Kai Lee')
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
     })
 
     it('asks none of a pull request\'s writers to read it: its label\'s agent nor its branch\'s', async () => {
