@@ -349,6 +349,19 @@ describe('the harness shares list as permissions change', () => {
     expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
   })
 
+  /** Another Swarm of the owner whose Lead L runs on the owner's machine, with L's part written before the confidential mark
+   *  existed (projects.ts markConfidential): the list learns L is confidential only by reading that Swarm. */
+  async function otherSwarmWithUnmarkedLead(n: number) {
+    const other = (await store.create(owner, randomUUID(), `Other ${n}`)).id
+    const harnessId = `perm-${n}-L`
+    const lead = (await store.execute(owner, other, { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead',
+      machineId: 'own-host', harnessId, name: 'Lead', configuration: AGENT_CONFIGURATION, lead: true } })).result.agentId as string
+    const part = await database.db.swarmAgent.findFirstOrThrow({ where: { tabId: other, key: lead } })
+    const { confidential: _mark, ...unmarked } = part.data as Record<string, unknown>
+    await database.db.swarmAgent.update({ where: { id: part.id }, data: { data: unmarked as object } })
+    return { other, harnessId }
+  }
+
   it('hides a Lead of another Swarm whose part was never marked, read from that Swarm', async () => {
     const { n, sees, shareWithBoth } = await swarmWithShares()
     const { harnessId } = await otherSwarmWithUnmarkedLead(n)
