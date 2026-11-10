@@ -1838,7 +1838,9 @@ export class SuperTabHost {
   /** The roster marks a Swarm whose Lead runs on this machine of its owner while the machine is not one of the Swarm's
    *  (Swarm creation never added it; on 2026-10-22 Ken's Mac ran a Lead outside its own Swarm's machines). The host
    *  adds it as the + dialog does (desktop/lib/super_tabs/machines.dart), only if it is still missing, so a person's
-   *  own contribution is never changed. A slow engine probe never delays deliveries. */
+   *  own contribution is never changed. A slow engine probe never delays deliveries. Never one its person took out of the
+   *  Swarm (its `removedMachines`): only a person adds that back. The server refuses it too (`unlessRemoved`), and this host
+   *  asks nothing more until the roster stops marking it, as the roster still did for a removed machine. */
   private joinSwarms(rows: unknown[]): void {
     const marked = new Set(rows.map(object).filter(row => row.joinSwarm === true && identifier(row.tabId)).map(row => row.tabId as string))
     for (const [tabId, join] of this.joins) if (!marked.has(tabId) && !join.running) this.joins.delete(tabId)
@@ -1848,12 +1850,16 @@ export class SuperTabHost {
       join.running = true
       this.joins.set(tabId, join)
       void (async () => {
+        const removed = (await this.sources.reads.read(tabId)).state.removedMachines
+        if (Array.isArray(removed) && removed.includes(this.machineId)) return false
         const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' }, { reads: this.sources.reads })
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
           type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
           // Joining sets no limit: free memory is checked at each start (Dee, 11-04: "remove the limit").
-          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, agents: 'memory', ifMissing: true } })
-      })().then(() => { join.failures = 0; join.retryAt = this.now() + JOIN_RETRY_MS }, error => {
+          cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, agents: 'memory', ifMissing: true,
+          unlessRemoved: true } })
+        return true
+      })().then(asked => { join.failures = 0; join.retryAt = asked ? this.now() + JOIN_RETRY_MS : Infinity }, error => {
         join.retryAt = error instanceof SuperTabHostError && JOIN_FINAL.has(error.code) ? Infinity
           : this.now() + Math.min(JOIN_RETRY_MAX_MS, JOIN_RETRY_MS * 2 ** join.failures++)
         this.log(`Could not add this machine to its Swarm: ${error instanceof Error ? error.message : String(error)}`)
