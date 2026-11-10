@@ -1189,10 +1189,10 @@ export class SuperTabHost {
         void this.releaseWorker(target)
         continue
       }
-      // An agent the server put to sleep or is moving (backend buddySleep.ts, `movedTo`) is never kept alive here; a managed
-      // Buddy asleep is closed once, when idle.
+      // A Buddy the server put to sleep or is moving (backend buddySleep.ts, `movedTo`) is never kept alive here; a managed one
+      // asleep is closed once, when idle. Any other agent's such mark is from crew sleep, which went with backend S14: ignored.
       const restKey = `${target.tabId}:${target.agent.harnessId}`
-      if (agent.movedTo || agent.asleep) {
+      if (isBuddy(agent) && (agent.movedTo || agent.asleep)) {
         if (agent.asleep && !agent.movedTo) void this.buddyRest(target)
         continue
       }
@@ -1360,11 +1360,9 @@ export class SuperTabHost {
       .finally(() => { this.skillsRunning = null })
   }
 
-  /** The owner, 2026-10-23: the Lead of an active project stays alive. One whose session is gone (a machine restart, a
-   *  kill) is reopened on its own conversation; nothing is typed into it, so no old input is replayed. A failure backs
-   *  off, so an engine that cannot start never spins. */
-  /** Buddies closed for sleep, by tab and harness: closed once per sleep. */
+  /** A Buddy's sleep close under way, by tab and harness: a newer roster's check replaces it. */
   private readonly buddyRestChecks = new Map<string, symbol>()
+  /** Buddies closed for their current sleep, by the same key: closed once per sleep. */
   private readonly rested = new Set<string>()
   private async buddyRest(row: HostAgent): Promise<void> {
     const key = `${row.tabId}:${row.agent.harnessId}`
@@ -1395,6 +1393,9 @@ export class SuperTabHost {
     } finally { if (this.buddyRestChecks.get(key) === check) this.buddyRestChecks.delete(key) }
   }
 
+  /** The owner, 2026-10-23: the Lead of an active project stays alive. One whose session is gone (a machine restart, a
+   *  kill) is reopened on its own conversation; nothing is typed into it, so no old input is replayed. A failure backs
+   *  off, so an engine that cannot start never spins. */
   private keepAlive(harnessId: string, kind: 'pm' | 'buddy' | 'buddy-switch' = 'pm'): void {
     const buddy = kind === 'buddy' || kind === 'buddy-switch'
     const reopen = this.core.agents.keepLeadAlive

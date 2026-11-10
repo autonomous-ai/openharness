@@ -1107,15 +1107,6 @@ export class ContributedMachines {
    *  after the weekly sweep's idle week, by that sweep's own rule (lib/worktreeSweep.ts): only a worktree this machine's
    *  record proves the Swarm made, with no session in it and nothing uncommitted. Its branch keeps every commit and goes
    *  only when they are all on other branches or the remote, as once its pull request merged. Anything else stays. */
-  /** The worktree a Swarm start made for [harnessId] here, from this machine's record: its folder and its project clone. */
-  worktreeOf(tabId: string, harnessId: string): { path: string; source: string } | null {
-    const record = readWorktrees(swarmWorktreesFile(this.core.dataDir, this.machineId)).find(w => w.tabId === tabId && w.harnessId === harnessId)
-    return record ? { path: record.path, source: record.source } : null
-  }
-
-  /** A helper's new worktree gets its Member's set-up folders (task #4698), from the Member's worktree this machine's Swarm made.
-   *  A Member set up elsewhere, or a copy this disk cannot make, leaves the helper to install itself; the log says which,
-   *  with no path. */
   removeStoppedWorktree(tabId: string, harnessId: string): Promise<void> {
     // Lead, 10-30: an ended session (host.ts endSession) and a stopped worker (releaseWorker) can ask at the same moment.
     // Each waits for the one before it and then checks for itself: after a removal it finds no record; after one that
