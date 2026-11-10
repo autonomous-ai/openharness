@@ -3405,8 +3405,9 @@ describe('adding the machine its own Lead runs on to the Swarm', () => {
     const t = joining()
     await t.pass(0)
     expect(t.prepare).toHaveBeenCalledExactlyOnceWith(t.core, { tabId: 'own', scope: 'swarm' }, { reads: expect.any(SwarmReads) })
+    // No Agents setting (backend S14a, #3865): the server checks free memory at each start and enforces none.
     expect(t.commands).toEqual([{ path: '/api/super-tabs/own/commands', operationId: expect.any(String), command: { type: 'machine.contribute',
-      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, agents: 'memory', ifMissing: true,
+      machineId: 'machine-1', name: 'Ken Mac', cwd: '/data/swarm-projects/own', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 3, ifMissing: true,
       unlessRemoved: true } }])
     await t.pass(59_000)
     t.rows[0]!.joinSwarm = false
