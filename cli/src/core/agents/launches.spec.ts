@@ -270,12 +270,12 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls.map(([input]) => 'claudeHome' in input)).toEqual([false, false, false, false])
   })
 
-  it('claudeHome is accepted only when it is a profile this machine offers', async () => {
-    const { ask, create } = setup({ claudeHomeOffered: (home) => home === '/homes/offered' })
+  it('claudeHome is accepted only when it is a profile this machine lists', async () => {
+    const { ask, create } = setup({ claudeHomeListed: (home) => home === '/homes/listed' })
     expect(await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/other' })).toStrictEqual({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
     expect(create).not.toHaveBeenCalled()
-    await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/offered' })
-    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ claudeHome: '/homes/offered' })
+    await ask({ engine: 'claude', cwd: '/w', claudeHome: '/homes/listed' })
+    expect(vi.mocked(create!).mock.calls[0][0]).toMatchObject({ claudeHome: '/homes/listed' })
   })
 
   // #4183: on Windows a profile folder is `C:\\…`; the check that wanted a leading '/' dropped every one, so the agent ran on
