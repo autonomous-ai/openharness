@@ -33,7 +33,6 @@ void main() {
     double width = window,
     String chat = 'agent-chat-second',
     Widget? terminal,
-    bool board = true,
   }) async {
     await tester.binding.setSurfaceSize(Size(width, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -49,13 +48,11 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
             github: swarmV4GitHub(),
             terminal: terminal,
-            board: board,
           ),
         ),
       ),
@@ -186,16 +183,6 @@ void main() {
     final composer = tester.getRect(key('super-message-composer-actions'));
     expect(composer.left, moreOrLessEquals(pane.left + gutter, epsilon: .5));
     expect(composer.right, moreOrLessEquals(pane.right - gutter, epsilon: .5));
-  });
-
-  testWidgets('the browser keeps its chat at the pane\'s full width', (
-    tester,
-  ) async {
-    // The v3 layout the browser draws until it moves to v4 (`board` is false there): no column.
-    await show(tester, swarmV4Server(), board: false);
-    final pane = centre(tester);
-    expect(pane.width, greaterThan(column + 2 * gutter));
-    expectRows(tester, pane, pane.width);
   });
 
   testWidgets(

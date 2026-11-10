@@ -298,17 +298,13 @@ class _ManageMachineLine extends StatelessWidget {
       'asleep' => MachinesStyle.asleep,
       _ => MachinesStyle.offline,
     };
-    final crew = view.crew;
-    final awake = crew.where((a) => !a.crewAsleep && !a.crewMoving).length;
     final age = view.readingAt == null ? null : now.difference(view.readingAt!);
     final metadata = [
       local ? 'This machine' : view.owner?.shownName ?? 'Owner unavailable',
       if (view.problem != null)
         view.problem!
       else if (group != 'online')
-        'last seen ${age == null ? 'unknown' : superTabAgo(age)}'
-      else if (crew.isNotEmpty)
-        '${crew.length} crew · $awake online',
+        'last seen ${age == null ? 'unknown' : superTabAgo(age)}',
     ].join(' · ');
     return Container(
       key: ValueKey('machines-line-${view.id}'),
@@ -324,16 +320,6 @@ class _ManageMachineLine extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final narrow = constraints.maxWidth < 640;
-          final disk = narrow ? 112.0 : 150.0;
-          // The crew column is as wide as its faces and "12 asleep" (a narrow row's chip alone) at the reader's text size, and
-          // never wider than its old share of the free width (two sevenths narrow, half wide), so a name is never cut sooner
-          // than before; one column down the list. The rest is the name's.
-          final free =
-              constraints.maxWidth - (20 + 8 + 12 + 12 + disk + 12 + 32);
-          final crewWidth = min(
-            MediaQuery.textScalerOf(context).scale(narrow ? 72 : 128),
-            max(0.0, free * (narrow ? 2 / 7 : 1 / 2)),
-          );
           return Row(
             children: [
               SizedBox(
@@ -360,6 +346,7 @@ class _ManageMachineLine extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Expanded(
+                flex: 5,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -428,85 +415,7 @@ class _ManageMachineLine extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               SizedBox(
-                width: crewWidth,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (!narrow &&
-                          group == 'online' &&
-                          view.owner != null) ...[
-                        Container(
-                          width: 20,
-                          height: 20,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: MachinesStyle.chip,
-                          ),
-                          child: Text(
-                            view.owner!.shownName.trim().isEmpty
-                                ? '?'
-                                : view.owner!.shownName
-                                      .trim()
-                                      .characters
-                                      .first
-                                      .toUpperCase(),
-                            style: MachinesStyle.small(
-                              color: MachinesStyle.metadata,
-                            ),
-                          ),
-                        ),
-                        if (crew.length > 1)
-                          Container(
-                            width: 20,
-                            height: 20,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: MachinesStyle.chip,
-                            ),
-                            child: Text(
-                              '+${crew.length - 1}',
-                              style: MachinesStyle.small(
-                                color: MachinesStyle.metadata,
-                              ),
-                            ),
-                          ),
-                        const SizedBox(width: 8),
-                      ],
-                      Flexible(
-                        child: Container(
-                          key: ValueKey('machines-crew-${view.id}'),
-                          padding: MachinesStyle.chipInset,
-                          decoration: BoxDecoration(
-                            color: group == 'asleep'
-                                ? MachinesStyle.asleep.withValues(alpha: .12)
-                                : MachinesStyle.chip,
-                            borderRadius: MachinesStyle.radius,
-                          ),
-                          child: Text(
-                            group == 'asleep' && crew.isNotEmpty
-                                ? '${crew.length} asleep'
-                                : '${crew.length} crew',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: MachinesStyle.small(
-                              color: group == 'asleep'
-                                  ? MachinesStyle.asleep
-                                  : MachinesStyle.metadata,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              SizedBox(
-                width: disk,
+                width: narrow ? 112 : 150,
                 child: _MachineDisk(view: view),
               ),
               const SizedBox(width: 12),

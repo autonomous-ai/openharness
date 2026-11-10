@@ -5,13 +5,11 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_menu.dart';
 
-/// One choice of a message's More menu. With [choices], it opens them beside
-/// it instead (Remind me's times).
+/// One choice of a message's More menu.
 typedef SuperTabMoreAction = ({
   String label,
   IconData icon,
-  VoidCallback? onPressed,
-  List<({String label, VoidCallback onPressed})> choices,
+  VoidCallback onPressed,
 });
 
 /// A change to the message itself, set apart under a rule at the menu's end:
@@ -75,28 +73,12 @@ class _SuperTabMessageMoreMenuState extends State<SuperTabMessageMoreMenu> {
       },
       children: [
         for (final (index, action) in widget.actions.indexed)
-          if (action.choices.isEmpty)
-            AppMenuItem(
-              focusNode: index == 0 ? _first : null,
-              label: action.label,
-              icon: action.icon,
-              onPressed: action.onPressed,
-            )
-          else
-            AppSubmenuItem(
-              itemKey: ValueKey('super-message-more-${action.label}'),
-              focusNode: index == 0 ? _first : null,
-              icon: action.icon,
-              label: action.label,
-              trailing: const Icon(
-                AppIcons.chevronRight,
-                size: AppIcons.inlineSize,
-              ),
-              menuChildren: [
-                for (final choice in action.choices)
-                  AppMenuItem(label: choice.label, onPressed: choice.onPressed),
-              ],
-            ),
+          AppMenuItem(
+            focusNode: index == 0 ? _first : null,
+            label: action.label,
+            icon: action.icon,
+            onPressed: action.onPressed,
+          ),
         if (widget.actions.isNotEmpty && widget.changes.isNotEmpty)
           const AppMenuDivider(),
         for (final (index, change) in widget.changes.indexed)

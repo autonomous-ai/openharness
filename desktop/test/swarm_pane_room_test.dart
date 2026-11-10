@@ -56,7 +56,6 @@ void main() {
               setHost = set;
               return SuperTabView(
                 controller: controller,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Mac Studio',
@@ -67,7 +66,6 @@ void main() {
                     : null,
                 onOpenGroupTerminals: () => set(() => terminalOpen = true),
                 onCloseTerminal: () => set(() => terminalOpen = false),
-                board: true,
               );
             },
           ),

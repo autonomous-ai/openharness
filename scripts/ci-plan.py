@@ -66,11 +66,9 @@ ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-duratio
 # mobile-checks too; it once failed only in a batch, two batches later (River, 2026-11-03). test_ci_plan's
 # test_every_desktop_file_the_phone_tests_read_selects_mobile scans mobile/test and fails on one missing here.
 ALSO.update({f"desktop/{path}": "mobile" for path in (
-    "lib/super_tabs/model.dart", "lib/super_tabs/controller.dart", "lib/super_tabs/buddies.dart",
-    "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
+    "lib/super_tabs/model.dart", "lib/super_tabs/controller.dart", "lib/super_tabs/parts.dart", "lib/super_tabs/profile_model.dart", "lib/super_tabs/live_card_model.dart",
     "lib/super_tabs/linked_tasks.dart", "lib/super_tabs/task_steps.dart", "lib/super_tabs/instructions_model.dart",
-    "lib/super_tabs/live_card.dart", "lib/super_tabs/task_status.dart", "lib/widgets/engine_identity.dart",
-    "lib/super_tabs/roster.dart", "lib/super_tabs/pulse.dart", "lib/super_tabs/tasks/personal_tasks.dart",
+    "lib/super_tabs/live_card.dart", "lib/widgets/engine_identity.dart", "lib/super_tabs/tasks/personal_tasks.dart",
     "lib/screens/swarm_screen.dart", "test/support/real_fonts.dart")})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
@@ -166,7 +164,6 @@ NOT_READS = {
                                                   "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
-    "desktop/test/super_tab_project_rules_test.dart": ("test data: rule path globs", {"docs/", "mobile/"}),
     "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
     "mobile/lib/demo/sample_scripts.dart": ("demo transcript text", {"tests/"}),
     "tui/src/runtime_model.rs": ("test data: a model name", {"provider/"}),

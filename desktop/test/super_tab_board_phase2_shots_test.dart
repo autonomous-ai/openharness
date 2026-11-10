@@ -10,7 +10,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -184,11 +184,9 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              board: true,
             ),
           ),
         ),

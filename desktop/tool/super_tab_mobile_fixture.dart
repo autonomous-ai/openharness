@@ -97,7 +97,6 @@ class _FixtureState extends State<_Fixture> {
       body: SafeArea(
         child: SuperTabView(
           controller: widget.controller,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           onNewProject: () {},

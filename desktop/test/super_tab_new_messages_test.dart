@@ -68,9 +68,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -210,6 +208,8 @@ void main() {
     await show(tester, _server(40));
     expect(find.byKey(_line), findsNothing);
     expect(scroll(tester).extentAfter, lessThan(40));
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   // Review of #2131, item 1: the first unread is older than the latest page.
@@ -473,6 +473,8 @@ void main() {
     await show(tester, server);
     expect(find.byKey(_line), findsNothing);
     expect(find.byKey(_jump), findsNothing);
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 
   testWidgets('the line stays where it was while new messages arrive', (
@@ -727,9 +729,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -973,22 +973,6 @@ void main() {
       );
     }
     expect(find.byKey(_jump), findsNothing);
-  });
-
-  testWidgets('Esc marks the conversation read and clears the line', (
-    tester,
-  ) async {
-    final server = _server(40)..markReadElsewhere('lead', 30);
-    final c = await show(tester, server);
-    expect(c.unread(c.selected!), isTrue);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(find.byKey(_line), findsNothing);
-    expect(c.unread(c.selected!), isFalse);
-    expect(server.readMarkPosts.last, {
-      'conversationId': 'lead',
-      'sequence': 40,
-    });
   });
 
   testWidgets('the sidebar\'s bold follows the mark kept on the server', (

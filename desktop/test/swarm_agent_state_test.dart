@@ -660,12 +660,10 @@ void main() {
             body: SuperTabView(
               controller: c,
               app: withApp ? createApp() : null,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
               github: swarmV4GitHub(),
-              board: true,
             ),
           ),
         ),
