@@ -18,7 +18,7 @@ import { accessSync, constants, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { engineInstallPaths, engineInstallRecipe } from '../lib/engineInstall.js'
-import { identifier } from './host.js'
+import { identifier } from './wire.js'
 
 type Json = Record<string, unknown>
 

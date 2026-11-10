@@ -3,10 +3,10 @@ import { existsSync } from 'node:fs'
 import { readAuthSession } from '../lib/authSession.js'
 import { createHash } from 'node:crypto'
 import type { CoreApi, ServiceRequests, SuperTabsPort } from '../core/api.js'
-import { backend, swarmListedFor, swarmRoleFor, hostJournalFile, identifier, object, SuperTabHost, SuperTabHostError, type SuperTabHostOptions, type SwarmSources } from './host.js'
+import { swarmListedFor, swarmRoleFor, hostJournalFile, SuperTabHost, type SuperTabHostOptions, type SwarmSources } from './host.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
-import { within } from './wire.js'
+import { backend, identifier, object, SuperTabHostError, within } from './wire.js'
 import { isCoordinator, isStep } from './agentContext.js'
 import { wireRole } from '../lib/swarmSkills.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
@@ -17,6 +17,7 @@ import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { GitHubMentions, watchedAgents } from './githubMentions.js'
+import { ShippingReporter } from './shipping.js'
 import { githubRest } from './githubRest.js'
 import { GitHubAssign } from './githubAssign.js'
 import { GitHubMerge, ledProjects, type LedProject } from './githubMerge.js'
@@ -138,6 +139,8 @@ export interface SuperTabServiceOptions {
   githubMerge?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubMerge, 'start' | 'stop'>
   /** What gives the tasks of the projects whose PM runs here to their builders (superTabs/githubAssign.ts), for a spec. */
   githubAssign?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubAssign, 'start' | 'stop'>
+  /** What reports what this computer's person's agents shipped to the Swarm's leaderboard (superTabs/shipping.ts), for a spec. */
+  shipping?: (core: CoreApi) => Pick<ShippingReporter, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -202,6 +205,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // Gives their tasks to their builders (githubAssign.ts), from the crew as the PM reads the Swarm.
   const assigns = (options.githubAssign ?? ((api, held) => new GitHubAssign({ projects: led(api, held), crew: crewOfProject(held),
     get: github.get, send: github.send })))(core, sources)
+  // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
+  const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
@@ -211,6 +216,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     mentions.start()
     merges.start()
     assigns.start()
+    shipping.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -248,7 +254,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   }
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
     connected: () => {
       tokens.start()
