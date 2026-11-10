@@ -110,8 +110,9 @@ export interface Agent {
   /** The account it runs in on its machine once a switch moved it; absent for the machine's default account. */
   profileId?: string
   /** The liveness sweep's moves of a PM on another account back to the default one (pmAccount.ts): how many it asked for, when
-   *  it asked last (ms), and whether its project chat heard it gave up. Dropped once the PM is on the default account. */
-  accountReturn?: { tries: number; at: number; gaveUp?: true }
+   *  the last was asked or seen to end (ms), whether it is asking now, and whether its project chat heard it failed 3 times.
+   *  Dropped once the PM is on the default account. */
+  accountReturn?: { tries: number; at: number; asking?: true; gaveUp?: true }
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
@@ -859,7 +860,7 @@ export const NOTICE_READERS = {
   // A PM switch nobody answered, in its project chat (tidy.ts staleSwitches).
   switch: 'people',
   // The machine owner's one line when another person moved a PM onto one of their non-default accounts: written until a PM ran on
-  // its machine's default account alone (pmAccount.ts), read still.
+  // its machine's default account alone (pmAccount.ts), read still. Delete it with the notice readers of v1-v3 (slice S18).
   'pm-switch-notice': 'people',
   // The machine owner's line, once a week, when someone else's work started on their machine: written until Swarm v4, read still.
   // Delete it with the notice readers of v1-v3 (slice S18).

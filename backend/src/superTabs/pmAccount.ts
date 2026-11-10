@@ -5,17 +5,21 @@
  * still reports, and a PM a switch left on another account is moved back by the liveness sweep.
  */
 
+import { logger } from '../utils/logger.js'
 import { agentDisplayName } from './agentNames.js'
-import { defaultProfileId, machineOffline, storedProfileId } from './machines.js'
+import { BELOW_LEAD_EFFORT, leadEffort } from './leadStart.js'
+import { contributedEngines, defaultProfileId, machineOffline, storedProfileId } from './machines.js'
 import { fail, stableId, type Agent, type MessageDraft, type SuperTabState } from './model.js'
-import { ledProject } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, ledProject, withRoleDefaults } from './projects.js'
 
 /** What a host reports it can do for a Product Manager's switch; a host from before it is never asked (HOST_OUTDATED). */
 export const SWITCH_CAPABILITY = 'leadSwitch'
-/** How many times the sweep asks a PM's machine to move it back before it says it could not. */
+/** After this many failed tries its project chat hears, once, that the PM is still on the other account. */
 export const ACCOUNT_RETURN_TRIES = 3
-/** The wait after the first failed try; each later one waits twice as long. */
+/** The wait after a failed try, doubled after each one, up to [ACCOUNT_RETURN_MAX_WAIT_MS]. */
 export const ACCOUNT_RETURN_WAIT_MS = 2 * 60_000
+/** A PM that cannot move keeps being asked, this far apart at most: its account is spent while it stays. */
+export const ACCOUNT_RETURN_MAX_WAIT_MS = 6 * 3_600_000
 
 /** The refusal of a switch onto any account but the destination's default one. */
 export function defaultAccountOnly(name: string, machine: string): never {
@@ -23,12 +27,12 @@ export function defaultAccountOnly(name: string, machine: string): never {
 }
 
 /**
- * Each PM still on another account of its machine (`profileId`, from a switch before the server took the default alone) is asked
- * to move to its engine's default account there, as Switch PM would, with the model and effort it runs now. The sweep runs on a
- * machine's report at most every 30 seconds, and the PM's machine carries the switch out with a handoff, so the PM keeps its
- * work: one is asked within about 30 seconds of its machine being online with this server. A failed try is asked
- * again after 2, then 4 minutes; after the third its project chat hears once that it is still there. The project chat hears
- * when it starts; the switch's result line says when it is done.
+ * Each PM still on another account of its machine (`profileId`, from a switch before the server took the default alone, or a
+ * rebind an older CLI reported) is asked to move to its engine's default account there, as Switch PM would: the model it runs,
+ * at high effort or above. The sweep runs on a machine's report at most every 30 seconds, and the PM's machine carries the switch
+ * out with a handoff, so the PM keeps its work: one is asked within about 30 seconds of its machine being online with this server.
+ * A failed try is asked again 2, 4, 8 … minutes after it ended, at most 6 hours apart; after the third its project chat hears
+ * once that it is still there. The project chat hears when it starts; each switch's result line says how it went.
  */
 export function pmsToDefaultAccount(state: SuperTabState, now: number): MessageDraft[] {
   const rows: MessageDraft[] = []
@@ -39,26 +43,34 @@ export function pmsToDefaultAccount(state: SuperTabState, now: number): MessageD
       delete pm.accountReturn
       continue
     }
-    const project = pm.switchRequest || pm.switchLanded ? undefined : ledProject(state, pm.id)
+    if (pm.switchRequest || pm.switchLanded) continue
+    const project = ledProject(state, pm.id)
     if (!project) continue
     const returning = pm.accountReturn, tries = returning?.tries ?? 0
     const pool = state.machines?.find(m => m.machineId === pm.machineId)
     const machine = pool?.name ?? 'its machine'
-    if (returning && tries >= ACCOUNT_RETURN_TRIES) {
-      if (returning.gaveUp) continue
-      returning.gaveUp = true
-      rows.push(line(state, pm, project.leadConversationId, stableId('account-return-failed', pm.id, String(returning.at)),
-        `The PM still runs on another account on ${machine}: it could not move to the default account. Use Switch PM to move it.`))
+    // The wait starts when a try ended, which the sweep sees with the request gone: a switch can run for minutes.
+    if (returning?.asking) {
+      pm.accountReturn = { tries, at: now, ...returning.gaveUp ? { gaveUp: true as const } : {} }
       continue
     }
-    if (returning && now < returning.at + ACCOUNT_RETURN_WAIT_MS * 2 ** (tries - 1)) continue
-    if (!pool || machineOffline(pool, now) || !pool.observation?.capabilities?.includes(SWITCH_CAPABILITY)) continue
+    if (returning && tries >= ACCOUNT_RETURN_TRIES && !returning.gaveUp) {
+      returning.gaveUp = true
+      logger.warn('[swarm] a PM could not move to its default account', { agentId: pm.id, machineId: pm.machineId, tries })
+      rows.push(line(state, pm, project.leadConversationId, stableId('account-return-failed', pm.id, String(returning.at)),
+        `The PM still runs on another account on ${machine}: moving it to the default account failed ${tries} times. Use Switch PM to move it.`))
+    }
+    if (returning && now < returning.at + Math.min(ACCOUNT_RETURN_WAIT_MS * 2 ** (tries - 1), ACCOUNT_RETURN_MAX_WAIT_MS)) continue
+    if (!pool || machineOffline(pool, now) || !pool.observation?.capabilities?.includes(SWITCH_CAPABILITY)
+      || !contributedEngines(pool).includes(engine)) continue
     // Its own id each time: a host keeps what it did for a switch id (cli superTabs/leadSwitchRequest.ts).
     const id = stableId('account-return', pm.id, String(now))
-    pm.switchRequest = { id, engine, profileId: defaultProfileId(pm.machineId, engine),
-      ...(pm.configuration.model ? { model: pm.configuration.model } : {}), ...(pm.configuration.effort ? { effort: pm.configuration.effort } : {}),
-      requestedBy: pm.machineOwnerId, at: new Date(now).toISOString() }
-    pm.accountReturn = { tries: tries + 1, at: now }
+    const { model, effort } = pm.configuration
+    const asked = leadEffort(withRoleDefaults({ engine, ...model ? { model } : {},
+      ...effort && !BELOW_LEAD_EFFORT.has(effort.toLowerCase()) ? { effort } : {} }, BUILT_IN_ROLE_DEFAULTS.lead), 'PM')
+    pm.switchRequest = { id, ...asked, profileId: defaultProfileId(pm.machineId, engine), requestedBy: pm.machineOwnerId, at: new Date(now).toISOString() }
+    pm.accountReturn = { tries: tries + 1, at: now, asking: true, ...returning?.gaveUp ? { gaveUp: true as const } : {} }
+    logger.info('[swarm] a PM is asked to move to its default account', { agentId: pm.id, machineId: pm.machineId, tries: tries + 1 })
     if (!tries) rows.push(line(state, pm, project.leadConversationId, stableId(id, 'line'), `Moving the PM to ${machine}'s default account.`))
   }
   return rows

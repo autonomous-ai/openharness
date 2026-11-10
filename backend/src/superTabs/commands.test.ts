@@ -5448,7 +5448,7 @@ describe('lead.switch', () => {
       machineId: 'destination', model: 'gpt-5.1', leadFor: expect.objectContaining({ switchId: s.sid() }) }) }))
   })
 
-  it('refuses a candidate whose switch, asked before the default account alone, names another account when the target claims it', () => {
+  it('starts a candidate whose switch, asked before the default account alone, names another account on the default one', () => {
     const s = setup()
     const destination = structuredClone(s.f.state.machines![0]!)
     destination.machineId = 'destination'
@@ -5460,14 +5460,14 @@ describe('lead.switch', () => {
     const start = s.f.state.starts!.find(candidate => candidate.request.leadFor?.switchId === s.sid())!
     s.f.run({ type: 'agent.switchClaim', agentId: s.pm, switchId: s.sid() }, s.as)
     s.f.run({ type: 'agent.switchHandoff', agentId: s.pm, switchId: s.sid(), handoffChangeId: 'e'.repeat(32), note: 'Handoff' }, s.as)
-    // The destination still reports the account, as a CLI of the last 30 days does.
+    // The destination still reports the account, as a CLI of the last 30 days does; that CLI starts it on its default account.
     s.agent().switchRequest!.profileId = WORK
-    start.request.profileId = WORK
-
-    expect(code(() => s.f.run({ type: 'agent.startDispatch', startId: start.id }, owner,
-      { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }))).toBe('DEFAULT_ACCOUNT_ONLY')
-    expect(start.dispatched).toBe(false)
-    expect(s.f.state.conversations.find(c => c.id === 'lead')!.leadId).toBe(s.pm)
+    s.f.state.starts!.find(candidate => candidate.id === start.id)!.request.profileId = WORK
+    s.f.run({ type: 'agent.startDispatch', startId: start.id }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } })
+    const dispatched = s.f.state.starts!.find(candidate => candidate.id === start.id)!
+    expect(dispatched.dispatched).toBe(true)
+    expect(dispatched.request.profileId).toBe(defaultProfileId('destination', 'codex'))
+    expect(s.agent().switchRequest!.profileId).toBe(defaultProfileId('destination', 'codex'))
   })
 
   it('publishes the prepared handoff only to the destination host start after the source claims the switch', () => {
@@ -5739,7 +5739,7 @@ describe('lead.switch', () => {
     s.f.run({ type: 'agent.rebind', agentId: s.pm, machineId: 'host', projectId: 'lead', previousHarnessId: 'pm', harnessId: 'pm-2', profileId: WORK,
       configuration: { ...config, engine: 'codex' } }, s.as)
     const done = s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId, ok: false, error: 'the new session did not start in time' }, s.as)
-    expect(done.messages[0]!.text).toBe('PM moved to Codex · Work.')
+    expect(done.messages[0]!.text).toBe('PM moved to Codex.')
   })
 
   it('says a PM that has not come back is not back', () => {
@@ -5786,40 +5786,64 @@ describe('lead.switch', () => {
       expect(s.agent().accountReturn).toBeUndefined()
     })
 
-    it('is asked three times, 2 then 4 minutes apart, and then its chat hears once that it is still there', () => {
+    it('is asked again 2, 4, 8 minutes after each failed try ended, and its chat hears once after the third', () => {
       const s = onWork()
       let now = 1000
       const sweep = (at: number) => { now = at; fresh(s, now); return sweepLiveness(s.f.state, now) }
+      const asked = () => s.agent().switchRequest !== undefined
       sweep(now)
       failed(s)
+      // The wait starts once the sweep sees the try ended, however long it ran.
+      sweep(now + 10 * 60_000)
       expect(sweep(now + 2 * 60_000 - 1)).toEqual([])
-      expect(s.agent().switchRequest).toBeUndefined()
-      expect(sweep(now + 1)).toEqual([])
-      expect(s.agent().switchRequest).toBeDefined()
-      failed(s)
-      sweep(now + 4 * 60_000 - 1)
-      expect(s.agent().switchRequest).toBeUndefined()
+      expect(asked()).toBe(false)
       sweep(now + 1)
+      expect(asked()).toBe(true)
       failed(s)
-      expect(sweep(now + 60 * 60_000)).toMatchObject([{ conversationId: 'lead',
-        text: 'The PM still runs on another account on Studio: it could not move to the default account. Use Switch PM to move it.' }])
-      expect(s.agent().switchRequest).toBeUndefined()
-      expect(sweep(now + 60 * 60_000)).toEqual([])
-      expect(s.agent().switchRequest).toBeUndefined()
-      // A person's Switch PM to the default account ends it.
-      s.f.run(s.request, owner, { now })
+      sweep(now + 10_000)
+      sweep(now + 4 * 60_000 - 1)
+      expect(asked()).toBe(false)
+      sweep(now + 1)
+      expect(asked()).toBe(true)
+      failed(s)
+      expect(sweep(now + 10_000)).toEqual([])
+      expect(sweep(now + 1)).toMatchObject([{ conversationId: 'lead',
+        text: 'The PM still runs on another account on Studio: moving it to the default account failed 3 times. Use Switch PM to move it.' }])
+      expect(asked()).toBe(false)
+      // It keeps being asked, saying nothing more, at most 6 hours apart: its account is spent while it stays.
+      expect(sweep(now + 8 * 60_000)).toEqual([])
+      expect(asked()).toBe(true)
+      failed(s)
+      s.agent().accountReturn = { tries: 20, at: now }
+      sweep(now + 6 * 3_600_000 - 1)
+      expect(asked()).toBe(false)
+      expect(sweep(now + 1)).toEqual([])
+      expect(asked()).toBe(true)
+      // Once it lands on the default account, nothing is left.
       s.f.run({ type: 'agent.switchResult', agentId: s.pm, switchId: s.sid(), ok: true }, s.as)
       sweep(now)
       expect(s.agent().accountReturn).toBeUndefined()
+      expect(asked()).toBe(false)
     })
 
-    it('waits for its machine to be online and new enough, and leaves a PM on the default account alone', () => {
+    it('asks for high effort or above, as Switch PM does', () => {
+      const s = onWork()
+      s.agent().configuration = { ...s.agent().configuration, effort: 'medium' }
+      sweepLiveness(s.f.state, 1000)
+      expect(s.agent().switchRequest).toMatchObject({ model: 'test-model', effort: 'high' })
+    })
+
+    it('waits for its machine to be online, new enough and offering its engine, and leaves a PM on the default account alone', () => {
       const offline = onWork()
       expect(sweepLiveness(offline.f.state, 1000 + 60_000)).toEqual([])
       expect(offline.agent().switchRequest).toBeUndefined()
       const old = onWork([])
       expect(sweepLiveness(old.f.state, 1000)).toEqual([])
       expect(old.agent().switchRequest).toBeUndefined()
+      const gone = onWork()
+      gone.f.state.machines![0]!.engines = ['claude']
+      expect(sweepLiveness(gone.f.state, 1000)).toEqual([])
+      expect(gone.agent().switchRequest).toBeUndefined()
       // A stored hex default is the default account too.
       const plain = setup()
       plain.agent().profileId = defaultProfileId('host', 'codex')

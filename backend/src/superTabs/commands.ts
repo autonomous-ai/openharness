@@ -3509,10 +3509,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
             || !destination.observation.capabilities.includes(LEAD_CAPABILITY)) {
             fail('HOST_OUTDATED', `Update Harness on ${destination?.name ?? 'that machine'} to move the ${coordinatorNameOf(project)}.`, 409)
           }
-          // A switch asked before the server took the default account alone may still name another one.
-          const profileId = switchSource.switchRequest.profileId
-          if (profileId !== defaultProfileId(destination.machineId, switchSource.switchRequest.engine)) {
-            defaultAccountOnly(coordinatorNameOf(project), destination.name)
+          // A switch asked before the server took the default account alone may still name another one. A destination host never
+          // started a PM on another account (cli superTabs/machines.ts takes no account from a start), so it is the default one.
+          const profileId = defaultProfileId(destination.machineId, switchSource.switchRequest.engine)
+          if (switchSource.switchRequest.profileId !== profileId && start.request.profileId === switchSource.switchRequest.profileId) {
+            switchSource.switchRequest.profileId = profileId
+            start.request.profileId = profileId
           }
           if (start.request.profileId !== profileId) fail('STALE_SWITCH', 'This PM switch no longer names this account.')
           if (start.request.machineId !== switchSource.machineId && (start.request.handoffSourceAgentId !== switchSource.harnessId
@@ -3886,10 +3888,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
       const running = moved && promoted ? promoted : target
       const engine = ENGINE_NAMES[running.configuration?.engine ?? ''] ?? 'its engine'
-      const label = running.profileId && state.machines?.find(m => m.machineId === running.machineId)?.observation?.profiles
-        ?.find(p => p.engine === running.configuration?.engine && p.id === running.profileId)?.label
       effects.messages.push({ id: operationId, conversationId: project.leadConversationId, author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
-        text: moved ? `PM moved to ${engine}${label ? ` · ${label}` : ''}.`
+        text: moved ? `PM moved to ${engine}.`
           : `Couldn't switch the PM: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
       break
     }
