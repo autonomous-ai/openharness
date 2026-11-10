@@ -125,7 +125,7 @@ describe('the one-time job that takes Harness Team accounts\' machines out', () 
     expect(await takeOutTeamMachinesOnce(db, store)).toEqual({ swarms: expect.any(Number), machines: 0, rows: 0, failed: 0 })
   })
 
-  it('keeps guarding the task a Team agent was building, unmarked from before the mark (audit H2)', async () => {
+  it('marks nothing on the task a Team agent was building: the Team-written guard went with Team accounts', async () => {
     const f = await fixture()
     const state = await storedState(f.tab)
     state.conversations.find(c => c.id === f.task)!.assignment = { id: 'team-work', agentId: 'team-agent', status: 'working', configuration: config,
@@ -134,7 +134,7 @@ describe('the one-time job that takes Harness Team accounts\' machines out', () 
     expect((await takeOutTeamMachinesOnce(db, store)).failed).toBe(0)
     const after = await storedState(f.tab)
     expect(after.agents.map(a => a.id)).not.toContain('team-agent')
-    expect(after.conversations.find(c => c.id === f.task)).toMatchObject({ teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
+    expect(after.conversations.find(c => c.id === f.task)).not.toHaveProperty('teamWritten')
   })
 
   it('takes out the Team machines of a Swarm whose owner\'s account is gone, so the job can finish', async () => {

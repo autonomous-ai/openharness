@@ -113,19 +113,6 @@ describe('crewKeep: folders', () => {
   })
 })
 
-describe('crewKeep: Team-written work stays where it is (security review of #3229)', () => {
-  it('a member in a Team-written conversation does not move', () => {
-    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
-    f.state.conversations.find(c => c.id === 'lead')!.teamWritten = true
-    // The project's chat is its coordinator's; a task the member works in is what counts.
-    f.state = applyCommand(f.state, person, { type: 'conversation.create', title: 'Team task', brief: 'b', checks: [] } as never, { now: NOW - 7_200_000, operationId: 'tw' }).state
-    const task = f.state.conversations.find(c => c.title === 'Team task')!
-    task.agentIds.push(f.ada.id)
-    task.teamWritten = true
-    expect(kinds(f.state)).toEqual([{ kind: 'stuck', agentId: f.ada.id, reason: 'signed-out' }])
-  })
-})
-
 describe('crewKeep: a machine that refused a move (security review 2 of #3229)', () => {
   it('a machine that refused the member\'s move start is not picked again for an hour', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini', { resetIn: 86_400_000 }), machine('late')])
