@@ -50,7 +50,7 @@ import { loginShellCaptureLine, warmLoginShellEnvironment } from '../lib/loginSh
 import { enableOffThreadExec } from '../lib/offThreadExec.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import { claudeHomeOffered } from '../lib/claudeProfiles.js'
+import { claudeHomeListed } from '../lib/claudeProfiles.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
@@ -3046,7 +3046,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
     ...(swarm ? { swarmLaunch: swarm.SWARM_LAUNCH } : {}),
-    claudeHomeOffered: (home) => claudeHomeOffered(home, machineIdNow()),
+    claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),
     receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
     createAgent: () => backend.onCreateAgent, forkAgent: () => backend.onForkAgent,
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch,
