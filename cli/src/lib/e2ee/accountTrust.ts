@@ -75,10 +75,8 @@ export function unstashTrust(acct: string, dir = defaultDir()): void {
 }
 
 /** Leave `from`'s trust for `to`'s. Both ids are checked before anything moves. */
-export function switchAccountTrust(from: string, to: string, dir = defaultDir(), { forgetPrevious = false }: { forgetPrevious?: boolean } = {}): void {
+export function switchAccountTrust(from: string, to: string, dir = defaultDir()): void {
   accountDir(dir, to)
   stashTrust(from, dir)
-  // The Team account now runs another owner's agents: none of the departing owner's stash may remain readable.
-  if (forgetPrevious) rmSync(accountDir(dir, from), { recursive: true, force: true })
   unstashTrust(to, dir)
 }

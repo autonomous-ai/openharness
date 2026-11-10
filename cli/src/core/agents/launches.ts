@@ -83,14 +83,14 @@ export interface LaunchRequestDeps {
   guestCreate?: () => GuestCreate | null
   /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
   swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode'>
-  /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeOffered); absent, any is. */
-  claudeHomeOffered?: (claudeHome: string) => boolean
+  /** Whether a `claudeHome` is a Claude profile of this machine (lib/claudeProfiles.ts claudeHomeListed); absent, any is. */
+  claudeHomeListed?: (claudeHome: string) => boolean
 }
 
 type Reply = (result: Record<string, unknown>) => void
 type CreateInput = Parameters<CreateAgent>[0]
 
-export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, swarmLaunch, claudeHomeOffered }: LaunchRequestDeps) {
+export function createLaunchRequests({ receipts, createAgent, prepareCreate, prepareEngine, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, swarmLaunch, claudeHomeListed }: LaunchRequestDeps) {
   const validateInstalled = async (input: CreateInput, known?: ReturnType<typeof installedDsh>): Promise<{ error: string; detail: string } | null> => {
     if (input.dsh) {
       const installed = known ?? installedDsh(input.dsh)
@@ -412,7 +412,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is only valid for claude, without a grid' })
       return
     }
-    if (claudeHome && claudeHomeOffered && !claudeHomeOffered(claudeHome)) {
+    if (claudeHome && claudeHomeListed && !claudeHomeListed(claudeHome)) {
       reply({ error: 'INVALID_CLAUDE_HOME', detail: 'claudeHome is not a Claude profile of this machine' })
       return
     }
@@ -446,7 +446,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       prompt = trimmed || null
     }
     const swarmRole = payload.swarmRole
-    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
+    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
     // Project instructions, phase 4 (decision 1): a coordinator, an agent or a Buddy. An older Harness sends lead, dev or review
@@ -461,15 +461,6 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (swarmSkillMode !== undefined && !swarmLaunch?.mode(swarmSkillMode)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm skill mode is default or orchestration.' }); return
     }
-    // Another person's project work: git and gh use the Harness GitHub App's token for the task (lib/swarmGitHub.ts).
-    // Only `true`, and only with a role; a start from before the app sends none and launches as it did.
-    const swarmGitHub = payload.swarmGitHub
-    if (swarmGitHub !== undefined && (swarmGitHub !== true || !swarm)) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
-    }
-    // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
-    // (superTabs/projectFolder.ts), or, started by a Lead on its own machine, it starts from what the checkout has.
-    if (swarmGitHub === true && projectFolder?.source === 'worktree') projectFolder = { ...projectFolder, offline: true }
     // Blank is "number it", the same as absent — a client that sends an empty field is not
     // asking for an agent with no name.
     const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null
@@ -538,8 +529,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}),
-        ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
+      ...(swarm ? { swarmRole: swarm.role, ...(swarm.fallback ? { swarmFallback: swarm.fallback } : {}), ...(swarmSkillMode ? { swarmSkillMode } : {}) } : {}),
       name,
       agent,
       resumeSessionId,
@@ -549,11 +539,15 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       ...(payload.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...(launchModel.state === 'ok' ? { launchModel: launchModel.launchModel } : {}),
       ...(parentAgentId ? { parentAgentId } : {}),
+      ...(payload.browser === true ? { browser: true } : {}),
     }
     // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
     // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.
     const { swarmFallback: _fallback, ...stable } = input
-    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm) } : input
+    // A start asked with the Harness GitHub App before this machine's update named it, and its worktree offline, in its receipt:
+    // asked again, it finds that receipt (and launches on this machine's own login). Delete on or after 2026-12-10.
+    const app = swarm && payload.swarmGitHub === true
+    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm), ...(app ? { swarmGitHub: true } : {}) } : input
     const fingerprintInput = model.state === 'ok' ? { ...recorded, modelSelection: model.selection } : recorded
     if (creationId !== undefined) {
       // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
@@ -561,7 +555,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // on this connection, just as engines_probe is detached above.
       const create = onCreateAgent
       try {
-        const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
+        const fingerprint = creationFingerprint(projectFolder
+          ? { ...fingerprintInput, projectFolder: app && projectFolder.source === 'worktree' ? { ...projectFolder, offline: true } : projectFolder } : fingerprintInput)
         // A new project too, which waits for its engine as any other create does (above).
         const durableNative = !!prepareCreate && !resumeSessionId
         // A new project is refused at once for a harness or named agent it cannot have, as it always was, rather than
@@ -615,10 +610,6 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       || !['ask', 'auto', 'plan', 'full'].includes(permissionMode))) {
       reply({ error: 'INVALID_PERMISSION_MODE' }); return
     }
-    // Team-written work keeps its project settings off: no resume trades that mode for another (audit H2).
-    if (permissionMode !== undefined && byAgent(target)?.permissionMode === 'teamWritten') {
-      reply({ error: 'INVALID_PERMISSION_MODE' }); return
-    }
     // Extra launch flags ride a restart or a resume of an agent the owner may change, and are checked with the engine's
     // own refused list before anything is relaunched. The engine runs them as the owner, so only the owner's own app
     // may send them (a device, an agent's own CLI and a guest may not), as only it may change a permission.
@@ -627,7 +618,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (!asker.ownerApp) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: 'Launch flags can only be changed from your own Harness app.' }); return }
       // A harness a bad flag left stopped is in the stopped store, not the registry: the way back is to resume it.
       const known = byAgent(target) ?? stoppedAgent(target)
-      if (typeof payload.launchArgs !== 'string' || known?.permissionMode === 'teamWritten') {
+      if (typeof payload.launchArgs !== 'string') {
         reply({ error: 'INVALID_LAUNCH_ARGS' }); return
       }
       if (!known) { reply({ error: 'AGENT_NOT_FOUND' }); return }

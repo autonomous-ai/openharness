@@ -3,10 +3,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/models.dart';
+import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/account_profile_dialog.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
+import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_session.dart';
 
+import '../swarm/swarm_fixture.dart';
+import '../voice_fakes.dart';
 import 'edge_fixture.dart';
 
 /// The account's name as the backend answers `PATCH /api/auth/me` (#2917): saved, or refused in its words.
@@ -27,33 +32,6 @@ class _ProfileApi extends EdgeApi {
   }
 }
 
-/// One Swarm's username, and its own name, as the sheet changes them (`SwarmProfile.setUsername`, `setName`).
-class _Swarm {
-  _Swarm(this.name, {this.username, this.personName});
-
-  final String name;
-  String? username, personName;
-  final sent = <String>[];
-  String? refuseUsername;
-
-  AccountProfileSwarm get target => AccountProfileSwarm(
-    name: name,
-    username: username,
-    personName: personName,
-    setUsername: (value) async {
-      sent.add('username $value');
-      if (refuseUsername case final refusal?) return refusal;
-      username = value;
-      return null;
-    },
-    setName: (value) async {
-      sent.add('name $value');
-      personName = value;
-      return null;
-    },
-  );
-}
-
 void main() {
   late AppNotifier app;
   late _ProfileApi api;
@@ -66,12 +44,12 @@ void main() {
     return notifier;
   }
 
-  Future<void> open(WidgetTester tester, {List<_Swarm> swarms = const [], Brightness brightness = Brightness.dark}) async {
+  Future<void> open(WidgetTester tester, {Brightness brightness = Brightness.dark}) async {
     setPhone(tester, largePhone);
     app = signedIn();
     await tester.pumpWidget(phoneApp(
       Builder(builder: (context) => TextButton(
-        onPressed: () => showAccountProfile(context, app, swarms: [for (final s in swarms) s.target]),
+        onPressed: () => showAccountProfile(context, app),
         child: const Text('open'),
       )),
       brightness: brightness,
@@ -115,8 +93,9 @@ void main() {
       expect(find.text('Profile'), findsOneWidget);
       expect(find.text('Name'), findsOneWidget);
       expect(tester.widget<TextField>(field('account-profile-name')).controller!.text, 'Ada Lovelace');
-      // No Swarm: no username.
+      // The name alone: no @username, whatever Swarms the person is in.
       expect(find.text('Username'), findsNothing);
+      expect(find.byType(TextField), findsOneWidget);
       await tester.enterText(field('account-profile-name'), '  Ada   King ');
       await save(tester);
       expect(api.names, ['Ada King']);
@@ -150,47 +129,6 @@ void main() {
       expect(find.text('Use a name, not an email address.'), findsNothing);
       await close(tester);
     });
-
-    testWidgets('one Username per Swarm, with @ and the Swarm\'s name; only what changed is sent', (tester) async {
-      final pilot = _Swarm('Pilot', username: 'ada', personName: 'Ada Lovelace');
-      final scout = _Swarm('Scout', username: 'ada-l', personName: 'Ada');
-      await open(tester, swarms: [pilot, scout]);
-      expect(find.text('Username'), findsNWidgets(2));
-      expect(find.text('in Pilot'), findsOneWidget);
-      expect(find.text('in Scout'), findsOneWidget);
-      expect(tester.widget<TextField>(field('account-profile-username-0')).decoration?.prefixText, '@');
-      expect(tester.widget<TextField>(field('account-profile-username-1')).controller!.text, 'ada-l');
-      await tester.enterText(field('account-profile-username-1'), 'lovelace');
-      await save(tester);
-      // The name did not change: no account call, and no Swarm name follows it.
-      expect(api.names, isEmpty);
-      expect(pilot.sent, isEmpty);
-      expect(scout.sent, ['username lovelace']);
-      expect(find.text('Profile'), findsNothing);
-      await close(tester);
-    });
-
-    testWidgets('a new name is followed by the Swarm name where it was the same; a refused username stays '
-        'under its field, and Save again sends only it', (tester) async {
-      final pilot = _Swarm('Pilot', username: 'ada', personName: 'Ada Lovelace')..refuseUsername = 'That username is taken in this Swarm.';
-      final scout = _Swarm('Scout', username: 'ada-l', personName: 'Countess');
-      await open(tester, swarms: [pilot, scout]);
-      await tester.enterText(field('account-profile-name'), 'Ada King');
-      await tester.enterText(field('account-profile-username-0'), 'ada2');
-      await save(tester);
-      expect(api.names, ['Ada King']);
-      expect(pilot.sent, ['username ada2']);
-      expect(find.byKey(const ValueKey('account-profile-username-0-error')), findsOneWidget);
-      expect(find.text('That username is taken in this Swarm.'), findsOneWidget);
-      pilot.refuseUsername = null;
-      await save(tester);
-      // The name is saved already: not sent again. Pilot's own name followed the change; Scout's, set on purpose, did not.
-      expect(api.names, ['Ada King']);
-      expect(pilot.sent, ['username ada2', 'username ada2', 'name Ada King']);
-      expect(scout.sent, isEmpty);
-      expect(find.text('Profile'), findsNothing);
-      await close(tester);
-    });
   });
 
   group('the entry (#2655)', () {
@@ -207,6 +145,49 @@ void main() {
       await tester.tap(find.text('Profile'));
       await frames(tester);
       expect(find.byKey(const ValueKey('account-profile-name')), findsOneWidget);
+      await close(tester);
+    });
+
+    testWidgets('in a Swarm, Profile is still the account name alone: no Username, no name per Swarm', (tester) async {
+      setPhone(tester, largePhone);
+      app = signedIn();
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': [
+          {'id': tab, 'name': 'Pilot', 'ownerId': me},
+        ],
+        'next': null,
+      };
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...firstLoad(),
+        'members': [part(me, 1, {...person(me), 'username': 'ada', 'name': 'Ada Lovelace'})],
+      };
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
+      final account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: swarm.request,
+        notices: SilentSystemNotices(),
+        features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())..value = {PhoneExperiment.swarm},
+      )..foreground = false;
+      addTearDown(host.dispose);
+      await tester.pumpWidget(phoneApp(SwarmScope(notifier: host, child: SettingsPage(notifier: app, large: true))));
+      await tester.runAsync(host.session!.inbox.refresh);
+      await frames(tester);
+      expect(host.session!.inbox.swarms, isNotEmpty, reason: 'the Swarm is read, so the old sheet would list it');
+      await tester.tap(find.text('Ada Lovelace'));
+      await frames(tester);
+      await tester.tap(find.text('Profile'));
+      await frames(tester);
+      expect(find.byKey(const ValueKey('account-profile-name')), findsOneWidget);
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.text('Username'), findsNothing);
+      expect(find.text('in Pilot'), findsNothing);
+      await tester.enterText(field('account-profile-name'), 'Ada King');
+      await save(tester);
+      expect(api.names, ['Ada King']);
+      expect(swarm.commands, isEmpty, reason: 'the Swarm is told nothing');
       await close(tester);
     });
   });

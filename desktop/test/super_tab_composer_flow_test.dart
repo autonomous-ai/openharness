@@ -25,7 +25,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -52,9 +51,7 @@ void main() {
         if (chat == 'the Buddy chat') {
           // The reader's own Buddy chat, where the PM's private lines land.
           final pm = (server.state['conversations'] as List)[1] as Map;
-          pm
-            ..['kind'] = 'buddy'
-            ..['buddyOwnerId'] = 'owner';
+          pm['kind'] = 'agent-chat';
           server.append(
             'Which build should I test?',
             conversationId: pm['id'] as String,

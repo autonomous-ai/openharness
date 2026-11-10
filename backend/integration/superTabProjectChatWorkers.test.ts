@@ -6,6 +6,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
+import { storeAssignment, storeStatus } from './storedWork.test-support.js'
 
 // Task #2924 (Dee and River, 2026-11-04): an agent with a task in the project talks in its project chat without joining it, and a
 // person's answer to its line there reaches it. Through the store, as hosts and apps call it. A fresh loopback replica set;
@@ -40,17 +41,16 @@ async function working() {
   const lead = await add('lead', 'Lead', true)
   const task = String((await run(tab, { type: 'conversation.create', title: 'Login bug', brief: 'Fix it.', checks: [] })).result.conversationId)
   const engineer = await add(task, 'Builder', false)
-  await run(tab, { type: 'work.assign', conversationId: task, agentId: engineer })
+  await storeAssignment(db, tab, task, engineer)
   const members = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.agentIds
   return { tab, lead, task, engineer, members }
 }
 
 describe('an agent with a task in the project, in its project chat', () => {
-  it('posts and reacts there without joining, and its host claims a person\'s answer in its thread or right below its line', async () => {
+  it('posts there without joining, and its host claims a person\'s answer in its thread or right below its line', async () => {
     const { tab, lead, task, engineer, members } = await working()
     expect(await members()).toEqual([lead])
     const asked = String((await run(tab, post('Can someone check the login bug?'))).result.messageId)
-    expect((await run(tab, { type: 'message.react', conversationId: 'lead', messageId: asked, emoji: 'eyes', on: true }, host, engineer)).result.changed).toBe(true)
     const line = String((await run(tab, post('I am on it: the token expires early.', asked), host, engineer)).result.messageId)
     const top = String((await run(tab, post('Fixed in the next build.'), host, engineer)).result.messageId)
     const inThread = String((await run(tab, post('Thanks, which build?', top))).result.messageId)
@@ -68,8 +68,7 @@ describe('an agent with a task in the project, in its project chat', () => {
     // Once its work there ends, what waits for it is no longer handed to its host.
     const late = String((await run(tab, post('One more thing?', top))).result.messageId)
     const waiting = (await store.deliveries(host, tab, engineer)).find(d => d.messageId === late)!
-    const assignmentId = (await store.read(owner, tab)).state.conversations.find(c => c.id === task)!.assignment!.id
-    await run(tab, { type: 'work.cancel', conversationId: task, assignmentId, reason: 'Moved on.' })
+    await storeStatus(db, tab, task, 'cancelled', 'Moved on.')
     await expect(store.delivery(host, tab, engineer, waiting.id, { type: 'claim', claimId: randomUUID() })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
     expect((await store.deliveries(host, tab, engineer)).map(d => d.messageId)).not.toContain(late)
   })
@@ -87,23 +86,3 @@ describe('an agent with a task in the project, in its project chat', () => {
   })
 })
 
-
-describe('project chat limits under transactional writes', () => {
-  it('counts a retry once and serializes competing second posts', async () => {
-    const { tab, engineer } = await working()
-    const asked = String((await run(tab, post('Please fix login.'))).result.messageId)
-    const envelope = { operationId: randomUUID(), command: { ...post('I can fix login.'), answers: asked } }
-    const first = await store.execute(host, tab, envelope, engineer)
-    const retry = await store.execute(host, tab, envelope, engineer)
-    expect(retry.result.messageId).toBe(first.result.messageId)
-    const results = await Promise.allSettled([
-      run(tab, { ...post('Login now works offline.', String(first.result.messageId)), alsoSend: true }, host, engineer),
-      run(tab, { ...post('Expired tokens work again.', String(first.result.messageId)), alsoSend: true }, host, engineer),
-    ])
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find(r => r.status === 'rejected')).toMatchObject({ reason: { code: 'CHAT_MAIN_LIMIT' } })
-    const rows = (await store.messages(owner, tab, 'lead', {})).messages
-    expect(rows.filter(m => m.author.kind === 'agent' && !m.source)).toHaveLength(2)
-    expect((await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')).not.toHaveProperty('chatLimits')
-  })
-})

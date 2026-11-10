@@ -190,6 +190,11 @@ export interface RegisteredSession {
    */
   launchArgs?: string[]
   /**
+   * Created with Browser ticked: the agent browser service (services/agentBrowser.ts) runs a sandboxed Chrome beside it.
+   * Chosen once at creation and carried forward, like `codexHome`. Absent for an agent without one.
+   */
+  browser?: true
+  /**
    * The conversation this agent was in on its own login when a fresh move took it onto a grid
    * (`agent_retarget` with `fresh`: a conversation too long for the grid model's window). The way
    * home reopens it instead of the grid's, and forgets it once home. Absent when there is none.
@@ -714,7 +719,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, swarmSkill: rawSwarmSkill, launchArgs: rawLaunchArgs, browser: rawBrowser, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -730,6 +735,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
     ...(launchModel ? { launchModel } : {}),
     ...(swarmSkill ? { swarmSkill } : {}),
     ...(launchArgs ? { launchArgs } : {}),
+    ...(rawBrowser === true ? { browser: true as const } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
     active,
@@ -1427,6 +1433,7 @@ class Registry {
           ...(rawGridLaunch ? { gridWebSearch: normalizedGridWebSearch(raw?.gridWebSearch) } : {}),
           ...(rawScmLaunch ? { scmLaunch: rawScmLaunch } : {}),
           ...(storedLaunchArgs(raw.launchArgs) ? { launchArgs: storedLaunchArgs(raw.launchArgs) } : {}),
+          ...(raw.browser === true ? { browser: true as const } : {}),
           ...(storedLaunchModel((raw as { launchModel?: unknown }).launchModel) ? { launchModel: storedLaunchModel((raw as { launchModel?: unknown }).launchModel) } : {}),
           // ⚠️ Rehydrated EXPLICITLY, like every field above it. A row is rebuilt from this list on
           // load, so a field added to the type and the setter but not to this list is written to
@@ -1762,6 +1769,8 @@ class Registry {
     parentAgentId?: string | null
     /** The guest it is started for — see RegisteredSession.guest. */
     guest?: string | null
+    /** Created with Browser ticked — see RegisteredSession.browser. */
+    browser?: boolean
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
     const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
@@ -1804,6 +1813,7 @@ class Registry {
       ...(input.startedBy === 'agent' ? { startedBy: 'agent' as const } : {}),
       ...normalizedParent(input.startedBy, input.parentAgentId),
       ...(input.guest ? { guest: input.guest } : {}),
+      ...(input.browser ? { browser: true as const } : {}),
       transcriptPath: null,
       projectDir: basename(input.cwd ?? '') || agentId,
       cwd: input.cwd ?? null,
@@ -2125,6 +2135,8 @@ class Registry {
       ...(existing?.launchModel ? { launchModel: existing.launchModel } : {}),
       // And the owner's extra launch flags: a hook bind that forgot them would drop them at the first relaunch.
       ...(existing?.launchArgs ? { launchArgs: existing.launchArgs } : {}),
+      // And its browser: dropped at the first hook, the agent's browser would stop with its next start.
+      ...(existing?.browser ? { browser: true as const } : {}),
       // And for the conversation a fresh move left: the grid's first hook would otherwise forget the way home.
       ...(existing?.subscriptionSessionId ? { subscriptionSessionId: existing.subscriptionSessionId } : {}),
       defaultName: existing?.defaultName,
@@ -2269,6 +2281,50 @@ class Registry {
    * rather than mint another. `terminalHost` stays set so the exit is recognised (`releaseEngine`).
    * Refused for anything but a terminal: an agent already running one engine is never re-labelled.
    */
+  /**
+   * An archived harness back on the pane its own engine never left: the terminal row that kept the pane gives it back.
+   *
+   * A restore that could not see a pane's engine archived the harness as exited and handed its pane to a new terminal
+   * row (`retainExitedSession`), while the engine ran on: on DESKTOP-0TFH0OJ (2026-11-10) CLI 0.5.97 did that to every
+   * Hermes pane, and the harness then answered Enter with `AGENT_BUSY` for as long as its own Hermes lived. The caller
+   * has proved [processIdentity] is the archived row's own process, in this pane. The archived row keeps its id, name and
+   * conversation, and takes the terminal row's pane; the terminal row goes. The terminal row may already have adopted that
+   * engine (a build with the engine fix but not this one): a terminal-born row of the same engine, with no conversation
+   * of its own yet, gives the pane back the same way. Null, changing nothing, for any other row, an archived id that is
+   * live, or a conversation bound to another row.
+   */
+  reinstateArchived(terminalAgentId: string, saved: RegisteredSession, processIdentity: ProcessIdentity): RegisteredSession | null {
+    const terminal = this.agents.get(terminalAgentId)
+    const holder = !!terminal && (isTerminalEngine(terminal.engine)
+      || (!!terminal.terminalHost && !terminal.sessionId && terminal.engine === saved.engine))
+    if (this.writeBlocked || !terminal || !holder || isTerminalEngine(saved.engine)
+      || this.agents.has(saved.agentId) || (saved.sessionId && this.bySession(saved.sessionId))
+      || !validProcessIdentity(processIdentity)) return null
+    this.drop(terminal)
+    this.terminalAvailableAgents.delete(terminal.agentId)
+    const entry: RegisteredSession = {
+      ...saved,
+      active: true,
+      launch: { state: 'ready' },
+      processIdentity,
+      runtimes: terminal.runtimes,
+      primaryRuntimeKey: terminal.primaryRuntimeKey,
+      tmuxPane: terminal.tmuxPane,
+      touchedAt: Date.now(),
+    }
+    this.traceLaunch(entry.agentId, saved.launch, entry.launch, `reinstateArchived from ${terminal.agentId}`)
+    this.index(entry)
+    this.terminalAvailableAgents.add(entry.agentId)
+    try { this.save() } catch {
+      this.drop(entry)
+      this.terminalAvailableAgents.delete(entry.agentId)
+      this.index(terminal)
+      this.terminalAvailableAgents.add(terminal.agentId)
+      return null
+    }
+    return entry
+  }
+
   adoptEngine(agentId: string, engine: AgentEngine, processIdentity?: ProcessIdentity | null): RegisteredSession | null {
     const entry = this.agents.get(agentId)
     if (!entry || !isTerminalEngine(entry.engine) || isTerminalEngine(engine)) return null
@@ -2315,6 +2371,8 @@ class Registry {
     // The shell under a new identity is the person's, not a harness an agent started: kept, a window took the new id for
     // a new child and opened the shell beside the agent, even after the person had closed the child (review of #1217).
     if (separateShell) delete entry.parentAgentId
+    // Its browser is the archived agent's, with that agent's logins: never the shell's.
+    if (separateShell) delete entry.browser
     this.releaseBinding(entry)
     delete entry.resumeOnly
     delete entry.externalResume

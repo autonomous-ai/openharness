@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/project_sidebar.dart';
 
-import '../super_tab_activity_lists_test.dart' show load, swarm;
+import '../support/super_tab_swarm.dart' show load, swarm;
 import '../swarm_state_test.dart' show createApp;
 
 Map<String, num> _distribution(List<int> microseconds) {
@@ -25,7 +25,6 @@ void main() {
     tester,
   ) async {
     final server = swarm()
-      ..state['swarmBuddy'] = true
       ..state['agents'] = [
         for (var i = 0; i < 40; i++)
           {
@@ -41,8 +40,7 @@ void main() {
             'myAgent': true,
           },
       ];
-    final activity = (await tester.runAsync(() => load(server)))!;
-    final c = activity.controller;
+    final c = (await tester.runAsync(() => load(server)))!;
     final app = createApp();
     addTearDown(app.dispose);
     await tester.binding.setSurfaceSize(const Size(300, 2400));
@@ -67,9 +65,7 @@ void main() {
                     onNewAgent: () {},
                     onNewSwarm: () {},
                     onPage: (_) {},
-                    attention: activity.attention,
                     onManage: () {},
-                    board: true,
                   ),
                 ),
               );

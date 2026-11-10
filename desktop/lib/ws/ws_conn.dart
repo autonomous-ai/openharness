@@ -949,6 +949,8 @@ class WsConn {
       !type.startsWith('api_connections') &&
       !type.startsWith('connectors') &&
       !type.startsWith('orchestrator') &&
+      // Browser settings carry a proxy's host and login, and a test its exit address.
+      !type.startsWith('agent_browser') &&
       !type.startsWith('super_tabs') &&
       !type.startsWith('route_') &&
       !type.startsWith('harness_share_') &&

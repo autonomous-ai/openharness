@@ -92,9 +92,8 @@ beforeAll(async () => {
   app.addHook('onRequest', async (req, reply) => {
     const header = req.headers.authorization ?? ''
     const user = accounts.find(a => header === `Bearer ${a.sub}`)
-    const team = accounts.find(a => header === `Bearer team:${a.sub}`)
-    if (!user && !team) return reply.code(401).send({ success: false })
-    req.user = user ?? { ...team!, harnessSessionKind: 'team', harnessComputerId: 'computer-1' }
+    if (!user) return reply.code(401).send({ success: false })
+    req.user = user
   })
   await app.register(superTabRoutes, { store })
   await app.ready()
@@ -212,15 +211,6 @@ describe('Joining by domain on the person\'s own list read', () => {
     expect((await listed(b1)).filter(id => tabs.includes(id))).toHaveLength(10)
     later()
     expect((await listed(b1)).filter(id => tabs.includes(id)).sort()).toEqual([...tabs].sort())
-  })
-
-  it('never joins from a team session', async () => {
-    const { t } = await org('four', ['t'])
-    const tab = await create()
-    await turnOn(tab)
-    const team = await app.inject({ method: 'GET', url: '/api/super-tabs/list', headers: { authorization: `Bearer team:${t.sub}` } })
-    expect(team.statusCode).toBe(403)
-    expect(await personIn(tab, t)).toBeUndefined()
   })
 
   it('writes no membership after turning auto-join off commits', async () => {

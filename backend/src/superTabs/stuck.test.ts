@@ -5,7 +5,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type SuperTabState } from './model.js'
-import { STUCK_DOWN_MS } from './stuck.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
 const HEAD = 'abc1234def5678abc1234def5678abc1234def56'
@@ -14,7 +13,7 @@ const person = (userId: string): Actor => ({ kind: 'person', userId, email: `${u
 
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 
-/** A public project App with its PM and a worker, and people p (its owner), c and d (as boardRights.test.ts). */
+/** A public project App with its PM and a worker, and people p (its owner), c and d. */
 function swarm() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.people.push({ id: 'p', email: 'p@example.com', role: 'collaborator', generation: 'p1' },
@@ -40,7 +39,6 @@ function fixture() {
   const f = swarm()
   const task = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Fix the host', brief: 'The host restarts.',
     checks: [{ description: 'Restarts', independent: true }], priority: 'P2', requesterId: 'd' } as Command, f.asAgent(f.pm)).conversationId as string
-  f.run({ type: 'work.assign', conversationId: task, agentId: f.worker } as Command, f.asAgent(f.pm))
   const group = (id = task) => f.state.conversations.find(c => c.id === id)!
   const post = (actor: Actor, text: string, id = task) => f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] } as Command, actor)
   return { run: f.run, app: f.app, pm: f.pm, worker: f.worker, add: f.add, asAgent: f.asAgent, task, group, post, get state() { return f.state } }

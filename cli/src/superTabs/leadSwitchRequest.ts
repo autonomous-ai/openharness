@@ -5,8 +5,7 @@
  * the new session with that id as its creation id, complete the handoff. Success is the PM rebinding to the new session.
  */
 import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { lstatSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import type { CoreApi } from '../core/api.js'
@@ -14,17 +13,18 @@ import type { AgentEngine } from '../engines/types.js'
 import { cliSignedIn, type EngineStatusRun } from '../lib/engineAccount.js'
 import { buddyAccountFile, buddyOwnerOf, signedInAccount } from '../lib/buddyGuard.js'
 import { handoffBaseName } from '../lib/agentHandoff.js'
-import { profileHome } from '../lib/claudeProfiles.js'
+import { namesDefaultAccount, profileId as profileIdOf } from '../lib/claudeProfiles.js'
 import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
 import { trustBuddyHome } from './buddyHome.js'
 import { leadSwitchOf, leadSwitching, SWITCH_ADOPT_MS, switchWithin } from './leadSwitch.js'
-import { githubPromptLine, LAUNCH_MODEL_REFUSALS, startNote } from './start.js'
-import { pmEngineHome } from './teamDaemon.js'
+import { LAUNCH_MODEL_REFUSALS, startNote } from './start.js'
 import { backend, identifier, object } from './wire.js'
 
-const GONE = 'that account is no longer on this machine'
+/** Offering another account to the Swarm went with Desktop's accounts page (F9): a PM moves to an engine's default account. */
+const DEFAULT_ONLY = 'only the default account can take a PM now'
+const NO_ENGINE = 'a PM runs on Claude Code or Codex'
 const NO_HANDOFF = 'the handoff could not be prepared'
 const NO_STOP = 'the session could not be stopped'
 const NO_START = 'the new session could not start'
@@ -49,12 +49,8 @@ export interface SwitchRow {
 export interface LeadSwitchDeps {
   now: () => number
   open: (where: Where) => Promise<Daemon>
-  profiles: typeof profileHome
-  team: () => boolean
-  /** The Team user's home, under which a Codex PM keeps an engine home of its own (teamDaemon.ts pmEngineHome). */
-  home: () => string
-  /** Whether the account (a profile folder, or 'default') holds a usable sign-in. */
-  signedIn: (engine: string, home: string) => Promise<boolean>
+  /** Whether the engine's default account holds a usable sign-in. */
+  signedIn: (engine: 'claude' | 'codex') => Promise<boolean>
   /** What the default [signedIn] runs to ask the engine; injected by specs. */
   run?: EngineStatusRun
   /** Reads only the daemon-prepared handoff file, with a strict byte limit; injected by host specs. */
@@ -65,16 +61,12 @@ interface Run { switchId: string; harnessId: string; changeId: string; busy: boo
   /** Why the new session did not start. Reported only once the old PM is back: a late start can still land the switch. */
   failed?: string }
 
-/** Whether the account (a profile folder, or 'default') is signed in, as its engine says (lib/engineAccount.ts `cliSignedIn`):
- *  the folder as its CLAUDE_CONFIG_DIR or CODEX_HOME, the default account under the daemon's environment, where a key its engine
- *  reads also counts. An engine that cannot say is taken as signed out: the switch would stop at a sign-in screen nobody sees. */
-export async function profileSignedIn(engine: string, home: string, environment: NodeJS.ProcessEnv = oneShotParentEnv(), run?: EngineStatusRun): Promise<boolean> {
-  const isDefault = home === 'default'
-  if (engine === 'claude') {
-    if (isDefault && CLAUDE_KEY_VARIABLES.some(name => environment[name])) return true
-    return await cliSignedIn('claude', isDefault ? environment : { ...environment, CLAUDE_CONFIG_DIR: home }, run) === true
-  }
-  return await cliSignedIn('codex', isDefault ? environment : { ...environment, CODEX_HOME: home }, run) === true
+/** Whether the engine's default account is signed in, as its engine says (lib/engineAccount.ts `cliSignedIn`) under the daemon's
+ *  environment, where a key its engine reads also counts. An engine that cannot say is taken as signed out: the switch would
+ *  stop at a sign-in screen nobody sees. */
+export async function profileSignedIn(engine: 'claude' | 'codex', environment: NodeJS.ProcessEnv = oneShotParentEnv(), run?: EngineStatusRun): Promise<boolean> {
+  if (engine === 'claude' && CLAUDE_KEY_VARIABLES.some(name => environment[name])) return true
+  return await cliSignedIn(engine, environment, run) === true
 }
 
 /** A request's one change id, so a record of #2493 (which holds only this) tells which switch it belongs to, and a create repeated
@@ -91,8 +83,8 @@ export class LeadSwitchRequests {
   private readonly claimRetryAt = new Map<string, number>()
   private readonly deps: LeadSwitchDeps
   constructor(private readonly core: CoreApi, private readonly machineId: string, deps: Partial<LeadSwitchDeps> = {}) {
-    this.deps = { now: Date.now, open: openDaemon, profiles: profileHome, team: () => false, home: homedir, log: () => {},
-      signedIn: (engine, home) => profileSignedIn(engine, home, undefined, this.deps.run),
+    this.deps = { now: Date.now, open: openDaemon, log: () => {},
+      signedIn: (engine) => profileSignedIn(engine, undefined, this.deps.run),
       readHandoff: (cwd, relativeFile, maxBytes) => {
         try {
           const file = join(cwd, relativeFile), stats = lstatSync(file)
@@ -149,11 +141,14 @@ export class LeadSwitchRequests {
 
   private async carryOut(row: SwitchRow, run: Run, request: NonNullable<SwitchRow['agent']['switchRequest']>): Promise<Run['outcome']> {
     const engine = String(request.engine), profileId = String(request.profileId ?? 'default')
-    const team = this.deps.team()
-    // The hex id of the default account counts as the default; a Team daemon takes no other account (its user's folders are not
-    // the owner's to offer).
-    const home = this.deps.profiles(engine, profileId, this.machineId, { offeredOnly: true })
-    if (home === null || (team && home !== 'default')) return { ok: false, error: GONE }
+    if (engine !== 'claude' && engine !== 'codex') return { ok: false, error: NO_ENGINE }
+    // The default account of the machine the PM moves to. Here, by any of its names (profileHome's rule); for a move to another
+    // machine, the Swarm names that machine's default by its hex id (backend commands.ts defaultProfileId), as this host cannot
+    // know the path of the other machine's Codex home.
+    const isDefault = run.crossMachine
+      ? profileId === 'default' || profileId === profileIdOf(String(request.targetMachineId), engine, 'default')
+      : namesDefaultAccount(engine, profileId, this.machineId)
+    if (!isDefault) return { ok: false, error: DEFAULT_ONLY }
     const old = this.core.agents.byAgent(run.harnessId)
     // The PM comes back as a Swarm PM, from what it was started as: with no saved role or no conversation to rebuild its prompt
     // from, it would come back role-less, with no Swarm skill and the machine owner's own GitHub login.
@@ -169,13 +164,12 @@ export class LeadSwitchRequests {
     }
     if (buddy) {
       // Check before the handoff stops anything: the launch guard also checks the recorded owner when the new engine starts.
-      if (team || skill.role !== 'buddy' || row.agent.buddySession || row.agent.modelRequest || !['claude', 'codex'].includes(engine)
-        || home !== 'default' || run.crossMachine || !await buddyOwnerCurrent()) {
+      if (skill.role !== 'buddy' || row.agent.buddySession || row.agent.modelRequest || run.crossMachine || !await buddyOwnerCurrent()) {
         return { ok: false, error: 'the Buddy owner or session could not be verified on this computer' }
       }
     }
-    // The default account too, in a Team daemon as well: each is its own sign-in, which its CLI reports.
-    if (!await this.deps.signedIn(engine, home)) return { ok: false, error: SIGNED_OUT }
+    // Here only: a move to another machine starts on that machine's account, which its own start checks.
+    if (!run.crossMachine && !await this.deps.signedIn(engine)) return { ok: false, error: SIGNED_OUT }
     const daemon = await this.deps.open({ dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId })
     try {
       const { changeId } = run, agentId = run.harnessId
@@ -209,17 +203,13 @@ export class LeadSwitchRequests {
         ? `You are a person's ${row.agent.buddyScope === 'swarm' ? 'one Buddy for every project they read' : 'Buddy'} in a shared Super Tab. Your chat with your owner is conversation ${conversation}: read it with harness super-tab --tab ${row.tabId} messages ${conversation}, and reply there with harness super-tab --tab ${row.tabId} post ${conversation} 'your message' UNIQUE_OPERATION_ID. Continue helping your owner in that chat.`
         : startNote(old.defaultName)
       // A PM that has no name to give has its handoff alone: no line of it starts with a space.
-      const prompt = [startPrompt, !buddy && skill.github ? githubPromptLine() : '', handoff].filter(Boolean).join(' ')
+      const prompt = [startPrompt, handoff].filter(Boolean).join(' ')
       // Desktop's rule (_changeAgent): a mode the new engine lacks becomes ask, and bypass follows the mode.
       const mode = old.permissionMode && permissionModeFlags(engine as AgentEngine, old.permissionMode) ? old.permissionMode : old.permissionMode ? 'ask' : undefined
-      // A Team user's Codex PM keeps an engine home of its own, as at its first start (start.ts, security re-check 2 of #2089).
-      const pmHome = pmEngineHome(engine, changeId, team, this.deps.home())
-      if (pmHome) mkdirSync(pmHome, { recursive: true, mode: 0o700 })
       const payload: Record<string, unknown> = { engine, cwd: old.cwd, creationId: changeId, startedBy: 'agent',
-        swarmRole: wireRole(skill), ...(skill.mode ? { swarmSkillMode: skill.mode } : {}), ...(!buddy && skill.github ? { swarmGitHub: true } : {}),
+        swarmRole: wireRole(skill), ...(skill.mode ? { swarmSkillMode: skill.mode } : {}),
         ...(mode ? { permissionMode: mode, bypassPermission: permissionModeApproves(mode) } : old.bypassPermission !== undefined ? { bypassPermission: old.bypassPermission } : {}),
         ...(old.defaultName ? { name: old.defaultName } : {}),
-        ...(pmHome ? { codexHome: pmHome } : home !== 'default' ? { [engine === 'claude' ? 'claudeHome' : 'codexHome']: home } : {}),
         ...(typeof request.model === 'string' ? { model: request.model } : {}), ...(typeof request.effort === 'string' ? { effort: request.effort } : {}),
         prompt }
       let created = await daemon.request('agent_create', payload, 30_000)

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' show max;
 
+import 'package:clock/clock.dart';
+import 'package:collection/collection.dart' show mergeSort;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -21,10 +23,14 @@ import 'model.dart';
 import 'pull_chip.dart';
 import 'swarm_type.dart';
 import 'task_board.dart';
+import 'visible_tick.dart';
 
 /// A task opened beside its project's channel (Swarm v4, anh Dee 2026-11-09): the GitHub issue, read with `gh` on this
 /// computer as its person, its text and its comments as one conversation, each named by the agent that signed it. People
 /// read it here; agents write on GitHub, and Open in GitHub goes there.
+///
+/// A pull request opens the same way, as a chat of its own (anh Dee, 2026-11-10: "it has its own comments on PRs"): its text,
+/// its comments, its reviews with their verdict and line comments with their place, and its merge, in time order.
 class SwarmIssuePanel extends StatefulWidget {
   const SwarmIssuePanel({
     super.key,
@@ -33,10 +39,18 @@ class SwarmIssuePanel extends StatefulWidget {
     required this.repository,
     required this.number,
     required this.onClose,
+    this.pull = false,
+    this.onOpenPull,
     this.refreshEvery = const Duration(seconds: 30),
     this.now = DateTime.now,
     this.openUrl = _openUrl,
   });
+
+  /// It is pull request [number], not an issue.
+  final bool pull;
+
+  /// Opens a task's pull request in its place; null where nothing opens it.
+  final ValueChanged<int>? onOpenPull;
 
   final SuperTabController controller;
   final SwarmGitHub github;
@@ -59,10 +73,11 @@ class SwarmIssuePanel extends StatefulWidget {
   State<SwarmIssuePanel> createState() => _SwarmIssuePanelState();
 }
 
-class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
+class _SwarmIssuePanelState extends State<SwarmIssuePanel>
+    with WidgetsBindingObserver, VisibleTick<SwarmIssuePanel> {
   SwarmIssueThread? _thread;
 
-  /// The task's open pull request, as last read: shown under its title.
+  /// The task's open pull request, as last read: shown under its title. A pull request's own, for its status.
   SwarmPull? _pull;
 
   /// Every comment read so far, oldest first, with none missing between them: the newest the thread brings, and the pages
@@ -73,14 +88,34 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   String? _earlier;
   bool _showing = false;
   String? _error;
-  Timer? _refresh;
+
+  /// When the last read started: back in sight, the task reads only once its clock would have by now.
+  DateTime? _readAt;
+
+  /// Reads still going: the clock's read waits for the next while one is.
+  int _reads = 0;
 
   @override
   void initState() {
     super.initState();
     _open();
-    if (widget.refreshEvery case final every?) {
-      _refresh = Timer.periodic(every, (_) => _read());
+    // Its clock runs only while it shows: hidden, it would spend the person's GitHub rate limit on nobody.
+    if (widget.refreshEvery case final every?) visibleTick(every);
+  }
+
+  @override
+  void onTick() {
+    if (_reads == 0) _read();
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    final (every, readAt) = (widget.refreshEvery, _readAt);
+    if (onScreen &&
+        _reads == 0 &&
+        every != null &&
+        (readAt == null || clock.now().difference(readAt) >= every)) {
+      _read();
     }
   }
 
@@ -101,7 +136,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   void _open() {
     final kept = widget.github.keptThread(widget.repository, widget.number);
     if (kept != null) _take(kept);
-    _pull = widget.github.keptPulls(widget.repository)?[widget.number];
+    _pull = _pullOf();
     _read();
   }
 
@@ -123,19 +158,35 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     }
   }
 
+  /// The open pull request shown under the title, as last read: a task's, or a pull request's own.
+  SwarmPull? _pullOf() => widget.pull
+      ? widget.github
+            .keptPullList(widget.repository)
+            ?.where((p) => p.number == widget.number)
+            .firstOrNull
+      : widget.github.keptPulls(widget.repository)?[widget.number];
+
   static String _key(SwarmIssueComment c) =>
       c.url ?? '${c.createdAt?.toIso8601String()}${c.author}${c.body.hashCode}';
 
-  @override
-  void dispose() {
-    _refresh?.cancel();
-    super.dispose();
+  Future<void> _read() async {
+    _reads++;
+    _readAt = clock.now();
+    try {
+      await _readThread();
+    } finally {
+      _reads--;
+    }
   }
 
-  Future<void> _read() async {
+  Future<void> _readThread() async {
     final (repository, number) = (widget.repository, widget.number);
     try {
-      final thread = await widget.github.thread(repository, number);
+      final thread = await widget.github.thread(
+        repository,
+        number,
+        pull: widget.pull,
+      );
       if (!mounted ||
           repository != widget.repository ||
           number != widget.number)
@@ -154,11 +205,14 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     }
     // Its pull request after its thread; a read of it that fails keeps the last one shown.
     try {
-      final pulls = await widget.github.pulls(repository);
+      await widget.github.pulls(
+        repository,
+        team: SwarmPull.teamOf(widget.controller.snapshot, repository),
+      );
       if (mounted &&
           repository == widget.repository &&
           number == widget.number) {
-        setState(() => _pull = pulls[number]);
+        setState(() => _pull = _pullOf());
       }
     } on SwarmGitHubError catch (error) {
       appLog.warn(
@@ -178,7 +232,12 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     if (cursor == null || _showing) return;
     setState(() => _showing = true);
     try {
-      final page = await widget.github.earlier(repository, number, cursor);
+      final page = await widget.github.earlier(
+        repository,
+        number,
+        cursor,
+        pull: widget.pull,
+      );
       // A newer read that did not join the held comments moved the cursor: this page is of a range no longer held.
       if (!mounted ||
           repository != widget.repository ||
@@ -203,7 +262,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     grid.AppTheme.watch(context);
     final url =
         _thread?.issue.url ??
-        'https://github.com/${widget.repository}/issues/${widget.number}';
+        'https://github.com/${widget.repository}/${widget.pull ? 'pull' : 'issues'}/${widget.number}';
     return ColoredBox(
       key: const ValueKey('swarm-issue-panel'),
       color: DesktopChrome.surface,
@@ -273,33 +332,42 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     );
   }
 
-  /// The task's pull request: where it stands, its title and its branch, and Open, which goes to it on GitHub.
-  Widget _pullRow(SwarmPull pull) => Container(
-    key: const ValueKey('swarm-issue-pull'),
-    padding: SwarmLayout.cardPadding,
-    decoration: BoxDecoration(
-      color: grid.AppPalette.cardBg,
+  /// The task's pull request: where it stands, its title and its branch, and Open, which goes to it on GitHub. A tap on it
+  /// opens its own chat in the task's place.
+  Widget _pullRow(SwarmPull pull) => Material(
+    color: grid.AppPalette.cardBg,
+    shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
-      border: Border.all(color: DesktopChrome.rim),
+      side: BorderSide(color: DesktopChrome.rim),
     ),
-    child: Row(
-      children: [
-        SwarmPullChip(pull: pull),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            '${pull.title} · ${pull.branch}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.metadata(),
-          ),
+    clipBehavior: Clip.antiAlias,
+    child: InkWell(
+      key: const ValueKey('swarm-issue-pull'),
+      onTap: widget.onOpenPull == null
+          ? null
+          : () => widget.onOpenPull!(pull.number),
+      child: Padding(
+        padding: SwarmLayout.cardPadding,
+        child: Row(
+          children: [
+            SwarmPullChip(pull: pull),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${pull.title} · ${pull.branch}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.metadata(),
+              ),
+            ),
+            TextButton(
+              key: const ValueKey('swarm-issue-pull-open'),
+              onPressed: () => widget.openUrl(pull.url),
+              child: const Text('Open'),
+            ),
+          ],
         ),
-        TextButton(
-          key: const ValueKey('swarm-issue-pull-open'),
-          onPressed: () => widget.openUrl(pull.url),
-          child: const Text('Open'),
-        ),
-      ],
+      ),
     ),
   );
 
@@ -371,17 +439,43 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
             if (agent != null) ...[
               swarmAgentFace(widget.controller, agent),
               const SizedBox(width: 6),
-              Text(agent, style: DesktopChrome.metadata()),
+              // The agent's own name, not its label's: "First builder", not first-builder.
+              Text(switch (swarmAgentNamed(widget.controller, agent)) {
+                final named? => named.displayName ?? named.name,
+                null => agent,
+              }, style: DesktopChrome.metadata()),
               Text(' · ', style: DesktopChrome.metadata()),
             ],
-            Text(
-              !thread.open
-                  ? 'Closed'
-                  : issue.taken
-                  ? 'On it'
-                  : 'Waiting',
-              style: DesktopChrome.metadata(),
-            ),
+            if (widget.pull) ...[
+              if (thread.branch case final branch?)
+                Flexible(
+                  child: Text(
+                    '$branch · ',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: DesktopChrome.metadata(),
+                  ),
+                ),
+              if (thread.open && _pull != null)
+                SwarmPullChip(pull: _pull!)
+              else
+                Text(
+                  thread.mergedAt != null
+                      ? 'Merged'
+                      : thread.open
+                      ? 'Open'
+                      : 'Closed',
+                  style: DesktopChrome.metadata(),
+                ),
+            ] else
+              Text(
+                !thread.open
+                    ? 'Closed'
+                    : issue.taken
+                    ? 'On it'
+                    : 'Waiting',
+                style: DesktopChrome.metadata(),
+              ),
             if (issue.author != null || issue.createdAt != null)
               Flexible(
                 child: Text(
@@ -403,7 +497,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
           const SizedBox(height: 8),
           SwarmLabelChips(issue: issue, limit: 12),
         ],
-        if (_pull case final pull?) ...[
+        if (_pull case final pull? when !widget.pull) ...[
           const SizedBox(height: 12),
           _pullRow(pull),
         ],
@@ -436,15 +530,44 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
             ],
           ),
         ],
-        for (final comment in _comments) ...[
+        for (final post in _talk(thread)) ...[
           const SizedBox(height: 18),
-          _post(context, comment, agents),
+          if (post.talk == SwarmTalk.merged)
+            _merged(post)
+          else
+            _post(context, post, agents),
         ],
       ],
     );
   }
 
-  /// One post: the face and name it is signed with (else its GitHub login), its login and time, then its text.
+  /// Its comments held, and a pull request's reviews, line comments and merge among them by time.
+  List<SwarmIssueComment> _talk(SwarmIssueThread thread) {
+    if (thread.reviews.isEmpty) return _comments;
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    // Stable, so posts of one second keep the order they were read in.
+    final talk = [..._comments, ...thread.reviews];
+    mergeSort(
+      talk,
+      compare: (a, b) => (a.createdAt ?? epoch).compareTo(b.createdAt ?? epoch),
+    );
+    return talk;
+  }
+
+  /// When a pull request merged: one quiet centred line, as a chat's day line reads.
+  Widget _merged(SwarmIssueComment merge) => Center(
+    child: Text(
+      [
+        'Merged',
+        if (merge.createdAt case final at?) _when(at, widget.now()),
+      ].join(' · '),
+      key: const ValueKey('swarm-issue-merged'),
+      style: DesktopChrome.metadata(),
+    ),
+  );
+
+  /// One post: the face and name it is signed with (else its GitHub login), its login, a review's verdict or a line comment's
+  /// place, and its time, then its text.
   Widget _post(
     BuildContext context,
     SwarmIssueComment post,
@@ -468,6 +591,14 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
                       text: [
                         if (post.author != null && post.author != name)
                           post.author!,
+                        if (post.talk == SwarmTalk.review)
+                          switch (post.verdict) {
+                            'APPROVED' => 'Approved',
+                            'CHANGES_REQUESTED' => 'Changes requested',
+                            _ => 'Review',
+                          },
+                        if (post.path case final path?)
+                          post.line == null ? path : '$path, line ${post.line}',
                         if (post.createdAt case final at?)
                           _when(at, widget.now()),
                       ].map((part) => ' · $part').join(),

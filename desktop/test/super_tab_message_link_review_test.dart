@@ -7,7 +7,7 @@ import 'package:harness/super_tabs/message_link_preview.dart';
 import 'package:harness/super_tabs/message_link_swarms.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'support/buddy_fixture.dart';
+import 'support/own_agent_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -49,10 +49,8 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
             linkSwarms: linkSwarms,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -100,6 +98,8 @@ void main() {
       expect(inPreview('message-1', 'Message unavailable'), findsOneWidget);
       expect(find.text('Loading message…'), findsNothing);
       expect(find.textContaining('Offline note'), findsNothing);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('a transient failure is read again and then shows', (
@@ -145,7 +145,7 @@ void main() {
     /// Ken's Chat with PM from before Buddies replaced it, as a server from
     /// before 10-29 still sends it (as in super_tab_buddies_test).
     Future<(ConversationServer, String, String)> hidden() async {
-      final server = buddySwarm(enabled: false);
+      final server = ownAgentSwarm();
       (server.state['conversations'] as List).add({
         ...conversationFixture('old-pm-chat', 'ken.tran'),
         'projectId': 'lead',
@@ -193,6 +193,8 @@ void main() {
       );
       expect(inPreview(message, 'Message unavailable'), findsOneWidget);
       expect(find.textContaining('Earlier answer'), findsNothing);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
   });
 
@@ -233,6 +235,8 @@ void main() {
       await show(tester, server, linkSwarms: swarms);
       expect(inPreview('message-1', 'Second Swarm note'), findsOneWidget);
       expect(inPreview('message-1', 'You'), findsOneWidget);
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('opens it in that Swarm, through the account’s Swarms', (
@@ -263,6 +267,8 @@ void main() {
         find.descendant(of: preview('message-2'), matching: find.byType(Text)),
         findsOneWidget,
       );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('a Swarm the account does not list reads nothing', (

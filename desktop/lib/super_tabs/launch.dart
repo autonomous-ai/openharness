@@ -8,7 +8,6 @@ import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/first_task.dart';
-import '../logging/app_log.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
@@ -18,11 +17,9 @@ import '../state/swarm.dart';
 import 'attachment_upload.dart';
 import 'actions.dart';
 import 'controller.dart';
-import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'new_repository.dart';
-import 'personal_projects.dart' show PersonalProjects;
 import 'agent_names.dart';
 import 'launch_prompt.dart';
 import 'identity.dart' show superTabMachineName;
@@ -41,6 +38,10 @@ class SuperTabLaunch {
   final AppNotifier app;
   final String swarmId, accountId, key;
   final Map<String, dynamic> saved;
+
+  /// Its form's destination: a start that goes on without the form opens nothing when it is done
+  /// ([HarnessLaunchIntegration.inBackground]).
+  HarnessLaunchIntegration? _destination;
 
   static Future<HarnessLaunchIntegration> open(
     AppNotifier app,
@@ -234,6 +235,12 @@ class SuperTabLaunch {
               }
               try {
                 final prompt = await launch.prepare(machine, task, engine);
+                // What its row in the left pane shows while it starts without the form (swarm_starts.dart).
+                integration
+                  ..name = saved['agentName'] as String?
+                  ..projectId = saved['newProject'] == true
+                      ? saved['projectId'] as String?
+                      : null;
                 integration.swarmSkillMode =
                     saved['skillMode'] as String? ?? 'orchestration';
                 integration.swarmRole = saved['lead'] == true ? 'lead' : 'dev';
@@ -321,6 +328,7 @@ class SuperTabLaunch {
           ..leadMachines = leadMachines
           ..leadModels = leadModels
           ..newRepositoryOwners = newRepositoryOwners;
+    launch._destination = integration;
     if (recovering) {
       integration
         ..machineId = saved['machineId'] as String?
@@ -381,7 +389,7 @@ class SuperTabLaunch {
     LeadMachine row(String id, Map<String, dynamic> pool) {
       final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
       final observation = part(reading['observation']);
-      // As Add machine and the Buddy picker name it ("Studio", not "Studio.local").
+      // As Add machine names it ("Studio", not "Studio.local").
       final name = superTabMachineName(pool['name'] as String? ?? id);
       final own = pool['contributorId'] == accountId;
       final connected = app.stateOf(id) != null;
@@ -539,9 +547,10 @@ class SuperTabLaunch {
                   folder,
                 ),
         },
+        // A MacBook may sleep with its lid closed.
         maySleep:
-            superTabMachineSymbol(device is String ? device : null) ==
-            'laptopcomputer',
+            device is String &&
+            device.trim().toLowerCase().startsWith('macbook'),
         own: own,
         owner: own
             ? null
@@ -772,7 +781,7 @@ class SuperTabLaunch {
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
     checkAccount();
-    controller.select(conversationId);
+    if (_destination?.inBackground != true) controller.select(conversationId);
     await app.superTabs.storage.delete(key);
   }
 
@@ -1037,30 +1046,8 @@ class SuperTabLaunch {
     checkAccount();
   }
 
-  /// A Personal start whose pane would need a tab the full desk cannot hold
-  /// is refused here, before any agent runs (task #3099). A start already
-  /// asked for is not: its agent may be running. A Product Manager started
-  /// on a Swarm machine ([startInSwarm]) puts no pane on this desk, so it
-  /// needs no tab.
-  void refuseFullDesk() {
-    if (started) return;
-    final refusal = PersonalProjects.of(app).startRefusal(
-      saved['tabId'] as String?,
-      saved['conversationId'] as String?,
-      newProject:
-          saved['newProject'] == true && saved['projectPrepared'] != true,
-    );
-    if (refusal != null) {
-      // Said in the log by its code alone: how often a full desk stops a
-      // start is what warns that the desk's 24 tabs are near.
-      appLog.warn('super-tabs', 'Personal start refused (TABS_FULL)');
-      throw SuperTabFailure('TABS_FULL', refusal);
-    }
-  }
-
   Future<String> prepare(String machine, String task, [String? engine]) async {
     checkAccount();
-    refuseFullDesk();
     if (app.stateOf(machine)?.belongsToOtherAccount == true) {
       throw const SuperTabFailure(
         'CONTRIBUTION_REQUIRED',
@@ -1352,25 +1339,14 @@ class SuperTabLaunch {
         saved['visibility'] == 'private' ? 'Swarm' : saved['title'] as String,
       );
     }
-    // The pane goes to its project's own tab in Personal (task #3099). A
-    // failure there never undoes the join: the agent is in its project.
-    if (controller.snapshot?.projectFor(saved['conversationId'] as String)
-        case final project?) {
-      try {
-        await PersonalProjects.of(app)
-            .placeInProjectTab(controller, project.id, machine, harnessId);
-      } catch (error) {
-        appLog.warn(
-          'super-tabs',
-          'Personal project tab placement failed (${error.runtimeType})',
-        );
-      }
-    }
     // Its person goes on in their chat with it: a PM's own chat since Swarm v4, as only agents post in the project's channel.
+    // A start that went on without its form opens nothing: they go in when they choose (anh Dee, 2026-11-10).
     final joined = controller.snapshot?.agents
         .where((a) => a.machineId == machine && a.harnessId == harnessId)
         .firstOrNull;
-    controller.select(joined?.chatId ?? saved['conversationId'] as String);
+    if (_destination?.inBackground != true) {
+      controller.select(joined?.chatId ?? saved['conversationId'] as String);
+    }
     await app.superTabs.storage.delete(key);
   }
 

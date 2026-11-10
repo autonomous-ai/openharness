@@ -9,7 +9,6 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/real_fonts.dart';
 import 'support/super_tab_fixture.dart';
-import 'support/super_tab_members.dart';
 
 /// Switch PM (spec 2026-11-02-pm-switch-engine-account-design.md, section 8):
 /// who is offered it, what its dialog lists and what Confirm sends.
@@ -99,9 +98,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             onNewProject: () {},
@@ -219,15 +216,18 @@ void main() {
   );
 
   testWidgets(
-    'the dialog says only offered accounts are listed on a machine the reader does not own',
+    'the dialog says a PM runs on its machine\'s default account, whoever owns the machine',
     (tester) async {
-      const line = 'Only accounts its owner offered are listed.';
-      for (final (account, shown) in [('owner', true), ('mac', false)]) {
+      for (final account in ['owner', 'mac']) {
         await mount(tester, swarm(), account);
         await openMenu(tester);
         await tester.tap(item);
         await tester.pumpAndSettle();
-        expect(find.text(line), shown ? findsOneWidget : findsNothing);
+        expect(
+          find.text('A PM runs on its machine’s default account.'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('offered'), findsNothing);
         await tester.tap(find.text('Cancel'));
         await finish(tester);
       }
@@ -540,35 +540,4 @@ void main() {
       await finish(tester);
     },
   );
-
-  testWidgets('a lent machine\'s borrower does not see Switch PM…', (
-    tester,
-  ) async {
-    final server = swarm(pm: {'machineOwnerId': 'ken'});
-    await mount(tester, server, 'mac');
-    await openMenu(tester);
-    expect(item, findsNothing);
-    await finish(tester);
-  });
-
-  testWidgets('the PM row shows Switching… while switchRequest is set', (
-    tester,
-  ) async {
-    final server = swarm(
-      pm: {
-        'switchRequest': {
-          'id': 'r',
-          'engine': 'codex',
-          'profileId': 'bbbbbbbbbbbbbbbb',
-          'requestedBy': 'owner',
-          'at': 1,
-        },
-      },
-    );
-    await mount(tester, server, 'owner');
-    await openSuperTabMembers(tester);
-    // The row's state word (Quiet Swarm).
-    expect(find.text('switching…'), findsWidgets);
-    await finish(tester);
-  });
 }

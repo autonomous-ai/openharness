@@ -14,7 +14,7 @@
  * `--json` for programs. Everything is composed from requests the daemon already answers: `agents_list`,
  * `agent_recent`, a bounded `session_get` page, and `agent_close` (its `inspect` mode tells needs-input from idle).
  */
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
@@ -81,6 +81,17 @@ and with --send "sent": {"state":"queued"} or {"error":"NOT_IDLE"|"NOT_RUNNING",
 on the last words or waits for the person. Wait for it (harness wait <name>) and send them with harness reply, or
 say so: never start new work for them, or a follow-up ("how is it going?") becomes a second harness.
 Exit status: 0 once decided (sent or not: read "sent"), 5 refused (switch off), 1 nothing decided (ROUTER_UNAVAILABLE).
+${ON_MACHINE}`
+export const RESUME_USAGE = `Usage: harness resume [--machine <name>] <name> [--json]
+
+Opens a harness that was closed or stopped again, with the same name and folder, and its conversation where its agent
+can resume one; one still running is left as it is. Then give it the words with harness reply. harness ps --all lists
+those closed in the last week; any closed one is found by its id. For a program acting for the person, while they
+allow it (harness settings programs-reply); never an agent.
+--json answers {"ok":true,"name","id","state","resumed","effect","next"}. "resumed": false: it is open again in a new
+conversation, as its agent could not resume the earlier one.
+Exit status: 0 open, 5 refused, 1 not opened (RESUME_UNCONFIRMED: its machine has not confirmed it yet; check its
+terminal, then run harness resume again).
 ${ON_MACHINE}`
 export const TELL_USAGE = `Usage: harness tell [--machine <name>] <name> [--json] -- <work…>
 
@@ -460,8 +471,9 @@ async function targetAway(s: Setup, o: Opened, name: string, away: Away): Promis
   try {
     const live = named(await list(daemon, false))
     if (pending && !live.some(exactly(name))) throw notStarted(s.env, pending, away)
-    let found = matching(name, live)
-    if (!found.length) found = matching(name, named(await list(daemon, true)))
+    // Asked with the stopped ones too (`opened(s, true)`): an exact stopped name before a live one it merely starts.
+    let found = matching(name, o.stopped ? named(await list(daemon, true)) : live)
+    if (!found.length && !o.stopped) found = matching(name, named(await list(daemon, true)))
     const frame = oneOf(name, found)
     if (frame) return { daemon, frame, machineId: away.machineId, machine: away.label, yours: yoursOn(o, away.machineId, frame.id), remote: true }
     throw new AgentClientError('UNKNOWN_HARNESS', `No harness named "${name}" on ${away.label}. \`${step(s.env, 'ps', machineOption(away.word))}\` lists them.`)
@@ -943,7 +955,9 @@ export function routeCommand(argv: readonly string[], deps: ClientDeps = {}): Pr
 async function replyInPane(s: Setup, o: Opened, t: Target, text: string, at: string): Promise<Record<string, unknown>> {
   const name = t.frame.name ?? t.frame.id.slice(0, 8)
   const state = stateOf(t.frame)
-  if (state === 'stopped' || state === 'offline') throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Start a new harness with the whole task.`)
+  if (state === 'stopped' || state === 'offline') {
+    throw new AgentClientError('NOT_RUNNING', `${name} is no longer running: it was closed or stopped. Resume it with harness resume ${at}, then reply; or start a new harness with the whole task.`)
+  }
   if (state !== 'idle') throw new AgentClientError('NOT_IDLE', state === 'working' ? `${name} is working. Wait for it to finish (${step(s.env, 'wait', at)}), then reply.` : `${name} is not idle: it may be waiting for the person (a question or a permission). Only they answer that.`)
   let reply: Record<string, unknown>
   try { reply = await s.record({ port: o.where.port, dataDir: o.where.dataDir, machineId: t.machineId }, { action: 'reply_local', machine: o.machine, agentId: t.frame.id, text }, 20_000) } catch (error) {
@@ -955,6 +969,71 @@ async function replyInPane(s: Setup, o: Opened, t: Target, text: string, at: str
   try { o.ledger.append({ at: s.now(), by: { machineId: o.where.machineId, agentId: PERSON_AGENT_ID }, told: { machineId: t.machineId, agentId: t.frame.id }, probe: flat(text).slice(0, PROBE_CHARS) }) }
   catch { /* `wait` then reads its last answer as it would without the line */ }
   return reply
+}
+
+// ── resume ─────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A closed harness opened again (`agent_resume`, core/agents/launches.ts), for a program acting for the person: the lamp
+ * hands follow-up work to the session the person names, and `reply` refuses one that was closed (NOT_RUNNING). The same
+ * caller policy as `reply` and `route`: the person's switch, never an agent. Only a resume: launch words and a permission
+ * mode are the owner's own app's to change. Asked with a receipt, so an answer lost on the way is asked after by it
+ * (`agent_create_status`) rather than by a second resume.
+ */
+export function resumeCommand(argv: readonly string[], deps: ClientDeps = {}): Promise<number> {
+  return run(RESUME_USAGE, deps, wantsJson, argv, async (s) => {
+    const { names, flags, machine } = words(argv, { '--json': 'flag' })
+    if (names.length !== 1) throw new UsageError(names.length ? 'Resume one harness at a time.' : 'Name the harness to resume.')
+    const away = await machineOf(s, s.where(), machine)
+    // The stopped ones too, from the start: a closed `weather` is meant before a live `weather-api` its name starts.
+    const o = await opened(s, true)
+    let t: Target | null = null
+    try {
+      if (o.caller || o.orphan) throw new AgentClientError('NOT_YOURS', 'Only the person, or a program acting for them, resumes a harness. Tell the person which one to resume.')
+      if (!readAgentSettings(o.where.dataDir).programsReply) throw new AgentClientError('REPLY_OFF', RESUME_OFF_TEXT)
+      t = await target(s, o, names[0], away)
+      const name = t.frame.name ?? t.frame.id.slice(0, 8)
+      if (t.frame.location === 'cloud') throw new UsageError(`${name} runs in its maker's cloud: harness resume reopens a harness in a pane only.`)
+      const at = onAway(addressOf({ machineId: '', agentId: t.frame.id, name: t.frame.name ?? '', engine: '' }), away)
+      const creationId = randomUUID()
+      let reply: Record<string, unknown>
+      // As long as a new harness may take to start: the machine answers once the engine is back, or that it is not.
+      try { reply = await t.daemon.request('agent_resume', { agentId: t.frame.id, creationId }, STARTING_MS) } catch (error) {
+        if (!(error instanceof AgentClientError) || error.code !== 'TIMEOUT') throw error
+        reply = await t.daemon.request('agent_create_status', { creationId })
+        // The machine has no record of it: the resume never reached it.
+        if (reply.state === 'missing') throw error
+      }
+      const agent = resumedAgent(s, name, at, t.frame.id, reply)
+      const resumed = reply.resumed !== false
+      // Said alike whether it was relaunched or found still running: the machine's answer does not say which.
+      const effect = resumed ? `${name} is open, with its conversation.` : `${name} is open, in a new conversation: its agent could not resume the earlier one.`
+      const next: NextStep[] = [{ run: `harness reply ${at} -- <words>`, when: 'to give it more work' }]
+      s.out(flags.has('--json') ? JSON.stringify({ ok: true, name, id: t.frame.id, state: stateOf(agent), resumed, effect, next })
+        : [`${name} on ${t.machine}: ${effect}`, formatNext(next)].join('\n'))
+      return EXIT.ok
+    } finally { if (t?.remote) t.daemon.close(); o.daemon.close() }
+  })
+}
+
+/** Said when the person has not allowed it: `reply`'s switch, as resuming is only ever to give a closed harness more work. */
+export const RESUME_OFF_TEXT = `Programs may not open your closed harnesses again yet. ${askThePersonFirst('programs-reply', 'tell them which harness to resume, and they open it in Harness.')}`
+
+/** The harness a resume's receipt says is open again, or why it is not, said for a program rather than the app. */
+function resumedAgent(s: Setup, name: string, at: string, agentId: string, reply: Record<string, unknown>): Frame {
+  const agent = reply.agent as Frame | undefined
+  if (reply.state === 'created' && agent?.id === agentId) return agent
+  // Relaunched but not seen to resume its conversation, or still opening: a second resume checks it again rather than
+  // starting another process (lib/resumeAgentService.ts).
+  if (reply.state === 'unconfirmed' || reply.state === 'pending') {
+    throw new AgentClientError('RESUME_UNCONFIRMED', `${name} was started again, but Harness has not confirmed its conversation yet. Check its terminal, then run harness resume ${at} again.`)
+  }
+  if (reply.state === 'created' || reply.state === 'unavailable') {
+    throw new AgentClientError('AGENT_CHANGED', `${name} changed while resuming. Check it with ${step(s.env, 'show', at)}.`)
+  }
+  const failure = (reply.state === 'failed' ? reply.failure ?? {} : reply) as { code?: unknown; error?: unknown; detail?: unknown }
+  const code = typeof failure.code === 'string' ? failure.code : typeof failure.error === 'string' ? failure.error : 'FAILED'
+  throw new AgentClientError(code, typeof failure.detail === 'string' && failure.detail ? failure.detail : `${name} was not resumed (${code}).`)
 }
 
 // ── tell ───────────────────────────────────────────────────────────────────────────────────────────

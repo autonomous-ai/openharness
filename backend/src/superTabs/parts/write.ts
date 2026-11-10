@@ -1,11 +1,9 @@
-import { proposalDueAt } from '../proposalClock.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { activeWork, stableId, type AgentStart, type Agent } from '../model.js'
 import type { GroupData, MachineData, PartKind } from './types.js'
 import { RETENTION_MS } from './types.js'
 import { ALL_HOSTS, noteChange } from '../cache.js'
-import { feedIdsOf } from '../read/feedIds.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -107,15 +105,13 @@ function hostDigest(group: GroupData): string {
 export function extracted(kind: PartKind, data: unknown, stamp: number): Record<string, unknown> {
   switch (kind) {
     case 'group': {
-      const group = data as GroupData, dueAt = proposalDueAt(group.proposal)
+      const group = data as GroupData
       return { projectId: group.projectId ?? null, kind: group.kind ?? null, archived: group.archived, dormant: !!group.dormant,
-        proposalDueAt: dueAt == null ? null : new Date(dueAt),
-        agentIds: group.agentIds, feedIds: feedIdsOf(group), executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
+        agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
-        // A step is never marked by a write: it archives with its task (task steps design; steps.ts endSteps), not on its own clock.
-        // Only the worker's startup marks one, once its task has ended (archive.ts markFinishedGroups).
-        workFinished: !group.reviewOf && (['done', 'cancelled'].includes(group.assignment?.status ?? '') || (!!group.reviewOf && !activeWork(group))) }
+        // A finished task, never a step. Nothing reads it since the archive pass went (Swarm v4); its index goes with the schema (S19).
+        workFinished: !group.reviewOf && ['done', 'cancelled'].includes(group.assignment?.status ?? '') }
     }
     case 'agent': {
       const agent = data as Agent

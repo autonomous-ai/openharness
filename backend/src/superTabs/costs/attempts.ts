@@ -67,7 +67,7 @@ const tokensOf = (state: SuperTabState, machineId: string, harnessId: string): T
  *  reads plan windows for it, per token when it reads it as known with none (an API key, cli superTabs/capacity.ts). */
 function billingOf(state: SuperTabState, machineId: string, engine: string, grid: string | undefined): Billing {
   if (grid) {
-    const kinds = new Set((state.machines ?? []).filter(m => !m.buddyOnly).flatMap(m => (m.observation?.localModels ?? []).filter(s => s.model === grid).map(s => s.kind)))
+    const kinds = new Set((state.machines ?? []).flatMap(m => (m.observation?.localModels ?? []).filter(s => s.model === grid).map(s => s.kind)))
     if (kinds.size !== 1) return 'unknown'
     const [kind] = kinds
     return kind === 'local' ? 'own-hardware' : kind === 'api' ? 'api' : 'unknown'
@@ -89,17 +89,14 @@ export function startRun(state: SuperTabState, assignment: Assignment, now: numb
   return { machineId, harnessId, ...ran, billing: billingOf(state, machineId, ran.engine, ran.grid), startedAt: now, start: tokensOf(state, machineId, harnessId) }
 }
 
-/** Its end, and the model and effort its agent ran at last. An agent that finishes its own work (Done, Stopped) sends its
- *  session's totals read as it finishes (`final`); finished without them (an older host, or a Lead finishing it) its end is
- *  unknown (null), never the last report's: that can be a report old and price real work at nothing (review of #2106). Other
- *  ends (lost, cancelled, its host's stop) take the totals its machine last reported; the report that says a session
+/** Its end, and the model and effort its agent ran at last. Since no agent reports its own Done any more (Swarm v4, 2026-11-10),
+ *  every end (lost, its host's stop, a removal) takes the totals its machine last reported; the report that says a session
  *  stopped no longer lists it, so then those reported before this write (`before`). A session replaced during the attempt
  *  (agent.rebind) counts from zero, so only the new session's tokens are counted. */
-export function endRun(run: RouteRun, state: SuperTabState, assignment: Assignment, agentId: string, now: number, before?: SuperTabState,
-  final?: TokensByModel | null): RouteRun {
+export function endRun(run: RouteRun, state: SuperTabState, assignment: Assignment, agentId: string, now: number, before?: SuperTabState): RouteRun {
   const { machineId, harnessId } = assignment.execution
   const { engine: _engine, grid: _grid, ...ran } = ranOn(state, assignment, agentId)
-  const end = final !== undefined ? final : tokensOf(state, machineId, harnessId) ?? (before ? tokensOf(before, machineId, harnessId) : null)
+  const end = tokensOf(state, machineId, harnessId) ?? (before ? tokensOf(before, machineId, harnessId) : null)
   return { ...run, ...ran, ...(harnessId !== run.harnessId ? { harnessId, start: {} } : {}), endedAt: now, end }
 }
 

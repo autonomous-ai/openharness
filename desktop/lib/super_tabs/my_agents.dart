@@ -1,26 +1,24 @@
+import 'controller.dart';
 import 'model.dart';
 
-/// The agents in [accountId]'s My agents, for the left pane (Swarm v3, task #4118): their Buddy first, then the others by
-/// name. The server says which (task #4192: their own account's, running and not finished), so every client lists the same.
-/// An older backend says nothing: then every agent the person brought, and only their own Buddy (this can go 2026-12-07).
+/// The agents in [accountId]'s My agents, for the left pane (task #4118), by name. The server says which (task #4192: their
+/// own account's, running and not finished), so every client lists the same; a backend that says nothing lists every
+/// agent the person brought.
 List<SuperTabAgent> superTabMyAgents(
   SuperTabSnapshot snapshot,
   String accountId,
 ) {
   final own = [
     for (final agent in snapshot.agents)
-      if (agent.myAgent ??
-          (agent.contributorId == accountId &&
-              (agent.buddyOf == null || agent.buddyOf == accountId)))
-        agent,
+      if (_mine(agent, accountId)) agent,
   ];
   String name(SuperTabAgent agent) =>
       (agent.displayName ?? agent.name).toLowerCase();
-  return own..sort((a, b) {
-    final buddy = (b.buddyOf != null ? 1 : 0) - (a.buddyOf != null ? 1 : 0);
-    return buddy != 0 ? buddy : name(a).compareTo(name(b));
-  });
+  return own..sort((a, b) => name(a).compareTo(name(b)));
 }
+
+bool _mine(SuperTabAgent agent, String accountId) =>
+    agent.myAgent ?? agent.contributorId == accountId;
 
 /// Whether [agent] is a PM, to wear the Lead ring: the backend's kind when it sends one (#4116), else whether it leads a
 /// project, as before.
@@ -36,4 +34,21 @@ SuperTabConversation? superTabAgentChat(
   // Swarm v4: an agent's row opens its own chat with its person (#4116), never its project's channel or a task's chat.
   if (agent.chatId case final id?) return snapshot.conversation(id);
   return null;
+}
+
+/// The 1:1 chats of the reader's agents with something new for them, by its read marks: an agent there asks its person
+/// (Swarm v4: an agent reaches its person only in that chat). What a Swarm's count, the Dock and the menu bar show; read
+/// on every change of every open Swarm, so it neither copies nor sorts the agents.
+List<(SuperTabAgent, SuperTabConversation)> superTabAgentsAsking(
+  SuperTabController c,
+) {
+  final snapshot = c.snapshot;
+  if (snapshot == null || c.accessRevoked) return const [];
+  return [
+    for (final agent in snapshot.agents)
+      if (_mine(agent, c.accountId))
+        if (superTabAgentChat(snapshot, agent) case final chat?
+            when c.unreadShown(chat))
+          (agent, chat),
+  ];
 }

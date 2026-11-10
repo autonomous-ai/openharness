@@ -5,7 +5,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/reading.dart';
-import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -22,8 +21,6 @@ class _Screen {
   final rebuilt = <Type, int>{};
   final rows = <String, int>{};
   int machineCalls = 0;
-  int rosterBuilds = 0;
-  ValueNotifier<bool>? collapsed;
 
   static int _at() => clock.now().millisecondsSinceEpoch;
 
@@ -31,7 +28,9 @@ class _Screen {
       .cast<Map<String, dynamic>>()
       .firstWhere((m) => m['machineId'] == id);
 
-  Future<void> show({bool ticks = false, bool collapse = false}) async {
+  Future<void> show({bool ticks = false}) async {
+    await tester.binding.setSurfaceSize(const Size(2000, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     server.append('Hello');
     server.state['machines'] = [
       for (final id in _ids)
@@ -56,7 +55,6 @@ class _Screen {
     await tester.pump();
     await tester.pump();
     c.pushUntil = clock.now().add(kSwarmPushLease);
-    collapsed = ValueNotifier(collapse);
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
@@ -66,41 +64,21 @@ class _Screen {
               Expanded(
                 child: SuperTabView(
                   controller: c,
-                  onInvite: () {},
                   onAddAgent: (_) {},
                   onOpenTerminal: (_) {},
                   machineName: (_) => 'Team Mac',
                 ),
               ),
               SizedBox(
-                width: 300,
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: SuperTabRoster(
-                        controller: c,
-                        onInvite: () {},
-                        onAddAgent: (_) {},
-                        onOpenAgent: (_) {},
-                        onAnswer: (_) {},
-                      ),
-                    ),
-                    Expanded(
-                      child: ValueListenableBuilder(
-                        valueListenable: collapsed!,
-                        builder: (context, shut, _) => SuperTabMachines(
-                          controller: c,
-                          onAddAgent: (_) {},
-                          collapsed: shut,
-                          ticks: ticks,
-                          now: () {
-                            machineCalls++;
-                            return clock.now();
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
+                width: 800,
+                child: SuperTabMachines(
+                  controller: c,
+                  onAddAgent: (_) {},
+                  ticks: ticks,
+                  now: () {
+                    machineCalls++;
+                    return clock.now();
+                  },
                 ),
               ),
             ],
@@ -118,26 +96,22 @@ class _Screen {
     addTearDown(() => debugOnRebuildDirtyWidget = null);
     rebuilt.clear();
     rows.clear();
-    rosterBuilds = 0;
     machineCalls = 0;
   }
 
   void _count(Element element, bool _) {
     final key = element.widget.key;
-    if (key == const PageStorageKey('super-tab-resources-tab')) rosterBuilds++;
     if (key is ValueKey<String> && key.value.startsWith('super-machine-row-')) {
       rows.update(key.value.substring(18), (n) => n + 1, ifAbsent: () => 1);
     }
     void bump(Type type) =>
         rebuilt.update(type, (n) => n + 1, ifAbsent: () => 1);
-    for (final type in const [SuperTabView, SuperTabRoster, SuperTabMachines]) {
+    for (final type in const [SuperTabView, SuperTabMachines]) {
       if (element.widget.runtimeType == type) bump(type);
     }
     element.visitAncestorElements((up) {
       final type = up.widget.runtimeType;
-      if (type == SuperTabView ||
-          type == SuperTabRoster ||
-          type == SuperTabMachines) {
+      if (type == SuperTabView || type == SuperTabMachines) {
         bump(type);
         return false;
       }
@@ -162,25 +136,19 @@ class _Screen {
 }
 
 void main() {
-  testWidgets(
-    'a minute of heartbeats rebuilds no chat, roster or Status card',
-    (tester) async {
-      final s = _Screen(tester);
-      await s.show();
-      for (var i = 0; i < 20; i++) {
-        await s.beat(_ids[i % 5]);
-      }
-      // ignore: avoid_print
-      print(
-        'COUNT rebuilt elements a minute: ${s.rebuilt}, '
-        'roster list builds ${s.rosterBuilds}',
-      );
-      expect(s.rebuilt[SuperTabView] ?? 0, 0);
-      // Only its own 30-second clock, for ages and leases on a quiet Swarm.
-      expect(s.rosterBuilds, lessThanOrEqualTo(2));
-      await s.close();
-    },
-  );
+  testWidgets('a minute of heartbeats rebuilds no chat or Status card', (
+    tester,
+  ) async {
+    final s = _Screen(tester);
+    await s.show();
+    for (var i = 0; i < 20; i++) {
+      await s.beat(_ids[i % 5]);
+    }
+    // ignore: avoid_print
+    print('COUNT rebuilt elements a minute: ${s.rebuilt}');
+    expect(s.rebuilt[SuperTabView] ?? 0, 0);
+    await s.close();
+  });
 
   testWidgets('a machine\'s report redraws its own row alone', (tester) async {
     final s = _Screen(tester);
@@ -224,15 +192,6 @@ void main() {
       await s.close();
     });
 
-    testWidgets('stops while its group is collapsed', (tester) async {
-      final s = _Screen(tester);
-      await s.show(ticks: true, collapse: true);
-      await tester.pump();
-      s.machineCalls = 0;
-      await tester.pump(const Duration(seconds: 5));
-      expect(s.machineCalls, 0);
-      await s.close();
-    });
   });
 
   testWidgets('a row says what its machine last reported', (tester) async {

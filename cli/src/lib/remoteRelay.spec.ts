@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AddressInfo } from 'node:net'
+import { WebSocket, WebSocketServer } from 'ws'
 import { RemoteRelayPool } from './remoteRelay.js'
 import { TerminalP2pInitiator } from './terminalP2p.js'
+import { b64e, newIdentity } from './e2ee/core.js'
+import { E2eeManager } from './e2ee/manager.js'
+import { MachinePeerStore } from './e2ee/machinePeers.js'
+import { E2eeStore } from './e2ee/store.js'
+import { TerminalBinaryKind } from './terminalBinary.js'
 
 /** Minimal fake of the private `Entry` shape `noteTerminalResponse`/`demoteP2p` operate on — exercised
  *  directly (bypassing the class's `private` marker, the lightest way to unit-test this without a real
@@ -29,6 +36,8 @@ function fakeEntry(overrides: Partial<Record<string, unknown>> = {}) {
     upgradeWaitResolve: null as (() => void) | null,
     upgradeOrphan: null,
     upgradeDone: false,
+    browserStreams: new Map<string, unknown>(),
+    browserOpens: new Map<string, unknown>(),
     ...overrides,
   }
 }
@@ -863,5 +872,182 @@ describe('RemoteRelayPool keeps background (isolated) clients cheap', () => {
     // A redial the app asks for explicitly is dialled at once.
     await expect(pool.connect('m1', 'env', { ...select, payload: { ...select.payload, forceReconnect: true } })).rejects.toThrow()
     expect(dial).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The viewing machine's side of an agent browser's stream (core/browserStreams.ts on the agent's): it keeps the route
+// it opened on. A terminal survives a move through its resync and keyframe; VNC has neither, so a moved stream would
+// corrupt, and these streams are kept out of every piece of code that moves terminal streams.
+describe('RemoteRelayPool carries agent browser streams on the route they opened on', () => {
+  const STREAM = '00000000-0000-4000-8000-0000000000e1'
+  const pool = new RemoteRelayPool(
+    { accessToken: async () => 'unused' } as never,
+    'ws://unused',
+    { pub: new Uint8Array(), priv: new Uint8Array() } as never,
+    { pin: () => {}, get: () => null } as never,
+  ) as unknown as {
+    sessionFor: (machineId: string, entry: ReturnType<typeof fakeEntry>) => { send: (frame: Record<string, unknown>) => Promise<void>; sendBinary: (clear: Record<string, unknown>) => Promise<void> }
+    noteBrowserResponse: (entry: ReturnType<typeof fakeEntry>, frame: Record<string, unknown>) => void
+    handleP2pData: (entry: ReturnType<typeof fakeEntry>, data: unknown) => void
+    demoteP2p: (machineId: string, entry: ReturnType<typeof fakeEntry>, reason: string) => void
+    promoteToDirect: (machineId: string, entry: ReturnType<typeof fakeEntry>, shadow: ReturnType<typeof fakeP2p>) => Promise<void>
+    promoteOpenStreams: (machineId: string, entry: ReturnType<typeof fakeEntry>) => void
+    entries: Map<string, ReturnType<typeof fakeEntry>>
+  }
+  const screen = { kind: TerminalBinaryKind.browser, streamId: STREAM, seq: 1, compressed: false, bytes: new Uint8Array([1]) }
+  const sent = (send: ReturnType<typeof vi.fn>) => send.mock.calls.map(([raw]) => (typeof raw === 'string' ? JSON.parse(raw) : raw))
+  beforeEach(() => { vi.spyOn(console, 'log').mockImplementation(() => {}) })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  /** A stream opened through `entry`, its result arrived. */
+  async function opened(entry: ReturnType<typeof fakeEntry>, streamId = STREAM, requestId = `r-${streamId}`) {
+    await pool.sessionFor('m1', entry).send({ type: 'agent_browser_open', payload: { requestId, agentId: 'a1' } })
+    pool.noteBrowserResponse(entry, { type: 'agent_browser_open_result', payload: { requestId, streamId } })
+  }
+
+  it('a browser stream opened while p2p is up uses it', async () => {
+    const p2p = fakeP2p()
+    const entry = fakeEntry({ p2p })
+    await opened(entry)
+    await pool.sessionFor('m1', entry).sendBinary(screen)
+    await pool.sessionFor('m1', entry).send({ type: 'agent_browser_ack', payload: { streamId: STREAM, bytes: 65536 } })
+    expect(sent(p2p.send).map(frame => frame.type)).toEqual(['agent_browser_open', 'agent_browser_ack'])
+    expect(p2p.sendWithBackpressureRetry).toHaveBeenCalledTimes(1)
+    expect(entry.ws.send).not.toHaveBeenCalled()
+  })
+
+  it('a browser stream opened while p2p is down uses the relay and stays there when p2p comes up', async () => {
+    const entry = fakeEntry()
+    await opened(entry)
+    const p2p = fakeP2p()
+    Object.assign(entry, { p2p })
+    pool.promoteOpenStreams('m1', entry)
+    await pool.sessionFor('m1', entry).sendBinary(screen)
+    await pool.sessionFor('m1', entry).send({ type: 'agent_browser_close', payload: { streamId: STREAM } })
+    expect(p2p.send).not.toHaveBeenCalled()
+    expect(p2p.sendWithBackpressureRetry).not.toHaveBeenCalled()
+    expect(entry.ws.send).toHaveBeenCalledTimes(3)
+  })
+
+  it('a browser stream is never sent terminal_resync', async () => {
+    const p2p = fakeP2p()
+    const entry = fakeEntry({ p2p })
+    await opened(entry)
+    pool.promoteOpenStreams('m1', entry)
+    pool.demoteP2p('m1', entry, 'peer_failed')
+    const frames = [...sent(p2p.send), ...sent(entry.ws.send)]
+    expect(frames.filter(frame => frame.type === 'terminal_resync')).toEqual([])
+    expect(entry.streams.size).toBe(0)
+  })
+
+  it('when p2p drops, the app gets agent_browser_close with reason route, and the machine gets a close over the relay', async () => {
+    const p2p = fakeP2p()
+    const entry = fakeEntry({ p2p })
+    await opened(entry)
+    Object.assign(entry, { p2p: null })
+    await opened(entry, '00000000-0000-4000-8000-0000000000e2')
+    Object.assign(entry, { p2p })
+    pool.demoteP2p('m1', entry, 'peer_failed')
+    expect(entry.sink.sendFrame).toHaveBeenCalledWith({ type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'route' } })
+    expect(sent(entry.ws.send).filter(frame => frame.type === 'agent_browser_close')).toEqual([{ type: 'agent_browser_close', payload: { streamId: STREAM } }])
+    // Never moved: what the app sends for it goes nowhere near the dead link, and the relayed stream is untouched.
+    await pool.sessionFor('m1', entry).sendBinary({ ...screen, streamId: '00000000-0000-4000-8000-0000000000e2' })
+    expect(entry.sink.sendFrame).toHaveBeenCalledTimes(1)
+  })
+
+  it('a result that comes back after its open\'s link went is closed with reason route at once', async () => {
+    const p2p = fakeP2p()
+    const entry = fakeEntry({ p2p })
+    await pool.sessionFor('m1', entry).send({ type: 'agent_browser_open', payload: { requestId: 'late', agentId: 'a1' } })
+    pool.demoteP2p('m1', entry, 'peer_failed')
+    pool.noteBrowserResponse(entry, { type: 'agent_browser_open_result', payload: { requestId: 'late', streamId: STREAM } })
+    expect(entry.sink.sendFrame).toHaveBeenCalledWith({ type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'route' } })
+    expect(entry.browserStreams.size).toBe(0)
+  })
+
+  it('a promote to a direct channel closes the old channel\'s browser streams with reason route at the swap, and an abandoned promote closes none', async () => {
+    vi.useFakeTimers()
+    try {
+      const old = fakeP2p({ sessionId: 'old-session' })
+      const shadow = fakeP2p({ sessionId: 'shadow-session' })
+      // Abandoned: the drain of a terminal stream times out, and the old channel is untouched.
+      const abandoned = fakeEntry({ p2p: old, upgradeShadow: shadow, p2pStreams: new Set(['terminal-1']) })
+      pool.entries.set('m1', abandoned)
+      await opened(abandoned)
+      const giveUp = pool.promoteToDirect('m1', abandoned, shadow)
+      await vi.advanceTimersByTimeAsync(5_000)
+      await giveUp
+      expect(abandoned.sink.sendFrame).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_browser_close' }))
+      expect(abandoned.browserStreams.get(STREAM)).toBe(old)
+      // Cut over: the close is at the swap, before the promote goes out.
+      const entry = fakeEntry({ p2p: old, upgradeShadow: shadow })
+      pool.entries.set('m1', entry)
+      await opened(entry)
+      const promoted = pool.promoteToDirect('m1', entry, shadow)
+      expect(entry.sink.sendFrame).toHaveBeenCalledWith({ type: 'agent_browser_close', payload: { streamId: STREAM, reason: 'route' } })
+      const relayed = sent(entry.ws.send).map(frame => frame.type)
+      expect(relayed.indexOf('agent_browser_close')).toBeLessThan(relayed.indexOf('p2p_promote'))
+      entry.upgradeWaitResolve!()
+      await promoted
+      expect(entry.browserStreams.size).toBe(0)
+    } finally {
+      pool.entries.delete('m1')
+      vi.useRealTimers()
+    }
+  })
+
+  it('a browser stream\'s bytes from the direct link reach the app', () => {
+    const entry = fakeEntry({ crypto: { decryptTerminal: () => screen } })
+    pool.handleP2pData(entry, Buffer.from([1, 2, 3]))
+    expect(entry.sink.sendBinary).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('RemoteRelayPool and agent browser frames from the relay', () => {
+  const machineId = 'abcdabcdabcdabcdabcdabcdabcdabcd'
+  const cleanups: Array<() => Promise<void>> = []
+  afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup() })
+
+  /** A real relay socket and the remote machine's E2EE session behind it, as remoteRelayRestart.spec.ts builds them. */
+  async function relayed() {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>(resolve => wss.once('listening', resolve))
+    let socket: WebSocket | null = null
+    const manager = new E2eeManager({ machineId, isConnected: () => true, sendTo: (_id: string, frame: unknown) => socket?.send(JSON.stringify(frame)) })
+    const self = newIdentity()
+    manager.trustPeer({ pub: b64e(self.pub), kind: 'machine', machineId: '12341234123412341234123412341234', label: 'test client' })
+    const store = new E2eeStore(); store.init()
+    const peers = new MachinePeerStore(); peers.pin(machineId, b64e(store.getIdentity().pub), 'test remote')
+    const pool = new RemoteRelayPool({ accessToken: async () => 'fixture-token' } as never, `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, self, peers, { p2p: false })
+    wss.on('connection', ws => {
+      socket = ws
+      ws.on('message', raw => {
+        const frame = JSON.parse(raw.toString()) as { type: string }
+        if (frame.type === 'machine_select') ws.send(JSON.stringify({ type: 'connected', payload: { machineId } }))
+        else if (frame.type === 'e2e_hello') manager.handleFrame('remote-1', frame)
+      })
+    })
+    cleanups.push(async () => {
+      pool.invalidate(machineId)
+      for (const ws of wss.clients) ws.terminate()
+      await new Promise<void>(resolve => wss.close(() => resolve()))
+    })
+    const inbox: Array<{ type: string; payload?: Record<string, unknown> }> = []
+    await pool.acquire(machineId, 'prod', { type: 'machine_select', payload: { machineId } }, { sendFrame: frame => { inbox.push(frame as never); return true }, sendBinary: () => true }, () => {})
+    return { inbox, push: (frame: unknown) => socket!.send(JSON.stringify(frame)), seal: (type: string, payload: Record<string, unknown>) => manager.wrapTarget('remote-1', type, payload) }
+  }
+
+  it('an unsealed agent_browser stream frame from the relay is refused', async () => {
+    const r = await relayed()
+    for (const type of ['agent_browser_open_result', 'agent_browser_close', 'agent_browser_open', 'agent_browser_ack']) r.push({ type, payload: { requestId: 'r', streamId: 'forged' } })
+    r.push(r.seal('agent_browser_close', { streamId: 'real', reason: 'agent' }))
+    await vi.waitFor(() => expect(r.inbox.some(frame => frame.type === 'agent_browser_close')).toBe(true))
+    expect(r.inbox.filter(frame => frame.type.startsWith('agent_browser_'))).toEqual([{ type: 'agent_browser_close', payload: { streamId: 'real', reason: 'agent' } }])
+  })
+
+  it('agent_browser_transport_error sent to this viewing machine reaches the app', async () => {
+    const r = await relayed()
+    r.push({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } })
+    await vi.waitFor(() => expect(r.inbox).toContainEqual({ type: 'agent_browser_transport_error', payload: { code: 'RATE' } }))
   })
 })

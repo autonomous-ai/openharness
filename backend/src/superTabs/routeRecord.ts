@@ -1,4 +1,4 @@
-/** What `harness super-tab route` records (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md). */
+/** What a route decision records, as the CLI's route sent it before Swarm v4 removed it (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md). */
 import { z } from 'zod'
 import type { RouteRun } from './costs/attempts.js'
 import { JOB_KINDS } from './evidence/jobKind.js'
@@ -133,7 +133,7 @@ export function readRecord(stored: StoredRouteRecord | RouteRecord): ReadRouteRe
  * Whether a started agent is the candidate's: the same machine, engine, and the model and effort that were
  * requested. After a failed switch `final` holds what ran, so the request is the one that names the candidate.
  */
-export const startedAs = (candidate: KeptCandidate, final: Extract<RouteFinal, { kind: 'new' }>): boolean =>
+const startedAs = (candidate: KeptCandidate, final: Extract<RouteFinal, { kind: 'new' }>): boolean =>
   final.machineId === candidate.machineId && final.engine === candidate.engine &&
   (final.requested?.model ?? final.model) === candidate.model && (final.requested?.effort ?? final.effort) === candidate.effort &&
   (final.gridModel ?? null) === (candidate.gridModel ?? null) && (final.gridName ?? null) === (candidate.gridName ?? null)

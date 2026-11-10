@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { agentTmpLaunch, buddyTmpEnv } from './agentTmp.js'
+import { agentTmpLaunch } from './agentTmp.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,9 +29,6 @@ const GRID: GridLaunchOverride = {
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
 // Every Buddy here was started on its owner's own machine: its start recorded its owner (security review 2 of #2832).
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => 'peer' }))
-// The account the gate runs under does not decide these launches: a Harness Team account is refused by prepareBuddyFolder before any
-// launch, which lib/swarmSkills.spec.ts tests on its own. These Buddies are their owner's, so the boundary is fixed to "not a Team account".
-vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => false }))
 // Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts, the launch golden).
 vi.mock('../engines/kit/statusLine.js', async (original) => ({ ...await original<object>(), statusLineSetting: () => null }))
 vi.mock('../engines/inProcess.js', async (real) => {
@@ -431,6 +428,16 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
 
+  it('relaunch of a browser agent keeps the args', async () => {
+    const claude = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null, browser: true }, 'a')
+    expect(claude).toMatchObject({ ok: true, overrides: { extraArgs: [
+      '--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"harness","args":["browser-mcp"]}}}'] } })
+    const codex = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'codex', { startedBy: null, cwd: null, browser: true }, 'a')
+    expect(codex.ok && codex.overrides.extraArgs).toEqual(expect.arrayContaining(['mcp_servers.browser.command="harness"', 'mcp_servers.browser.args=["browser-mcp"]']))
+    const plain = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { startedBy: null, cwd: null }, 'a')
+    expect(JSON.stringify(plain)).not.toContain('browser-mcp')
+  })
+
   it('relaunches a Buddy with them, as its owner\'s own session (task #2832)', async () => {
     writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: [], projects: [] } })
     const buddy = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
@@ -469,17 +476,13 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     const withMcp: GridLaunchOverride = { ...GRID, mcpUrl: 'https://api-grid.example/v1/grid/web-mcp/' }
     const cwd = mkdtempSync(join(tmpdir(), 'overrides-buddy-'))
     const buddy = { startedBy: null, cwd, swarmSkill: { role: 'buddy' as const, key: 'harness-claude-buddy' } }
-    const buddyTmp = { TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' }
-    vi.mocked(buddyTmpEnv).mockReturnValueOnce(buddyTmp).mockReturnValueOnce(buddyTmp)
     const own = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', buddy, 'a', () => true)
     const grid = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude', { ...buddy, gridLaunch: withMcp }, 'a', () => true)
     if (!own.ok || !grid.ok) throw new Error('Fixture launch failed')
     expect(grid.overrides.extraArgs).toEqual(expect.arrayContaining(['--mcp-config', CLAUDE_ALLOW_WEB_TOOLS_ARG]))
     // Claude Code's own web tools stay off, as on any grid.
     expect(grid.overrides.extraArgs).toContain(CLAUDE_DISALLOW_WEB_TOOLS_ARG)
-    // What it gets on its own login, it gets on the grid: its folder for temporary files and its Buddy instructions.
-    expect(grid.overrides.env).toMatchObject(buddyTmp)
-    expect(own.overrides.env).toMatchObject(buddyTmp)
+    // What it gets on its own login, it gets on the grid: its Buddy instructions.
     const told = (args: string[]) => args[args.indexOf('--append-system-prompt') + 1]
     expect(told(own.overrides.extraArgs)).toContain('swarm-buddy')
     expect(told(grid.overrides.extraArgs)).toContain(told(own.overrides.extraArgs))
@@ -624,17 +627,6 @@ describe('buildLaunchOverrides — the owner\'s private temporary folder (audit 
     expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', { role: 'agent', key: 'k' })
     expect(result).toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data/agent-tmp/one' } } })
     expect((result as { overrides: { extraArgs: string[] } }).overrides.extraArgs).toContain('--add-dir=/data/agent-tmp/one')
-  })
-
-  // A restart, update, resume or fork of a Buddy keeps its own folder: its guard still names it (review of #2563).
-  it('keeps a relaunched Buddy in its own folder, and the launch\'s own variables win', async () => {
-    const swarm = { args: () => [], prepare: () => ({ instructions: 'x' }) }
-    const agents = vi.mocked(agentTmpLaunch).mock.calls.length
-    vi.mocked(buddyTmpEnv).mockReturnValueOnce({ TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' })
-    expect(await buildLaunchOverrides(deps({ swarm } as never).d, 'claude', { cwd: '/w', swarmSkill: { role: 'buddy', key: 'k' } as never }, 'a'))
-      .toMatchObject({ ok: true, overrides: { env: { TMPDIR: '/data-buddy-tmp/one', CLAUDE_CODE_TMPDIR: '/data-buddy-tmp/one' } } })
-    expect(buddyTmpEnv).toHaveBeenLastCalledWith('claude', '/w')
-    expect(vi.mocked(agentTmpLaunch).mock.calls.length).toBe(agents)
   })
 
   it('gives way to the launch\'s own variables', async () => {

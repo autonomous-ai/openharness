@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, lstat, mkdir, mkdtemp, rename, rm, stat } from 'node:fs/promises'
+import { access, lstat, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { plausibleBranchName, projectFolderName, projectFolderSlug } from './agentNames.js'
@@ -15,9 +15,7 @@ import type { ScmLaunchRecord } from '../scm/types.js'
  *  harness and the time. `suggested` marks a name the app made up (from the first task — the phone has
  *  no name field), which is numbered past a folder that exists rather than refused. */
 export type ProjectFolder = { source: 'new'; name?: string; suggested?: boolean } | { source: 'remote'; repositoryUrl: string; name: string }
-  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean; fromDefaultBranch?: boolean
-    /** Fetch nothing (gitProject.ts `offline`): set by the daemon for a Swarm start doing another person's work, never by a client. */
-    offline?: boolean }
+  | { source: 'worktree'; gitSource: string; branchRef?: string; branchName?: string; existingBranch?: boolean; placeholder?: boolean; fromDefaultBranch?: boolean }
   | { source: 'branch'; gitSource: string; branchRef?: string; branchName?: string }
 
 /** Where this daemon and the desktop app put the workspaces they make. A folder directly inside it is
@@ -129,10 +127,7 @@ export async function prepareProjectFolder(
   project: ProjectFolder,
   options: {
     root?: string
-    clone?: (url: string, destination: string, env?: NodeJS.ProcessEnv) => Promise<void>
-    /** The environment a clone's git runs in instead of the daemon's own: a Swarm host's, with the Harness GitHub App's
-     *  token for the project (lib/swarmGitHub.ts `swarmGitPrepareEnv`). */
-    gitEnv?: NodeJS.ProcessEnv
+    clone?: (url: string, destination: string) => Promise<void>
     /** Who the harness is ("Codex", "Blender"): a new project folder is named after it and the time. */
     label?: string | null
     now?: () => Date
@@ -160,7 +155,7 @@ export async function prepareProjectFolder(
       // The isolated-workspace path, through the SCM seam. The git implementation makes exactly the
       // prepareGitProject call this used to make.
       const { cwd, launchRecord } = await scmByKind('git')!.prepareIsolated(project.gitSource, {
-        root, base: project.branchRef, ...(project.fromDefaultBranch ? { fromDefaultBranch: true } : {}), ...(project.offline ? { offline: true } : {}),
+        root, base: project.branchRef, ...(project.fromDefaultBranch ? { fromDefaultBranch: true } : {}),
         ...(project.branchName ? { name: project.branchName, existing: project.existingBranch === true, placeholder: project.placeholder === true } : {}),
       })
       options.onPrepared?.({ cwd, scmLaunchRecord: launchRecord })
@@ -243,7 +238,7 @@ export async function prepareProjectFolder(
       if (staging) await rm(staging, { force: true, recursive: true }).catch(() => {})
       staging = await mkdtemp(join(root, '.harness-clone-'))
       try {
-        await (options.clone ?? cloneRepository)(used, join(staging, 'checkout'), options.gitEnv)
+        await (options.clone ?? cloneRepository)(used, join(staging, 'checkout'))
         if (index > 0) logAttempt(repository.owner, repository.name, used, 'cloned')
         break
       } catch (error) {
@@ -291,6 +286,21 @@ const ALL_BRANCHES = '+refs/heads/*:refs/remotes/origin/*'
  *  progressing is never cut off, however long it takes on a slow connection. */
 export const CLONE_STALL_MS = 120_000
 
+/** How often a clone's pack files are looked at, for progress git does not say. After its history, a blob-less clone's
+ *  checkout fetches the files in a fetch of its own that shows progress only to a terminal: creating a project of lampOS on
+ *  Mac 2, git said nothing after "Resolving deltas: 100% (70463/70463), done." for longer than [CLONE_STALL_MS] while that
+ *  pack was still arriving, and the clone was cut off (anh Dee, 2026-11-10). A pack that grows is progress too. */
+export const CLONE_LOOK_MS = 5_000
+
+/** The bytes of [destination]'s pack files, a fetch's objects as they arrive; 0 before git has made any. */
+async function packBytes(destination: string): Promise<number> {
+  const folder = join(destination, '.git', 'objects', 'pack')
+  const names = await readdir(folder).catch(() => [] as string[])
+  let total = 0
+  for (const name of names) total += await stat(join(folder, name)).then(file => file.size, () => 0)
+  return total
+}
+
 /** No shell interpolation or interactive password prompt. Diagnostics stay
  * bounded and private; only actionable, credential-free messages reach the UI.
  *
@@ -298,9 +308,9 @@ export const CLONE_STALL_MS = 120_000
  * checkout's own, then whatever `blame` or another branch's checkout reads). lampOS (576 MB pack, about 4,400 branches)
  * took 48 s in full on MACs-Mac-Studio and longer than the 5 minutes once allowed on a slower Mac; blob-less, 6 s. The
  * fetch rule is then widened to every branch, so `git fetch origin X && git checkout X` works as in a full clone.
- * [options] are for tests: `git` the command, `stallMs` the no-progress window. */
+ * [options] are for tests: `git` the command, `stallMs` the no-progress window, `lookMs` how often its pack is looked at. */
 export function cloneRepository(url: string, destination: string, gitEnv?: NodeJS.ProcessEnv,
-  options: { git?: string; stallMs?: number } = {}): Promise<void> {
+  options: { git?: string; stallMs?: number; lookMs?: number } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     const base = gitEnv ?? process.env
     const git = options.git ?? 'git'
@@ -316,16 +326,26 @@ export function cloneRepository(url: string, destination: string, gitEnv?: NodeJ
       void stopTree(child.pid).then(problem => { if (problem) console.error(`[project] could not stop a stalled clone: ${problem}`) })
     }, options.stallMs ?? CLONE_STALL_MS)
     stall.unref()
+    let packed = 0
+    const look = setInterval(() => {
+      void packBytes(destination).then(bytes => {
+        if (bytes > packed && !stalled) stall.refresh()
+        packed = Math.max(packed, bytes)
+      })
+    }, options.lookMs ?? CLONE_LOOK_MS)
+    look.unref()
     child.stderr?.on('data', (chunk: Buffer) => {
       if (!stalled) stall.refresh()
       diagnostic = (diagnostic + chunk.toString()).slice(-8192)
     })
     child.on('error', () => {
       clearTimeout(stall)
+      clearInterval(look)
       reject(new ProjectFolderError('GIT_UNAVAILABLE', 'Git could not start. Install Git on the selected machine, then retry.'))
     })
     child.on('close', (code) => {
       clearTimeout(stall)
+      clearInterval(look)
       if (stalled) {
         const last = lastLine(diagnostic)
         reject(new ProjectFolderError('CLONE_TIMEOUT', `Cloning stopped making progress${last ? ` (git's last words: ${last})` : ''}. Check the connection and retry.`))

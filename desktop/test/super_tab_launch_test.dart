@@ -72,13 +72,18 @@ class SuperTabFixtureConnection extends WsConn {
 
   /// Refuses the next join as the backend would, before anything is written.
   SuperTabFailure? failJoin;
-  bool failNative = false;
+
+  /// Refuses the next `agent.new`, as the backend refuses a name it will not give.
+  SuperTabFailure? failNew;
   WsRequestFailure? backendFailure;
 
   /// [backendFailure] refuses only commands: an older backend still answers
   /// reads and rejects the command it does not know.
   bool backendFailureOnCommandsOnly = false;
   bool failResume = false;
+
+  /// Refuses a Stop, as a computer refuses one it may not make.
+  bool refuseClose = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
 
@@ -208,26 +213,13 @@ class SuperTabFixtureConnection extends WsConn {
             'maxAvailableAgents': maxAvailableAgents,
         };
       }
-      if (payload['action'] == 'prepareNative' ||
-          payload['action'] == 'renewNative') {
-        if (native?['status'] == 'stopped') {
-          return {
-            'error': 'SUPER_TAB_UNAVAILABLE',
-            'detail': 'The exact contributed terminal is unavailable on this machine.',
-          };
-        }
-        return failNative
-            ? {
-                'error': 'NATIVE_UNAVAILABLE',
-                'detail': 'Fixture recording unavailable.',
-              }
-            : {'ok': true, 'inputContext': payload['contextId']};
-      }
+      // What the backend answers since terminal recording was removed
+      // (backend routes/superTabs.ts recordingGone, 1.4.51): ok, no context.
       if (payload['method'] == 'POST' &&
           (payload['path'] as String?)?.endsWith('/native') == true) {
         return {
           'ok': true,
-          'value': {'contextId': (payload['body'] as Map)['operationId']},
+          'value': {'ok': true, 'ignored': true},
         };
       }
       if (payload['path'] == '/api/super-tabs' && payload['method'] == 'POST') {
@@ -249,6 +241,13 @@ class SuperTabFixtureConnection extends WsConn {
         };
       }
       final body = payload['body'] as Map<String, dynamic>?;
+      if (body?['command'] case final Map command
+          when command['type'] == 'agent.new') {
+        if (failNew case final failure?) {
+          failNew = null;
+          throw failure;
+        }
+      }
       if (body?['command'] case final Map command
           when command['type'] == 'agent.add') {
         joins.add(Map<String, dynamic>.from(body!));
@@ -341,6 +340,14 @@ class SuperTabFixtureConnection extends WsConn {
         'agent': native,
       };
     }
+    if (type == 'agent_close' && refuseClose) {
+      throw const WsRequestFailure(
+        responseType: 'agent_close_result',
+        code: 'CLOSE_REFUSED',
+        detail: 'This computer would not stop it.',
+        payload: {},
+      );
+    }
     if (type == 'agent_create' &&
         refuseLaunchModel &&
         (payload['model'] != null || payload['effort'] != null)) {
@@ -419,6 +426,7 @@ class SuperTabFixtureConnection extends WsConn {
       },
       'codex_profiles_list' => {'profiles': <dynamic>[]},
       'dsh_list' => {'dsh': <dynamic>[]},
+      'agent_close' => {'closed': true},
       'fs_list_dir' => {'path': '/work/project', 'entries': <dynamic>[]},
       _ => {},
     };

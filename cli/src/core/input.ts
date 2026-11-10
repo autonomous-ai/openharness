@@ -77,6 +77,11 @@ export interface InputDeps {
   controlHeld?: (agentId: string) => boolean
   /** An agent whose turns keep ending at once has its automatic writes held a while (turns/shortTurnGuard.ts). */
   shortTurns?: Pick<ShortTurnGuard, 'holding'>
+  /** Whether an engine's reader is starting: null when there is nothing to wait for, else whether it came up within its start
+   *  wait (core/serviceLinks.ts `whenStarting`). */
+  engineStarting?: (engine: string) => Promise<boolean> | null
+  /** An agent's frame changed outside the registry (its `waitingFor`): pushed to every window again. */
+  sync?: (id: string) => void
 }
 
 /**
@@ -169,6 +174,25 @@ const questionOf = (screen: ScreenReading | null): string | undefined =>
 const freeTextEmpty = (screen: ScreenReading | null): boolean =>
   screen?.question?.kind === 'question' && !!screen.question.typeRow
 
+/** What holds a typed delivery from the pane as read. A maker's chat may use the native input queue (`typesWhileBusy`), while Agent
+ *  Messages still waits for idle; both keep the same draft and dialog checks. */
+function paneHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission'>, session: RegisteredSession, screen: ScreenReading | null,
+  capture: string | null, deliveryId?: string): string | null {
+  if (!screen) return 'team_waiting_unavailable'
+  return deliveryId && deps.typesWhileBusy?.(deliveryId) && deps.submission.policy(session.engine)?.typesWhileBusy
+    ? teamHold(session.engine, capture ?? '', screen.pane, screen.question, true) : screen.teamHold
+}
+
+/** The pane as a typed delivery's write first reads it (`beforeTeamWrite`), and what holds it there. Before the pane is read, an
+ *  agent the short-turn guard holds: its Swarm deliveries are asked again every second. */
+async function readTeamHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission' | 'readScreen' | 'shortTurns' | 'terminal'>,
+  session: RegisteredSession, deliveryId?: string): Promise<{ capture: string | null; screen: ScreenReading | null; hold: string | null }> {
+  if (deps.shortTurns?.holding(session.sessionId)) return { capture: null, screen: null, hold: 'team_waiting_control' }
+  const capture = await deps.terminal.captureTerminal(session.agentId)
+  const screen = await deps.readScreen(session, capture)
+  return { capture, screen, hold: paneHold(deps, session, screen, capture, deliveryId) }
+}
+
 /** What `SessionInputController` is given: every write takes the device's pane lock first. */
 export function sessionInputDeps(
   deps: InputDeps,
@@ -177,13 +201,6 @@ export function sessionInputDeps(
   const { resolve, terminal, deliveries, device, clients, agentIdFor, commandcode, emit } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
-  // A maker's chat may use the native input queue (`typesWhileBusy`), while Agent Messages still waits for idle.
-  // Both paths keep the same draft and dialog checks under the pane's writer lock.
-  const deliveryHold = (session: RegisteredSession, screen: ScreenReading | null, capture: string | null, deliveryId?: string): string | null => {
-    if (!screen) return 'team_waiting_unavailable'
-    return deliveryId && deps.typesWhileBusy?.(deliveryId) && deps.submission.policy(session.engine)?.typesWhileBusy
-      ? teamHold(session.engine, capture ?? '', screen.pane, screen.question, true) : screen.teamHold
-  }
   return {
     ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
     readScreen: deps.readScreen,
@@ -194,11 +211,9 @@ export function sessionInputDeps(
       deliveries.settled(event)
     },
     beforeTeamWrite: async (session, deliveryId) => {
-      // Before the pane is read: a held agent's Swarm deliveries are asked again every second.
-      if (deps.shortTurns?.holding(session.sessionId)) return 'team_waiting_control'
-      const capture = await captureTerminal(session.agentId)
-      const screen = await deps.readScreen(session, capture)
-      const hold = deliveryHold(session, screen, capture, deliveryId)
+      const read = await readTeamHold(deps, session, deliveryId)
+      if (!read.screen && read.hold === 'team_waiting_control') return read.hold
+      const { capture, screen, hold } = read
       // A person's answer closes the question it answers: one Escape, then the pane is read again and held as ever if
       // the question stays. Never a permission prompt, an agent's message, another engine, a question the core does not
       // know of, one that opened after the message was written, or one with an answer typed into its free-text row.
@@ -225,7 +240,7 @@ export function sessionInputDeps(
         const next = await deps.readScreen(session, after)
         if (next && next.messageHold !== 'question_open') {
           console.warn(`[inject] ${sid(session.sessionId)} question closed for a person's message`)
-          return deliveryHold(session, next, after, deliveryId)
+          return paneHold(deps, session, next, after, deliveryId)
         }
       }
       console.warn(`[inject] ${sid(session.sessionId)} question closed for a person's message: Escape sent, question still open`)
@@ -237,11 +252,17 @@ export function sessionInputDeps(
     // An Agent Messages turn waits for a ready composer, and for its mailbox to still want it written.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
-      return writeMessage(id, text, (session, screen, capture) => deliveryHold(session, screen, capture, deliveryId)
+      return writeMessage(id, text, (session, screen, capture) => paneHold(deps, session, screen, capture, deliveryId)
         ?? (deliveries.canWrite(deliveryId) ? null : 'team_waiting_control'))
     }),
     sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
     capture: captureTerminal,
+    engineStarting: (session) => deps.engineStarting?.(session.engine) ?? null,
+    // The app hears that the message waits, and why: it shows the agent as starting until the message is typed or refused (`error`).
+    onWaitChanged: (id) => deps.sync?.(id),
+    onWaiting: (sessionId, reason) => {
+      clients.send({ type: 'message_waiting', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { reason } })
+    },
     onError: (sessionId, message) => {
       clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
       const engine = resolve(sessionId)?.engine
@@ -346,7 +367,16 @@ export function createInput(deps: InputDeps) {
     else input.submit(target, adapted, deliveryId)
   }
   const messageRequest = createMessageRequest((id, content, context, receipt) => submitAgent(id, content, undefined, context, receipt), deps.typed)
-  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
+  /** What holds a typed delivery from [id]'s pane now, read as its write reads it (`beforeTeamWrite`, `injectTeam`), with nothing
+   *  typed, pressed or locked: a question a person's message would close is said as it is, since only the write may press Escape. */
+  const holdOf = async (id: string, deliveryId: string): Promise<string | null> => {
+    const session = resolve(id)
+    if (!session) return 'team_waiting_unavailable'
+    // As the write reads it: its first check, then its lease, then what the pane shows a message (messageWriter).
+    const { screen, hold } = await readTeamHold(deps, session, deliveryId)
+    return hold ?? (deps.deliveries.canWrite(deliveryId) ? null : 'team_waiting_control') ?? screen?.messageHold ?? null
+  }
+  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest, holdOf }
 }
 
 /**

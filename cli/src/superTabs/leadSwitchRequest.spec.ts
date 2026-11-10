@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parse as parseToml } from 'smol-toml'
 import type { Daemon } from '../agentClient/daemon.js'
 import { markBuddyOwner, writeBuddyAccount } from '../lib/buddyGuard.js'
+import { profileId } from '../lib/claudeProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { processCoreApi } from '../services/processCoreApi.js'
 import { readFixture } from './fixtures/read/index.js'
@@ -17,7 +18,7 @@ import { LeadSwitchRequests, profileSignedIn, switchChangeId, type SwitchRow } f
 
 afterEach(() => { vi.unstubAllEnvs() })
 
-const request = { id: 'sw1', engine: 'claude', profileId: 'p1' }
+const request = { id: 'sw1', engine: 'claude', profileId: 'default' }
 const row = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => ({ tabId: 'tab', ledConversationId: 'conv1',
   agent: { id: 'a1', harnessId: 'h1', switchRequest: request, ...over }, ...top })
 const NOW = 1_800_000_000_000
@@ -30,7 +31,7 @@ function writeRecord(dataDir: string, changeId: string, at: number) {
   writeFileSync(join(dir, `${createHash('sha256').update('h1').digest('hex')}.json`), JSON.stringify({ version: 1, agentId: 'h1', changeId, targetEngine: 'claude', at }), { mode: 0o600 })
 }
 
-function setup(options: { claim?: boolean; home?: string | null; team?: boolean; refuse?: string; live?: boolean; resultStale?: boolean; old?: Record<string, unknown>; signedIn?: boolean;
+function setup(options: { claim?: boolean; refuse?: string; live?: boolean; resultStale?: boolean; old?: Record<string, unknown>; signedIn?: boolean;
   claimGate?: Promise<void>; claimFails?: boolean; createTimesOut?: boolean; createHeld?: boolean; noRecord?: boolean } = {}) {
   const clock = { now: NOW }
   const dataDir = mkdtempSync(join(tmpdir(), 'lead-switch-'))
@@ -67,15 +68,14 @@ function setup(options: { claim?: boolean; home?: string | null; team?: boolean;
   }) }
   const core = fakeCore({ dataDir, account: { backend },
     agents: { byAgent: vi.fn((id: string) => id === 'h1' && live ? { ...PM, ...options.old } as never : undefined) } })
-  const profiles = vi.fn(() => options.home === undefined ? '/home/p1' : options.home)
-  const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, home: () => home, signedIn: async () => options.signedIn !== false,
-    open: async () => daemon, profiles: profiles as never, team: () => options.team === true,
+  const switches = new LeadSwitchRequests(core, 'm1', { now: () => clock.now, signedIn: async () => options.signedIn !== false,
+    open: async () => daemon,
     readHandoff: () => 'Earlier project state.' })
-  return { core, switches, calls, posted, daemon, profiles, operationIds, home, dataDir, clock, reopen: () => { live = true } }
+  return { core, switches, calls, posted, daemon, operationIds, home, dataDir, clock, reopen: () => { live = true } }
 }
 
 describe('a PM host carrying out a switch the Swarm asked for', () => {
-  it('claims, prepares the handoff, closes with the change id, creates with creationId = changeId and the profile home, completes the handoff', async () => {
+  it('claims, prepares the handoff, closes with the change id, creates with creationId = changeId on the default account, completes the handoff', async () => {
     const t = setup()
     await t.switches.serve(row())
     expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim'])
@@ -83,37 +83,37 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     const changeId = String(t.calls[0][1].changeId)
     expect(changeId).toMatch(/^[0-9a-f]{32}$/)
     expect(t.calls[1][1]).toEqual({ agentId: 'h1', sessionId: 'native-old', createdAt: '2027-01-15T08:00:00.000Z', mode: 'now', changeId })
-    expect(t.calls[2][1]).toMatchObject({ engine: 'claude', cwd: '/work', creationId: changeId, claudeHome: '/home/p1', permissionMode: 'ask', name: 'PM' })
+    expect(t.calls[2][1]).toMatchObject({ engine: 'claude', cwd: '/work', creationId: changeId, permissionMode: 'ask', name: 'PM' })
+    expect(t.calls[2][1]).not.toHaveProperty('claudeHome')
     expect(String(t.calls[2][1].prompt)).toContain(`.harness/handoff/h1-${changeId}.md`)
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
   })
 
-  it('recreates the PM as a Swarm PM: its role, skill mode, GitHub token, start prompt, then the handoff', async () => {
+  // The PM's row still holds the GitHub App flag it was saved with (PM above): the replacement reads it as nothing.
+  it('recreates the PM as a Swarm PM: its role, skill mode, start prompt, then the handoff, with no GitHub App', async () => {
     const t = setup()
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
-    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true, startedBy: 'agent', name: 'PM' })
+    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', startedBy: 'agent', name: 'PM' })
+    expect(create).not.toHaveProperty('swarmGitHub')
     const prompt = String(create.prompt)
     // Its name alone, as at its first start: no manual and no command (superTabs/start.ts startNote).
     expect(prompt.startsWith('You are PM. ')).toBe(true)
     expect(prompt).not.toContain('super-tab')
-    expect(prompt).toContain('Harness GitHub App token')
-    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(prompt.indexOf('Harness GitHub App token'))
+    expect(prompt).not.toContain('GitHub App')
+    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(0)
   })
 
-  it('starts a PM that has no name to give with the token line and its handoff alone, no line of it opening with a space', async () => {
-    for (const [name, github] of [[undefined, true], ['', true], ['  ', false]] as const) {
-      const t = setup({ old: { defaultName: name, swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github } } })
+  it('starts a PM that has no name to give with its handoff alone, no line of it opening with a space', async () => {
+    for (const name of [undefined, '', '  ']) {
+      const t = setup({ old: { defaultName: name, swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github: true } } })
       await t.switches.serve(row())
-      const create = t.calls.find(c => c[0] === 'agent_create')![1]
-      const prompt = String(create.prompt)
-      expect(prompt, `${JSON.stringify(name)} ${github}`).toMatch(github ? /^git and gh here use a Harness GitHub App token/ : /^Context handoff:/)
-      expect(prompt).toContain('Context handoff:')
-      expect(prompt).not.toContain('You are')
+      const prompt = String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)
+      expect(prompt, JSON.stringify(name)).toMatch(/^Context handoff:/)
     }
   })
 
-  it('keeps a PM without GitHub off the token', async () => {
+  it('names no skill mode for a row without one', async () => {
     const t = setup({ old: { swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } })
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
@@ -131,15 +131,49 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     }
   })
 
-  it('asks the machine for offered accounts only, so one the owner never offered is refused as gone', async () => {
-    const t = setup({ home: null })
-    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'claude', profileId: 'abcdef0123456789' } }))
-    expect(t.profiles).toHaveBeenCalledWith('claude', 'abcdef0123456789', expect.anything(), { offeredOnly: true })
+  // F9: offering an account to the Swarm went with Desktop's accounts page, so a PM moves to an engine's default account alone.
+  it('refuses a switch to any other account, saying why, before closing the PM; the default by either name goes ahead', async () => {
+    const other = setup()
+    await other.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'claude', profileId: 'abcdef0123456789' } }))
+    expect(other.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'only the default account can take a PM now' })
+    expect(other.calls).toEqual([])
+    const byId = setup()
+    await byId.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: profileId('m1', 'codex', 'default') } }))
+    expect(byId.calls.map(c => c[0])).toContain('agent_create')
+  })
+
+  // The backend moves a PM left on another account back to the default one (backend pmAccount.ts): the new session takes no
+  // folder of the old one's.
+  it('starts a PM that ran in another account\'s folder on the default account', async () => {
+    for (const old of [{ engine: 'claude', claudeHome: '/homes/work' }, { engine: 'codex', codexHome: '/homes/work-codex' }]) {
+      const t = setup({ old })
+      await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: old.engine, profileId: profileId('m1', old.engine as 'claude' | 'codex', 'default') } }))
+      const created = t.calls.find(c => c[0] === 'agent_create')![1]
+      expect(created).toMatchObject({ engine: old.engine })
+      expect(created).not.toHaveProperty('claudeHome')
+      expect(created).not.toHaveProperty('codexHome')
+    }
+  })
+
+  // A native Codex launch reports its home's path, which for the default home is the default account too (replacements.ts
+  // accountId; profileHome took it before #3831).
+  it('takes the default Codex home by the id of its path, on this machine', async () => {
+    const t = setup()
+    vi.stubEnv('CODEX_HOME', t.home)
+    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: profileId('m1', 'codex', realpathSync(t.home)) } }))
+    expect(t.calls.map(c => c[0])).toContain('agent_create')
+  })
+
+  it('refuses an engine that cannot run a PM before closing it', async () => {
+    const t = setup()
+    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'gemini', profileId: 'default' } }))
+    expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'a PM runs on Claude Code or Codex' })
+    expect(t.calls).toEqual([])
   })
 
   it('maps a permission mode the target engine lacks to ask, as Desktop does, and bypass follows the mode', async () => {
     const t = setup({ old: { permissionMode: 'acceptEdits', bypassPermission: true } })
-    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: 'p1' } }))
+    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: 'default' } }))
     expect(t.calls.find(c => c[0] === 'agent_create')![1]).toMatchObject({ engine: 'codex', permissionMode: 'ask', bypassPermission: false })
     const f = setup({ old: { permissionMode: 'full', bypassPermission: true } })
     await f.switches.serve(row())
@@ -283,42 +317,11 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)).toContain('You are PM.')
   })
 
-  // A Team daemon's default account was signed in through its owner's relay, which this could not read, so it went
-  // unchecked. With no relay (#4137) it is the account's own sign-in, which the CLI reports like any other.
-  it('refuses a signed-out default account before closing the PM, in a Team daemon too', async () => {
-    for (const team of [false, true]) {
-      const t = setup({ home: 'default', signedIn: false, team })
-      await t.switches.serve(row())
-      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
-      expect(t.calls).toEqual([])
-    }
-  })
-
-  it('refuses a signed-out account without closing the PM', async () => {
+  it('refuses a signed-out default account before closing the PM', async () => {
     const t = setup({ signedIn: false })
     await t.switches.serve(row())
     expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is signed out' })
     expect(t.calls).toEqual([])
-  })
-
-  it('a Team daemon switches to its default account (the hex id counts), and a Codex PM keeps an engine home of its own', async () => {
-    const t = setup({ team: true, home: 'default' })
-    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: 'abcdef0123456789' } }))
-    const create = t.calls.find(c => c[0] === 'agent_create')![1]
-    const changeId = String(create.creationId)
-    expect(create).toMatchObject({ engine: 'codex', codexHome: join(t.home, '.harness-pm-homes', changeId, 'codex') })
-    expect(create).not.toHaveProperty('claudeHome')
-    const c = setup({ team: true, home: 'default' })
-    await c.switches.serve(row())
-    expect(c.calls.find(x => x[0] === 'agent_create')![1]).not.toHaveProperty('claudeHome')
-  })
-
-  it('refuses a gone profile without closing the PM, and a Team daemon any profile but the default', async () => {
-    for (const t of [setup({ home: null }), setup({ team: true })]) {
-      await t.switches.serve(row())
-      expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: false, error: 'that account is no longer on this machine' })
-      expect(t.calls).toEqual([])
-    }
   })
 
   it('does nothing for a request it cannot claim', async () => {
@@ -344,6 +347,14 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.posted.at(-1)).toMatchObject({ type: 'agent.switchResult', ok: true })
   })
 
+  // Review of #3831: for a move the Swarm names the destination's default account (backend commands.ts defaultProfileId), and
+  // that account is the destination's own to check: this machine's sign-in does not decide it.
+  it('takes a move to another machine\'s default account, whatever this machine\'s own sign-in says', async () => {
+    const t = setup({ signedIn: false })
+    await t.switches.serve(row({ switchRequest: { id: 'sw1', engine: 'codex', profileId: profileId('m2', 'codex', 'default'), targetMachineId: 'm2' } }))
+    expect(t.posted.map(c => c.type)).toEqual(['agent.switchClaim', 'agent.switchHandoff'])
+  })
+
   it('keeps the source running when the backend clears a failed destination switch', async () => {
     const t = setup()
     await t.switches.serve(row({ switchRequest: { ...request, targetMachineId: 'm2' } }))
@@ -362,7 +373,7 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
   })
 })
 
-describe('whether a profile folder holds a sign-in', () => {
+describe('whether the default account holds a sign-in', () => {
   /** A fake `claude auth status --json` / `codex login status`, recording what it was asked. */
   const cli = (signedIn: boolean | null) => {
     const calls: Array<{ engine: string; args: readonly string[]; env: NodeJS.ProcessEnv }> = []
@@ -373,67 +384,41 @@ describe('whether a profile folder holds a sign-in', () => {
     }
     return { run, calls }
   }
-  /** A folder holding the sign-in files the CLIs once kept: their presence must never count. */
-  const folder = () => {
-    const dir = mkdtempSync(join(tmpdir(), 'profile-signed-in-'))
-    writeFileSync(join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: 'r' } }))
-    writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'a@b.c' } }))
-    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ OPENAI_API_KEY: 'k', tokens: { access_token: 'a', refresh_token: 'r' } }))
-    return dir
-  }
-
   it('asks the engine itself for the default account, under the daemon\'s own environment, or takes its key', async () => {
     const yes = cli(true)
-    expect(await profileSignedIn('claude', 'default', { PATH: '/bin' }, yes.run)).toBe(true)
-    expect(await profileSignedIn('codex', 'default', { PATH: '/bin', CODEX_HOME: '/mine' }, yes.run)).toBe(true)
+    expect(await profileSignedIn('claude', { PATH: '/bin' }, yes.run)).toBe(true)
+    expect(await profileSignedIn('codex', { PATH: '/bin', CODEX_HOME: '/mine' }, yes.run)).toBe(true)
     expect(yes.calls).toEqual([
       { engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin' } },
       { engine: 'codex', args: ['login', 'status'], env: { PATH: '/bin', CODEX_HOME: '/mine' } },
     ])
     const no = cli(false)
-    expect(await profileSignedIn('claude', 'default', {}, no.run)).toBe(false)
-    expect(await profileSignedIn('claude', 'default', { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(true)
+    expect(await profileSignedIn('claude', {}, no.run)).toBe(false)
+    expect(await profileSignedIn('claude', { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(true)
     expect(no.calls).toHaveLength(1)
   })
 
-  it('asks Claude Code about a profile folder as its CLAUDE_CONFIG_DIR, and reads none of its files', async () => {
-    const dir = folder(), no = cli(false), yes = cli(true)
-    expect(await profileSignedIn('claude', dir, { PATH: '/bin' }, no.run)).toBe(false)
-    expect(no.calls).toEqual([{ engine: 'claude', args: ['auth', 'status', '--json'], env: { PATH: '/bin', CLAUDE_CONFIG_DIR: dir } }])
-    expect(await profileSignedIn('claude', dir, {}, yes.run)).toBe(true)
-    // A key the daemon has is the default account's, not the folder's.
-    expect(await profileSignedIn('claude', dir, { ANTHROPIC_API_KEY: 'k' }, no.run)).toBe(false)
-    expect(await profileSignedIn('claude', dir, {}, cli(null).run)).toBe(false)
-  })
-
-  it('asks Codex about a profile folder as its CODEX_HOME, by its exit code, and reads none of its files', async () => {
-    const dir = folder(), no = cli(false)
-    expect(await profileSignedIn('codex', dir, { CODEX_HOME: '/other' }, no.run)).toBe(false)
-    expect(no.calls).toEqual([{ engine: 'codex', args: ['login', 'status'], env: { CODEX_HOME: dir } }])
-    expect(await profileSignedIn('codex', dir, {}, cli(true).run)).toBe(true)
-    expect(await profileSignedIn('codex', dir, {}, cli(null).run)).toBe(false)
-  })
-
-  it('a switch to a profile asks the engine by default', async () => {
+  // Review of #3831: a host gives no sign-in check of its own, so a switch asks the engine through this one.
+  it('is what a switch asks by default, of the default account', async () => {
     const t = setup()
-    const dir = folder(), no = cli(false)
+    // The daemon's own environment, whatever this test runs under: no key of Claude's, its own CLAUDE_CONFIG_DIR.
+    for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) vi.stubEnv(name, '')
+    vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
+    const no = cli(false)
     const switches = new LeadSwitchRequests(fakeCore({ dataDir: t.dataDir, account: { backend: vi.fn(async () => ({ status: 200, body: { success: true, data: { result: {} } } })) },
-      agents: { byAgent: vi.fn(() => ({ ...PM }) as never) } }), 'm1',
-      { now: () => NOW, profiles: (() => dir) as never, run: no.run })
+      agents: { byAgent: vi.fn(() => ({ ...PM }) as never) } }), 'm1', { now: () => NOW, run: no.run })
     await switches.serve(row())
-    expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', dir]])
-    // Signed out under that folder: refused before anything is closed.
+    expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', t.home]])
     expect(vi.mocked(switches['core'].account.backend).mock.calls.at(-1)![2]).toMatchObject({ command: { type: 'agent.switchResult', ok: false, error: 'that account is signed out' } })
   })
 })
-
 
 const buddyRow = (over: Record<string, unknown> = {}, top: Record<string, unknown> = {}): SwitchRow => row({
   buddyOf: { personId: 'owner', generation: 'g' }, buddyScope: 'swarm',
   switchRequest: { id: 'sw1', engine: 'codex', profileId: 'default', requestedBy: 'owner' }, ...over,
 }, { ledConversationId: undefined, buddyConversationId: 'private-chat', ...top })
 const buddySetup = (options: Parameters<typeof setup>[0] = {}) => {
-  const t = setup({ home: 'default', ...options, old: { engine: 'claude', swarmSkill: { role: 'buddy', key: 'swarm-buddy', mode: 'orchestration' }, ...options.old } })
+  const t = setup({ ...options, old: { engine: 'claude', swarmSkill: { role: 'buddy', key: 'swarm-buddy', mode: 'orchestration' }, ...options.old } })
   vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
   vi.stubEnv('CODEX_HOME', t.home)
   // A signed-in daemon has already installed Codex's hooks in this fixture's own config.
@@ -467,7 +452,7 @@ describe('a Buddy engine handoff', () => {
       },
     })
     const switches = new LeadSwitchRequests(core, 'm1', {
-      now: () => NOW, open: async () => t.daemon, profiles: (() => 'default') as never, signedIn: async () => true,
+      now: () => NOW, open: async () => t.daemon, signedIn: async () => true,
     })
     await switches.serve(buddyRow())
     if (accountId === 'owner') {
@@ -515,9 +500,9 @@ describe('a Buddy engine handoff', () => {
     expect(String(create.prompt)).not.toContain('Product Manager of the project')
   })
 
-  it.each(['different-owner', 'unknown-owner', 'missing-folder-owner', 'signed-out', 'team', 'no-chat', 'model-pending'])(
+  it.each(['different-owner', 'unknown-owner', 'missing-folder-owner', 'signed-out', 'no-chat', 'model-pending'])(
     'refuses %s before preparing or closing the Buddy', async reason => {
-      const t = buddySetup({ signedIn: reason !== 'signed-out', team: reason === 'team' })
+      const t = buddySetup({ signedIn: reason !== 'signed-out' })
       if (reason === 'different-owner') writeBuddyAccount('other', t.dataDir)
       if (reason === 'unknown-owner') writeBuddyAccount(null, t.dataDir)
       if (reason === 'missing-folder-owner') markBuddyOwner('work', 'other', t.dataDir)

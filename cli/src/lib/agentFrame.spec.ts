@@ -26,6 +26,18 @@ describe('agentFrame', () => {
     expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ sessionId: 's1', status: 'active', identityHold: row.identityHold })
   })
+  // Null is a real answer: a push without the key would leave a window showing a wait that ended.
+  it('says what a message to it waits for, read as the frame is built, and null when nothing', async () => {
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).waitingFor).toBeNull()
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, waitingFor: () => 'engine' })).waitingFor).toBe('engine')
+  })
+  // Absent is a real answer here: an agent without Browser has no browser, and the panel draws nothing for it.
+  it('browser field present only when the context has it', async () => {
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).not.toHaveProperty('browser')
+    expect(await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser: undefined })).not.toHaveProperty('browser')
+    const browser = { state: 'setup' as const, step: 'building' }
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, browser })).browser).toEqual(browser)
+  })
   it('says its name was not chosen by a person when nobody renamed it, whatever its session title says', async () => {
     const row = { ...session(null), title: 'cd /Users/macbookpro/projects/lamp' }
     const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })

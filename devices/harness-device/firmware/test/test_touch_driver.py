@@ -15,8 +15,9 @@ code=r'''
 #include <assert.h>
 #include <setjmp.h>
 #include <stdio.h>
-#include "creature_gallery.h"
-/* HT_WIDTH / HT_HEIGHT come from terminal.h through the header above. Repeating them here would be a
+#include <string.h>
+#include "terminal.h"
+/* HT_WIDTH / HT_HEIGHT come from terminal.h. Repeating them here would be a
    -Wmacro-redefined error the day the header spells them differently. */
 #define ESP_OK 0
 #define ESP_ERR_INVALID_RESPONSE 1
@@ -35,7 +36,10 @@ typedef struct {uint32_t ms; int rc; bool down; uint16_t x,y;} sample_t;
 static sample_t *samples; static int count, at, forwarded_down, forwarded_up, canceled, woke;
 static bool asleep;
 static int power_off_at, power_on_at, sleep_on_lock, locks;
-static ht_gallery_t gallery;
+/* What the UI behind the driver sees: the same events habitat_touch() gets, reduced to the gesture that a
+   completed contact makes. A horizontal swipe, a vertical swipe or a tap — the three things Focus tells apart
+   at the touch layer. A cancel drops the contact in progress and nothing else. */
+static struct {bool active,booped;int x0,y0,x1,y1,creature,mood;} gallery;
 static jmp_buf stop;
 static int64_t esp_timer_get_time(void) { return samples[at].ms*1000ll; }
 static bool open_touch(void) {controller=(void*)1;return true;}
@@ -54,16 +58,21 @@ static bool display_is_asleep(void){return asleep;}
 static void display_wake(void){asleep=false;woke++;}
 static void display_bump_activity(void){}
 static void habitat_input_stamp(int64_t n){(void)n;}
-static void habitat_touch_cancel(void){canceled++;ht_gallery_cancel(&gallery);}
+static void habitat_touch_cancel(void){canceled++;gallery.active=false;}
 static void habitat_touch(bool down,int x,int y,uint32_t n) {
- ht_gallery_touch(&gallery,down,x,y,n);if(down)forwarded_down++;else forwarded_up++;
+(void)n;
+ if(down){ if(!gallery.active){gallery.active=true;gallery.x0=x;gallery.y0=y;} gallery.x1=x;gallery.y1=y; forwarded_down++; }
+ else if(gallery.active){
+  int dx=gallery.x1-gallery.x0,dy=gallery.y1-gallery.y0;
+  if(dx>=40||dx<=-40)gallery.creature++; else if(dy>=40||dy<=-40)gallery.mood++; else gallery.booped=true;
+  gallery.active=false; forwarded_up++;
+ } else forwarded_up++;
 }
 '''+body+r'''
 static void run(sample_t *s,int n,bool sleep,int off,int on,int lock_sleep) {
  samples=s;count=n;at=forwarded_down=forwarded_up=canceled=woke=0;asleep=sleep;
  power_off_at=off;power_on_at=on;sleep_on_lock=lock_sleep;locks=0;
- ht_gallery_init(&gallery,s[0].ms);
- gallery.creature=0; // Exercise original reaction traces, independent of gallery boot art.
+ memset(&gallery,0,sizeof gallery);
  controller=(void*)1;if(!setjmp(stop))task(NULL);
 }
 #define RUN(s,asleep_) run(s,sizeof(s)/sizeof(s[0]),asleep_,-1,-1,-1)
@@ -112,7 +121,7 @@ int main(void) {
  // Screen power may change after the initial wake check, while waiting for the UI lock.
  RUN_POWER(off_mid_swipe,-1,-1,2);
  assert(gallery.creature==0&&!gallery.booped&&canceled==1&&forwarded_up==0);
- puts("touch driver: PASS (production task + gallery; ACK/error recovery, wake gestures, power off/on during contact and sleep at dispatch)");
+ puts("touch driver: PASS (production task + a gesture recorder; ACK/error recovery, wake gestures, power off/on during contact and sleep at dispatch)");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-touch-driver-') as d:
@@ -120,7 +129,5 @@ with tempfile.TemporaryDirectory(prefix='harness-touch-driver-') as d:
  subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-O1',
                  '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                  '-I',str(p/'../main/ui/habitat'),str(root/'driver.c'),
-                 str(p/'../main/ui/habitat/creature_gallery.c'),str(p/'../main/ui/habitat/creature_font.c'),
-                 str(p/'../main/ui/habitat/terminal.c'),str(p/'../main/ui/habitat/fonts.c'),
                  '-o',str(root/'driver')],check=True)
  subprocess.run([str(root/'driver')],check=True)

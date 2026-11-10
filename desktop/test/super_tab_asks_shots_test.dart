@@ -16,9 +16,9 @@ import 'swarm_state_test.dart' show createApp;
 final shots = Platform.environment['SUPER_TAB_ASKS_SHOTS'];
 
 /// The project chat after task #2925, as anh Dee's 'bot messages' mockup
-/// (11-04) draws it: only rows people wrote, the agent doing the work's 👀 and
-/// ✅ under them, the thread line unchanged, and no On it or Shipped, even from
-/// a server that still sends them. Both appearances, the chat and one thread.
+/// (11-04) draws it: only rows people wrote, the thread line unchanged, and no
+/// On it or Shipped, even from a server that still sends them. Both
+/// appearances, the chat and one thread.
 void main() {
   setUpAll(() async {
     if (shots == null) return;
@@ -56,18 +56,6 @@ void main() {
   final darren = person('darren', 'darren@example.com');
   final river = agent('agent-lead', 'River');
   final egret = agent('egret', 'Egret');
-  List<Map<String, Object>> reacted(List<(String, String)> by) => [
-    for (final emoji in ['eyes', 'check'])
-      if (by.where((r) => r.$1 == emoji).toList() case final who
-          when who.isNotEmpty)
-        {
-          'emoji': emoji,
-          'count': who.length,
-          'by': [
-            for (final r in who) {'kind': 'agent', 'id': r.$2},
-          ],
-        },
-  ];
 
   for (final brightness in Brightness.values) {
     for (final view in ['chat', 'thread']) {
@@ -103,7 +91,6 @@ void main() {
           String? thread,
           int minutesAgo = 0,
           Map<String, Object>? source,
-          List<Map<String, Object>>? reactions,
         }) {
           server.append(text, conversationId: 'offline');
           server.messages.last
@@ -117,14 +104,12 @@ void main() {
               ..['replyTo'] = thread;
           }
           if (source != null) server.messages.last['source'] = source;
-          if (reactions != null) server.messages.last['reactions'] = reactions;
         }
 
         say(
           'Jumping back a week in a chat freezes my Mac.',
           huy,
           minutesAgo: 90,
-          reactions: reacted([('eyes', 'gannet')]),
         );
         say(
           'Days load one at a time',
@@ -145,7 +130,6 @@ void main() {
           'I renamed the agents, but the sidebar still shows the old names.',
           darren,
           minutesAgo: 60,
-          reactions: reacted([('eyes', 'egret'), ('check', 'egret')]),
         );
         say(
           'Darren, done: a renamed agent keeps its name now.',
@@ -186,7 +170,6 @@ void main() {
               body: SuperTabView(
                 controller: c,
                 app: app,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Mac Studio',

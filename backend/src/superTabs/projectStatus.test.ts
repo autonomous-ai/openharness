@@ -3,6 +3,7 @@ import { applyCommand, commandSchema, type Command, type CommandContext } from '
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
 import { numberMessages } from './parts/commit.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 // Quiet project chats (Dee, 2026-10-31): a report sets the coordinator's own lines on the project's status card and posts nothing,
 // the server writes the card's lines itself and wakes nobody for them (task #3593), and every project gets the morning digest by default.
@@ -46,10 +47,10 @@ describe('the project status card', () => {
     const f = fixture()
     const first = f.run(report('Offline editing: PR #12 waiting on CI'), f.leadActor)
     expect(first.messages).toEqual([])
-    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: PR #12 waiting on CI', at: new Date(f.now).toISOString(), by: f.lead, own: true })
+    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: PR #12 waiting on CI', at: new Date(f.now).toISOString(), by: f.lead })
     f.tick(MINUTE)
     expect(f.run(report('Offline editing: merged'), f.leadActor).messages).toEqual([])
-    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: merged', at: new Date(f.now).toISOString(), by: f.lead, own: true })
+    expect(projectOf(f.state, 'lead').status).toEqual({ text: 'Offline editing: merged', at: new Date(f.now).toISOString(), by: f.lead })
     // No text only acknowledges: the card stays.
     expect(f.run(report(null), f.leadActor).messages).toEqual([])
     expect(projectOf(f.state, 'lead').status!.text).toBe('Offline editing: merged')
@@ -98,23 +99,20 @@ describe('the project status card', () => {
     const withoutChat = { ...f.state, conversations: f.state.conversations.filter(c => c.id !== 'lead') }
     expect(visibleState(withoutChat, owner).projects?.find(p => p.id === 'lead')).not.toHaveProperty('status')
   })
+
+  // Swarm v4 (2026-11-10): a task is the project's GitHub issue, so the server writes no task's line on the card. A task stored
+  // before v4, still working, shows nothing there: the card is the coordinator's own lines alone, as last reported.
+  it('is the coordinator\'s own lines alone: a task stored before v4 adds none', () => {
+    const f = fixture(), group = f.group(), dev = f.add('dev', group)
+    storedAssignment(f.state, group, dev, f.now)
+    f.run(report('Freeze starts Friday.'), f.leadActor)
+    expect(visibleState(f.state, owner).projects?.find(p => p.id === 'lead')?.status?.text).toBe('Freeze starts Friday.')
+    expect(f.state.conversations.find(c => c.id === group)).not.toHaveProperty('statusLine')
+  })
 })
 
 describe('no card wake-up for the coordinator (#3593)', () => {
   // The server writes the card (statusCard.ts), so a work group's change marks nothing for the coordinator to read.
-  it('marks no work group for a report, whatever changes in it', () => {
-    const f = fixture(), group = f.group()
-    const engineer = f.add('engineer', group)
-    const as: Actor = { kind: 'agent', agentId: engineer, machineOwnerId: 'host-owner' }
-    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: engineer }).result.assignmentId as string
-    f.tick(5 * MINUTE)
-    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'PR #7' }, as)
-    f.run({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
-    f.tick(15 * MINUTE)
-    expect(f.state.conversations.find(c => c.id === group)!.reportSeq).toBeUndefined()
-    expect(projectOf(f.state, 'lead').progress).toBeUndefined()
-  })
-
   it('lets an archived group go quiet at once, with no report to wait for', () => {
     const f = fixture(), group = f.group()
     f.run({ type: 'conversation.archive', conversationId: group, archived: true })

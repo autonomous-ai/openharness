@@ -63,7 +63,7 @@ describe('individual agent names', () => {
   })
 
   it('keeps every other stored name, even one that reads like a role or an automatic session (review of #2281)', () => {
-    // A Buddy may be named "claude-2026-10-30" (buddies.ts accepts it); only a stored "Reviewer" is replaced.
+    // Only a stored "Reviewer" or an engine's name is replaced.
     const kept = ['Dev', 'PM', 'Lead 2', 'claude-2026-10-30', 'codex-2026-10-30T09']
     const agents: NamedAgent[] = kept.map((displayName, i) => ({ id: `k-${i}`, name: 'Builder', displayName }))
     assignAgentDisplayNames(agents)
@@ -132,13 +132,5 @@ describe('a free agent name', () => {
     for (const agent of agents) expect(AGENT_NAMES).toContain(agent.displayName)
     expect(new Set(agents.map(a => a.displayName)).size).toBe(4)
     expect(agentDisplayName([{ id: 'd', name: 'Codex', displayName: 'Codex' }], 'd')).not.toBe('Codex')
-  })
-
-  // Mac test of #3560: a Buddy started before real names still goes by "<person>'s Buddy" until it restarts.
-  it('gives an agent still named "<person>\'s Buddy" a member name at once', () => {
-    const agents: NamedAgent[] = [{ id: 'b', name: "owner's Buddy", displayName: "owner's Buddy" }, { id: 'c', name: "ken.tran's Buddy" }]
-    assignAgentDisplayNames(agents)
-    for (const agent of agents) expect(AGENT_NAMES).toContain(agent.displayName)
-    expect(agentDisplayName([{ id: 'b', name: "dee's Buddy", displayName: "dee's Buddy" }], 'b')).not.toBe("dee's Buddy")
   })
 })

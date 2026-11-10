@@ -5,7 +5,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
-import type { MachineObservation } from '../src/superTabs/machines.js'
+import { MACHINE_FRESH_MS, type MachineObservation } from '../src/superTabs/machines.js'
 import { localReportMemory, type ReportMemory } from '../src/superTabs/machineReports.js'
 import { clock as stamps } from '../src/superTabs/parts/index.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
@@ -176,13 +176,12 @@ describe('the whole readings on demand', () => {
   })
 })
 
-// Task #3462: a crew member's wake is timed from the work that woke it to the first machine reading that shows its session
-// running again, and the timing row is stored in its project chat for the daily scorecard.
-describe('a crew wake timed by the machine report that shows it back (#3462)', () => {
-  it('stores one timing row in the project chat, from the assignment to that reading', async () => {
-    const sweeping: ReportMemory = { get: async () => undefined, set: async () => {}, sweepDue: async () => true }
-    const store = new SuperTabStore(db, () => clock.now, null, { reports: sweeping })
-    const tab = (await store.create(owner, randomUUID(), 'Crew', 'public')).id
+// Tester Q3, 2026-11-09: a post to an agent whose session is down stays queued, as it must, and its sender heard nothing. The result
+// every CLI prints now says the agent is offline, and the post is read when it is back.
+describe('a post to an agent whose session is down', () => {
+  it('tells its sender the agent is offline, queues the post for it, and stops saying so once it is back', async () => {
+    const store = new SuperTabStore(db, () => clock.now, null, { reports: never })
+    const tab = (await store.create(owner, randomUUID(), 'Offline', 'public')).id
     const execute = (command: Command, user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
     const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
@@ -192,33 +191,32 @@ describe('a crew wake timed by the machine report that shows it back (#3462)', (
       memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS',
       gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: running, stoppedHarnessIds: [] })
     const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-    // Its machine's owner's own session: a member on another person's machine runs in its Team account, which the keeper keeps awake.
-    const ada = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId: 'mac', harnessId: 'h-ada', name: 'Ada', configuration: config,
-      lead: false }, host)).result.agentId)
-    await execute({ type: 'crew.add', agentId: ada, role: 'Engineer' })
-    await beat(['h-ada'])
-    // Asleep, as the keeper leaves it after an idle hour (crewKeep.ts, its own tests): its record says so, and its host closed
-    // the session. Written straight to its stored record, as only the keeper's sweep sets it.
-    const stored = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: ada } })
-    await db.swarmAgent.update({ where: { id: stored.id }, data: { data: { ...(stored.data as object), asleep: { since: clock.now } } } })
-    clock.now += 60_000
-    await beat([])
-    // New work wakes it; its host reopens the session in place, and the next reading shows it running.
+    // A task of its own, where the agent is a member a person can name.
     const task = String((await execute({ type: 'conversation.create', title: 'Fix login', brief: 'Fix it', checks: [] })).result.conversationId)
-    clock.now += 1_000
-    const wokeAt = clock.now
-    await execute({ type: 'work.assign', conversationId: task, agentId: ada })
-    clock.now += 7_000
+    const ada = String((await execute({ type: 'agent.add', conversationId: task, machineId: 'mac', harnessId: 'h-ada', name: 'Ada', configuration: config,
+      lead: false }, host)).result.agentId)
+    const adaName = async () => { const found = (await store.read(owner, tab)).state.agents.find(a => a.id === ada)!; return found.displayName ?? found.name }
+    const post = (text: string, recipientIds = [ada]) => execute({ type: 'message.send', conversationId: task, text, replyTo: null, recipientIds })
+    const queued = () => db.superTabDelivery.count({ where: { tabId: tab, agentId: ada, status: 'queued' } })
+    const told = async () => `${await adaName()} is offline; it will read this when it is back.`
+    await beat(['h-ada'])
+    expect((await post('While you are up.')).result).not.toHaveProperty('offline')
+
+    // Its machine goes silent: a reading that stale reads as down.
+    clock.now += MACHINE_FRESH_MS + MINUTE
+    const silent = await queued()
+    expect((await post('While your machine is silent.')).result.offline).toBe(await told())
+    expect(await queued()).toBe(silent + 1)
+
+    // Back, then its session goes while the machine keeps reporting: the next reading does not list it.
+    await beat(['h-ada'])
+    expect((await post('Back.')).result).not.toHaveProperty('offline')
+    clock.now += 15_000
     await beat([])
-    clock.now += 11_000
-    const backAt = clock.now
-    await beat(['h-ada'])
-    clock.now += 30_000
-    await beat(['h-ada'])
-    const rows = (await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } }))
-      .filter(m => (m.source as { kind?: string } | null)?.kind === 'crew-timing')
-    expect(rows).toHaveLength(1)
-    expect(rows[0]!.source).toMatchObject({ what: 'wake', agentId: ada, startedAt: wokeAt, runningAt: backAt })
-    expect(rows[0]!.recipientIds).toEqual([])
+    const gone = await queued()
+    expect((await post('While you are down.')).result.offline).toBe(await told())
+    expect(await queued()).toBe(gone + 1)
+    // A post that names no one says nothing of it.
+    expect((await post('To nobody.', [])).result).not.toHaveProperty('offline')
   })
 })

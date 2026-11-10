@@ -139,10 +139,9 @@ void main() {
   ) async {
     final s = server(chat: 'offline')..state.remove('projects');
     ((s.state['conversations'] as List)[1] as Map)
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['agentIds'] = ['pm'];
-    final c = await showView(tester, s, board: false);
+    final c = await showView(tester, s);
     await c.select('offline');
     await tester.pumpAndSettle();
     final rows = find.byType(SuperTabMessageRow);

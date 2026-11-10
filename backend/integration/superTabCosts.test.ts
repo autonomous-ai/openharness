@@ -13,6 +13,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import type { TokensByModel } from '../src/superTabs/costs/tokens.js'
 import { poolRows } from './hostRows.test-support.js'
+import { storeAssignment, storeStatus } from './storedWork.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
@@ -24,7 +25,6 @@ let db: PrismaClient
 const owner: AuthUser = { sub: '300000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '300000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
-const MINUTE = 60_000
 const plan = [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 10, resetsAt: null }] }]
 const opus = (input: number, output: number): TokensByModel => ({ 'claude-opus-5-5': { input, output, cacheRead: 0, cacheWrite: 0 } })
 
@@ -84,83 +84,21 @@ async function swarm() {
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     return String((await execute({ type: 'route.record', conversationId: group, decision } as Command, host, lead)).result.routeDecisionId)
   }
-  const assign = async (routeDecisionId: string) => String((await execute({ type: 'work.assign', conversationId: group, agentId: worker, routeDecisionId } as Command,
-    host, lead)).result.assignmentId)
-  /** The worker marks its work done, sending its session's totals read as it finishes (cli superTabs/service.ts), or none
-   *  like an older host; `by` the Lead finishes it instead. */
-  const finish = async (assignmentId: string, tokens?: TokensByModel, by = worker) => {
-    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await execute({ type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'npm test, 0 failures' } as Command, host, worker)
-    await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped.', ...(tokens ? { tokens } : {}) } as Command, host, by)
+  /** The worker's attempt on [routeDecisionId], done, with its session's totals at [start] and [end], as work.assign and its
+   *  Done stored it before Swarm v4 (both gone, 2026-11-10). */
+  const finished = async (routeDecisionId: string, start: TokensByModel, end: TokensByModel) => {
+    const { id: assignmentId } = await storeAssignment(db, tab, group, worker, now)
+    await storeStatus(db, tab, group, 'done', 'Shipped.')
+    await db.superTabRouteDecision.update({ where: { id: routeDecisionId }, data: { assignmentId, final: { kind: 'member', agentId: worker, machineId: 'test-host' },
+      outcome: 'done', outcomeAt: new Date(now), run: { machineId: 'test-host', harnessId: harness.worker, engine: 'claude', model: 'opus', effort: 'high',
+        billing: 'subscription', startedAt: now, start, endedAt: now, end } } })
   }
   const decision = (id: string) => db.superTabRouteDecision.findUniqueOrThrow({ where: { id } })
-  return { store, tab, execute, lead, group, worker, harness, observe, beat, route, assign, finish, decision,
+  return { store, tab, execute, lead, group, worker, harness, observe, beat, route, finished, decision,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
-describe('an attempt’s record on its route decision', () => {
-  it('keeps the kind, what ran, how it was paid and the session totals at its start and end, and closes done', async () => {
-    const f = await swarm()
-    await f.beat(opus(1000, 100))
-    const id = await f.route()
-    const assignmentId = await f.assign(id)
-    const started = f.clock.now
-    expect((await f.decision(id)).run).toEqual({ machineId: 'test-host', harnessId: f.harness.worker, engine: 'claude', model: 'opus', effort: 'high',
-      billing: 'subscription', startedAt: started, start: opus(1000, 100) })
-    f.clock.now += MINUTE
-    await f.beat(opus(5000, 900))
-    // Its last turns after that report: the totals it sends as it finishes are its end, not the report's.
-    await f.finish(assignmentId, opus(7000, 1200))
-    const row = await f.decision(id)
-    expect(row).toMatchObject({ assignmentId, outcome: 'done', record: { assessment: { kind: 'parser' } },
-      run: { startedAt: started, start: opus(1000, 100), endedAt: f.clock.now, end: opus(7000, 1200) } })
-  })
-
-  it('leaves the end unknown, never the last report’s, when the attempt is finished without its own reading', async () => {
-    for (const by of ['older host', 'lead'] as const) {
-      const f = await swarm()
-      await f.beat(opus(1000, 100))
-      const id = await f.route()
-      const assignmentId = await f.assign(id)
-      await f.beat(opus(5000, 900))
-      // A Lead finishing it sends its own session's totals, which are never the worker's.
-      if (by === 'lead') await f.finish(assignmentId, opus(9_999_999, 1), f.lead)
-      else await f.finish(assignmentId)
-      expect((await f.decision(id)).run, by).toMatchObject({ end: null, endedAt: f.clock.now })
-      expect((await f.store.costSummary(owner, f.tab, 7)).totals, by).toMatchObject({ attempts: 1, tokensKnown: 0, costKnown: 0, apiCost: null })
-    }
-  })
-
-  it('closes lost when its machine goes silent, and stays lost when the task is handed on', async () => {
-    const f = await swarm()
-    await f.beat(opus(10, 1))
-    const id = await f.route()
-    await f.assign(id)
-    await f.beat(opus(70, 7))
-    const silent = f.clock.now
-    f.clock.now = silent + 2 * MINUTE + 5_000
-    await f.observe('lead-host', [f.harness.lead])
-    expect(await f.decision(id)).toMatchObject({ outcome: 'lost', outcomeAt: new Date(f.clock.now), run: { end: opus(70, 7), endedAt: f.clock.now } })
-    // Handing it on keeps it lost: the hand-over is a new attempt with its own decision.
-    await f.observe('test-host', [f.harness.worker])
-    const next = await f.route()
-    expect((await f.decision(id)).outcome).toBe('lost')
-    await f.assign(next)
-    expect((await f.decision(next)).run).toMatchObject({ startedAt: f.clock.now })
-  })
-
-  it('ends a task lost to its stopped session with the counts reported before the session stopped', async () => {
-    const f = await swarm()
-    await f.beat(opus(10, 1))
-    const id = await f.route()
-    await f.assign(id)
-    await f.beat(opus(250, 25))
-    f.clock.now += 5_000
-    // The report that says the session stopped no longer lists it, nor its counts.
-    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
-    expect(await f.decision(id)).toMatchObject({ outcome: 'lost', run: { start: opus(10, 1), end: opus(250, 25), endedAt: f.clock.now } })
-  })
-
+describe('a machine’s session totals', () => {
   it('never shows the machine’s raw token counts to a reader', async () => {
     const f = await swarm()
     await f.beat(opus(10, 1))
@@ -172,38 +110,13 @@ describe('an attempt’s record on its route decision', () => {
   })
 })
 
-describe('the cost summary', () => {
-  it('shows a finished attempt by engine, model, effort and kind with its tokens, API-equivalent cost and spend', async () => {
-    const f = await swarm()
-    await f.beat(opus(1_000_000, 100_000))
-    const assignmentId = await f.assign(await f.route('parser'))
-    // Twelve minutes of work, its machine reporting every minute as it does every 15 seconds.
-    for (let minute = 0; minute < 12; minute++) {
-      f.clock.now += MINUTE
-      await f.beat(opus(3_000_000, 600_000))
-    }
-    await f.finish(assignmentId, opus(3_000_000, 600_000))
-    const summary = await f.store.costSummary(owner, f.tab, 7)
-    // 2M input at $4 and 0.5M output at $20 per million: $18, on a plan, so nothing spent per token.
-    expect(summary.rows).toEqual([expect.objectContaining({ engine: 'claude', model: 'opus', effort: 'high', kind: 'parser', attempts: 1, shipped: 1,
-      outcomes: { done: 1 }, billing: { subscription: 1 }, medianMinutesToShip: 12, tokensKnown: 1,
-      tokens: { input: 2_000_000, output: 500_000, cacheRead: 0, cacheWrite: 0 }, apiCost: 18, spend: 0, costKnown: 1, costPerShipped: 18 })])
-    expect(summary).toMatchObject({ days: 7, truncated: false, prices: [{ model: 'claude-opus-5-5' }] })
-    // The Lead reads it too, as its own agent.
-    expect((await f.store.costSummary(host, f.tab, 7, f.lead)).totals).toMatchObject({ attempts: 1, apiCost: 18 })
-    // Past the period, nothing.
-    f.clock.now += 8 * 24 * 60 * MINUTE
-    expect((await f.store.costSummary(owner, f.tab, 7)).rows).toEqual([])
-  })
-})
-
 describe('route decision reads', () => {
   // Review of #2106: members read only the summary, never an attempt's session totals.
   it('never carry an attempt’s run or its token totals, over HTTP or to the Lead, while the summary still has them', async () => {
     const f = await swarm()
     await f.beat(opus(1_000_000, 100_000))
     const id = await f.route()
-    await f.finish(await f.assign(id), opus(1_000_000, 100_000))
+    await f.finished(id, opus(1_000_000, 100_000), opus(1_000_000, 100_000))
     expect((await f.decision(id)).run).toMatchObject({ start: opus(1_000_000, 100_000) })
     const app = Fastify()
     app.setErrorHandler(errorHandler)
@@ -228,7 +141,7 @@ describe('route decision reads', () => {
         expect(decision).not.toHaveProperty('run')
         expect(JSON.stringify(decision)).not.toMatch(/cacheRead|1000000/)
       }
-      expect((await get(`/api/super-tabs/${f.tab}/costs?days=7`)).totals).toMatchObject({ attempts: 1, shipped: 1 })
+      expect((await get(`/api/super-tabs/${f.tab}/costs?days=7`)).totals).toMatchObject({ attempts: 1 })
     } finally { await app.close() }
   })
 })
@@ -240,7 +153,7 @@ describe('costs and a project\'s GitHub access, read through the read cache (tas
   it('reads no part at a stamp that did not move, and answers what a read straight from Mongo answers', async () => {
     const f = await swarm()
     await f.beat(opus(1000, 100))
-    await f.finish(await f.assign(await f.route()), opus(7000, 1200))
+    await f.finished(await f.route(), opus(1000, 100), opus(7000, 1200))
     const direct = new SuperTabStore(db, () => f.clock.now, null, { readCache: null })
     for (const [name, read] of [['costs', (store: SuperTabStore) => store.costSummary(owner, f.tab, 7)],
       ['github', (store: SuperTabStore) => store.projectRepository(owner, f.tab, 'lead')]] as const) {
@@ -249,7 +162,7 @@ describe('costs and a project\'s GitHub access, read through the read cache (tas
       expect(again.reads, name).toBe(0)
       expect(again.value, name).toEqual(await read(direct))
     }
-    expect((await f.store.costSummary(owner, f.tab, 7)).totals).toMatchObject({ attempts: 1, shipped: 1 })
+    expect((await f.store.costSummary(owner, f.tab, 7)).totals).toMatchObject({ attempts: 1 })
   })
 })
 
@@ -257,7 +170,7 @@ describe('a route decision as stored (task #2488)', () => {
   // As production's routes were on 2026-11-03: every engine on every machine, 13 candidates with labels of ~540 characters and
   // 47 exclusions of 5 reasons, ~20 KB a row. The pick is kept whole, of the others who and where they are and their titles (task
   // #2769), and each reason once; readers get every candidate and exclusion back.
-  it('keeps the pick whole and each exclusion reason once, reads back every candidate and exclusion, and still links its start', async () => {
+  it('keeps the pick whole and each exclusion reason once, and reads back every candidate and exclusion', async () => {
     const f = await swarm()
     const long = (text: string, size: number) => `${text} ${'·'.repeat(Math.max(0, size - text.length - 1))}`
     const fit = { status: 'fits', coverage: 1.5, effectiveCost: 3, expiring: 0, spend: { '5-hour': 30, weekly: 4 }, account: 'k'.repeat(64) }
@@ -287,7 +200,5 @@ describe('a route decision as stored (task #2488)', () => {
       expect(new Set(record.excluded.map(e => JSON.stringify(e)))).toEqual(new Set(excluded.map(e => JSON.stringify(e))))
       expect(read).not.toHaveProperty('record.unavailable')
     }
-    await f.assign(id)
-    expect(await f.decision(id)).toMatchObject({ final: { kind: 'member', agentId: f.worker }, override: null })
   })
 })

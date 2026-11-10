@@ -13,11 +13,11 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 function scene(closed = false) {
   const s = richSwarm()
   s.contribute('mac', 'swarm')
-  // peer's Buddy chat, or with no kind their Chat with PM from before Buddies replaced it (projects.ts isClosedPmChat).
+  // peer's 1:1 chat with an agent, or with no kind their Chat with PM from before (projects.ts isClosedPmChat).
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peer.userId)!.generation
-    Object.assign(state.conversations.find(c => c.id === privateId)!, { ...closed ? {} : { kind: 'buddy' }, audience: { people: [{ id: peer.userId, generation }] } })
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { ...closed ? {} : { kind: 'agent-chat' }, audience: { people: [{ id: peer.userId, generation }] } })
   })
   return { s, privateId, parts: store.split(s.state, { tabId: 'tab', version: R, now: NOW }) }
 }
@@ -31,10 +31,10 @@ function write(parts: SwarmParts, kind: Kind, key: string, change: (part: Part) 
   return part
 }
 /** What the reader receives: its view of the active (live) parts, then the changed parts run through its read check. */
-function receive(parts: SwarmParts, changed: Part[], actor: Actor, cursor?: number) {
+function receive(parts: SwarmParts, changed: Part[], actor: Actor) {
   const active = { ...parts, ...Object.fromEntries((['members', 'agents', 'groups', 'machines', 'starts', 'progress'] as Kind[])
     .map(kind => [kind, (parts[kind] as Part[]).filter(p => !p.deleted && !p.dormant)])) } as SwarmParts
-  return changesFor(readerView(active, actor, LATER, {}), changed, actor, undefined, cursor)
+  return changesFor(readerView(active, actor, LATER, {}), changed, actor)
 }
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
@@ -47,32 +47,6 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(receive(parts, [head], peer).head).toMatchObject({ key: 'head', version: R + 1 })
   })
 
-  // Tasks #3593, #4419: each task keeps its own status line, but readers get the card in the head's project; a change poll that
-  // sent only the task would leave Desktop and web on the old card until something else moved the head. The head goes only when
-  // a changed task's line moved since the reader's cursor: a task changes with every message, and the head is large.
-  it('sends the head with a task whose status line moved since the cursor, so a live reader sees the card move', () => {
-    const { s, parts } = scene()
-    const line = { text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW }
-    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object }).statusLine = line })]
-    const received = receive(parts, changed, owner, NOW - 1_000)
-    expect(received.head).not.toBeNull()
-    expect(received.head!.data.projects![0]!.status!.text).toContain('#1 "Web": working.')
-  })
-
-  it('sends the head with a task whose line left the card since the cursor', () => {
-    const { s, parts } = scene()
-    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object }).statusLine = { text: '', since: NOW } })]
-    expect(receive(parts, changed, owner, NOW - 1_000).head).not.toBeNull()
-  })
-
-  it('leaves the head out for a task change that left its line as the reader already has it', () => {
-    const { s, parts } = scene()
-    // The line moved long before the reader's cursor; the task changed since for another reason (a message, a title).
-    const line = { text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW - 3_600_000 }
-    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object; title: string }).statusLine = line; (p.data as { title: string }).title = 'Web 3' })]
-    expect(receive(parts, changed, owner, NOW - 1_000).head).toBeNull()
-  })
-
   it('sends a changed group whole to its readers and nothing to anyone else', () => {
     const { s, parts } = scene()
     const changed = [write(parts, 'groups', s.web, p => { (p.data as { title: string }).title = 'Web 2' }),
@@ -82,7 +56,7 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(keys(receive(parts, changed, owner).groups)).toEqual([s.web, s.secretGroup])
   })
 
-  it('sends a Buddy chat\'s change, removal and dormant stub only to its owner, never the Lead; a closed Chat with PM\'s to nobody', () => {
+  it('sends a 1:1 chat\'s change, removal and dormant stub only to its owner, never the Lead; a closed Chat with PM\'s to nobody', () => {
     const { s, privateId } = scene()
     for (const change of [(p: Part) => { (p.data as { title: string }).title = 'x' }, (p: Part) => { p.deleted = true }, (p: Part) => { p.dormant = true }]) {
       const { parts: fresh } = scene()
@@ -132,18 +106,6 @@ describe('changes since a cursor (design 4.4)', () => {
     const changed = [write(fresh, 'starts', `start-${s.web}`, p => { p.deleted = true }), write(fresh, 'starts', `start-${s.secretGroup}`, p => { p.deleted = true })]
     expect(keys(receive(fresh, changed, peer).starts)).toEqual([`start-${s.web}`])
     expect(keys(receive(fresh, changed, owner).starts)).toEqual([`start-${s.web}`, `start-${s.secretGroup}`])
-    // A Buddy reads no starts, not even a removal's id, though it reads their group (security review 2 of #2258).
-    s.edit(state => {
-      const generation = state.people.find(p => p.id === peer.userId)!.generation, worker = state.agents.find(a => a.id === s.worker)!
-      state.agents.push({ ...worker, id: 'buddy', harnessId: 'buddy-harness', contributorId: peer.userId, membershipGeneration: generation,
-        name: 'Buddy', buddyOf: { personId: peer.userId, generation } })
-    })
-    const withBuddy = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const removed = [write(withBuddy, 'starts', `start-${s.web}`, p => { p.deleted = true })]
-    const buddy: Actor = { kind: 'agent', agentId: 'buddy', machineOwnerId: `${owner.userId}-machine` }
-    expect(keys(receive(withBuddy, [write(withBuddy, 'groups', s.web, () => {})], buddy).groups)).toEqual([s.web])
-    expect(receive(withBuddy, removed, buddy).starts).toEqual([])
-    expect(keys(receive(withBuddy, removed, peer).starts)).toEqual([`start-${s.web}`])
   })
 
   it('sends changed project progress only to readers of the project', () => {
@@ -159,8 +121,9 @@ describe('changes since a cursor (design 4.4)', () => {
     const { s } = scene()
     // Only an agent of the private project runs on 'secret-mac', so the peer does not see that machine.
     s.add('secret-harness', s.secretGroup, false, owner, 'secret-mac')
-    s.run({ type: 'work.define', conversationId: s.done, task: { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'],
-      requires: { machines: ['secret-mac', 'mac'] } }, checks: [{ description: 'It answers.', independent: false }] })
+    // A task whose requirements were defined before Swarm v4, which defines none.
+    s.edit(state => { state.conversations.find(c => c.id === s.done)!.task = { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'],
+      requires: { machines: ['secret-mac', 'mac'] } } })
     const fresh = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const requires = (groups: Array<{ key: string }>) => (groups.find(g => g.key === s.done) as unknown as { data: { task: { requires: unknown } } }).data.task.requires
     expect(requires(readerView(fresh, owner, LATER, {}).parts.groups)).toEqual({ machines: ['secret-mac', 'mac'] })
@@ -215,16 +178,6 @@ describe('a machine\'s reading, for a client that asks for lines', () => {
     const out = changesFor(readerView({ ...parts, machines: [] }, peer, LATER, {}), [gone], peer, { since: SINCE })
     expect(out.machines).toEqual([{ key: 'mac', version: R + 1, changedAt: LATER, deleted: true }])
     expect(out.machineReadings).toEqual([])
-  })
-
-  it('tells a Buddy nothing, and anyone nothing of a Buddy-only machine', () => {
-    const { parts, s } = scene()
-    s.edit(state => { state.agents.push({ ...state.agents[0]!, id: 'buddy', buddyOf: { personId: peer.userId, generation: 'g' } } as never) })
-    const withBuddy = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const buddy: Actor = { kind: 'agent', agentId: 'buddy', machineOwnerId: `${owner.userId}-machine` }
-    expect(lightly(withBuddy, [reading(withBuddy)], buddy).machineReadings).toEqual([])
-    const hidden = reading(parts, p => { (p.data as { contribution: { buddyOnly?: true } }).contribution.buddyOnly = true })
-    expect(lightly(parts, [hidden], peer).machineReadings).toEqual([])
   })
 
   it('leaves the reply as it was for a client that did not ask', () => {

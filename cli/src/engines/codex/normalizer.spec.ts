@@ -624,6 +624,20 @@ describe('Codex rollout normalizer — the 0.147 TUI vocabulary', () => {
     expect(events.map((e) => (e.payload as { content: string }).content)).toEqual([
       'Looking at the tests first.', 'No phase here', 'Done.',
     ])
+    // The commentary says so, for whoever needs the answer alone (core/turns/ends.ts): the engine reader leaves it out of a turn's text.
+    expect(events.map((e) => e.payload)).toEqual([
+      { content: 'Looking at the tests first.', commentary: true }, { content: 'No phase here' }, { content: 'Done.' },
+    ])
+  })
+
+  it('says commentary of the old vocabulary, flat in its message, as well', () => {
+    const normalizer = new CodexNormalizer('live')
+    normalizer.ingest(line('event_msg', { type: 'user_message', message: 'go' }))
+    const events = [
+      line('event_msg', { type: 'agent_message', phase: 'commentary', message: 'Working on it.' }),
+      line('event_msg', { type: 'agent_message', phase: 'final_answer', message: 'Done.' }),
+    ].flatMap((raw) => normalizer.ingest(raw))
+    expect(events.map((e) => e.payload)).toEqual([{ content: 'Working on it.', commentary: true }, { content: 'Done.' }])
   })
 
   it('replays to the same history shape as the old vocabulary', () => {

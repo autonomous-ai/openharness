@@ -41,7 +41,7 @@ static void tick(ht_character_t *c, uint32_t now, ht_character_mood_t mood,
 
 static void clocks(void)
 {
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
+    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
         ht_character_t c = {0}; assert(ht_character_select(&c, id));
         tick(&c, UINT32_MAX - 49, HT_CHARACTER_WORKING, false, true, false, 0);
         tick(&c, 50, HT_CHARACTER_WORKING, false, true, false, 0);
@@ -95,35 +95,36 @@ static void clocks(void)
         ht_character_motion_t before = c.motion;
         assert(ht_character_select(&c, id));
         assert(!memcmp(&before, &c.motion, sizeof before));
-        assert(!ht_character_select(&c, HT_CHARACTER_COUNT) && c.id == (ht_character_id_t)id);
-        assert(!ht_character_select(&c, (ht_character_id_t)-1));
-        assert(ht_character_select(&c, (id + 1) % HT_CHARACTER_ILLUSTRATED_TIM));
-        assert(!c.motion.initialized && !c.motion.reaction.initialized);
+        // Focus is the only character: any other id, however odd, selects it and keeps its motion.
+        assert(ht_character_select(&c, HT_CHARACTER_COUNT) && c.id == HT_CHARACTER_FOCUS);
+        assert(ht_character_select(&c, (ht_character_id_t)-1) && c.id == HT_CHARACTER_FOCUS);
+        assert(!memcmp(&before, &c.motion, sizeof before));
         tick(&c, 10000, (ht_character_mood_t)255, false, true, false, 0);
         assert(c.motion.reaction.mood == HT_CHARACTER_IDLE);
     }
 }
 
-static void portraits(void)
+static void faces(void)
 {
     ht_scene_t a, b;
     ht_character_t c = {0};
-    ht_character_face_t f = {.recipient = "Parser helper", .status = "Working", .hint = "tap to talk",
-        .detail = "A carried paragraph", .foreground = 0xffff, .ink = 0xafe0, .dim = 0x7777, .roomy_reading = true};
+    ht_character_face_t f = {.recipient = "Parser helper", .status = "Working", .foreground = 0xffff};
+    // No recap, a short one, and one that needs every line the face has.
+    const char *recaps[] = {NULL, "Fixed the parser. All tests pass.",
+        "Fixed the parser. All tests pass. Voice input now sends to the selected agent, including after switching characters or reading another pane."};
     ht_scene_clear(&a, ht_rgb(0x181818)); redraw(NULL, &a);
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
+    for (int id = 0; id < HT_CHARACTER_COUNT; id++) {
         ht_character_select(&c, id);
-        for (int size = HT_CHARACTER_FULL; size <= HT_CHARACTER_QUICK; size++) {
+        for (unsigned r = 0; r < sizeof recaps / sizeof recaps[0]; r++) {
             for (int mood = HT_CHARACTER_IDLE; mood < HT_CHARACTER_MOODS; mood++) {
                 f.mood = mood;
                 for (unsigned frame = 0; frame < 8; frame++) {
                     c.motion.frame = frame;
-                    c.delivery.lift = (frame >> 1) & 1;
                     f.pose = (ht_character_pose_t){.blink = frame == 0, .look = (int)(frame % 5) - 2,
                         .pressed = frame == 3, .level = frame % 5};
                     ht_scene_clear(&b, a.background);
-                    ht_character_portrait(&b, &c, &f, ht_rgb(0xc8a9f0), size, 98);
-                    assert(b.count && b.count <= HT_RUNS - 9);
+                    ht_character_face(&b, &c, &f, ht_rgb(0xc8a9f0), recaps[r]);
+                    assert(b.count && b.count <= HT_RUNS - 1); // Reading fits; voice puts the letter away for Discard.
                     redraw(&a, &b); a = b;
                     uint16_t bg = (b.background << 8) | (b.background >> 8);
                     unsigned pixels = 0;
@@ -133,14 +134,6 @@ static void portraits(void)
                         pixels++;
                     }
                     assert(pixels > 100);
-                    f.focus = size == HT_CHARACTER_COMPACT;
-                    f.straight_title = frame & 1; f.unread = frame & 2;
-                    const char *recap = size == HT_CHARACTER_BRIEF ? "Fixed the parser. All tests pass." :
-                        size == HT_CHARACTER_READING ? "Fixed the parser. All tests pass. Voice input now sends to the selected agent, including after switching characters or reading another pane." : NULL;
-                    ht_scene_clear(&b, a.background);
-                    ht_character_face(&b, &c, &f, ht_rgb(0xc8a9f0), recap);
-                    assert(b.count <= HT_RUNS - 1); // Reading fits; voice puts the letter away for Discard.
-                    redraw(&a, &b); a = b;
                 }
             }
         }
@@ -160,76 +153,10 @@ static void portraits(void)
     assert(!memcmp(full, scratch, sizeof full));
 }
 
-static void delivery_and_caption(void)
+static void caption_ink(void)
 {
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) {
-        ht_character_t c = {0}; ht_character_select(&c, id);
-        c.motion.next_ms = 1000;
-        assert(!ht_character_delivery_tick(&c, 100, true, 0, true)); // Restored mail only holds.
-        assert(!c.delivery.moving);
-        ht_character_delivery_tick(&c, 200, true, 1, true);
-        assert(c.delivery.moving && c.motion.next_ms == 160);
-        ht_character_delivery_tick(&c, 360, true, 1, true); assert(c.delivery.lift == 1);
-        ht_character_delivery_tick(&c, 400, true, 2, true); // Burst coalesces.
-        ht_character_delivery_tick(&c, 1480, true, 2, true); assert(!c.delivery.moving && !c.delivery.lift);
-        ht_character_delivery_tick(&c, 1600, true, 3, false);
-        ht_character_delivery_tick(&c, 1760, true, 3, true); assert(!c.delivery.moving); // No replay on wake.
-        ht_character_delivery_tick(&c, UINT32_MAX - 79, true, UINT32_MAX, true);
-        ht_character_delivery_tick(&c, 80, true, UINT32_MAX, true); assert(c.delivery.lift == 1);
-        ht_character_delivery_tick(&c, 81, false, 0, true); assert(!c.delivery.moving && !c.delivery.lift);
-    }
-    ht_character_caption_t c = {0};
-    ht_character_caption_tick(&c, 100, "a", false); assert(!c.activity && c.opacity == 255);
-    ht_character_caption_tick(&c, 200, "a", true); assert(!c.activity && c.opacity == 255);
-    ht_character_caption_tick(&c, 3080, "a", true); assert(!c.activity && c.opacity < 255);
-    ht_character_caption_tick(&c, 3200, "a", true); assert(c.activity && !c.opacity);
-    ht_character_caption_tick(&c, 3500, "a", true); assert(c.activity && c.opacity == 255);
-    ht_character_caption_tick(&c, 6500, "a", true); assert(!c.activity && c.opacity == 255);
-    ht_character_caption_tick(&c, 9600, "a", true); assert(c.activity);
-    ht_character_caption_tick(&c, 9601, "a", false); assert(!c.activity && c.opacity == 255);
-    ht_character_caption_tick(&c, UINT32_MAX - 1499, "a", true);
-    ht_character_caption_tick(&c, 1700, "a", true); assert(c.activity);
-    ht_character_caption_tick(&c, 1701, "b", true); assert(!c.activity && c.opacity == 255);
     assert(ht_character_caption_ink(0xffff, 0x18c3, 0) == 0x18c3);
     assert(ht_character_caption_ink(0xffff, 0x18c3, 255) == 0xffff);
-}
-
-/*
- * ht_character_layout()'s recap contract: four roomy rows, ninety characters, an ellipsis past that.
- *
- * Only the skins that GO THROUGH that layout are measured here. Focus owns its whole face and has
- * its own grid — three recap rows, because the fourth slot is its status line — so measuring it
- * against these numbers would be testing one layout with another layout's ruler. focus_face() below
- * is its ruler.
- */
-static void recap_budget(void)
-{
-    for (int id = 0; id < HT_CHARACTER_ILLUSTRATED_TIM; id++) for (int unicode = 0; unicode < 2; unicode++)
-        for (int length = 89; length <= 91; length++) {
-            if (id == HT_CHARACTER_FOCUS) continue;
-            ht_character_t c = {0}; ht_character_select(&c, id);
-            ht_character_face_t f = {.roomy_reading=true, .single_label=true, .foreground=0xffff};
-            char input[400] = "", visible[400] = "";
-            for (int i = 0; i < length; i++) strcat(input, unicode ? "\xc3\xa9" : "x");
-            ht_scene_t scene; ht_scene_clear(&scene, 0);
-            ht_character_face(&scene, &c, &f, 0xffff, input);
-            int rows = 0, chars = 0;
-            for (int i = 0; i < scene.count; i++) if (scene.runs[i].font == &ht_mono_28) {
-                if (scene.runs[i].text[0]) rows++;
-                strcat(visible, scene.runs[i].text);
-            }
-            for (const char *p = visible; *p; chars++) {
-                uint32_t cp = ht_utf8_next(&p);
-                assert(cp == (unicode ? 0xe9u : 'x') || cp == '.');
-            }
-            assert(rows <= 4 && chars <= 90);
-            if (length <= 90) assert(!strcmp(input, visible));
-            else assert(!strcmp(visible + strlen(visible) - 3, "..."));
-            ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
-            for (int y=0;y<HT_HEIGHT;y++) for (int x=0;x<HT_WIDTH;x++)
-                if (full[y*HT_WIDTH+x])
-                    assert((x-233)*(x-233)+(y-233)*(y-233)<230*230);
-        }
 }
 
 /*
@@ -359,10 +286,9 @@ static void focus_face(void)
     };
     int expected = -1;
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        ht_character_face_t f = {.recipient = cases[i].name, .tab = cases[i].tab,
-            .engine = cases[i].engine, .activity = cases[i].activity, .elapsed = cases[i].elapsed,
-            .status = "", .hint = "", .detail = "", .mood = cases[i].mood,
-            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_character_face_t f = {.recipient = cases[i].name, .engine = cases[i].engine, .activity = cases[i].activity, .elapsed = cases[i].elapsed,
+            .status = "", .mood = cases[i].mood,
+            .foreground = 0xffff};
         f.pose.level = cases[i].level;
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &f, 0xffff, cases[i].recap);
@@ -375,17 +301,17 @@ static void focus_face(void)
                 assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);   // property 2
     }
     /*
-     * THE OCTOPUS'S LAYOUT (owner, 2026-10-01): the name on the top curve, the engine's 56 px mark,
-     * and a recap of up to four lines that ends in "…" once it is cut — at the octopus's ninety
+     * THE FOCUS LAYOUT (owner, 2026-10-01): the name on the top curve, the engine's 56 px mark,
+     * and a recap of up to four lines that ends in "…" once it is cut — at ninety
      * codepoints or at four lines, whichever comes first — every line within the recap column's 364 px, so the
      * raster never cuts it.
      */
     {
         const char *lengthy = "Flashed 0.0.91 to both dials and verified the image on each. All 44 host checks "
                               "pass, including the new reader tests. Nothing is committed yet; say commit.";
-        ht_character_face_t f = {.recipient = long_name, .tab = long_tab, .engine = "claude",
-            .activity = "", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
-            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_character_face_t f = {.recipient = long_name, .engine = "claude",
+            .activity = "", .status = "", .mood = HT_CHARACTER_IDLE,
+            .foreground = 0xffff};
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &f, 0xffff, lengthy);
         int arc = 0, mark = 0, lines = 0;
@@ -416,9 +342,9 @@ static void focus_face(void)
     // Inter faces take them from Noto Sans Symbols 2 through gen_focus_faces.py's second --font); a missing glyph is "?".
     {
         const char *marks = "Tests \xe2\x9c\x93 pushed \xe2\x9c\x97";
-        ht_character_face_t f = {.recipient = "pane", .tab = "", .engine = "claude", .activity = "",
-            .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
-            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_character_face_t f = {.recipient = "pane", .engine = "claude", .activity = "",
+            .status = "", .mood = HT_CHARACTER_IDLE,
+            .foreground = 0xffff};
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &f, 0xffff, marks);
         int found = 0;
@@ -440,7 +366,7 @@ static void focus_face(void)
     /*
      * THE VOICE FACE, both halves of it, every frame.
      *
-     * It is the same skin through the same entry point — ui_habitat.c sets `voice` and Focus owns
+     * It is the same face through the same entry point — ui_habitat.c sets `voice` and Focus owns
      * the whole glass — so the constant-run rule applies across the two states as well as within
      * them: recording and sending must emit the same runs in the same order, or a person watching a
      * clip go out gets a full 466x466 repaint at the moment the meter stops. The bars reach 121 px
@@ -451,10 +377,10 @@ static void focus_face(void)
         int voice_runs = -1;
         for (int sending = 0; sending < 2; sending++)
             for (int frame = 0; frame < 15; frame++) {
-                ht_character_face_t f = {.recipient = "", .tab = "", .engine = "", .activity = "",
-                    .status = "", .hint = "", .detail = "", .voice = true,
+                ht_character_face_t f = {.recipient = "", .engine = "", .activity = "",
+                    .status = "", .voice = true,
                     .mood = sending ? HT_CHARACTER_WORKING : HT_CHARACTER_LISTENING,
-                    .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+                    .foreground = 0xffff};
                 ht_scene_t scene; ht_scene_clear(&scene, 0);
                 c.motion.frame = (uint8_t)frame;
                 ht_character_face(&scene, &c, &f, 0xffff, recap);
@@ -483,9 +409,8 @@ static void focus_face(void)
      * line, 1.75x over two, 1.5x over three; over four the 56 px mark's box.
      */
     {
-        ht_character_face_t f = {.recipient = "Payments refactor", .tab = "Harness repo",
-            .engine = "claude", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
-            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_character_face_t f = {.recipient = "Payments refactor", .engine = "claude", .status = "", .mood = HT_CHARACTER_IDLE,
+            .foreground = 0xffff};
         const char *recaps[] = {"Done.", "Shipped the retry queue and the webhook tests.",
             ("Flashed 0.0.91 to both dials and verified the image on each. All 44 host checks pass, "
              "including the new reader tests. Nothing is committed yet."),
@@ -746,9 +671,8 @@ static void focus_face(void)
             for (int state = 0; state < HT_PET_STATES; state++)
                 for (int step = 0; step < (int)ht_pet_steps(pet); step++) {
                     ht_character_face_t f = {.recipient = "Payments refactor", .engine = eng,
-                        .activity = layout == 1 ? "Working" : "", .elapsed = 5, .status = "", .hint = "",
-                        .detail = "", .mood = state == HT_PET_DONE ? HT_CHARACTER_DONE : HT_CHARACTER_IDLE,
-                        .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff, .asking = state == HT_PET_ASKING,
+                        .activity = layout == 1 ? "Working" : "", .elapsed = 5, .status = "", .mood = state == HT_PET_DONE ? HT_CHARACTER_DONE : HT_CHARACTER_IDLE,
+                        .foreground = 0xffff, .asking = state == HT_PET_ASKING,
                         .clock_ms = (uint32_t)step * pet->step_ms[state] + 1};
                     if (state == HT_PET_WORKING && layout != 2) f.activity = "Working";
                     ht_scene_t scene; ht_scene_clear(&scene, 0);
@@ -770,9 +694,8 @@ static void focus_face(void)
         for (int state = 0; state < HT_PET_STATES; state++)
             for (int step = 0; step < (int)ht_pet_steps(pet); step++) {
                 ht_character_face_t f = {.recipient = "Payments refactor", .engine = eng,
-                    .activity = "", .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE,
-                    .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff,
-                    .clock_ms = (uint32_t)step * pet->step_ms[state] + 1};
+                    .activity = "", .status = "", .mood = HT_CHARACTER_IDLE,
+                    .foreground = 0xffff, .clock_ms = (uint32_t)step * pet->step_ms[state] + 1};
                 if (state == HT_PET_WORKING) { f.activity = "Working"; f.elapsed = 5; }
                 if (state == HT_PET_DONE) f.mood = HT_CHARACTER_DONE;
                 if (state == HT_PET_ASKING) f.asking = true;
@@ -845,8 +768,7 @@ static void focus_face(void)
         // with ht_cell_sprite_zoom (zoom 4), centred in the 56 px box.
         assert(pet->cells && !pet->frames);
         if (pet->cells) {
-            ht_character_face_t cf = {.recipient = "Payments refactor", .engine = eng, .status = "", .hint = "", .detail = "",
-                .mood = HT_CHARACTER_IDLE, .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff, .clock_ms = 1};
+            ht_character_face_t cf = {.recipient = "Payments refactor", .engine = eng, .status = "", .mood = HT_CHARACTER_IDLE, .foreground = 0xffff, .clock_ms = 1};
             // (a pet with a relaxing scene shows its small self resting only while held: clock 0)
             if (pet->relaxing_scene) cf.clock_ms = 0;
             ht_scene_t cs; ht_scene_clear(&cs, 0);
@@ -881,7 +803,7 @@ static void focus_face(void)
             {.recipient = "x", .engine = eng, .activity = "", .mood = HT_CHARACTER_OFFLINE, .clock_ms = 5000},
         };
         for (int k = 0; k < 3; k++) {
-            held[k].status = ""; held[k].hint = ""; held[k].detail = "";
+            held[k].status = "";
             ht_scene_t scene; ht_scene_clear(&scene, 0);
             ht_character_face(&scene, &c, &held[k], 0xffff, "");
             assert(scene.count == 1 + 1 + 1 + 4 + 1 + 2 + 1);
@@ -891,7 +813,7 @@ static void focus_face(void)
 
         // An engine without a pet keeps its own mark, in any state, and has no pet clock.
         ht_character_face_t other = {.recipient = "x", .engine = "cursor", .activity = "Working",
-            .elapsed = 5, .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING,
+            .elapsed = 5, .status = "", .mood = HT_CHARACTER_WORKING,
             .clock_ms = 4321};
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &other, 0xffff, "");
@@ -901,7 +823,7 @@ static void focus_face(void)
         // The time the face next changes: a later clock, where the drawn frame or hop really differs,
         // and nothing differs one ms before it.
         ht_character_face_t w = {.recipient = "x", .engine = eng, .activity = "Working",
-            .status = "", .hint = "", .detail = "", .elapsed = 5, .mood = HT_CHARACTER_WORKING};
+            .status = "", .elapsed = 5, .mood = HT_CHARACTER_WORKING};
         for (unsigned k = 0; k < 40; k++) {
             w.clock_ms = k * 90 + 1;
             uint32_t next = ht_focus_pet_next_ms(&w, "");
@@ -955,9 +877,7 @@ static void focus_face(void)
         int frames_seen[26], distinct = 0;
         for (unsigned step = 0; step < ws->steps; step++) {
             ht_character_face_t f = {.recipient = "Payments refactor", .engine = "claude",
-                .activity = "Coalescing", .elapsed = 34, .status = "", .hint = "", .detail = "",
-                .mood = HT_CHARACTER_WORKING, .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff,
-                .clock_ms = step * ws->step_ms + 1};
+                .activity = "Coalescing", .elapsed = 34, .status = "", .mood = HT_CHARACTER_WORKING, .foreground = 0xffff, .clock_ms = step * ws->step_ms + 1};
             ht_scene_t scene; ht_scene_clear(&scene, 0);
             ht_character_face(&scene, &c, &f, 0xffff, "");
             assert(scene.count == 11);
@@ -998,7 +918,7 @@ static void focus_face(void)
         for (unsigned pe = 0; pe < ht_pet_count; pe++) {
             const ht_pet_t *pt = &ht_pets[pe];
             ht_character_face_t g = {.recipient = "x", .engine = pt->engine, .activity = "", .status = "Try again",
-                .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 0};
+                .mood = HT_CHARACTER_IDLE, .clock_ms = 0};
             ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
             const ht_run_t *m = &sc.runs[1];
             bool claude = !strcmp(pt->engine, "claude");
@@ -1012,8 +932,7 @@ static void focus_face(void)
         // the name and the recap's first line; Muse stays 1x there.
         for (int e = 0; e < 2; e++) {
             const char *eng_ = e ? "muse" : "codex";
-            ht_character_face_t g = {.recipient = "x", .engine = eng_, .activity = "", .status = "", .hint = "",
-                .detail = "", .mood = HT_CHARACTER_DONE, .clock_ms = 0};
+            ht_character_face_t g = {.recipient = "x", .engine = eng_, .activity = "", .status = "", .mood = HT_CHARACTER_DONE, .clock_ms = 0};
             ht_scene_t sc; ht_scene_clear(&sc, 0);
             ht_character_face(&sc, &c, &g, 0xffff, "Flashed 0.0.91 to both dials and verified the image on each. All 44 "
                               "host checks pass, including the new reader tests. Nothing is committed yet; say commit.");
@@ -1027,7 +946,7 @@ static void focus_face(void)
         // 50 px apart and centred on the glass, each baseline where a browser puts Inter 36's.
         for (int k = 0; k < 6; k++) {
             ht_character_face_t g = {.recipient = "Deploy latest firmware", .engine = "", .activity = "", .status = "",
-                .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = (uint32_t)k * 977 + 1};
+                .mood = HT_CHARACTER_IDLE, .clock_ms = (uint32_t)k * 977 + 1};
             ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
             int n = 0, base[2];
             for (int i = 0; i < sc.count; i++)
@@ -1041,7 +960,7 @@ static void focus_face(void)
             const ht_pet_scene_t *w = ht_pets[pe].working_scene;
             if (!w) continue;
             ht_character_face_t g = {.recipient = "x", .engine = ht_pets[pe].engine, .activity = "Coalescing", .elapsed = 3,
-                .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 1};
+                .status = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 1};
             ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
             const ht_run_t *m = &sc.runs[1];
             assert(m->sprite.width == w->w && abs(m->x + w->w / 2 - 233) <= 1 &&
@@ -1049,7 +968,7 @@ static void focus_face(void)
         }
         // The other states and the recap keep the small pet, the centred line and no lower arc.
         ht_character_face_t g = {.recipient = "x", .engine = "claude", .activity = "Coalescing", .elapsed = 34,
-            .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500};
+            .status = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500};
         ht_scene_t scene; ht_scene_clear(&scene, 0);
         ht_character_face(&scene, &c, &g, 0xffff, "Done.");
         // (over a one-line recap, Claude's 1.5x drawing)
@@ -1060,8 +979,8 @@ static void focus_face(void)
 
         // An engine without scenes working: its mark, the centred inter_30 green line, nothing on the lower arc.
         ht_character_face_t x = {.recipient = "x", .engine = "cursor", .activity = "Coalescing", .elapsed = 34,
-            .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500,
-            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+            .status = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500,
+            .foreground = 0xffff};
         ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &x, 0xffff, "");
         assert(scene.count == 11 && scene.runs[1].sprite.width == 56);
         assert(scene.runs[7].font == &ht_lv_inter_30.base && scene.runs[7].fg == ht_rgb(0x00ff2f) &&
@@ -1075,9 +994,9 @@ static void focus_face(void)
         const uint8_t *shown[HT_PET_SCENE_LEVELS][56];
         for (unsigned level = 0; level < HT_PET_SCENE_LEVELS; level++)
             for (unsigned step = 0; step < 56; step++) {
-                ht_character_face_t v = {.recipient = "", .tab = "", .engine = "claude", .activity = "",
-                    .status = "", .hint = "", .detail = "", .voice = true, .mood = HT_CHARACTER_LISTENING,
-                    .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff, .clock_ms = step * ls->step_ms + 1};
+                ht_character_face_t v = {.recipient = "", .engine = "claude", .activity = "",
+                    .status = "", .voice = true, .mood = HT_CHARACTER_LISTENING,
+                    .foreground = 0xffff, .clock_ms = step * ls->step_ms + 1};
                 v.pose.level = level;
                 ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &v, 0xffff, ""); only_inter(&scene);
                 assert(scene.count == 11);
@@ -1104,9 +1023,9 @@ static void focus_face(void)
             moved |= ls->step_dy[step] != ls->step_dy[0];
         }
         assert(moved);
-        ht_character_face_t sending = {.recipient = "", .tab = "", .engine = "claude", .activity = "", .status = "",
-            .hint = "", .detail = "", .voice = true, .mood = HT_CHARACTER_WORKING, .clock_ms = 1,
-            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+        ht_character_face_t sending = {.recipient = "", .engine = "claude", .activity = "", .status = "",
+            .voice = true, .mood = HT_CHARACTER_WORKING, .clock_ms = 1,
+            .foreground = 0xffff};
         ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &sending, 0xffff, "");
         assert(scene.count == 11);
         for (int i = 0; i < scene.count; i++) assert(scene.runs[i].sprite.width != ls->w);   // the sending scene, not this one
@@ -1179,8 +1098,8 @@ static void focus_face(void)
         // own run (the first sparkle's slot), working with none (owner, 2026-10-07: the notice bell took its sandbox
         // bubble's place); ink inside r 230, the run count constant.
         {
-            ht_character_face_t base = {.recipient = "Payments refactor", .tab = "", .engine = "codex", .activity = "Coalescing",
-                .elapsed = 34, .status = "", .hint = "", .detail = "", .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+            ht_character_face_t base = {.recipient = "Payments refactor", .engine = "codex", .activity = "Coalescing",
+                .elapsed = 34, .status = "", .foreground = 0xffff};
             ht_scene_t cs_;
             static const int bias_[3] = {4, -6, 0};
             static const unsigned steps_[3] = {28, 15, 15}, ms_[3] = {120, 80, 140};
@@ -1320,8 +1239,7 @@ static void focus_face(void)
             {
                 // (with a status line: an idle or done agent with nothing to show is the relaxing face; every
                 // state plays this one loop)
-                ht_character_face_t g = {.recipient = "x", .engine = "muse", .activity = "", .status = "Ready", .hint = "",
-                    .detail = "", .mood = HT_CHARACTER_DONE, .clock_ms = 18 * 217 + 1};
+                ht_character_face_t g = {.recipient = "x", .engine = "muse", .activity = "", .status = "Ready", .mood = HT_CHARACTER_DONE, .clock_ms = 18 * 217 + 1};
                 ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
                 ht_character_face(&a, &c, &g, 0xffff, "");
                 g.clock_ms = 1; ht_character_face(&b, &c, &g, 0xffff, "");
@@ -1340,8 +1258,8 @@ static void focus_face(void)
             assert(ms_[2]->overlay->frames[ms_[2]->overlay->loop[ms_[2]->steps - 1]].cols == 1);
             assert(ms_[2]->overlay->frames[ms_[2]->overlay->loop[0]].cols > 1);
             static const int mbias_[3] = {4, -6, 0};
-            ht_character_face_t mbase = {.recipient = "Payments refactor", .tab = "", .engine = "muse", .activity = "Coalescing",
-                .elapsed = 34, .status = "", .hint = "", .detail = "", .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+            ht_character_face_t mbase = {.recipient = "Payments refactor", .engine = "muse", .activity = "Coalescing",
+                .elapsed = 34, .status = "", .foreground = 0xffff};
             ht_scene_t ms;
             for (int kind = 0; kind < 3; kind++) {
                 const ht_pet_scene_t *sc = ms_[kind];
@@ -1469,8 +1387,7 @@ static void focus_face(void)
         // slot, brightness per letter by rhythm B; 11 runs listening, sending, held and plain.
         for (int e = 0; e < 2; e++) {
             const char *eng = e ? "codex" : "claude";
-            ht_character_face_t v = {.recipient = "", .tab = "", .engine = eng, .activity = "", .status = "", .hint = "",
-                .detail = "", .voice = true, .mood = HT_CHARACTER_LISTENING, .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+            ht_character_face_t v = {.recipient = "", .engine = eng, .activity = "", .status = "", .voice = true, .mood = HT_CHARACTER_LISTENING, .foreground = 0xffff};
             for (uint32_t clock = 1; clock < 2700; clock += 13) {
                 v.clock_ms = clock;
                 ht_scene_clear(&scene, 0); ht_character_face(&scene, &c, &v, 0xffff, ""); only_inter(&scene);
@@ -1578,8 +1495,8 @@ static void focus_face(void)
     {
         const ht_pet_t *cp = pet_of("claude");
         ht_character_face_t f = {.recipient = "x", .engine = "claude", .activity = "Coalescing", .elapsed = 34,
-            .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500,
-            .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+            .status = "", .mood = HT_CHARACTER_WORKING, .clock_ms = 500,
+            .foreground = 0xffff};
         ht_scene_t scene;
         {
             f.footer_action = true;
@@ -1619,8 +1536,8 @@ static void focus_face(void)
         const ht_pet_scene_t *ls = pet_of("claude")->listening_scene;
         for (unsigned level = 0; level < HT_PET_SCENE_LEVELS + 2; level++)
             for (unsigned step = 0; step < ls->steps; step++) {
-                ht_character_face_t v = {.recipient = "", .tab = "", .engine = "claude", .activity = "", .status = "",
-                    .hint = "", .detail = "", .voice = true, .mood = HT_CHARACTER_LISTENING,
+                ht_character_face_t v = {.recipient = "", .engine = "claude", .activity = "", .status = "",
+                    .voice = true, .mood = HT_CHARACTER_LISTENING,
                     .clock_ms = step * ls->step_ms + 1};
                 v.pose.level = level;
                 // The scene's next step, the word's next sweep step (a multiple of 65 ms) or the arcs' next tick (50 ms),
@@ -1629,8 +1546,8 @@ static void focus_face(void)
                 assert(next > v.clock_ms && next <= (step + 1) * ls->step_ms &&
                        (next == (step + 1) * ls->step_ms || next % 65 == 0 || next % 50 == 0));
             }
-        ht_character_face_t v = {.recipient = "", .tab = "", .engine = "claude", .activity = "", .status = "",
-            .hint = "", .detail = "", .voice = true, .mood = HT_CHARACTER_LISTENING, .clock_ms = 1};
+        ht_character_face_t v = {.recipient = "", .engine = "claude", .activity = "", .status = "",
+            .voice = true, .mood = HT_CHARACTER_LISTENING, .clock_ms = 1};
         v.clock_ms = 0; assert(!ht_focus_pet_next_ms(&v, ""));
         // Sending: the next frame change of the post box scene; held or without a scene, nothing.
         const ht_pet_scene_t *ss = pet_of("claude")->sending_scene;
@@ -1692,8 +1609,7 @@ static void focus_relaxing(void)
         int ball_at[24] = {0};
         for (unsigned step = 0; step < 2 * rs->steps; step++) {
             ht_character_face_t f = {.recipient = "Payments refactor", .engine = want[e].engine, .activity = "",
-                .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .foreground = 0xffff, .dim = 0x8410,
-                .ink = 0xffff, .clock_ms = 5000 + step * rs->step_ms};
+                .status = "", .mood = HT_CHARACTER_IDLE, .foreground = 0xffff, .clock_ms = 5000 + step * rs->step_ms};
             unsigned st = f.clock_ms / rs->step_ms % rs->steps;
             ht_scene_t scene; ht_scene_clear(&scene, 0);
             ht_character_face(&scene, &c, &f, 0xffff, "");
@@ -1778,8 +1694,7 @@ static void focus_relaxing(void)
         // The raster budget: the code-drawn shapes stay small (each ring arc rasterises only its ink box).
         assert(arcs_ink / (2 * rs->steps) <= 8000);   // Claude ~1.7k px a step, Muse's ball ~1.5k
         // Not relaxing: working, a recap, a question, a status of its own, held (clock 0, asleep), the voice screen.
-        ht_character_face_t g = {.recipient = "x", .engine = want[e].engine, .activity = "", .status = "", .hint = "",
-            .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 1234};
+        ht_character_face_t g = {.recipient = "x", .engine = want[e].engine, .activity = "", .status = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 1234};
         ht_scene_t sc;
         ht_character_face_t w = g; w.activity = "Working"; w.elapsed = 3;
         ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &w, 0xffff, "");
@@ -1807,7 +1722,7 @@ static void focus_relaxing(void)
     for (int k = 0; k < 6; k++) {
         static const char *const others[] = {"cursor", "opencode", "grok", "hermes", "agy", "something-new"};
         ht_character_face_t g = {.recipient = "Payments refactor", .engine = others[k], .activity = "", .status = "",
-            .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 777u * (unsigned)k + 1};
+            .mood = HT_CHARACTER_IDLE, .clock_ms = 777u * (unsigned)k + 1};
         ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
         assert(sc.count == 11 && !sc.runs[10].arc && !sc.runs[10].text[0]);
         assert(sc.runs[8].text[0] && sc.runs[8].font == &ht_lv_inter_36.base && sc.runs[8].fg == ht_rgb(0x585863));
@@ -1823,62 +1738,6 @@ static void focus_relaxing(void)
         assert(known);
     }
     puts("Focus relaxing: Claude juggles, Codex's plane, Muse's keepy-uppy; constant runs, exact redraws, grey arc line; others unchanged PASS");
-}
-
-static void footer_layout(void)
-{
-    const unsigned counts[] = {0, 1, 9, 10, 32, 1, 0};
-    ht_scene_t before, after;
-    ht_scene_clear(&before, 0); redraw(NULL, &before);
-    for (unsigned i = 0; i < sizeof counts / sizeof counts[0]; i++) {
-        ht_scene_clear(&after, 0);
-        ht_notification_bell(&after, counts[i], counts[i] ? 0xffff : ht_rgb(0x888888));
-        redraw(&before, &after); before = after;
-        int left = HT_WIDTH, right = 0, top = HT_HEIGHT, bottom = 0;
-        for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
-            if (full[y * HT_WIDTH + x]) {
-                assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
-                if (x < left) left = x;
-                if (x > right) right = x;
-                if (y < top) top = y;
-                if (y > bottom) bottom = y;
-            }
-        assert(left + right >= 460 && left + right <= 470);
-        assert(top >= 418 && bottom <= 451); // Matches the upper curve's rim inset.
-    }
-    ht_scene_clear(&after, 0); redraw(&before, &after);
-}
-
-static void inbox_layout(void)
-{
-    const char *names[] = {"Build", "Investigate firmware and notifications"};
-    const char *messages[] = {"Yes. The fix is installed.",
-        "Fixed and merged into main: PR #436. All 62 relevant tests and static analysis passed.",
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"};
-    const char *marks[] = {HT_DONE, "?", HT_FAILED};
-    const unsigned colors[] = {0x0dbc79, 0xe5e510, 0xcd3131};
-    ht_scene_t before, after;
-    ht_scene_clear(&before, 0); redraw(NULL, &before);
-    for (unsigned n = 0; n < 2; n++) for (unsigned m = 0; m < 3; m++)
-        for (unsigned k = 0; k < 3; k++) {
-            ht_scene_clear(&after, 0);
-            ht_inbox_card(&after, marks[k], names[n], messages[m], 0xffff, ht_rgb(colors[k]));
-            int titles = n ? 2 : 1, bodies = after.count - titles - 1;
-            assert(bodies >= 1 && bodies <= 4);
-            const ht_run_t *icon = &after.runs[after.count - 1];
-            assert(!strcmp(icon->text, marks[k]) && icon->fg == ht_rgb(colors[k]));
-            assert(icon->x == after.runs[0].x && icon->y == after.runs[0].y);
-            assert(after.runs[titles].y - after.runs[titles - 1].y - 38 == 28);
-            int bottom = after.runs[after.count - 2].y + 38;
-            assert(after.runs[0].y + bottom >= 453 && after.runs[0].y + bottom <= 454);
-            for (int i = 0; i < after.count - 1; i++)
-                assert(after.runs[i].font == &ht_mono_28 && after.runs[i].fg == 0xffff);
-            redraw(&before, &after); before = after;
-            for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
-                if (full[y * HT_WIDTH + x])
-                    assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
-        }
-    puts("Inbox layout: desktop status colors, neutral prose, balanced short/long blocks, fixed gap, circle bounds and exact incremental redraws PASS");
 }
 
 /*
@@ -1929,10 +1788,9 @@ static size_t working_dx_at(void)
 }
 static ht_character_face_t custom_face(bool working, unsigned notices)
 {
-    ht_character_face_t f = {.recipient = "Payments refactor", .tab = "", .engine = "claude",
-        .activity = working ? "Coalescing" : "", .status = "", .hint = "", .detail = "",
-        .mood = working ? HT_CHARACTER_WORKING : HT_CHARACTER_IDLE, .clock_ms = 1000,
-        .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+    ht_character_face_t f = {.recipient = "Payments refactor", .engine = "claude",
+        .activity = working ? "Coalescing" : "", .status = "", .mood = working ? HT_CHARACTER_WORKING : HT_CHARACTER_IDLE, .clock_ms = 1000,
+        .foreground = 0xffff};
     if (notices) { f.notice_ms = 500; f.notices = (uint16_t)notices; }
     return f;
 }
@@ -2203,10 +2061,9 @@ static unsigned rnd_n;
 static uint32_t rnd_count(void) { return rnd_n++; }   // 0, 1, 2, ...: chef, builder, chef, ...
 static ht_character_face_t builder_face(uint32_t clock_ms, bool working, unsigned notices)
 {
-    ht_character_face_t f = {.recipient = "Payments refactor", .tab = "", .engine = "claude",
-        .activity = working ? "Coalescing" : "", .elapsed = 34, .status = "", .hint = "", .detail = "",
-        .mood = working ? HT_CHARACTER_WORKING : HT_CHARACTER_DONE, .clock_ms = clock_ms,
-        .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+    ht_character_face_t f = {.recipient = "Payments refactor", .engine = "claude",
+        .activity = working ? "Coalescing" : "", .elapsed = 34, .status = "", .mood = working ? HT_CHARACTER_WORKING : HT_CHARACTER_DONE, .clock_ms = clock_ms,
+        .foreground = 0xffff};
     if (notices) { f.notice_ms = 1; f.notices = (uint16_t)notices; }
     return f;
 }
@@ -2284,9 +2141,8 @@ int main(int argc, char **argv)
     fclose(fp);
     assert(vec_len > 22 && vec_len < sizeof vec_buf);
     if (argc > 2 && !strcmp(argv[2], "--custom-only")) { custom_pet(); return 0; }
-    assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
-    assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
-    clocks(); portraits(); delivery_and_caption(); recap_budget(); focus_face();
-    focus_relaxing(); focus_builder(); footer_layout(); inbox_layout(); custom_pet();
-    printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
+    assert(HT_CHARACTER_COUNT == 1 && !strcmp(ht_character_name(HT_CHARACTER_FOCUS), "Focus"));
+    clocks(); faces(); caption_ink(); focus_face();
+    focus_relaxing(); focus_builder(); custom_pet();
+    printf("Characters: Focus, eight moods, three recaps, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }

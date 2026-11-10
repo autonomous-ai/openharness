@@ -117,8 +117,27 @@ it('forwards returning offers, every skip reason and every pairing source in voc
 })
 
 it('forwards Import agent outcomes in vocabulary 7 (task #2379)', () => {
-  expect(APP_USAGE_VOCABULARY).toBe(7)
+  expect(APP_USAGE_VOCABULARY).toBeGreaterThanOrEqual(7)
   const report = { ...native, counters: Object.fromEntries(['started', 'ok', 'failed', 'cancelled', 'unknown', 'over_1m']
     .map(measure => [`ui_desktop_agent_import_${measure}`, 1])) }
+  expect(appProductUsageReport(report)).toBe(report)
+})
+
+it('forwards an opened agent Browser from a Desktop in vocabulary 9, and only the name', () => {
+  expect(APP_USAGE_VOCABULARY).toBe(9)
+  const report = { ...native, counters: { ...native.counters, agent_browser_opened: 3 } }
+  expect(appProductUsageReport(report)).toBe(report)
+  // Only a Desktop report with its context files it, and never the daemon's own agent browser counts.
+  expect(appProductUsageReport({ ...old, counters: { agent_browser_opened: 1 } })).toBeUndefined()
+  expect(appProductUsageReport({ ...native, counters: { agent_browser_start_ok: 1 } })).toBeUndefined()
+  // An older vocabulary's names are forwarded as before.
+  const older = { ...native, counters: { ui_desktop_agent_import_ok: 1, ui_desktop_add_phone_paired_menu: 1 } }
+  expect(appProductUsageReport(older)).toBe(older)
+})
+
+it('forwards Team account removal outcomes in vocabulary 8 (2026-11-10)', () => {
+  expect(APP_USAGE_VOCABULARY).toBeGreaterThanOrEqual(8)
+  const report = { ...native, counters: Object.fromEntries(['started', 'ok', 'failed', 'cancelled', 'unknown', 'under_1s']
+    .map(measure => [`ui_desktop_team_account_removal_${measure}`, 1])) }
   expect(appProductUsageReport(report)).toBe(report)
 })

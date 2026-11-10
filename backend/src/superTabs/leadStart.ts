@@ -1,19 +1,16 @@
-/** A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B), as a Buddy's start is
- *  (buddies.ts): recorded on the machine's contribution and launched by its host. Its person names the machine, which is their
- *  own computer: Swarm v3 starts no agent on another person's computer and none in a Team account (task #4120). Desktop's
+/** A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B):
+ *  recorded on the machine's contribution and launched by its host. Its person names the machine, which is their
+ *  own computer: Swarm v3 starts no agent on another person's computer (task #4120). Desktop's
  *  own-machine flow (project.create, a local start, agent.add) is unchanged. */
-import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, NOT_YOUR_COMPUTER, projectFolder, projectsOnMachine, teamAccountPool,
-  noRepositoryStart, TEAM_ACCOUNTS_GONE, type ContributedMachine } from './machines.js'
+import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, NOT_YOUR_COMPUTER, projectFolder,
+  noRepositoryStart, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
-import { coordinatorNameOf } from './instructions.js'
+import { COORDINATOR_NAME } from './roleNames.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
-/** The coordinator's name in rows written before projects could name it (store.ts reads them for Buddies); new rows use what
- *  the project calls it (instructions.ts coordinatorNameOf). */
-export const LEAD_NAME = 'Product Manager'
 /** Memory and disk gate it; CPU use is one momentary sample, so it is not capped, as a routed Builder's start (Diego, 10-30). */
 export const LEAD_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 100,
   tools: ['git'], devices: [], quotaRequired: false }
@@ -35,16 +32,16 @@ export interface LeadContext {
 
 /** Efforts a Product Manager never runs at (task #3022, Ken 11-05): it keeps what people teach it only when it thinks hard
  *  enough to. Claude's and Codex's names below high. */
-const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
+export const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
 /** The effort a Product Manager gets when its start or switch names a model and no effort. */
 export const LEAD_EFFORT = 'high'
 
 /** [request] for a Product Manager at high effort or above: an effort named below it is refused, and a model named with no
  *  effort gets the coordinator's own default effort for that model (Claude Opus at xhigh, as its start; review of #3066, 3),
  *  else high. With no model it keeps its engine's own model and effort, which its host sets only together. */
-export function leadEffort<T extends { engine: string; model?: string; effort?: string }>(request: T, name: string): T {
+export function leadEffort<T extends { engine: string; model?: string; effort?: string }>(request: T): T {
   if (request.effort && BELOW_LEAD_EFFORT.has(request.effort.toLowerCase())) {
-    fail('EFFORT_TOO_LOW', `A ${name} runs at high effort or above, so it keeps what people teach it. Choose high, xhigh or max.`, 400)
+    fail('EFFORT_TOO_LOW', `A ${COORDINATOR_NAME} runs at high effort or above, so it keeps what people teach it. Choose high, xhigh or max.`, 400)
   }
   if (!request.model || request.effort) return request
   const defaults = BUILT_IN_ROLE_DEFAULTS.lead
@@ -61,19 +58,13 @@ function admitLead(state: SuperTabState, project: SwarmProject, pool: Contribute
     fail('ENGINE_NOT_OFFERED', `${LEAD_ENGINES[start.engine as keyof typeof LEAD_ENGINES] ?? start.engine} isn’t offered on ${pool.name}.`, 403)
   }
   admitMachineStart(state, start, context.now, undefined, project)
-  // Its Team account will serve only this project (machines.ts productManagerOn), so not one running another's work now.
-  if (teamAccountPool(pool) && [...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)) {
-    fail('TEAM_ACCOUNT_BUSY', `The Harness Team account on ${pool.name} runs other projects' agents, so it cannot host this ${coordinatorNameOf(project)} now.`, 409)
-  }
   if (!pool.observation?.capabilities?.includes(LEAD_CAPABILITY)) {
-    fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${coordinatorNameOf(project)} there.`, 409)
+    fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${COORDINATOR_NAME} there.`, 409)
   }
 }
 
 /** Where [project]'s Product Manager with [request]'s engine runs when its person names [machineId], as its start request; or
- *  throws why it cannot run there now. Writes nothing. The machine itself for its own owner; on another person's Mac, its
- *  Harness Team account when that admits this Product Manager with this engine now, else the Mac itself, as its owner,
- *  unless the Mac was added as its person joined. A Team account named itself keeps its rules and is refused with its reason.
+ *  throws why it cannot run there now. Writes nothing. Only on its person's own computer.
  */
 export function leadHost(state: SuperTabState, project: SwarmProject, machineId: string, request: LeadRequest, leadFor: AgentStartRequest['leadFor'],
   context: LeadContext): AgentStartRequest {
@@ -83,11 +74,10 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
   if (listed && !state.people.some(p => p.id === listed.contributorId)) fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
   const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
   const startIn = (pool: ContributedMachine): AgentStartRequest => noRepositoryStart(pool, project, { conversationId: project.leadConversationId, machineId: pool.machineId,
-    engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: coordinatorNameOf(project),
+    engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: COORDINATOR_NAME,
     cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
-  // A PM starts only on its person's own computer, as them, and never in a Team account (task #4120, the PM's ruling): the
-  // person starting it is [leadFor]'s, else the project's owner.
-  if (teamAccountPool(named)) failTeamWork(TEAM_ACCOUNTS_GONE)
+  // A PM starts only on its person's own computer, as them (task #4120, the PM's ruling): the person starting it is
+  // [leadFor]'s, else the project's owner.
   if (named.contributorId !== (leadFor?.personId ?? project.ownerId)) failTeamWork({ code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER })
   const start = startIn(named)
   admitLead(state, project, named, start, context)
@@ -132,31 +122,30 @@ export function leadOvertaken(state: SuperTabState, start: AgentStart, home: Con
   const placement = placementOf(state, start)
   const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
   if (placement) delete project.lead
-  const name = coordinatorNameOf(project)
+  const name = COORDINATOR_NAME
   const reason = `This project already has ${holder.displayName ?? holder.name} as its ${name}.`
   return { reason, text: `${name} started on ${machine ?? 'its machine'}, but this project already has ${holder.displayName ?? holder.name} as its ${name}, so it did not join.`,
     source: machine ? { kind: 'system', machine } : { kind: 'system' } }
 }
 
 /** Its agent [agentId] joined the project's Lead conversation [home]: it leads it, unless a Lead was added there by hand
- *  meanwhile, which stays. The line its conversation shows, and its source: a system row naming the machine, so a Buddy reads
- *  it without the name (store.ts withoutMachineNames; Diego, 10-30). */
+ *  meanwhile, which stays. The line its conversation shows, and its source: a system row naming the machine. */
 export function leadJoined(state: SuperTabState, start: AgentStart, home: Conversation, agentId: string): { text: string; source: { kind: 'system'; machine?: string } } {
   if (!home.leadId || !home.agentIds.includes(home.leadId)) home.leadId = agentId
   const placement = placementOf(state, start)
   if (placement) placement.status = 'started'
   const machine = placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name
   const project = start.request.leadFor && projectsOf(state).find(p => p.id === start.request.leadFor!.projectId)
-  const started = `${project ? coordinatorNameOf(project) : start.request.name} started on ${machine ?? 'its machine'}.`
+  const started = `${project ? COORDINATOR_NAME : start.request.name} started on ${machine ?? 'its machine'}.`
   const ran = state.agents.find(a => a.id === agentId)?.configuration
   const other = ran && otherThanAsked(start.request, ran)
   return { text: other ? `${started} ${other}` : started, source: machine ? { kind: 'system', machine } : { kind: 'system' } }
 }
 
 /** A Product Manager's start line when its machine could not launch it with the model and effort it asked for, so it runs its
- *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined). [name]: what its project calls it. */
-export const launchRefusedLine = (asked: { model: string; effort?: string }, name: string) =>
-  `${name} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
+ *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined). */
+export const launchRefusedLine = (asked: { model: string; effort?: string }) =>
+  `${COORDINATOR_NAME} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
 
 /** A Claude id by its family (`claude-opus-5-5[1m]` is opus), as the CLI's route rates it. */
 const family = (model: string) => /haiku|sonnet|opus|fable/.exec(model.toLowerCase())?.[0] ?? model.toLowerCase()
@@ -199,8 +188,8 @@ export function leadWaits(project: SwarmProject, id: string, now: number): void 
   project.leadWaiting = [...(project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS), { id, at: now }].slice(-MAX_LEAD_WAITING)
 }
 
-/** [project]'s Lead [agentId] joined its chat: the messages its person sent there while it had none are delivered to it, as a
- *  Buddy's waiting messages are (store.ts writeLateDeliveries checks each is its person's own row in that chat), and what waited
+/** [project]'s Lead [agentId] joined its chat: the messages its person sent there while it had none are delivered to it
+ *  (store.ts writeLateDeliveries checks each is its person's own row in that chat), and what waited
  *  and the claim end. */
 export function leadArrived(state: SuperTabState, project: SwarmProject, agentId: string, now: number) {
   const waiting = (project.leadWaiting ?? []).filter(w => now - w.at < LEAD_WAIT_MS)

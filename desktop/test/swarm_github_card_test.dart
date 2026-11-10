@@ -35,8 +35,8 @@ void main() {
     await tester.runAsync(c.refresh);
     await tester.pumpWidget(MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
-      home: Scaffold(body: SuperTabView(controller: c, onInvite: () {}, onAddAgent: (_) {}, onOpenTerminal: (_) {},
-        machineName: (_) => 'Mac Studio', github: swarmV4GitHub(), board: true)),
+      home: Scaffold(body: SuperTabView(controller: c, onAddAgent: (_) {}, onOpenTerminal: (_) {},
+        machineName: (_) => 'Mac Studio', github: swarmV4GitHub())),
     ));
     await tester.pumpAndSettle();
     return c;

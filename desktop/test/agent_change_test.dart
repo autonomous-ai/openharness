@@ -131,8 +131,6 @@ class SwitchConnection extends MonitorConnection {
 /// A machine with two Claude accounts and two Codex ones, as the daemon would list them.
 class ProfileConnection extends SwitchConnection {
   final links = <String>[];
-  final offers = <Map<String, dynamic>>[];
-  Map<String, dynamic>? offerReply;
   final requests = <String>[];
   final usageReads = <Map<String, dynamic>>[];
   var plainUsage = false;
@@ -163,9 +161,6 @@ class ProfileConnection extends SwitchConnection {
   }) async {
     requests.add(type);
     switch (type) {
-      case 'swarm_account_offer':
-        offers.add(Map.of(payload));
-        return offerReply ?? {'offered': payload['offered']};
       case 'claude_profiles_list':
         return {'profiles': claudeRows};
       case 'claude_profile_link':
@@ -1321,31 +1316,6 @@ void main() {
     expect(connection.creations.single['engine'], 'claude');
   });
 
-  test(
-    'a Buddy keeps its agent, and the refusal says how to use another',
-    () async {
-      // The daemon's refusal speaks of Stop Harness, which is no help to someone changing the agent.
-      final connection = SwitchConnection()
-        ..closeRefusal = {
-          'error': 'BUDDY_PROTECTED',
-          'detail': 'This is a Swarm Buddy. Its person removes it from the Swarm, or Stop Harness stops it.',
-          'keptRunning': true,
-        };
-      final app = fixture(connection);
-      addTearDown(app.dispose);
-      await app.addAgentToSwarm('m', 'a0');
-      final pane = app.panes.single;
-      expect(
-        await app.changeAgent('m', 'a0', 'opencode'),
-        'A Swarm Buddy keeps its agent. To use another agent, its person removes the Buddy and adds a new one.',
-      );
-      expect(connection.creations, isEmpty);
-      expect(app.panes.single, same(pane));
-      expect(pane.agentId, 'a0');
-      expect(app.stateOf('m')!.agents.first.isStopped, isFalse);
-    },
-  );
-
   // Dee, 11-01: a Swarm Product Manager's engine is switched from its pane,
   // as any pane's. Its machine lets the stop through only for the switch
   // whose handoff it prepared, so the stop names that switch.
@@ -1520,79 +1490,23 @@ void main() {
     });
 
     test(
-      'using an account that is not offered runs this pane on it and offers nothing',
+      'using another account runs this pane on it',
       () async {
         final connection = ProfileConnection();
-        connection.claudeRows[1]['offered'] = false;
         final app = fixture(connection, sourceEngine: 'codex');
         app.stateOf('m')!.localOnly = true;
         addTearDown(app.dispose);
         await app.addAgentToSwarm('m', 'a0');
         final rows = await app.agentProfiles('m', 'claude');
-        expect(rows.map((r) => r.offered), [true, false]);
         expect(
           await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key),
           isNull,
         );
         expect(connection.links, isEmpty);
-        expect(connection.offers, isEmpty);
         expect(
           connection.creations.single,
           containsPair('claudeHome', '/home/me/.claude-work'),
         );
-      },
-    );
-
-    test('the owner offers and withdraws an account by asking this computer', () async {
-      final connection = ProfileConnection();
-      connection.claudeRows[1]['offered'] = false;
-      final app = fixture(connection, sourceEngine: 'codex');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', true), isNull);
-      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', false), isNull);
-      expect(connection.offers, [
-        {'engine': 'claude', 'path': '/home/me/.claude-work', 'offered': true},
-        {'engine': 'claude', 'path': '/home/me/.claude-work', 'offered': false},
-      ]);
-      connection.offerReply = {'error': 'NOT_FOUND'};
-      expect(await app.setAccountOffered('m', 'claude', '/gone', true), 'That account’s folder is gone.');
-      connection.offerReply = {'error': 'UNSUPPORTED'};
-      expect(await app.setAccountOffered('m', 'claude', '/x', true), 'Update Harness on this computer to offer accounts.');
-    });
-
-    test('accounts of another computer cannot be offered from here', () async {
-      final connection = ProfileConnection();
-      final app = fixture(connection, sourceEngine: 'codex');
-      addTearDown(app.dispose);
-      expect(await app.setAccountOffered('m', 'claude', '/home/me/.claude-work', true), 'Accounts can be offered on their own computer only.');
-      expect(connection.offers, isEmpty);
-    });
-
-    test('only an account a current CLI marks can be offered: never the default, never an old CLI row', () async {
-      final connection = ProfileConnection();
-      connection.claudeRows[1]['offered'] = false;
-      final app = fixture(connection, sourceEngine: 'codex');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [false, true]);
-      connection.claudeRows[1].remove('offered');
-      expect((await app.agentProfiles('m', 'claude')).map((r) => r.canOffer), [false, false]);
-    });
-
-    test(
-      'an offered account, the default and an old CLI row link nothing',
-      () async {
-        final connection = ProfileConnection();
-        connection.claudeRows[1]['offered'] = true;
-        final app = fixture(connection, sourceEngine: 'codex');
-        app.stateOf('m')!.localOnly = true;
-        addTearDown(app.dispose);
-        await app.addAgentToSwarm('m', 'a0');
-        final rows = await app.agentProfiles('m', 'claude');
-        expect(rows.every((r) => r.offered), isTrue);
-        await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key);
-        expect(connection.links, isEmpty);
       },
     );
 
@@ -1709,40 +1623,6 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       return search;
     }
-
-    test('a row not offered says so, and Swarm accounts… is listed only where an account can be offered', () async {
-      final connection = ProfileConnection();
-      connection.claudeRows[1]['offered'] = false;
-      final app = fixture(connection, sourceEngine: 'codex');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      final search = await pick(app);
-      final work = search.rows.firstWhere((r) => r.title == 'Claude · Work');
-      expect(work.detail, 'Not offered to the Swarm');
-      expect(search.rows.where((r) => r.managesSwarmAccounts).single.title, 'Swarm accounts…');
-      expect(search.rows.where((r) => r.addsClaudeAccount).single.detail, contains('Yours until you offer it'));
-      connection.claudeRows[1].remove('offered');
-      final old = await pick(app);
-      expect(old.rows.where((r) => r.managesSwarmAccounts), isEmpty);
-    });
-
-    test('Swarm accounts lists offerable rows of both engines, and a failed list throws rather than reading as none', () async {
-      final connection = ProfileConnection();
-      connection.claudeRows[1]['offered'] = false;
-      connection.codexRows = [
-        {'path': '${homeDir()}/.codex', 'label': 'Default', 'default': true, 'offered': true},
-        {'path': '/home/me/.codex-a', 'label': 'A', 'offered': true},
-      ];
-      final app = fixture(connection, sourceEngine: 'codex');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      final rows = await app.swarmAccounts('m');
-      expect(rows.map((r) => (r.engine, r.label, r.offered)), [('claude', 'Work', false), ('codex', 'A', true)]);
-      connection.claudeRows = [];
-      final other = fixture(ProfileConnection(), sourceEngine: 'codex');
-      addTearDown(other.dispose);
-      await expectLater(other.swarmAccounts('m'), throwsStateError);
-    });
 
     test('a Codex pane on the default account has the default row current and no change', () async {
       final connection = ProfileConnection();
@@ -1899,35 +1779,6 @@ void main() {
         expect(await app.addClaudeAccount('m', 'a0'), isNotNull);
       },
     );
-
-    test('a Swarm Buddy keeps its engine: rows disabled, no change', () async {
-      final connection = ProfileConnection();
-      final app = fixture(connection, sourceEngine: 'claude');
-      app.stateOf('m')!.localOnly = true;
-      addTearDown(app.dispose);
-      app.buddyAgentsForTest.add(('m', 'a0'));
-      final search = SwarmSearchController(app, []);
-      addTearDown(search.dispose);
-      search.setQuery('&');
-      search.setAgentSelection('m', 'a0');
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(
-        search.rows.every(
-          (r) => r.detail == 'A Buddy keeps its engine for now',
-        ),
-        isTrue,
-      );
-      expect(search.canSubmit(search.rows.first), isFalse);
-      expect(
-        connection.requests.where((t) => t.endsWith('profiles_list')),
-        isEmpty,
-      );
-      expect(
-        await app.changeAgent('m', 'a0', 'codex'),
-        'A Buddy keeps its engine for now',
-      );
-      expect(connection.creations, isEmpty);
-    });
   });
 
   test('& searches all agents and only submits supported choices for its exact source', () {

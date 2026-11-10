@@ -15,14 +15,10 @@ import 'controller.dart';
 import 'dialog_scope.dart';
 import 'leaderboard/models_section.dart';
 import 'leaderboard/reader.dart';
-import 'scorecard.dart';
-import 'scorecard_view.dart';
 import 'message_row.dart' show SuperTabMessageRow;
 import 'local_models.dart';
 import 'machines.dart';
-import 'backlog_view.dart';
 import 'model.dart';
-import 'pull_request_facts.dart';
 import 'sharing.dart';
 import 'swarm_delete.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
@@ -30,9 +26,9 @@ import 'swarm_switcher.dart' show PersonalSwarm;
 /// What Manage shows (docs/plans/2026-11-02-quiet-swarm-design.md, screens 10,
 /// 10b, 10c): what used to stand in the sidebar and the Swarm dropdown, one
 /// click away. Devices is the devices pane the view already holds.
-enum SuperTabManageTab { machines, models, devices, swarm, backlog, scorecard }
+enum SuperTabManageTab { machines, models, devices, swarm }
 
-/// Machines, Models, Devices, Swarm, Backlog, Scorecard, under Manage's heading.
+/// Machines, Models, Devices, Swarm, under Manage's heading.
 class SuperTabManageTabs extends StatelessWidget {
   const SuperTabManageTabs({
     super.key,
@@ -70,17 +66,14 @@ class SuperTabManageTabs extends StatelessWidget {
           tab(SuperTabManageTab.models, 'Models'),
           if (devices) tab(SuperTabManageTab.devices, 'Devices'),
           tab(SuperTabManageTab.swarm, 'Swarm'),
-          tab(SuperTabManageTab.backlog, 'Backlog'),
-          tab(SuperTabManageTab.scorecard, 'Scorecard'),
         ],
       ),
     );
   }
 }
 
-/// Manage's Machines, Models, Swarm or Backlog. Each is built only while it
-/// shows, so what it runs (the machines' clock, the Backlog's pull request
-/// watch) stops when it does not.
+/// Manage's Machines, Models or Swarm. Each is built only while it shows, so
+/// what it runs (the machines' clock) stops when it does not.
 class SuperTabManagePage extends StatelessWidget {
   const SuperTabManagePage({
     super.key,
@@ -90,8 +83,6 @@ class SuperTabManagePage extends StatelessWidget {
     this.app,
     this.board,
     this.onOpenAgent,
-    this.onOpenConversation,
-    this.facts,
     this.readLocal,
     this.now = DateTime.now,
   });
@@ -102,10 +93,6 @@ class SuperTabManagePage extends StatelessWidget {
   final SuperTabLeaderboardReader? board;
   final ValueChanged<SuperTabConversation> onAddAgent;
   final ValueChanged<SuperTabAgent>? onOpenAgent;
-
-  /// Opens a task's chat from the Backlog; [facts] gives its rows' checks.
-  final bool Function(String id)? onOpenConversation;
-  final SuperTabPullRequestFacts? facts;
 
   /// Forwarded to [SuperTabMachines], for a test without a real machine.
   final Future<MachineResources?> Function(String machineId)? readLocal;
@@ -130,7 +117,6 @@ class SuperTabManagePage extends StatelessWidget {
           onOpenAgent: onOpenAgent,
           readLocal: readLocal,
           now: now,
-          manage: true,
         ),
         SuperTabManageTab.models => _ManageModels(
           controller: controller,
@@ -144,13 +130,6 @@ class SuperTabManagePage extends StatelessWidget {
           controller: controller,
           app: app,
         ),
-        SuperTabManageTab.backlog => SuperTabBacklogView(
-          controller: controller,
-          facts: facts,
-          now: now,
-          onOpenConversation: (id) => onOpenConversation?.call(id),
-        ),
-        SuperTabManageTab.scorecard => _ManageScorecard(controller: controller),
       },
     ),
   );
@@ -414,33 +393,4 @@ class _ManageSwarmState extends State<_ManageSwarm> {
       .where((tab) => tab.isSuperTab && tab.superTabId == c.tabId)
       .firstOrNull
       ?.id;
-}
-
-/// Manage's Scorecard: its reader lives while the tab shows.
-class _ManageScorecard extends StatefulWidget {
-  const _ManageScorecard({required this.controller});
-  final SuperTabController controller;
-
-  @override
-  State<_ManageScorecard> createState() => _ManageScorecardState();
-}
-
-class _ManageScorecardState extends State<_ManageScorecard> {
-  late final _reader = SuperTabScorecardReader(
-    tabId: widget.controller.tabId,
-    request: widget.controller.request,
-  );
-
-  @override
-  void dispose() {
-    _reader.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => SuperTabScorecardView(
-    projects: widget.controller.snapshot?.projects ?? const [],
-    projectId: widget.controller.selected?.projectId,
-    reader: _reader,
-  );
 }

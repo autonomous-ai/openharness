@@ -34,36 +34,27 @@ void main() {
     expect(snapshot.conversation('aeef')!.lastMessageSequence, 219804);
     expect(snapshot.agents.map((a) => a.displayName), ['River', 'Hugo']);
     expect(snapshot.localModels!.grid, 'swarm-c514');
-    expect(snapshot.mentionsWaiting, 0);
-    expect(state['githubApp'], true);
     // The machine and its values worked out at read time.
     expect(snapshot.pool('7835')!['teamWork'], {'allowed': true});
     expect(snapshot.pool('7835')!['availableSlots'], 3);
   });
 
-  test(
-    'derived values overlay the agents; a null decision keeps the stored one',
-    () {
-      final state = SuperTabParts.firstLoad(recorded('first_load')).state;
-      final agents = (state['agents'] as List).cast<Map<String, dynamic>>();
-      final hugo = agents.firstWhere((a) => a['id'] == '0540');
-      final river = agents.firstWhere((a) => a['id'] == '0fcb');
-      expect(hugo['downSince'], '2026-10-26T10:19:51.474Z');
-      expect(hugo['workDecision'], 'awaiting');
-      expect(river['downSince'], isNull);
-      expect(river.containsKey('workDecision'), isFalse);
+  test('derived values overlay the agents', () {
+    final state = SuperTabParts.firstLoad(recorded('first_load')).state;
+    final agents = (state['agents'] as List).cast<Map<String, dynamic>>();
+    final hugo = agents.firstWhere((a) => a['id'] == '0540');
+    final river = agents.firstWhere((a) => a['id'] == '0fcb');
+    expect(hugo['downSince'], '2026-10-26T10:19:51.474Z');
+    expect(river['downSince'], isNull);
 
-      final changed = recorded('changes');
-      final parts = SuperTabParts.firstLoad(recorded('first_load'))
-        ..apply(changed);
-      final after = (parts.state['agents'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((a) => a['id'] == '0540');
-      // Derived says nothing more about the decision: the stored one stands.
-      expect(after['workDecision'], 'release');
-      expect(after['downSince'], isNull);
-    },
-  );
+    final changed = recorded('changes');
+    final parts = SuperTabParts.firstLoad(recorded('first_load'))
+      ..apply(changed);
+    final after = (parts.state['agents'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((a) => a['id'] == '0540');
+    expect(after['downSince'], isNull);
+  });
 
   test('a first load of another format is refused', () {
     expect(
@@ -144,7 +135,6 @@ void main() {
         SuperTabSnapshot.fromJson(state).pool('7835')!['availableSlots'],
         2,
       );
-      expect(state['mentionsWaiting'], 1);
     },
   );
 
@@ -341,11 +331,11 @@ void main() {
         'derived': {
           'agents': <String, dynamic>{},
           'machines': <String, dynamic>{},
-          'mentionsWaiting': 4,
+          'avatars': {'person:owner': 'https://example.com/a.png'},
         },
       });
       expect(parts.derivedEtag, 'e2');
-      expect(parts.derived['mentionsWaiting'], 4);
+      expect(parts.derived['avatars'], isNotEmpty);
       expect(parts.derived['agents'], isEmpty);
     });
 

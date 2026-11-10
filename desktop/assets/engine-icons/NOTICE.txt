@@ -131,6 +131,11 @@ autonomous/memories
 License: MIT
 Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/memories.svg
 
+autonomous/files
+© 2026 OpenHarness contributors
+License: MIT
+Source: https://github.com/autonomous-ai/openharness/blob/main/store/branding/files.svg
+
 licenses/original.txt
 
 MIT License

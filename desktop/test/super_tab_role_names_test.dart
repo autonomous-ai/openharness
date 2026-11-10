@@ -59,9 +59,6 @@ void main() {
         _agent('qa', {'roleName': 'Quality assurance lead'}),
         _agent('exact', {'roleName': 'Twelve chars'}),
         _agent('lead', {'roleName': 'PM'}),
-        _agent('buddy', {
-          'buddyOf': {'personId': 'u1'},
-        }),
       ],
       project: {'coordinatorName': 'Coordinator'},
     );
@@ -72,7 +69,6 @@ void main() {
     ));
     expect(swarm.roleOf('exact')?.badge, 'Twelve chars');
     expect(swarm.roleOf('lead'), (name: 'PM', badge: 'PM'));
-    expect(swarm.roleOf('buddy'), isNull);
     expect(swarm.roleOf('nobody'), isNull);
     expect(swarm.coordinatorNameOf('p1'), 'Coordinator');
     expect(swarm.coordinatorNameOf('elsewhere'), kDefaultCoordinatorName);
@@ -119,7 +115,6 @@ void main() {
             home: Scaffold(
               body: SuperTabView(
                 controller: c,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Team Mac',

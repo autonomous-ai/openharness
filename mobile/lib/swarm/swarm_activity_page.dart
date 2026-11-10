@@ -15,7 +15,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
 import 'swarm_activity.dart';
-import 'swarm_activity_feed.dart';
 import 'swarm_asks.dart' show SwarmAsks;
 import 'swarm_home_rows.dart' show SwarmInvitationRow, swarmNeedAsk;
 import 'swarm_inbox.dart';
@@ -119,15 +118,15 @@ class SwarmActivityPage extends StatelessWidget {
 }
 
 /// Activity, in place of Needs you (Tony's prototype C3): its title in the
-/// terminal's face, the filters — All · Needs you · Mentions · Replies ·
-/// Reactions (Threads from a server before Activity) — each with its count,
+/// terminal's face, the filters — All · Needs you · Mentions · Replies
+/// (Threads from a server before Activity) — each with its count,
 /// then the open filter's rows. All, the tab's first (Slack's one feed, Tony,
 /// 2026-11-03), has what needs the person first, then the rest newest first.
 /// On the tab, the invitations to a Swarm head All and Needs you, counted in
 /// both and on the tab's badge ([swarmActivityTabBadge]): they wait on the
 /// person's answer. Each row: where and who over what, and Approve (which
 /// asks first) or Reply at the row's end. A need the person handled stays,
-/// dimmed, under the others; a reply or reaction is bold while unread. The
+/// dimmed, under the others; a reply is bold while unread. The
 /// rows shown are read on every device once Activity is left
 /// ([SwarmActivity.showing]). The Activity tab's screen, and
 /// [SwarmActivityPage]'s.
@@ -191,8 +190,6 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
   }) => switch (key) {
     final key? when key.startsWith('mention:') => SwarmActivityFilter.mentions,
     final key? when key.startsWith('thread:') => SwarmActivityFilter.threads,
-    final key? when key.startsWith('reaction:') =>
-      SwarmActivityFilter.reactions,
     null when all => null,
     _ => SwarmActivityFilter.needsYou,
   };
@@ -368,11 +365,12 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
       children: [
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
+          // Each pill's 44-point box leaves 6 above and below what it draws.
           padding: const EdgeInsets.fromLTRB(
             AppSpace.m,
-            AppSpace.xs,
+            0,
             AppSpace.m,
-            AppSpace.s,
+            AppSpace.xs,
           ),
           child: Row(
             children: [
@@ -418,10 +416,7 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     List<SwarmActivityItem> items,
   ) {
     final activity = session.activity, inbox = session.inbox;
-    final fromChats =
-        _filter == null ||
-        _filter == SwarmActivityFilter.threads ||
-        _filter == SwarmActivityFilter.reactions;
+    final fromChats = _filter == null || _filter == SwarmActivityFilter.threads;
     final note = AppType.caption(color: AppPalette.textSecondary, height: 1.35);
     final missing = _focusMissing(session, items);
     if (missing == null) _showFocus();
@@ -592,7 +587,6 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     SwarmActivityFilter.threads when replies =>
       'No replies to your messages yet.',
     SwarmActivityFilter.threads => 'No threads with you yet.',
-    SwarmActivityFilter.reactions => 'No reactions to you yet.',
   };
 
   Widget _row(
@@ -968,8 +962,11 @@ class _Note extends StatelessWidget {
   );
 }
 
-/// One of Activity's filters: its name and count in a pill a thumb can find,
-/// filled while it is the one open.
+/// One of Activity's filters: its name and count in a pill drawn at a
+/// control's height ([AppControl.height]) and pressed across the 44-point box
+/// it is laid out in ([SwarmTapTarget]), filled while it is the one open; its
+/// name semibold then, medium otherwise, as [SwarmSegments] draws its
+/// segments.
 class SwarmActivityFilterPill extends StatelessWidget {
   const SwarmActivityFilterPill({
     super.key,
@@ -994,45 +991,52 @@ class SwarmActivityFilterPill extends StatelessWidget {
     AppTheme.watch(context);
     final ink = selected ? AppPalette.windowBg : AppPalette.textPrimary;
     final name = label ?? filter?.label ?? 'All';
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '$name, $count',
-      excludeSemantics: true,
-      child: Material(
-        color: selected
-            ? AppPalette.textPrimary
-            : AppPalette.swarmSearchSurface,
-        shape: const StadiumBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    name,
-                    style: AppType.label(
-                      color: ink,
-                      fontWeight: AppFont.semibold,
-                      height: 1,
+    return SwarmTapTarget(
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: '$name, $count',
+        excludeSemantics: true,
+        child: Material(
+          color: selected
+              ? AppPalette.textPrimary
+              : AppPalette.swarmSearchSurface,
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: AppControl.height,
+                minWidth: AppControl.height,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      style: AppType.label(
+                        color: ink,
+                        fontWeight: selected
+                            ? AppFont.semibold
+                            : AppFont.medium,
+                        height: 1,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '$count',
-                    style: AppType.label(
-                      color: selected
-                          ? ink.withValues(alpha: .7)
-                          : AppPalette.textSecondary,
-                      height: 1,
+                    const SizedBox(width: 6),
+                    Text(
+                      '$count',
+                      style: AppType.label(
+                        color: selected
+                            ? ink.withValues(alpha: .7)
+                            : AppPalette.textSecondary,
+                        height: 1,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -1044,7 +1048,7 @@ class SwarmActivityFilterPill extends StatelessWidget {
 
 /// One row of Activity, as prototype C3 draws it: who it is from, "#project ·
 /// who · when" over what it is in bold, maybe a line under that (a thread's
-/// replies, the reactions), and at its end Approve or Reply. A decision
+/// replies), and at its end Approve or Reply. A decision
 /// whose answer is held or on its way shows that, with Undo, in place of
 /// the button; a handled row is dimmed, with what was done at its end.
 class SwarmActivityRow extends StatelessWidget {
@@ -1066,7 +1070,7 @@ class SwarmActivityRow extends StatelessWidget {
   /// What was done with it; null while it is still to handle.
   final String? handled;
 
-  /// Bold: still to handle, or a reply or reaction not read.
+  /// Bold: still to handle, or a reply not read.
   final bool unread;
   final DateTime now;
   final VoidCallback onTap, onApprove, onReply;
@@ -1135,11 +1139,13 @@ class SwarmActivityRow extends StatelessWidget {
         key: ValueKey('swarm-activity-approve-${item.key}'),
         label: 'Approve',
         style: SwarmButtonStyle.fill,
+        compact: true,
         onPressed: onApprove,
       ),
       null => SwarmButton(
         key: ValueKey('swarm-activity-reply-${item.key}'),
         label: 'Reply',
+        compact: true,
         onPressed: onReply,
       ),
     };
@@ -1207,7 +1213,6 @@ class SwarmActivityRow extends StatelessWidget {
       SwarmWorkNeed(:final work) => work.project.name,
     },
     SwarmActivityThread(:final project) => project.name,
-    SwarmActivityReaction(:final project) => project.name,
     // The project as this Swarm's own read has the chat: never the server's
     // word for it.
     SwarmActivityServerItem(:final conversationId) =>
@@ -1225,11 +1230,9 @@ class SwarmActivityRow extends StatelessWidget {
       final text? when text.trim().isNotEmpty => text.trim(),
       _ => 'A thread in #${project.name}',
     },
-    SwarmActivityReaction(:final message) => message.text.trim(),
-    SwarmActivityServerItem(:final entry) => swarmActivityDid(
-      entry,
-      swarmActivityWho(item, session.inbox.reader(item.swarmId)).name,
-    ),
+    SwarmActivityServerItem() =>
+      '${swarmActivityWho(item, session.inbox.reader(item.swarmId)).name} '
+          'replied to your message',
   };
 
   String? _line() => switch (item) {
@@ -1239,9 +1242,6 @@ class SwarmActivityRow extends StatelessWidget {
     },
     SwarmActivityThread(:final thread) =>
       thread.replies == 1 ? '1 reply' : '${thread.replies} replies',
-    SwarmActivityReaction(:final reactions) => [
-      for (final r in reactions) '${r.emoji.glyph} ${r.count}',
-    ].join('  '),
     _ => null,
   };
 }
@@ -1294,20 +1294,6 @@ class SwarmActivityRow extends StatelessWidget {
       ),
       _ => (id: thread.id, name: 'Someone'),
     },
-    SwarmActivityReaction(:final reactions) => () {
-      final by = [
-        for (final r in reactions)
-          for (final who in r.by) who,
-      ];
-      final names = {for (final who in by) named(who.kind, who.id, 'Someone')}
-          .toList();
-      return (
-        id: by.isEmpty ? item.key : by.first.id,
-        name: names.length <= 2
-            ? names.join(', ')
-            : '${names.take(2).join(', ')} +${names.length - 2}',
-      );
-    }(),
     // An agent the Swarm no longer lists keeps the server's name for it; a
     // person is named only as this Swarm lists them.
     SwarmActivityServerItem(:final entry) => (
@@ -1320,15 +1306,3 @@ class SwarmActivityRow extends StatelessWidget {
     ),
   };
 }
-
-/// What [entry]'s [who] did, as Desktop's Activity says it.
-String swarmActivityDid(SwarmActivityEntry entry, String who) =>
-    switch (entry.kind) {
-      SwarmActivityKind.reply => '$who replied to your message',
-      SwarmActivityKind.reaction => switch (SuperTabReactionEmoji.of(
-        entry.emoji,
-      )?.glyph) {
-        final glyph? => '$who reacted $glyph to your message',
-        null => '$who reacted to your message',
-      },
-    };

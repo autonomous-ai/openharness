@@ -6,25 +6,41 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/browser/browser_panel.dart';
+import 'package:harness/browser/browser_pill.dart';
+import 'package:harness/browser/browser_settings.dart';
+import 'package:harness/browser/browser_settings_page.dart';
+import 'package:harness/browser/browser_setup_dialog.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
-import 'package:harness/super_tabs/chat/fold.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
-import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/channel_talk.dart';
+import 'package:harness/super_tabs/quiet_rows.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/github_row.dart';
 import 'package:harness/super_tabs/task_board.dart';
+import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
+import 'package:harness/super_tabs/agent_info.dart';
+import 'package:harness/super_tabs/back_to_chat.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
+import 'package:harness/super_tabs/project_sidebar.dart'
+    show SuperTabFoldRow, SwarmStartRow;
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
@@ -92,13 +108,18 @@ void main() {
     };
     expect(details.evaluate(), isNotEmpty);
     expect(rights, hasLength(1), reason: '$rights');
-    // The heading's +: its glyph's box ends on the same edge.
+    // The headings' +, Your Team's and Projects': each glyph's box ends on the same edge.
     final plus = find.descendant(
       of: find.byKey(_Gallery.leftPane),
       matching: find.byIcon(AppIcons.plus),
     );
-    expect(plus, findsOneWidget);
-    expect(tester.getRect(plus).right, moreOrLessEquals(rights.single));
+    expect(plus, findsNWidgets(2));
+    for (final e in plus.evaluate()) {
+      expect(
+        tester.getRect(find.byWidget(e.widget)).right,
+        moreOrLessEquals(rights.single),
+      );
+    }
     await _close(tester, bars);
   });
 
@@ -136,12 +157,35 @@ Future<List<SuperTabController>> _show(
   final old = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
+  // Faye's pane reads her own file and, under it, the project's AGENTS.md and CLAUDE.md, as her computer sends them.
+  final computer =
+      SwarmV4Computer(
+          files: {'h/Faye': 'Answer in Vietnamese.\nNever push to main.'},
+        )
+        ..shared = [
+          {
+            'name': 'AGENTS.md',
+            'text': '# lampOS\n\nShip small.\nKeep the answer short, and say\nwhat you checked.',
+            'truncated': true,
+          },
+          {
+            'name': 'CLAUDE.md',
+            'text': 'Read AGENTS.md first.',
+            'truncated': false,
+          },
+        ]
+        ..skipped = [
+          {'name': 'CLAUDE.local.md', 'why': 'link'},
+        ];
   // The task cards read the lampOS review Swarm's channel.
   final c = swarmV4Server().controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
+  // Faye's Browser settings, as her computer keeps them.
+  final browserApp = _BrowserSettingsApp();
+  addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1950);
+  tester.view.physicalSize = const Size(760, 4353);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -153,14 +197,19 @@ Future<List<SuperTabController>> _show(
         child: _Gallery(
           brightness,
           faces: faces,
-          // The decision cards read their answers' state from a reader's Decisions.
+          // The task board reads its project from a Swarm.
           swarm: c,
+          instructions: computer.link,
+          browserApp: browserApp,
         ),
       ),
     ),
   );
+  // The pane's read answers after the first frame, and shows on the next.
   await tester.pump();
-  // A fold says More a frame after it measures what it holds.
+  await tester.pump();
+  // Its folder's files start folded; AGENTS.md is opened, as a person clicks it, and CLAUDE.md stays folded.
+  await tester.tap(find.byKey(const ValueKey('swarm-shared-row-0')));
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
@@ -199,8 +248,12 @@ const _rest = .0001;
     (
       regions: _regions(tester),
       // A glyph's smoothed edge reaches a little past its box.
+      // Selectable text (the Instructions pane's files) draws its words through an editable, not a RichText.
       words: [
-        for (final text in find.byType(RichText).evaluate())
+        for (final text in [
+          ...find.byType(RichText).evaluate(),
+          ...find.byType(EditableText).evaluate(),
+        ])
           tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
       ],
     );
@@ -316,15 +369,17 @@ const _faces = [
   'Nova',
 ];
 
-SuperTabAgent _agent(String name, {String? kind}) => SuperTabAgent.fromJson({
-  'id': 'id-$name',
-  'name': name,
-  'machineId': 'm',
-  'harnessId': 'h',
-  'contributorId': 'p',
-  'configuration': {'engine': 'claude'},
-  'kind': ?kind,
-});
+SuperTabAgent _agent(String name, {String? kind, bool offline = false}) =>
+    SuperTabAgent.fromJson({
+      'id': 'id-$name',
+      'name': name,
+      'machineId': 'm',
+      'harnessId': 'h',
+      'contributorId': 'p',
+      'configuration': {'engine': 'claude'},
+      'kind': ?kind,
+      if (offline) 'downSince': '2026-11-09T05:00:00Z',
+    });
 
 final _person = SuperTabPerson.fromJson({
   'id': 'p1',
@@ -333,14 +388,26 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness, {required this.faces, required this.swarm});
+  const _Gallery(
+    this.brightness, {
+    required this.faces,
+    required this.swarm,
+    required this.instructions,
+    required this.browserApp,
+  });
   final Brightness brightness;
+
+  /// Where Browser settings reads Faye's.
+  final AppNotifier browserApp;
   final List<String> faces;
 
   static const leftPane = ValueKey('gallery-left-pane');
 
   /// The lampOS review Swarm, whose channel the task cards read.
   final SuperTabController swarm;
+
+  /// How the Instructions pane asks Faye's computer.
+  final SwarmInstructionsLink instructions;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -418,19 +485,35 @@ class _Gallery extends StatelessWidget {
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
-                        for (final (name, lead, unread, selected) in [
-                          ('River', true, false, false),
-                          ('Quinn', false, false, true),
-                          ('Kai', false, true, false),
+                        // A New agent going on after its form closed: first, greyed, until it runs; one that failed opens
+                        // its form again.
+                        const SwarmStartRow(name: 'Faye', project: false),
+                        SwarmStartRow(
+                          name: 'Ivy',
+                          project: false,
+                          failed: true,
+                          onOpen: () {},
+                        ),
+                        for (final (name, lead, unread, selected, state) in [
+                          ('River', true, false, false, null),
+                          ('Quinn', false, false, true, 'on #12'),
+                          ('Kai', false, true, false, 'free'),
+                          ('Wren', false, false, false, 'offline'),
+                          ('Moss', false, false, false, 'starting'),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
-                              _agent(name, kind: lead ? 'pm' : null),
+                              _agent(
+                                name,
+                                kind: lead ? 'pm' : null,
+                                offline: state == 'offline',
+                              ),
                               size: SuperTabQuietRow.faceSize,
                               engineBadge: false,
                               lead: lead,
                             ),
                             name: name,
+                            detail: state,
                             selected: selected,
                             unread: unread,
                             onTap: () {},
@@ -447,9 +530,43 @@ class _Gallery extends StatelessWidget {
                           detail: 'Mac Studio',
                           onTap: () {},
                         ),
+                        // While a click joins it: it waits.
+                        SuperTabQuietRow(
+                          leading: SuperTabAvatar(
+                            identity: 'agent:${swarmAgentId('m', 'billing')}',
+                            name: 'Billing fix',
+                            size: SuperTabQuietRow.faceSize,
+                            face: true,
+                          ),
+                          name: 'Billing fix',
+                          detail: 'joining',
+                          onTap: null,
+                        ),
+                        // Past the first eight: the rest, a click away.
+                        SuperTabFoldRow(hidden: 32, onTap: () {}),
+                        SuperTabQuietHeading(
+                          'Projects',
+                          collapsed: false,
+                          onTap: () {},
+                          onAdd: () {},
+                          addTooltip: 'New project',
+                        ),
+                        // A New project going on after its form closed, in place of its own row.
+                        const SwarmStartRow(name: 'docs-home', project: true),
+                        // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',
-                          collapsed: true,
+                          collapsed: false,
+                          onTap: () {},
+                        ),
+                        SuperTabQuietRow(
+                          leading: Icon(
+                            AppIcons.monitorOff,
+                            size: AppIcons.inlineSize,
+                            color: grid.SidebarInk.inkMuted,
+                          ),
+                          name: 'Old Rig',
+                          detail: 'offline',
                           onTap: () {},
                         ),
                         SuperTabQuietHeading(
@@ -487,7 +604,25 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              // Its pull requests, what ⑂ opens (anh Dee 2026-11-10): three columns by who acts next, as lampOS's train bot sorts them.
+              title(
+                'Pull requests: To read, To fix, Merging; a card opens its chat',
+              ),
+              SizedBox(
+                width: 760,
+                height: 250,
+                child: SwarmTaskBoard(
+                  controller: swarm,
+                  conversationId: 'lead',
+                  github: swarmV4GitHub(),
+                  pulls: true,
+                  refreshEvery: null,
+                  now: () => DateTime.utc(2026, 11, 9, 9),
+                  onOpen: (_, _) {},
+                  onClose: () {},
+                ),
+              ),
+              title('Chat: bubbles, a time after a pause, cards'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -510,6 +645,15 @@ class _Gallery extends StatelessWidget {
                         ),
                         SwarmChatTime(DateTime.utc(2026, 11, 7, 9, 12)),
                         _message('dee', 'Found it, thanks!', person: _person),
+                        // A post to a teammate reads "Quinn to Kai", and says when the one asked is off.
+                        _message(
+                          'Quinn',
+                          '@Kai can you read #12?',
+                          agent: _agent('Quinn'),
+                          id: 'm-Quinn-to',
+                          to: ['Kai'],
+                          note: 'Kai is offline',
+                        ),
                       ],
                     ),
                   ),
@@ -519,22 +663,6 @@ class _Gallery extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SwarmChatCard(
-                          icon: AppIcons.send,
-                          label: 'Sent to River',
-                          title: 'Every task opens as a thread',
-                          action: 'View brief',
-                          details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
-                        const SwarmChatCard(
-                          icon: AppIcons.circleCheck,
-                          label: 'Shipped',
-                          title: 'Wake fix: the mic closes after 1 second',
-                          action: 'What changed',
-                          details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
                         // What GitHub said to your agent (github_row.dart).
                         const SwarmChatCard(
                           icon: AppIcons.gitPullRequest,
@@ -542,14 +670,6 @@ class _Gallery extends StatelessWidget {
                           title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
                           action: 'Read',
                           details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
-                        SwarmFold(
-                          child: Text(
-                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
-                                .join('\n'),
-                            style: SwarmType.body(context),
-                          ),
                         ),
                       ],
                     ),
@@ -568,6 +688,85 @@ class _Gallery extends StatelessWidget {
                     width: 250,
                     child: _Composer('typed', 'Ship it'),
                   ),
+                ],
+              ),
+              title('Back to chat: where a pane took the chat\'s place'),
+              SizedBox(width: 280, child: SwarmBackToChat(onBack: () {})),
+              title('Info: what the app knows of an agent, beside its chat'),
+              SizedBox(
+                width: 380,
+                height: 300,
+                child: SwarmAgentInfo(
+                  controller: swarm,
+                  agent: swarm.snapshot!.agent('first builder')!,
+                  machineName: 'Mac Studio',
+                  github: swarmV4GitHub(),
+                  onClose: () {},
+                ),
+              ),
+              title(
+                'Browser in New agent: off, on, this computer to set up, another computer to set up',
+              ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  BrowserPill(on: false, onPressed: () {}),
+                  gap(),
+                  BrowserPill(on: true, onPressed: () {}),
+                  gap(),
+                  BrowserPill(on: true, needsSetup: true, onPressed: () {}),
+                  gap(),
+                  BrowserPill(
+                    on: false,
+                    unavailable: 'Set up Browser on Ken Mac first',
+                    onPressed: () {},
+                  ),
+                ],
+              ),
+              title('Set up Browser'),
+              const SizedBox(
+                width: 500,
+                child: BrowserSetupPrompt(ownMachine: false),
+              ),
+              title('Browser settings: a proxy with a saved password'),
+              SizedBox(
+                width: 420,
+                height: 420,
+                child: BrowserSettingsPage(
+                  app: browserApp,
+                  machineId: 'm',
+                  agentId: 'faye',
+                  onBack: () {},
+                ),
+              ),
+              title(
+                'Browser in an agent\'s bar, closed and open; its panel setting up, and failed',
+              ),
+              Row(
+                children: [
+                  SizedBox(child: BrowserButton(open: false, onPressed: () {})),
+                  gap(),
+                  SizedBox(child: BrowserButton(open: true, onPressed: () {})),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final agent in ['faye-setup', 'faye-failed']) ...[
+                    SizedBox(
+                      width: 340,
+                      height: 230,
+                      child: BrowserPanel(
+                        app: browserApp,
+                        machineId: 'm',
+                        agentId: agent,
+                        thisComputer: true,
+                        onClose: () {},
+                      ),
+                    ),
+                    gap(),
+                  ],
                 ],
               ),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
@@ -590,6 +789,35 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title(
+                'Instructions: the agent\'s own file, then its folder\'s files, read only and folded',
+              ),
+              SizedBox(
+                width: 380,
+                height: 500,
+                child: SwarmAgentInstructions(
+                  agent: _agent('Faye'),
+                  machineName: 'Mac Studio',
+                  onClose: () {},
+                  link: instructions,
+                ),
+              ),
+              // The one empty pane that says why (anh Dee 2026-11-09): a blank channel read as broken.
+              title('Empty: a project\'s channel'),
+              const SizedBox(
+                width: 400,
+                height: 60,
+                child: SuperTabEmptyWords(superTabEmptyChannel),
+              ),
+              // What GitHub said to a person's agent, in their chat with it (anh Dee 2026-11-09): a card on the left, not a bubble.
+              title('GitHub card: what GitHub said to your agent'),
+              SizedBox(
+                width: 560,
+                child: _githubCard(
+                  3879,
+                  'Juno, 14:20, to Pip: HOLD d0bf35b. Add the far-field test.',
+                ),
+              ),
             ],
           ),
         ),
@@ -597,6 +825,80 @@ class _Gallery extends StatelessWidget {
     );
   }
 }
+
+/// Faye's computer as Browser settings and her Browser panels ask it: a SOCKS5 proxy whose password it keeps.
+class _BrowserSettingsApp extends AppNotifier {
+  _BrowserSettingsApp()
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      ) {
+    // Her computer, with one browser building and one whose Podman is down.
+    const machine = Machine(
+      machineId: 'm',
+      authMode: MachineAuthMode.remote,
+      name: 'Ken Mac',
+    );
+    machines = [machine];
+    machineStates['m'] = MachineState(machine)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = const [
+        Agent(
+          id: 'faye-setup',
+          name: 'Faye',
+          engine: 'claude',
+          browser: AgentBrowser(state: 'setup', step: 'building'),
+        ),
+        Agent(
+          id: 'faye-failed',
+          name: 'Faye',
+          engine: 'claude',
+          browser: AgentBrowser(state: 'failed', error: 'podman_down'),
+        ),
+      ];
+  }
+
+  @override
+  Future<BrowserSettings> agentBrowserSettings(
+    String machineId,
+    String agentId,
+  ) async => const BrowserSettings(
+    proxy: BrowserProxy(
+      scheme: 'socks5',
+      host: 'proxy.example',
+      port: 1080,
+      username: 'faye',
+      passwordSet: true,
+    ),
+    languages: 'vi-VN, en-US',
+  );
+}
+
+/// What GitHub said to a person's agent on pull request [number], as their chat with it draws it ([SuperTabGitHubRow]): its
+/// words [text], relayed by their Harness.
+Widget _githubCard(int number, String text) => SuperTabGitHubRow(
+  message: SuperTabMessage.fromJson({
+    'id': 'gh-$number',
+    'conversationId': 'agent-chat-pip',
+    'sequence': 0,
+    'text':
+        'On GitHub, deehw wrote on pull request autonomous-ai/lampOS#$number:\n$text\nhttps://github.com/autonomous-ai/lampOS/pull/$number',
+    'createdAt': '2026-11-09T07:05:00Z',
+    'author': {'kind': 'person', 'id': 'owner', 'name': 'Dee'},
+    'source': {
+      'kind': 'github',
+      'event': 'comment',
+      'on': 'pull',
+      'repository': 'autonomous-ai/lampOS',
+      'number': number,
+      'url': 'https://github.com/autonomous-ai/lampOS/pull/$number',
+      'login': 'deehw',
+    },
+  }),
+);
 
 /// A chat message row, as the chat draws one. Its time is words, which the
 /// comparison leaves out, so the image holds in every time zone.
@@ -608,9 +910,12 @@ Widget _message(
   String? id,
   bool grouped = false,
   bool joinsBelow = false,
+  List<String> to = const [],
+  String? note,
 }) => SuperTabMessageRow(
   grouped: grouped,
   joinsBelow: joinsBelow,
+  to: to,
   message: SuperTabMessage.fromJson({
     'id': id ?? 'm-$author',
     'conversationId': 'lead',
@@ -624,7 +929,7 @@ Widget _message(
   author: author,
   agent: agent,
   person: person,
-  receipts: const [],
+  receipts: [if (note != null) SuperTabPostNote(note)],
   onReturnToComposer: () {},
   readerId: 'p1',
 );

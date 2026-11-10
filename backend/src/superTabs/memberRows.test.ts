@@ -16,9 +16,9 @@ describe('who joined or left each chat in one command', () => {
     expect(memberChanges(before, after).map(c => [c.group.id, c.agent.id, c.added])).toEqual([['task', 'c', true], ['task', 'b', false]])
   })
 
-  it('leaves out a chat the command opened and a Buddy chat', () => {
-    const before = swarm([group('task', ['a']), group('buddy', ['a'], { kind: 'buddy' })])
-    const after = swarm([group('task', ['a']), group('buddy', ['a', 'c'], { kind: 'buddy' }), group('new', ['a'])])
+  it('leaves out a chat the command opened', () => {
+    const before = swarm([group('task', ['a'])])
+    const after = swarm([group('task', ['a']), group('new', ['a'])])
     expect(memberChanges(before, after)).toEqual([])
   })
 
@@ -92,9 +92,9 @@ describe('a machine report\'s rows', () => {
     expect(new Set(rows.map(r => r.id)).size).toBe(2)
   })
 
-  it('writes nothing for an agent the report did not close or reopen, or in a Buddy chat', () => {
-    const before = swarm([group('task', ['a']), group('buddy', ['b'], { kind: 'buddy' })])
-    const after = swarm([group('task', []), group('buddy', [], { kind: 'buddy' })], [agent('a')])
+  it('writes nothing for an agent the report did not close or reopen', () => {
+    const before = swarm([group('task', ['a'])])
+    const after = swarm([group('task', [])], [agent('a')])
     expect(sessionRows(before, after, new Set(['b']), 'report-1')).toEqual([])
   })
 })

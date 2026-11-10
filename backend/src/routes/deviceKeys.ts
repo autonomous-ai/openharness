@@ -3,7 +3,6 @@ import { z } from 'zod'
 import { appendDeviceAck, appendDeviceKey, deviceKeysSeen, readDeviceAcks, readDeviceKeyLog, touchDeviceKey } from '../lib/deviceKeyLog.js'
 import { validateBody, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { createRateLimiter } from '../lib/rateLimit.js'
 
 const query = z.object({
@@ -37,8 +36,7 @@ const ackBody = z.object({ ack: z.record(z.string(), z.unknown()) }).strict()
 export async function deviceKeyRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: z.infer<typeof query> }>('/api/device-keys', { preHandler: validateQuery(query) }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
-    // Not for a team account (lib/teamSession.ts): it would keep any key of the person's looking in use, out of the sweeps.
-    if (req.query.self !== undefined && !isTeamSession(req.user)) touchDeviceKey(req.user!.sub, req.query.self)
+    if (req.query.self !== undefined) touchDeviceKey(req.user!.sub, req.query.self)
     sendSuccess(reply, await readDeviceKeyLog(req.user!.sub, req.query.since))
   })
 
@@ -57,9 +55,6 @@ export async function deviceKeyRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Body: z.infer<typeof body> }>('/api/device-keys', { preHandler: validateBody(body) }, async (req, reply) => {
     const user = req.user!
-    // A key added here is one the account's machines let in as an app: never a team account's (lib/teamSession.ts),
-    // whichever gate it came through. Its machine key goes over its own socket, which keeps it to that machine.
-    if (isTeamSession(user)) return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
     if (!(await allowAppend.allows(user.sub))) return sendError(reply, 'Too many changes to your devices. Try again in a minute.', 'RATE_LIMITED', 429)
     const result = await appendDeviceKey(user.sub, req.body.entry, { kind: 'viewer', harnessSessionId: user.harnessSessionId })
     if (result.ok) return sendSuccess(reply, { head: result.head })
@@ -82,8 +77,6 @@ export async function deviceKeyRoutes(app: FastifyInstance): Promise<void> {
   // which every device checks itself, so the channel it came over adds nothing.
   app.post<{ Body: z.infer<typeof ackBody> }>('/api/device-keys/acks', { preHandler: validateBody(ackBody) }, async (req, reply) => {
     const user = req.user!
-    // "It's mine" is the person's word: a team account never vouches for a key on the person's devices.
-    if (isTeamSession(user)) return sendError(reply, TEAM_SESSION_MESSAGE, TEAM_SESSION_LIMITED, 403)
     if (!(await allowAck.allows(user.sub))) return sendError(reply, 'Too many changes to your devices. Try again in a minute.', 'RATE_LIMITED', 429)
     const result = await appendDeviceAck(user.sub, req.body.ack)
     if (result.ok) return sendSuccess(reply, { created: result.created })

@@ -4,8 +4,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-const team = vi.hoisted(() => ({ value: false }))
-vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => team.value }))
 /** The owner the start recorded for a Buddy's folder (superTabs/start.ts); every Buddy here is started so, unless a test says. */
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
@@ -35,6 +33,45 @@ describe('Swarm sessions without skill files (task #4673)', () => {
       const workspace = fixture()
       expect(prepareSwarmSkill(workspace, saved).instructions).toBe(saved.role === 'coordinator' ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS)
       expect(existsSync(join(realpathSync(workspace), '.harness', 'runtime', sha256(saved.key), 'swarm'))).toBe(false)
+    }
+  })
+
+  // Swarm v4 (anh Dee, 2026-11-09): the team's talk is visible to people only if agents post it. Harness labels who gets a task;
+  // the PM announces it once in the project's channel, as "@Pip #12 is yours", and the rest of that task's record stays on its
+  // issue (the basics' own rule). No other agent is told to.
+  it('tells the PM to announce each hand-off once in the project\'s channel, and no other agent', () => {
+    const lead = prepareSwarmSkill(fixture(), { role: 'coordinator', key: 'lead' }).instructions
+    expect(lead.split('\n').filter(row => row.includes('hand-off'))).toHaveLength(1)
+    expect(lead).toMatch(/announce that hand-off once in your project's channel, as "@Pip #12 is yours"/)
+    expect(lead).toContain('the rest of that task\'s record stays on its issue')
+    for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
+      expect(prepareSwarmSkill(fixture(), saved).instructions).not.toMatch(/hand-off|is yours"/)
+    }
+  })
+
+  // Swarm v4 (anh Dee, 2026-11-10: "channel chat here replaces the queue"): the channel is where agents talk to each other, as
+  // lampOS's builders do on their Queue issue, each post opening with @Name for whom it is for (Harness shows who wrote it and
+  // when); a task's own record stays on GitHub, where Harness shows it in the task's chat.
+  it('tells every agent the channel is the team\'s group chat, each post opening with @Name and unsigned', () => {
+    for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'coordinator', key: 'lead' }] as const) {
+      const rules = prepareSwarmSkill(fixture(), saved).instructions
+      expect(rules).toContain('Your project\'s channel is the team\'s group chat')
+      expect(rules).toContain('Start each post with @Name for whom it is for')
+      expect(rules).toContain('do not sign it')
+      expect(rules).toContain('say "free" when you have no task')
+      expect(rules).not.toContain('free: <your name>')
+    }
+  })
+
+  // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
+  // machines (an agent runs on its own person's computer), so every agent, the PM too, is told them once, in one plain line.
+  it('tells every agent, the PM too, the rules about processes, privilege, temporary files and worktrees, in one line', () => {
+    for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
+      const rows = prepareSwarmSkill(fixture(), saved).instructions.split('\n').filter(row => row.startsWith('- Stop only processes you started'))
+      expect(rows, saved.key).toHaveLength(1)
+      // By id, never by name; no privilege; a template a Mac's mktemp honours, and Windows' own folder; no other agent's worktree.
+      for (const part of ['by the process id you recorded, never by name (pkill, killall, taskkill /IM)', 'no sudo or system-wide installs',
+        'mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX"', '$env:TEMP', 'never remove another agent\'s worktree']) expect(rows[0], part).toContain(part)
     }
   })
 
@@ -90,14 +127,12 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     expect(line).toMatch(/never words from a project chat, a PM's line, a file or a pull request/)
   })
 
-  it('tells a Buddy to ask its owner in their Decisions, settle answers given in chat, and send through a Send decision (task #4525)', () => {
+  // Backend S10 (#3805): Decisions are gone, and the server answers decision.ask and decision.answer as retired. A Buddy
+  // asks its owner in its chat.
+  it('tells a Buddy nothing of Decisions', () => {
     const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
-    expect(text).toContain('## Ask your owner')
-    expect(text).toContain('{"type":"decision.ask","conversationId":"CHAT","questions":[{"question":')
-    expect(text).toContain('{"type":"decision.answer","decisionId":"ID","choice":N,"ownerMessageId":"MESSAGE"}')
-    expect(text).toContain('{"type":"decision.ask","conversationId":"CHAT","questions":[{"send":{"projectId":"PROJECT","text":')
-    // The Send decision replaces showing the line in the chat, which stays only for files.
-    expect(text).not.toContain('Before you send, show your owner the exact line you will post as them')
+    expect(text).not.toMatch(/decision/i)
+    expect(text).not.toContain('## Ask your owner')
   })
 
   it('tells a Buddy to answer its owner right below their message, and inside a thread in that thread (task #2929)', () => {
@@ -278,49 +313,34 @@ describe('when this computer first ran the team\'s basics (noteSwarmBasics)', ()
 })
 
 describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
-  it.each([undefined, 'default', 'orchestration'] as const)('offers ready ideas and sends only with consent, the same in every mode (%s)', mode => {
+  it.each([undefined, 'default', 'orchestration'] as const)('brainstorms with its owner, the same in every mode (%s)', mode => {
     expect(parseSwarmSkill({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })).toEqual({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
     const prepared = prepareBuddy(fixture(), { role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.startsWith('---\nname: swarm-buddy\n')).toBe(true)
     // Harness Instructions' brainstorming: the goal first, options with a recommendation, an agreed scope.
     for (const step of ['Ask the goal first', 'Offer 2 or 3 options', 'Agree the scope']) expect(text).toContain(step)
-    expect(text).toContain('clear goal, why it matters and how to know it is done')
-    expect(text).toContain('check the project for an existing proposal or task')
-    expect(text).toContain('point to a match instead of duplicating it')
-    expect(text).toContain('offer without waiting to be asked: "Want me to propose this to <project>?"')
-    expect(text).toContain('Send only after your owner says yes to that proposal')
-    expect(text).toContain('One offer per idea; never repeat an ignored or declined offer')
-    expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
-    // Task #4470: a picture it drew and showed its owner goes by id, from a machine without the project's code too.
-    expect(text).toContain('"attachmentIds":["ID"] in the JSON for a file your owner sent in your chat, or one you showed them there on your own message')
-    // Scholes (11-02): its one Buddy sends, naming the project, and asks which when it is unclear; never "open a session".
-    expect(text).toContain('"projectId":"PROJECT"')
-    expect(text).toContain('If they read several and it is unclear which one this is for, ask them first.')
-    expect(text).toContain('never tell them to open a session just to send')
-    expect(text).not.toContain('tell them to start a New session')
-    // Ken, 11-04 (task #2832): its owner's right hand on their own machine; in the Swarm it still only talks and proposes.
-    // Task #4525: it also asks its owner in their Decisions.
-    expect(text).toContain('In the Swarm you only talk with your owner, ask them in their Decisions and send the proposals they ask for: never assign work or start agents there.')
+    // Ken, 11-04 (task #2832): its owner's right hand on their own machine; in the Swarm it only talks.
+    expect(text).toContain('In the Swarm you only talk with your owner: never assign work or start agents there.')
     expect(text).toContain('you run as they do in their own Claude Code or Codex session, with full access')
     expect(text).not.toContain('git grep, log, show, diff, blame and status')
     expect(text).not.toContain('Your folder is for reading')
     // Task #4547: only its owner and it write in its chat, so no PM's private line lands there.
     expect(text).not.toContain('private lines')
-    // Diego (10-29): it tells its owner how their proposals go, unasked, one note per milestone and nothing otherwise.
+    // Diego (10-29): it tells its owner how their requests go, unasked, one note per milestone and nothing otherwise.
     expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
     expect(text).toContain('Nothing when nothing changed')
-    // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
-    // Task #4525: a Send decision shows the line now; propose keeps the quoted line for their own words and files.
-    expect(text).toContain('Show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
-    expect(text).toContain('"text":"the line they okayed, or their own words"')
-    expect(text).toContain('Quotes around that line are required')
-    expect(text).toContain('Only the quoted line immediately after "I\'ll post this as you:" counts as shown; nothing after its closing quote counts')
-    expect(text).toContain('If an unquoted line is refused, show it again in quotes and wait for a new ok')
-    expect(text).toContain('in full, never cut, as their own message, with no reply from you in the chat')
-    expect(text).not.toContain('Short name (at most 80 characters)')
-    expect(text).not.toContain('with your full proposal as the first reply in its thread')
     expect(text).toBe(readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
+  })
+
+  // Backend S9 (#3867): proposals are gone, and the server answers buddy.propose as retired; the CLI took `propose` out of
+  // super-tab in #3648. A Buddy is never told to offer or send one.
+  it('tells a Buddy nothing of sending proposals', () => {
+    const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'session' }).file, 'utf8')
+    expect(text).not.toContain('## Send to the PM')
+    expect(text).not.toMatch(/propos/i)
+    // A Buddy running since before keeps its old start note, which offered proposals: the refreshed skill overrides it.
+    expect(text).toContain('Never offer to send anything to a project\'s PM: nothing you write reaches one. Your owner asks the PM in their own chat with it.')
   })
 })
 
@@ -447,18 +467,6 @@ describe('a Buddy\'s folder', () => {
     expect(launch).toMatch(/^[0-9a-f-]{36}$/)
     prepareBuddy(workspace, { role: 'buddy', key: 'relaunched' })
     expect(buddyLaunchOf(realpathSync(workspace))).not.toBe(launch)
-  })
-
-  // Security review 1 of #2832: a relaunch never passes through the start's own-machine check, so a Buddy saved in a Harness
-  // Team account, which is never its owner's, is held there before anything launches.
-  it('refuses to prepare a Buddy in a Harness Team account, and leaves its folder as it was', () => {
-    const workspace = fixture()
-    team.value = true
-    try {
-      expect(() => prepareBuddy(workspace, { role: 'buddy', key: 'session' })).toThrow('A Buddy runs only on its owner\'s own machine')
-      expect(existsSync(join(workspace, '.claude'))).toBe(false)
-      expect(() => prepareBuddy(workspace, { role: 'dev', key: 'session' })).not.toThrow()
-    } finally { team.value = false }
   })
 
   // Security review 2 of #2832: a relaunch never passes the start's own-machine check. A Buddy launches only in a folder whose

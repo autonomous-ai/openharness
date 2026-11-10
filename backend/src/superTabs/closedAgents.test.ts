@@ -66,14 +66,10 @@ describe('closedAgents: which agents a report shows closed', () => {
     f.state.machines![0]!.observation!.runningHarnessIds = []
     expect(closedAgents(f.state, 'mac', f.report(['lead']), NOW)).toEqual([])
   })
-  // Task #3397: a crew member's host reopens it in place, so a report never removes one; the same agent off the crew goes.
-  it('never takes a crew member, and takes the same agent once it is off the crew', () => {
+  // Swarm v4 has no crew (2026-11-10): a crew mark an agent kept from before keeps it no more.
+  it('takes an agent with a crew mark from before as any other', () => {
     const f = fixture()
-    f.worker.crew = { role: 'Engineer', at: 1, by: 'owner' }
-    expect(closedAgents(f.state, 'mac', f.report(['lead'], ['worker']), NOW)).toEqual([])
-    f.worker.downSince = new Date(NOW - DOWN_REMOVE_MS).toISOString()
-    expect(closedAgents(f.state, 'mac', f.report(['lead']), NOW)).toEqual([])
-    delete f.worker.crew
+    Object.assign(f.worker, { crew: { role: 'Engineer', at: 1, by: 'owner' } })
     expect(ids(closedAgents(f.state, 'mac', f.report(['lead'], ['worker']), NOW))).toEqual(['worker'])
   })
   it('never takes a coordinator', () => {
@@ -101,13 +97,6 @@ describe('removeClosedAgents: what a removal leaves for the host', () => {
     expect(closed.state.closingSessions).toBeUndefined()
     expect(closed.state.harnessReservations).toEqual([])
     expect(closed.state.releasedHarnesses).toEqual([{ machineId: 'mac', harnessId: 'worker' }])
-  })
-  it('holds a Team account for the project of a confidential session until its host confirms the data deleted', () => {
-    const f = fixture()
-    f.worker.confidential = true
-    f.worker.teamAccount = true
-    removeClosedAgents(f.state, [f.worker], NOW)
-    expect(f.state.closingSessions).toEqual([expect.objectContaining({ agentId: f.worker.id, heldFor: expect.any(String), since: NOW })])
   })
   it('keeps an agent that holds a task, active or just lost', () => {
     const f = fixture()
@@ -169,34 +158,11 @@ describe('what may come back', () => {
     expect(restoreRefusal(restoring(), record(), 'owner', facts)).toBeNull()
   })
 
-  it('never onto a Team account that serves another project', () => {
-    const team = { hostMachineId: 'host-mac', teamAccountOnly: true }
-    const onTeam = record({ agent: removedAgent({ teamAccount: true }) })
-    const held = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'other', since: AT }]
-    expect(restoreRefusal(restoring({ closingSessions: held } as Partial<SuperTabState>, team), onTeam, 'owner', facts)).toBe('team-other-project')
-    const mine = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'p', since: AT }]
-    expect(restoreRefusal(restoring({ closingSessions: mine } as Partial<SuperTabState>, team), onTeam, 'owner', facts)).toBeNull()
-  })
-
   // Swarm v3 (task #4120, the PM's ruling): an agent works on any project its person reads, so it comes back to a teammate's
   // project too; one its person no longer reads ends (project-ended, above).
   it('comes back to a teammate\'s project its person reads', () => {
-    expect(restoreRefusal(restoring({}, { hostMachineId: 'host-mac' }), record(), 'owner', facts)).toBeNull()
-    const theirs = restoring({ projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>, { hostMachineId: 'host-mac' })
+    const theirs = restoring({ projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>)
     expect(restoreRefusal(theirs, record(), 'owner', facts)).toBeNull()
-  })
-
-  // Swarm v3 (task #4120, the PM's ruling): only the project owner's own agent may take over a task a Team agent wrote.
-  it('leaves out a task marked Team-written while it was away, unless it is the project owner\'s own agent, and keeps the rest', () => {
-    const groups = () => [removedGroup({ teamWritten: true }), removedGroup({ id: 'g2' })]
-    const mates = restoring({ conversations: groups(), removedSessions: [record({ groupIds: ['g1', 'g2'] })],
-      projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>)
-    restoreSessions(mates, 'mac', ['h1'], AT, new Set(['h1']), () => {})
-    expect(mates.conversations.find(c => c.id === 'g1')!.agentIds).toEqual([])
-    expect(mates.conversations.find(c => c.id === 'g2')!.agentIds).toEqual(['a1'])
-    const owners = restoring({ conversations: groups(), removedSessions: [record({ groupIds: ['g1', 'g2'] })] })
-    restoreSessions(owners, 'mac', ['h1'], AT, new Set(['h1']), () => {})
-    expect(owners.conversations.map(c => c.agentIds)).toEqual([['a1'], ['a1']])
   })
 
   // #2207 (Ken): the project chat holds only its coordinator among agents, so a session that was a member there comes back to

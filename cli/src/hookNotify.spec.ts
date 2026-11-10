@@ -95,6 +95,8 @@ interface RunHookOpts {
   /** Override the fixture's ps `comm` and full argv to exercise install-root-independent matching. */
   processExecutable?: string
   processArgs?: string
+  /** The hook's parent is Hermes' shared gateway (a child of the pane's Hermes), as every hook is from Hermes 0.22. */
+  viaHermesGateway?: boolean
   /** Kernel birth evidence for the synthetic process; never read an unrelated host pid. */
   nativeProcess?: 'linux' | 'missing' | 'changed' | 'lock-replaced' | 'boot-replaced' | 'registry-replaced'
     | 'zombie' | 'registry-zombie' | 'registry-command' | 'registry-reparented' | 'short' | 'wrong-pid'
@@ -108,7 +110,7 @@ interface RunHookOpts {
   cursorHome?: string
   hermesHome?: string
   /** Fake Hermes SQLite source; null means the session row has not appeared. */
-  hermesSource?: 'cli' | 'tui' | 'subagent' | null
+  hermesSource?: 'cli' | 'tui' | 'subagent' | null | { source: string; created_source: string | null }
   /** How long Hermes' store takes to answer, in the shipped hook's seconds: a loaded machine. Stretched
    *  as the hook stretches its own step limits under HARNESS_HOOK_DEADLINE_MS (notify.mjs STEP_SCALE),
    *  so the delay keeps the same share of the sqlite3 limit whatever the budget. */
@@ -168,7 +170,9 @@ function runHook(opts: RunHookOpts): Promise<string> {
         env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
         writeFileSync(join(binDir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
       } else {
-        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)} '${process.pid} 7001 node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+        // Hermes 0.22+: the hook comes from the shared gateway the pane's Hermes started, not from that Hermes.
+        const gateway = opts.viaHermesGateway ? ` '7002 7001 python3 Mon Aug 10 10:00:02 2026 python3 -m hermes_cli.main gateway run --quiet --idle-exit'` : ''
+        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
       }
       const nativeFixture = join(binDir, 'native-process.mjs')
       writeFileSync(nativeFixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
@@ -209,7 +213,8 @@ fs.readFileSync = (path, ...args) => {
         symlinkSync(target, join(binDir, 'grok'))
       }
       if (opts.hermesSource !== undefined) {
-        const rows = opts.hermesSource === null ? '[]' : JSON.stringify([{ source: opts.hermesSource }])
+        const rows = opts.hermesSource === null ? '[]'
+          : JSON.stringify([typeof opts.hermesSource === 'object' ? opts.hermesSource : { source: opts.hermesSource }])
         const stepScale = Number(env.HARNESS_HOOK_DEADLINE_MS) / 4500
         const delay = opts.hermesDelaySeconds ? `sleep ${opts.hermesDelaySeconds * stepScale}\n` : ''
         writeFileSync(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`, { mode: 0o755 })
@@ -969,6 +974,28 @@ describe('hook notify terminal scope', () => {
     }
   })
 
+  it('offline Hermes fallback binds a Hermes 0.23 local session only when its CLI or TUI created it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-local-'))
+    tmpDirs.push(dir)
+    const common = {
+      port: 9, tmuxPane: '%82', engine: 'hermes' as const, processEngine: 'hermes' as const, processExecutable: 'python3',
+      processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes', hermesHome: join(dir, 'hermes'),
+    }
+    const local = (n: number) => `local-${String(n).padStart(2, '0').repeat(32)}`
+    const cases = [
+      ['cli', { source: 'local', created_source: 'cli' }, true], ['tui', { source: 'local', created_source: 'tui' }, true],
+      ['acp', { source: 'local', created_source: 'acp' }, false], ['unknown', { source: 'local', created_source: 'unknown' }, false],
+      ['child', { source: 'subagent', created_source: null }, false],
+    ] as const
+    for (const [index, [name, row, binds]] of cases.entries()) {
+      const dataDir = join(dir, `${name}-data`)
+      await runHook({ ...common, dataDir, hermesSource: row, input: { hook_event_name: 'on_session_start', session_id: local(index + 1) } })
+      if (binds) {
+        expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: local(index + 1), engine: 'hermes' }])
+      } else expect(() => readFileSync(join(dataDir, 'registry.json'), 'utf8')).toThrow()
+    }
+  })
+
   it.each(['recovers', 'full', 'resolving', 'disconnects'] as const)('Hermes live admission %s retries within a bound and never writes an offline registry', async outcome => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-held-'))
     tmpDirs.push(dir)
@@ -1029,6 +1056,24 @@ describe('hook notify terminal scope', () => {
     ])
     await runHook({ ...common, dataDir: join(dir, 'unrelated'), processArgs: `python3 worker.py -c ${source}` })
     expect(() => readFileSync(join(dir, 'unrelated', 'registry.json'), 'utf8')).toThrow()
+  })
+
+  // From Hermes 0.22 every session's hook runs in one gateway, which the first Hermes client started and which sits under
+  // that client's pane: the pane in the hook's environment and its parents are that one, whichever pane the session is in.
+  // Offline, the hook cannot tell which pane, so it writes nothing (the daemon reads the session's own pane instead).
+  it('writes no offline registration for a Hermes hook from its shared gateway, which belongs to no pane', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-gateway-'))
+    tmpDirs.push(dir)
+    const common = {
+      port: 9, tmuxPane: '%84', engine: 'hermes' as const, processEngine: 'hermes' as const,
+      processExecutable: 'python3', processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes',
+      hermesHome: join(dir, 'hermes'), hermesSource: 'cli' as const,
+      input: { hook_event_name: 'on_session_start', session_id: '20260810_120004_a1b2c3' },
+    }
+    await runHook({ ...common, dataDir: join(dir, 'direct') })
+    expect(JSON.parse(readFileSync(join(dir, 'direct', 'registry.json'), 'utf8'))).toMatchObject([{ engine: 'hermes', tmuxPane: '%84' }])
+    await runHook({ ...common, dataDir: join(dir, 'gateway'), viaHermesGateway: true })
+    expect(() => readFileSync(join(dir, 'gateway', 'registry.json'), 'utf8')).toThrow()
   })
 
   it('still binds a CLI Hermes session when its store is slow to answer, as on a loaded machine', async () => {

@@ -11,9 +11,9 @@ import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
-import { HERMES_HOMES, HERMES_SOURCE } from './engines/hermes/contract.js'
+import { HERMES_HOMES, HERMES_SESSION_PANE, HERMES_SOURCE } from './engines/hermes/contract.js'
 import { readStorePool } from './engines/kit/storePool.js'
-import { isInteractiveSource } from './engines/kit/storeSource.js'
+import { isInteractiveSource, rowSessionSource, storeSourceQuery } from './engines/kit/storeSource.js'
 import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
@@ -31,7 +31,7 @@ import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
-import { PTY_HOST_INSTANCE } from './lib/ptyHost/instance.js'
+import { PTY_HOST_INSTANCE, PTY_HOST_PANE } from './lib/ptyHost/instance.js'
 
 /**
  * Which agent does a hook belong to, given the two grades of evidence?
@@ -46,13 +46,15 @@ import { PTY_HOST_INSTANCE } from './lib/ptyHost/instance.js'
  * session; trusting that pane alone binds the old transcript to the replacement agent.
  * Two candidates is not a tie to break, so we answer nothing.
  */
-export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[], engine: AgentEngine): {
+export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: readonly T[], engine: AgentEngine, bySessionPane = false): {
   agent: T | null
   reason: 'ancestry' | 'runtime' | 'ambiguous' | 'none'
 } {
   if (byAncestry.length === 1) return { agent: byAncestry[0], reason: 'ancestry' }
   if (byAncestry.length > 1) return { agent: null, reason: 'ambiguous' }
-  if (engine !== 'cursor') return { agent: null, reason: 'none' }
+  // A Hermes hook from its shared gateway names the pane its session was created from, read from Hermes' own store
+  // (`hermesSessionHint`), not from the caller: that pane is the evidence, as Cursor's hinted pane is.
+  if (engine !== 'cursor' && !bySessionPane) return { agent: null, reason: 'none' }
   if (byRuntimeOnly.length === 1) return { agent: byRuntimeOnly[0], reason: 'runtime' }
   return { agent: null, reason: byRuntimeOnly.length ? 'ambiguous' : 'none' }
 }
@@ -87,10 +89,16 @@ export interface HookServerHandlers {
     tmuxPane?: string
     runtimeHints: HookTerminalHint[]
     callerPid?: number
+    /** The hints are the pane the hook's session was opened from (`hermesSessionHint`), not the caller's: the agent on
+     *  that pane is the evidence, and the caller's process ancestry, which is a shared process's, is not. */
+    bySessionPane?: boolean
     /** Called once the resolution has to wait for the agent to record its process
      *  (core/engines/hooks.ts): the hook is answered then, before the wait. */
     onWait?: () => void
   }) => Promise<RegisteredSession | null>
+  /** Whether the hook's caller descends from a process that serves every pane (Hermes 0.22+'s gateway), whose
+   *  pane and ancestry say nothing about the session the hook is for (core/engines/hooks.ts). */
+  hookViaSharedProcess?: (query: { engine: RegisteredSession['engine']; callerPid: number }) => Promise<boolean>
   /** A turn is now running (Command Code's PreToolUse — its only live turn-open signal). Idempotent:
    *  it fires once per tool call, and every call after the first in a turn must be a no-op. */
   onTurnStart?: (body: { sessionId: string }) => void
@@ -383,14 +391,16 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
   if (!HERMES_SOURCE.id.test(sessionId)) return { kind: 'accept', value: undefined }
   try {
     const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
-      sql: HERMES_SOURCE.query, params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
+      sql: columns => storeSourceQuery(HERMES_SOURCE, columns), params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
       columns: ['id', 'source'], pointKey: 'id', knownHome,
     })
     if (!found.length) return { kind: 'hold', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
     if (found.length !== 1) return { kind: 'hold', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
     const { home, aliases, row } = found[0]
     if (knownHome && !aliases.includes(knownHome)) return { kind: 'hold', reason: 'Waiting for the Hermes source in its known home; keeping the current conversation.' }
-    const source = row[HERMES_SOURCE.column]
+    // A unified-runtime row names its creator separately; an unstamped one waits like a row not written yet.
+    const source = rowSessionSource(HERMES_SOURCE, row)
+    if (source === null) return { kind: 'hold', reason: 'Waiting for the Hermes session creator to be recorded; keeping the current conversation.' }
     if (typeof source !== 'string' || source.length > 128) throw new IdentityReadUnavailable('the Hermes source record is invalid')
     if (!isInteractiveSource(HERMES_SOURCE, source)) return { kind: 'reject', reason: 'hermes_subagent' }
     return { kind: 'accept', value: knownHome ?? (home === env.HERMES_HOME ? undefined : home) }
@@ -398,6 +408,52 @@ async function inspectHermesKind(sessionId: string, knownHome?: string): Promise
     if (!(error instanceof IdentityReadUnavailable)) throw error
     return { kind: 'hold', reason: `Hermes session source is unavailable; keeping the current conversation. ${error.message}` }
   }
+}
+
+/**
+ * The pane a client environment names, as the hook names its own (hook/notify.mjs `ptyHostPane`): a tmux pane's
+ * `TMUX_PANE` first, else a pty host pane's `HARNESS_PANE=<instance>:%N`.
+ */
+export function clientEnvPane(clientEnv: unknown): HookTerminalHint | null {
+  if (typeof clientEnv !== 'string' || clientEnv.length > HERMES_SESSION_PANE.maxBuffer) return null
+  let parsed: unknown
+  try { parsed = JSON.parse(clientEnv) } catch { return null }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const { TMUX_PANE: tmuxPane, HARNESS_PANE: ptyPane } = parsed as Record<string, unknown>
+  if (typeof tmuxPane === 'string' && tmuxPane) return /^%\d+$/.test(tmuxPane) ? { backend: 'tmux', paneId: tmuxPane } : null
+  const pty = typeof ptyPane === 'string' ? PTY_HOST_PANE.exec(ptyPane) : null
+  return pty ? { backend: 'ptyhost', instance: pty[1]!, paneId: pty[2]! } : null
+}
+
+/** The pane Hermes froze with [sessionId] when it was created (`HERMES_SESSION_PANE`), or null: none, or unreadable. */
+async function hermesCreationPane(sessionId: string): Promise<HookTerminalHint | null> {
+  try {
+    const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
+      sql: HERMES_SESSION_PANE.query, params: [HERMES_SESSION_PANE.key(sessionId), sessionId], maxRows: 1,
+      maxBuffer: HERMES_SESSION_PANE.maxBuffer, columns: ['id'], pointKey: 'id',
+    })
+    return found.length === 1 ? clientEnvPane(found[0].row.client_env) : null
+  } catch (error) {
+    if (!(error instanceof IdentityReadUnavailable)) throw error
+    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${error.message}`)
+    return null
+  }
+}
+
+/**
+ * Where a hook that came through Hermes' shared gateway belongs. The pane its session was created from, while a Hermes
+ * agent is on it; else the pane of the agent the session is already bound to (a restore or resume opens the same
+ * conversation in a new pane, and Hermes keeps the creation policy); else the creation pane, for an agent that is still
+ * opening there. Null: neither is known, so nothing says which pane the session is.
+ */
+async function hermesSessionHint(sessionId: string): Promise<HookTerminalHint | null> {
+  const created = await hermesCreationPane(sessionId)
+  if (created && registry.byRuntimeEngine(created, 'hermes')) return created
+  const bound = registry.bySession(sessionId)
+  const runtime = bound?.engine === 'hermes' ? bound.runtimes[0] : undefined
+  if (runtime) return runtime.backend === 'tmux' ? { backend: 'tmux', paneId: runtime.paneId }
+    : { backend: 'ptyhost', instance: runtime.instance, paneId: runtime.paneId }
+  return created
 }
 
 export interface HookServerOptions {
@@ -563,8 +619,7 @@ export function startHookServer(
           console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
           answer(200, { ignored: true, reason })
         }
-        const runtimeHints = normalizedRuntimeHints(body)
-        if (!runtimeHints.length) { ignore('not_in_terminal'); return }
+        let runtimeHints = normalizedRuntimeHints(body)
         // A plugin/extension is loaded ONCE per engine process, so a pane opened before an update keeps
         // running the old copy — silently, and for hours. Measured on amp: a pane started at 11:49 was
         // still writing transcripts with no tool calls long after the fix reached disk. The engines that
@@ -580,6 +635,20 @@ export function startHookServer(
         // Capture before process resolution yields. Native time is unchanged across client retries.
         const admissionOrder = { firedAt: hookFiredAt(req), arrival: ++admissionArrival }
         const fingerprint = createHash('sha256').update(JSON.stringify([body, admissionOrder.firedAt])).digest('hex')
+        // A Hermes 0.22+ hook runs in the shared gateway, with the gateway's pane (or none) and ancestry. Those named
+        // the first Hermes pane for every session (DESKTOP-0TFH0OJ, 2026-11-09: `5afb24e8 rebound local-fc`, a
+        // conversation typed in another pane). Its session's own pane replaces them, and is the only evidence.
+        // After the order and fingerprint are taken: they are the delivery's as it was sent.
+        let bySessionPane = false
+        if (engine === 'hermes' && body.callerPid && handlers.hookViaSharedProcess
+          && await handlers.hookViaSharedProcess({ engine, callerPid: body.callerPid })) {
+          const hint = body.sessionId ? await hermesSessionHint(body.sessionId) : null
+          if (!hint) { ignore('hermes_gateway_session_has_no_pane'); return }
+          runtimeHints = [hint]
+          bySessionPane = true
+          body.tmuxPane = hint.backend === 'tmux' ? hint.paneId : undefined
+        }
+        if (!runtimeHints.length) { ignore('not_in_terminal'); return }
         const deliveryHeader = req.headers['x-harness-hook-delivery-id']
         const nativeDeliveryId = typeof deliveryHeader === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(deliveryHeader) ? deliveryHeader : undefined
         const deliveryId = nativeDeliveryId ?? randomUUID()
@@ -617,6 +686,7 @@ export function startHookServer(
             tmuxPane: body.tmuxPane,
             runtimeHints,
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
+            ...(bySessionPane ? { bySessionPane } : {}),
             // A relaunch records its engine's process a moment after the engine starts, and a hook in that
             // moment waits for the record, up to 20s. Its client does not: the engine's hook command gives
             // up on a reply after 500ms and then writes the registry itself, as for a daemon that is down

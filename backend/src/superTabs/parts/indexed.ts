@@ -13,11 +13,10 @@ type Transaction = Prisma.TransactionClient
 
 /** The SwarmGroup indexes hot reads name, as prisma/schema.prisma declares them. */
 export const GROUP_INDEX = {
-  proposalDue: { deleted: 1, proposalDueAt: 1, tabId: 1, key: 1 },
   key: { tabId: 1, key: 1 },
   running: { tabId: 1, executionMachineId: 1 },
   agents: { tabId: 1, agentIds: 1 },
-  /** A person's Tasks feed pages, newest activity first (read/personalTasks.ts, task #4203). */
+  /** A person's Tasks feed pages, which nothing reads since Swarm v4 retired the feed (2026-11-10): goes with its column (S19). */
   feed: { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 },
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
@@ -103,19 +102,10 @@ export const NAMED_INDEX = {
   },
   /** A page's thread summaries, by root id (pageReads.ts pageThreads). */
   SuperTabThread: { id: { _id: 1 } },
-  /** `age`: Activity rows past their expiry (activity.ts sweepActivity). */
-  /** `unread`: a person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). */
-  /** `thread`: a person's rows of a thread: whether a reply there rang them already (activity.ts writeReplyActivity). */
-  SuperTabActivity: { age: { createdAt: 1 }, unread: { tabId: 1, personId: 1, readAt: 1, createdAt: 1 },
-    thread: { tabId: 1, personId: 1, conversationId: 1, threadId: 1 } },
+  /** Which agent wrote a GitHub comment, by its id (githubComments.ts commentAuthors). */
+  SuperTabGithubComment: { id: { _id: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
-  /** A person's reminders (reminders.ts): `person`, the due list, the next one, the digest and the cap's count; `due`, the
-   *  sweep's reminders due more than 30 days ago. */
-  SuperTabReminder: {
-    person: { tabId: 1, personId: 1, dueAt: 1 },
-    due: { dueAt: 1 },
-  },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

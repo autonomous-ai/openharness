@@ -16,6 +16,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import type { MachineData } from '../src/superTabs/parts/index.js'
 import { poolRows } from './hostRows.test-support.js'
+import { storeAssignment } from './storedWork.test-support.js'
 
 // Machine reports that change only the machine's reading skip the Swarm load (DB roadmap 2.5). A fresh loopback replica
 // set, created here; Redis is MemoryStamps and an in-process report memory. This suite never reads DATABASE_URL.
@@ -53,6 +54,9 @@ afterEach(() => configureSwarmStamps(new MemoryStamps()))
 const quiet = (memory: ReportMemory): ReportMemory => ({ get: (t, m) => memory.get(t, m), set: (t, m, r) => memory.set(t, m, r), sweepDue: async () => false })
 /** A server that remembers no full report: every reading runs in full. */
 const never: ReportMemory = { get: async () => undefined, set: async () => {}, sweepDue: async () => false }
+/** [memory], with each answer it gives to "is this Swarm's sweep due?" put in [asked]: a reading that is refused never asks. */
+const logged = (asked: boolean[], memory: ReportMemory): ReportMemory => ({ get: (t, m) => memory.get(t, m), set: (t, m, r) => memory.set(t, m, r),
+  sweepDue: async (t, at) => { const due = await memory.sweepDue(t, at); asked.push(due); return due } })
 
 /** A Swarm whose Lead runs on lead-host and whose worker runs on test-host, working on a task the owner asked for. Swarms
  *  given one [shared] clock and memory are one server's. */
@@ -79,7 +83,7 @@ async function swarm(memory?: (now: () => number) => ReportMemory, shared?: { cl
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(group, 'test-host', harness.worker, 'Worker', false, host)
-  await execute({ type: 'work.assign', conversationId: group, agentId: worker })
+  await storeAssignment(db, tab, group, worker, clock.now)
   const reading = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}): MachineObservation => ({
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,
       diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
@@ -207,9 +211,6 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     ['its record is older than two minutes, whatever other machines wrote since', async f => {
       await f.reports.set(f.tab, 'test-host', { ...(await f.reports.get(f.tab, 'test-host'))!, at: f.clock.now - RECORD_TTL_MS })
     }],
-    ['the record says a Team account runs its agents', async f => {
-      await f.reports.set(f.tab, 'test-host', { ...(await f.reports.get(f.tab, 'test-host'))!, team: true })
-    }],
     ['a bump of its Swarm is owed here', async f => {
       const bump = stamps.bump.bind(stamps)
       stamps.bump = async () => { throw new Error('Redis is unreachable') }
@@ -261,24 +262,6 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     expect(paths[4]).toBe('full')
   })
 
-  it('a Team account\'s reading came in since: the owner\'s own sign-in is refused as the full report refuses it', async () => {
-    const f = await swarm()
-    expect((await settle(f)).at(-1)).toBe('fast')
-    // As a fast reading from the machine's Harness Team account stores it: same sessions, signed in as the team account.
-    const row = await f.part()
-    const data = structuredClone(row.data) as unknown as MachineData
-    data.contribution!.observation!.sessionKind = 'team'
-    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as never } })
-    try {
-      machineReportLine(0)
-      await expect(f.beat()).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY' })
-      expect(machineReportLine(0)).toMatchObject({ fast: 0, full: 1 })
-    } finally {
-      // The machine's host form reads every Swarm it is in, and refuses this sign-in for one that records a Team account.
-      await db.swarmMachine.update({ where: { id: row.id }, data: { data: row.data as never } })
-    }
-  })
-
   it('its contribution was regenerated: refused as revoked', async () => {
     const f = await swarm()
     expect((await settle(f)).at(-1)).toBe('fast')
@@ -286,28 +269,7 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
   })
 })
 
-describe('time-based losses and Lent on the fast path', () => {
-  it('loses a worker\'s task by the first report after its lease ends, in full', async () => {
-    const f = await swarm()
-    // Its screen last changed long ago: the reports' renewal stops 25 minutes after it, its lease 5 minutes later.
-    const progress = { harnessProgress: { [f.harness.worker]: f.clock.now - 29 * MINUTE } }
-    expect((await settle(f, progress)).at(-1)).toBe('fast')
-    const deadline = (await f.reports.get(f.tab, 'test-host'))!.deadline
-    expect(deadline).toBeGreaterThan(f.clock.now)
-    // Heartbeats up to the deadline: fast while the record holds (its key expires 2 minutes after a full report).
-    const paths: string[] = []
-    while (f.clock.now + BEAT < deadline) {
-      f.clock.now += BEAT
-      paths.push(await pathOf(() => f.beat(progress)))
-    }
-    f.clock.now = deadline - 1
-    await f.beat(progress)
-    expect(paths).toContain('fast')
-    expect((await f.assignment()).status).toBe('working')
-    f.clock.now = deadline + 1
-    expect(await pathOf(() => f.beat(progress))).toBe('full')
-    expect((await f.assignment()).status).toBe('lost')
-  })
+describe('the sweep clock and Lent on the fast path', () => {
 
   it('counts the same Lent after N fast heartbeats as after N full ones, also right after the running set changed', async () => {
     const fast = await swarm(), full = await swarm()
@@ -330,35 +292,39 @@ describe('time-based losses and Lent on the fast path', () => {
   })
 
   it('never lets a refused reading take the Swarm\'s sweep', async () => {
-    const f = await swarm(now => localReportMemory(now))
+    const asked: boolean[] = []
+    const f = await swarm(now => logged(asked, localReportMemory(now)))
     const lead = (extra: Partial<MachineObservation> = {}) => f.timed.observeMachine(host, f.tab, 'lead-host', { ...f.reading('lead-host', [f.harness.lead]), ...extra })
     await lead()
     await f.beat()
-    // The worker's machine goes silent past two minutes; a revoked reading arrives first, then the Lead machine's own.
+    // A while on, a revoked reading arrives first, then the Lead machine's own.
     f.clock.now += 125_000
+    asked.length = 0
     await expect(lead({ generation: 'not-the-current-one' })).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    expect(asked).toEqual([])
     await lead()
-    expect((await f.assignment()).status).toBe('lost')
+    expect(asked).toEqual([true])
   })
 
   it('sweeps a Swarm once per 30 seconds between servers sharing one memory', async () => {
     for (const shared of [true, false]) {
       const f = await swarm(now => localReportMemory(now))
-      const other = f.store(shared ? f.reports : localReportMemory(() => f.clock.now))
+      const asked: boolean[] = []
+      const other = f.store(logged(asked, shared ? f.reports : localReportMemory(() => f.clock.now)))
       const lead = (by: SuperTabStore) => by.observeMachine(host, f.tab, 'lead-host', f.reading('lead-host', [f.harness.lead]))
       await lead(f.timed)
       await f.beat()
-      // This server's sweep runs while the worker's machine is still fresh.
+      // This server's sweep runs.
       f.clock.now += 100_000
       await lead(f.timed)
-      // 25 s on, the worker's machine has been silent past two minutes: only a server whose sweep is due loses its task.
+      // 25 s on, another server's report: only one whose sweep is due takes it.
       f.clock.now += 25_000
       await lead(other)
-      expect((await f.assignment()).status, shared ? 'shared clock' : 'own clock').toBe(shared ? 'working' : 'lost')
+      expect(asked, shared ? 'shared clock' : 'own clock').toEqual([!shared])
       if (!shared) continue
       f.clock.now += 5_000
       await lead(other)
-      expect((await f.assignment()).status).toBe('lost')
+      expect(asked).toEqual([false, true])
     }
   })
 })
@@ -469,6 +435,19 @@ describe('a busy Swarm\'s readings (task #3119)', () => {
     return { store, during }
   }
   const message = (f: Scene, text: string) => f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+
+  // Swarm v4 runs no v3 job on a report: it lost a task, nudged a crew member and kept a crew, so each full report read every
+  // project's rules (one indexed read per project with a task assigned, and with crew) to judge them. Now none.
+  it('reads no project rules in a full report, though a task is assigned in the Swarm', async () => {
+    const f = await swarm()
+    const { store, during } = counted(f, never)
+    await f.beat({}, store)
+    f.clock.now += BEAT
+    const beat = await during(() => f.beat({}, store))
+    expect(beat.path).toBe('full')
+    expect((await f.assignment()).status).toBe('working')
+    expect(Object.keys(beat.ops).filter(op => op.startsWith('SuperTabProjectRules.'))).toEqual([])
+  })
 
   it('stores a reading fast, in four calls, after a change elsewhere in the Swarm', async () => {
     const f = await swarm()

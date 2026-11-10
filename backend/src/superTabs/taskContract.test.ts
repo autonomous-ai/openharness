@@ -89,10 +89,4 @@ describe('the task contract: what an agent says when it opens a task', () => {
     expect(created.state.conversations.at(-1)!.requesterId).toBe('owner')
     expect(f.create({ brief: '', checks: [] }, peer).result.conversationId).toEqual(expect.any(String))
   })
-
-  it('does not ask a step of a task for a contract: it is no task of its own', () => {
-    const f = fixture()
-    const parent = f.create(whole).result.conversationId as string
-    expect(f.create({ title: 'Review', reviewOf: parent, step: 'Review', brief: '', checks: [] }).result.conversationId).toEqual(expect.any(String))
-  })
 })

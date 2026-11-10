@@ -38,6 +38,11 @@ enum ProductFlow {
   /// Import an agent running on this Mac (task #2379): started when its
   /// handoff preview shows, then imported, failed or cancelled.
   agentImport('agent_import'),
+
+  /// A Team account's removal from this computer (anh Dee, 2026-11-10: every
+  /// Team account goes): ok removed or already gone, failed when the system
+  /// refused or kept it, cancelled at the admin prompt.
+  teamAccountRemoval('team_account_removal'),
   // The same card offered once to a computer that never had it, after one of its own harnesses
   // finished a turn (`AppNotifier._offerPhoneAfterWork`): counted apart, so the two offers read apart.
   phoneOfferAfterWork('phone_offer_after_work'),
@@ -68,6 +73,7 @@ enum ProductFlow {
     phoneOfferReturning => 6,
     shareInvite || shareAccept => 5,
     agentImport => 7,
+    teamAccountRemoval => 8,
     phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
     _ => 1,
   };
@@ -591,6 +597,18 @@ class ProductMeasurement extends ChangeNotifier {
     );
   }
 
+  /// An agent's Browser panel opened a stream to its screen (spec § Measures): the name alone, never the agent,
+  /// machine or route.
+  void agentBrowserOpened() {
+    if (!healthEnabled || !sharing || _disposed) return;
+    _coverage();
+    _count(
+      'ui',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'agent_browser_opened',
+    );
+  }
+
   /// A new non-machine key joined while Add Phone was open, by its opening only.
   void addPhonePaired(AddPhoneOpening from) {
     if (!healthEnabled || !sharing || _disposed) return;
@@ -719,9 +737,10 @@ class ProductMeasurement extends ChangeNotifier {
 
   /// The proxy revision ([proxyVocabulary]) that forwards [metric]: the Add
   /// Phone card's flow and the ways Add Phone opened are 3, the card offered
-  /// after work or after time away 4, and first-run/invite counters 5. Other
+  /// after work or after time away 4, first-run/invite counters 5, and an opened agent Browser 8. Other
   /// health measures use [health] to wait for support before counting.
   static int _vocabularyOf(String metric) {
+    if (metric == 'agent_browser_opened') return 9;
     if (metric.startsWith('ui_desktop_phone_offer_skipped_') ||
         metric.startsWith('ui_desktop_add_phone_paired_')) {
       return 6;

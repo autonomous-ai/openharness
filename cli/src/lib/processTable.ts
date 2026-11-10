@@ -15,6 +15,7 @@ import {
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { discoveryField, versionedInstalls } from '../engines/discoveries.js'
+import { HERMES_HISTORY_ID_RE } from '../engines/hermes/contract.js'
 import { psEnv } from './childLocale.js'
 import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
@@ -136,6 +137,41 @@ function engineCapabilityProbe(args: string, nativeArgv?: readonly string[]): bo
   const option = next()
   return (option === '--help' || option === '-h' || option === '--version' || option === '-V')
     && next() === undefined
+}
+
+/**
+ * Hermes' gateway: since Hermes 0.22 one background process runs every session ("the one gateway now runs every
+ * session", agent/session_client_env.py). The first client that finds none starts `<python> -m hermes_cli.main
+ * [--profile <name>] gateway run …` (hermes_cli/gateway_runtime_start.py), on Windows as that client's child, so it
+ * sits under one pane while it serves all of them. It is never a pane's engine, and what it starts (every shell hook)
+ * belongs to no pane it happens to sit under. Read from argv: Hermes' entrypoint, an optional profile, then `gateway`.
+ * Keep the standalone hook's copy (hook/notify.mjs) in sync.
+ */
+export function hermesGatewayProcess(row: Pick<ProcessRow, 'args' | 'nativeArgv'>): boolean {
+  const next = argvPrefix(row.args, row.nativeArgv)
+  const entrypoint = processEntrypoint(row.args, next)
+  if (entrypoint !== 'hermes_cli.main' && programName(entrypoint) !== 'hermes') return false
+  let token = next()
+  if (token === '--profile' || token === '-p') {
+    next()
+    token = next()
+  }
+  return token === 'gateway'
+}
+
+/**
+ * The Hermes gateways running under [engine]'s process: what a build before `hermesGatewayProcess` recorded as that
+ * pane's Hermes (the gateway matched as `hermes_cli`). A row holding one is that same engine's agent, recorded wrongly,
+ * not another program in its pane: without this, the first discovery after an upgrade replaced it and forgot its
+ * conversation (DESKTOP-0TFH0OJ, 2026-11-10: `%2002 replaced 5afb24e8`).
+ */
+export function hermesGatewaysUnder(rows: readonly ProcessRow[], engine: ProcessIdentity): ProcessIdentity[] {
+  const engineRow = rows.find((row) => sameProcessIdentity(row, engine))
+  if (!engineRow) return []
+  const under = processTreePids(rows, [engineRow.pid])
+  return rows.filter((row) => row.pid !== engineRow.pid && under.has(row.pid) && hermesGatewayProcess(row))
+    .map((row) => ({ pid: row.pid, executable: row.executable, startMarker: row.startMarker,
+      ...(row.startTicks !== undefined ? { startTicks: row.startTicks } : {}) }))
 }
 
 function hasCursorPackageEntrypoint(args: string): boolean {
@@ -691,6 +727,9 @@ export function engineProcessMatch(
   ownership = agentCommandOwnershipSnapshot(),
 ): EngineProcessMatch {
   if (engineCapabilityProbe(row.args, row.nativeArgv)) return { score: 0, evidence: 'none' }
+  // Matched as `hermes_cli`, the gateway was recorded as the first Hermes harness's engine (DESKTOP-0TFH0OJ,
+  // 2026-11-09: pid 23704), and a second Hermes pane, which has no gateway under it, was never confirmed.
+  if (engine === 'hermes' && hermesGatewayProcess(row)) return { score: 0, evidence: 'none' }
   const owners = engineFileOwners([row.imageFileKey, row.entrypointFileKey], ownership)
   if (owners.length === 1) {
     return owners[0] === engine
@@ -798,9 +837,9 @@ const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: readonly
   // writes a NEW session, so the id in argv is the parent's and would bind the agent to the wrong row.
   kilo: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/, unless: ['--fork'] },
   pi: { flags: ['--session', '--session-id'], id: /^[0-9a-f][0-9a-f-]{7,}$/i },
-  // Hermes ids are timestamps: 20260728_115628_f2c86a.
-  // Hermes ids are timestamps (20260728_115628_f2c86a), or uuids for an editor's (ACP) sessions.
-  hermes: { flags: ['--resume', '-r'], id: /^(?:\d{8}_\d{6}_[0-9a-z]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i },
+  // Hermes ids are timestamps (20260728_115628_f2c86a), `local-<sha256>` from Hermes 0.23's unified runtime, or
+  // uuids for an editor's (ACP) sessions: the contract's one list, so a title passed to `-r` is never read as one.
+  hermes: { flags: ['--resume', '-r'], id: HERMES_HISTORY_ID_RE },
   // `devin -r <id>` / `--resume <id>`: ids are word slugs (`brisk-otter`).
   devin: { flags: ['--resume', '-r'], id: /^[a-z0-9]+(?:-[a-z0-9]+)+$/ },
   commandcode: { flags: ['--resume', '-r', '--session'], id: /^[0-9a-f-]{16,}$/i },

@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' show AppControl;
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -56,6 +58,11 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
+  /// What [control] draws: its face, inside the box it is laid out in.
+  Rect drawn(WidgetTester tester, Finder control) => tester.getRect(
+    find.descendant(of: control, matching: find.byType(Material)).first,
+  );
+
   SwarmHost host(WidgetTester tester) =>
       tester.widget<SwarmScope>(find.byType(SwarmScope)).notifier!;
 
@@ -72,7 +79,7 @@ void main() {
   }
 
   testWidgets('five filters, All first, each with its count, each a thumb '
-      'tall', (tester) async {
+      "tall, drawn at a control's height", (tester) async {
     await pump(tester, activityBackend(page: activityPage));
 
     expect(find.text('Activity'), findsOneWidget);
@@ -82,7 +89,6 @@ void main() {
       // A word a screen reader says, on the phone (2026-11-03).
       ('mentions', 'Mentions', '1'),
       ('threads', 'Threads', '1'),
-      ('reactions', 'Reactions', '0'),
     ]) {
       final pill = key('swarm-activity-filter-$name');
       expect(
@@ -95,7 +101,51 @@ void main() {
         reason: '$label carries its count',
       );
       expect(tester.getSize(pill).height, greaterThanOrEqualTo(44));
+      expect(drawn(tester, pill).height, AppControl.height);
     }
+  });
+
+  testWidgets("a filter is pressed across a thumb's 44 points, though drawn "
+      'smaller', (tester) async {
+    // The tab's Activity, which opens on All.
+    await pump(
+      tester,
+      activityBackend(page: activityPage),
+      home: const Scaffold(body: SwarmActivityView()),
+    );
+    final mention = find.text('Can you check the copy?');
+    expect(mention, findsOneWidget, reason: 'All lists the tag');
+
+    // Just above Needs you's pill: Needs you opens, and has no tag.
+    final needs = drawn(tester, key('swarm-activity-filter-needsYou'));
+    final reach = (minTouchTarget - needs.height) / 2;
+    await tester.tapAt(needs.topCenter - Offset(0, reach - 1));
+    await tester.pumpAndSettle();
+    expect(mention, findsNothing);
+    expect(key('swarm-activity-row-decision:d1'), findsOneWidget);
+
+    // Just under Mentions' pill, scrolled into view first: Mentions opens,
+    // the tag alone.
+    await tester.ensureVisible(key('swarm-activity-filter-mentions'));
+    await tester.pumpAndSettle();
+    final mentions = drawn(tester, key('swarm-activity-filter-mentions'));
+    await tester.tapAt(mentions.bottomCenter + Offset(0, reach - 1));
+    await tester.pumpAndSettle();
+    expect(mention, findsOneWidget);
+    expect(key('swarm-activity-row-decision:d1'), findsNothing);
+  });
+
+  testWidgets("a row's Reply, drawn smaller, is pressed across a thumb's 44 "
+      'in a row of one line', (tester) async {
+    await pump(tester, activityBackend());
+
+    // Just above Reply's face, it opens the chat as Reply does.
+    final reply = drawn(tester, key('swarm-activity-reply-$work'));
+    await tester.tapAt(
+      reply.topCenter - Offset(0, (minTouchTarget - reply.height) / 2 - 1),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(SwarmConversationPage), findsOneWidget);
   });
 
   testWidgets("the tab's top bar has Threads before You, where Home's Threads "
@@ -144,6 +194,7 @@ void main() {
     for (final button in [approve, reply]) {
       expect(tester.getSize(button).height, greaterThanOrEqualTo(44));
       expect(tester.getSize(button).width, greaterThanOrEqualTo(44));
+      expect(drawn(tester, button).height, AppControl.height);
     }
   });
 
@@ -377,28 +428,13 @@ void main() {
     expect(page.threadId, 'root-1');
   });
 
-  testWidgets("Reactions: who reacted how to the person's message", (
-    tester,
-  ) async {
+  testWidgets('Activity offers no Reactions, and lists none', (tester) async {
     final store = MemoryKeyValueStore()
       ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
     await pump(tester, activityBackend(page: activityPage), store: store);
-    await filter(tester, 'reactions');
-
-    final row = key('swarm-activity-row-reaction:$tab:mine-2');
-    expect(
-      find.descendant(of: row, matching: find.text('Copy is fixed.')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: row, matching: find.textContaining('River')),
-      findsWidgets,
-    );
-    expect(
-      find.descendant(of: row, matching: find.textContaining('✅ 1')),
-      findsOneWidget,
-    );
-    expect(key('swarm-activity-row-reaction:$tab:own-only'), findsNothing);
+    expect(key('swarm-activity-filter-reactions'), findsNothing);
+    expect(find.text('Reactions'), findsNothing);
+    expect(key('swarm-activity-row-reaction:$tab:mine-2'), findsNothing);
   });
 
   testWidgets('the same agent id in two Swarms: each row is named in its '
@@ -421,10 +457,10 @@ void main() {
 
   testWidgets('a filter with nothing in it says so', (tester) async {
     await pump(tester, activityBackend());
-    await filter(tester, 'reactions');
+    await filter(tester, 'threads');
 
     expect(key('swarm-activity-none'), findsOneWidget);
-    expect(find.text('No reactions to you yet.'), findsOneWidget);
+    expect(find.text('No threads with you yet.'), findsOneWidget);
   });
 
   testWidgets('a Swarm the person can no longer read leaves the screen at '

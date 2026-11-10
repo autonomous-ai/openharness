@@ -81,6 +81,7 @@ class _App extends AppNotifier {
     String? agent,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     calls.add({
       'machine': machineId,

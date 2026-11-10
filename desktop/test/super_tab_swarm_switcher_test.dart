@@ -10,7 +10,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
-import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/personal_machines.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -425,7 +424,6 @@ void main() {
             body: SuperTabView(
               controller: shown,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewProject: () {},
@@ -460,7 +458,27 @@ void main() {
     late _Backend backend;
     await tester.runAsync(() async {
       (app, backend) = await _twoTabs();
-      backend.servers['beta']!.state['mentionsWaiting'] = 2;
+      // Two of the reader's agents wrote to them in their own chats: what waits in Beta.
+      final server = backend.servers['beta']!;
+      for (final id in ['pip', 'juno']) {
+        (server.state['agents'] as List).add({
+          'id': id,
+          'name': id,
+          'machineId': 'host',
+          'harnessId': 'session-$id',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+          'kind': 'regular',
+          'chatId': 'agent-chat-$id',
+          'myAgent': true,
+        });
+        (server.state['conversations'] as List).add({
+          ...conversationFixture('agent-chat-$id', id),
+          'kind': 'agent-chat',
+          'agentIds': [id],
+          'lastMessageSequence': 1,
+        });
+      }
       final beta = await app.superTabs.open('beta');
       await beta.refresh();
     });
@@ -881,7 +899,6 @@ void main() {
             body: SuperTabView(
               controller: alpha,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewSwarm: dropdown ? () {} : null,
@@ -954,7 +971,6 @@ void main() {
             body: SuperTabView(
               controller: alpha,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               onNewSwarm: () {},
@@ -1698,230 +1714,6 @@ void main() {
       });
     });
 
-    group('their rows', () {
-      Finder row(String id) =>
-          find.byKey(ValueKey('super-personal-machine-$id'));
-      Future<void> pump(
-        WidgetTester tester,
-        AppNotifier app,
-        SuperTabController c,
-      ) async {
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SingleChildScrollView(
-                child: SuperTabMachines(
-                  controller: c,
-                  app: app,
-                  embedded: true,
-                  onAddAgent: (_) {},
-                ),
-              ),
-            ),
-          ),
-        );
-        await tester.pump();
-      }
-
-      testWidgets(
-        'an offline machine reads why, with Try again, and the row goes once '
-        'it joined',
-        (tester) async {
-          late AppNotifier app;
-          late SuperTabController c;
-          await tester.runAsync(() async {
-            final (a, _, opened) = await personal(
-              before: (a) => _ownMachine(a, 'lamp', online: false),
-            );
-            app = a;
-            c = opened;
-          });
-          await pump(tester, app, c);
-          expect(
-            find.descendant(
-              of: row('lamp'),
-              matching: find.text('Machine lamp'),
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.descendant(
-              of: row('lamp'),
-              matching: find.text("Couldn't join: machine is off"),
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.descendant(of: row('lamp'), matching: find.text('Try again')),
-            findsOneWidget,
-          );
-          await tester.runAsync(() async {
-            app.machineStates['lamp']!
-              ..nodeOnline = true
-              ..connectionStatus = ConnectionStatus.connected;
-            await PersonalMachines.of(app).sync(c);
-            await _settle();
-            await c.refresh();
-          });
-          await tester.pump();
-          expect(row('lamp'), findsNothing);
-        },
-      );
-
-      testWidgets('a failure reads why in a few words, with its whole reason '
-          'on hover', (tester) async {
-        late AppNotifier app;
-        late SuperTabController c;
-        await tester.runAsync(() async {
-          final (a, backend, opened) = await personal();
-          app = a;
-          c = opened;
-          backend.failPrepareOn = 'rig';
-          _ownMachine(a, 'rig');
-          await PersonalMachines.of(a).sync(c);
-          await _settle();
-        });
-        await pump(tester, app, c);
-        expect(
-          find.descendant(of: row('rig'), matching: find.text("Couldn't join")),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(of: row('rig'), matching: find.text('Try again')),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(
-            of: row('rig'),
-            matching: find.textContaining('Setup failed'),
-          ),
-          findsNothing,
-        );
-        expect(
-          find.descendant(
-            of: row('rig'),
-            matching: find.byTooltip('Setup failed there.'),
-          ),
-          findsOneWidget,
-        );
-      });
-
-      testWidgets('Try again on a row joins it, and the row goes', (
-        tester,
-      ) async {
-        late AppNotifier app;
-        late _Backend backend;
-        late SuperTabController c;
-        await tester.runAsync(() async {
-          final (a, b, opened) = await personal();
-          app = a;
-          backend = b;
-          c = opened;
-          b
-            ..failPrepareOn = 'rig'
-            ..prepareFailure = const SuperTabFailure(
-              'SIGNED_OUT',
-              'Sign in to use Swarm.',
-            );
-          _ownMachine(a, 'rig');
-          await PersonalMachines.of(a).sync(c);
-          await _settle();
-        });
-        await pump(tester, app, c);
-        expect(
-          find.descendant(
-            of: row('rig'),
-            matching: find.text("Couldn't join: not signed in to Harness"),
-          ),
-          findsOneWidget,
-        );
-        backend.failPrepareOn = null;
-        await tester.tap(
-          find.descendant(of: row('rig'), matching: find.text('Try again')),
-        );
-        await tester.runAsync(() async {
-          await _settle();
-          await c.refresh();
-        });
-        await tester.pump();
-        expect(row('rig'), findsNothing);
-        expect(
-          backend.contributions(c.tabId).map((m) => m['machineId']),
-          contains('rig'),
-        );
-      });
-
-      for (final brightness in Brightness.values) {
-        testWidgets('pictures of the rows saying why, with Try again (task '
-            '#3042), in ${brightness.name}', (tester) async {
-          if (_shots == null) return;
-          final previous = grid.AppTheme.brightness.value;
-          grid.AppTheme.brightness.value = brightness;
-          addTearDown(() => grid.AppTheme.brightness.value = previous);
-          tester.view.devicePixelRatio = 2;
-          tester.view.physicalSize = const Size(1400, 700);
-          addTearDown(tester.view.reset);
-          late AppNotifier app;
-          late SuperTabController c;
-          await tester.runAsync(() async {
-            final (a, backend, opened) = await personal(
-              before: (a) =>
-                  _ownMachine(a, 'studio', name: 'Studio', online: false),
-            );
-            app = a;
-            c = opened;
-            backend
-              ..failPrepareOn = 'mini'
-              ..prepareFailure = const SuperTabFailure(
-                'MACHINE_UNAVAILABLE',
-                'This machine is not signed in.',
-              );
-            _ownMachine(a, 'mini', name: 'Mac mini');
-            await PersonalMachines.of(a).sync(c);
-            await _settle();
-          });
-          await tester.pumpWidget(
-            MaterialApp(
-              debugShowCheckedModeBanner: false,
-              theme: grid.buildAppTheme(brightness: brightness),
-              home: Scaffold(
-                body: SingleChildScrollView(
-                  child: SuperTabMachines(
-                    controller: c,
-                    app: app,
-                    embedded: true,
-                    onAddAgent: (_) {},
-                  ),
-                ),
-              ),
-            ),
-          );
-          await tester.pump();
-          await tester.pump();
-          await captureWindow(
-            tester,
-            _shots,
-            'personal-machine-rows-${brightness.name}',
-          );
-          await _releaseAll(tester, app);
-        });
-      }
-
-      testWidgets('another Swarm lists none', (tester) async {
-        late AppNotifier app;
-        late SuperTabController other;
-        await tester.runAsync(() async {
-          final (a, _, _) = await personal(
-            before: (a) => _ownMachine(a, 'lamp', online: false),
-          );
-          app = a;
-          other = await a.superTabs.open('gamma');
-          await other.refresh();
-        });
-        await pump(tester, app, other);
-        expect(row('lamp'), findsNothing);
-      });
-    });
   });
 
   // Task #2920 (review of #3021): the app starts the sync of names people chose, on its own triggers.

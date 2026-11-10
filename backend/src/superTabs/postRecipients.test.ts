@@ -7,10 +7,11 @@
 import { describe, expect, it } from 'vitest'
 import { REACHED_NO_AGENT, type Command } from './commands.js'
 import { agent } from './model.js'
+import { agentDisplayName } from './agentNames.js'
+import { recordAgentPresence } from './machines.js'
 import { agentChatId } from './agentKind.js'
 import { owner, stepsFixture } from './steps.test-support.js'
-
-const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 
 function setup() {
   const f = stepsFixture()
@@ -38,7 +39,7 @@ describe('an agent post that names no one', () => {
   it('in a task with no active assignee reaches no agent', () => {
     const { f, post, to } = setup()
     const other = f.add('other', f.task)
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Merged' } as Command, f.as(f.dev))
+    storedStatus(f.state, f.task, 'done', 'Merged')
     expect(to(post(other, f.task, 'Thanks, it merged.'))).toEqual([[]])
     expect(to(post(f.dev, f.task, 'Merged.'))).toEqual([[]])
   })
@@ -46,7 +47,7 @@ describe('an agent post that names no one', () => {
   it('from a step\'s agent reaches no agent; the Engineer\'s reaches the step\'s agent', () => {
     const { f, post, to } = setup()
     const step = f.step('Review'), reviewer = f.add('reviewer', step)
-    f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
+    storedAssignment(f.state, step, reviewer, f.now)
     expect(to(post(reviewer, step, 'Ready to merge: Yes'))).toEqual([[]])
     expect(to(post(f.dev, step, 'Fixed in abc123, please re-check.'))).toEqual([[reviewer]])
   })
@@ -141,7 +142,7 @@ describe('an agent\'s thread reply', () => {
   it('reaches a step agent that answered the Engineer, and nobody for a person\'s message', () => {
     const { f, post, to } = setup()
     const step = f.step('Review'), reviewer = f.add('reviewer', step)
-    f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
+    storedAssignment(f.state, step, reviewer, f.now)
     const verdict = post(reviewer, step, 'Ready to merge: With fixes', [f.dev])[0]!
     expect(to(post(f.dev, step, 'Fixed, please re-check.', [], { id: verdict.id, author: verdict.author as never }))).toEqual([[reviewer]])
     const asked = f.run({ type: 'message.send', conversationId: 'lead', text: 'Is the fix out?', replyTo: null, recipientIds: [] } as Command, owner).messages[0]!
@@ -149,19 +150,8 @@ describe('an agent\'s thread reply', () => {
   })
 })
 
-describe('status still reaches the PM', () => {
-  const status = (status: string, result: string | null) => {
-    const f = stepsFixture()
-    const rows = f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status, result, ...(status === 'blocked' || status === 'needs_human' ? { hold: HOLD } : {}) } as Command, f.as(f.dev)).messages
-    return { f, rows: rows.filter(m => m.conversationId === f.task) }
-  }
-
-  it.each([['done', 'Merged #12'], ['needs_human', 'Ship behind a flag?'], ['blocked', 'No Mac here']])('%s', (kind, result) => {
-    const { f, rows } = status(kind, result)
-    expect(rows.some(m => m.recipients.includes(f.lead))).toBe(true)
-  })
-
-  it('lost', () => {
+describe('a lost task', () => {
+  it('still reaches the PM', () => {
     const f = stepsFixture()
     const rows = f.run({ type: 'agent.alert', agentId: f.dev, alert: 'limit', active: true, resetAt: new Date(3_600_000).toISOString() } as Command, f.as(f.dev)).messages
     expect(rows.some(m => m.source?.kind === 'work-lost' && m.recipients.includes(f.lead))).toBe(true)
@@ -174,7 +164,7 @@ describe('the PM\'s deliveries in a fixture hour', () => {
   it('are only the posts that name it or answer it', () => {
     const { f, post, nameOf } = setup()
     const step = f.step('Review'), reviewer = f.add('reviewer', step)
-    f.run({ type: 'work.assign', conversationId: step, agentId: reviewer }, f.as(f.dev))
+    storedAssignment(f.state, step, reviewer, f.now)
     const other = f.add('helper', f.task)
     const rows = [
       ...['Plan pushed.', 'Task 1 red.', 'Task 1 green.', 'PR is ready.', 'CI green.', 'Merged main in.'].flatMap(t => post(f.dev, f.task, t)),
@@ -189,13 +179,11 @@ describe('the PM\'s deliveries in a fixture hour', () => {
     ]
     const asked = post(f.lead, f.task, 'Is the migration reversible?', [f.dev])[0]!
     rows.push(...post(f.dev, f.task, 'Yes.', [], { id: asked.id, author: asked.author as never }))
-    const agentPosts = rows.filter(m => m.author.kind === 'agent' && m.source?.kind !== 'system' && m.source?.kind !== 'crew-need')
+    const agentPosts = rows.filter(m => m.author.kind === 'agent' && m.source?.kind !== 'system')
     expect(agentPosts).toHaveLength(18)
     expect(agentPosts.filter(m => m.recipients.includes(f.lead))).toHaveLength(3)
-    // The Engineer's tag of the owner is the PM's crew need instead (crewNeeds.ts, task #3404): one more for the PM, and the
-    // owner is not tagged.
-    expect(rows.filter(m => m.source?.kind === 'crew-need').map(m => m.recipients)).toEqual([[f.lead]])
-    expect(rows.flatMap(m => m.mentions ?? [])).toEqual([])
+    // The Engineer's tag of the owner tags the owner: Swarm v4 routes no tag through the PM.
+    expect(rows.flatMap(m => m.mentions ?? [])).toEqual(['owner'])
   })
 })
 
@@ -212,13 +200,72 @@ describe('a person\'s reply to an agent', () => {
   })
   it('reaches that agent and the PM once its work in the task is done', () => {
     const f = stepsFixture()
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Done, PR #12' } as Command, f.as(f.dev))
+    storedStatus(f.state, f.task, 'done', 'Done, PR #12')
     expect(reply(f, f.task, f.dev, 'Release it now?')).toEqual([[f.dev, f.lead]])
   })
   it('reaches the agent alone when the done work is another agent\'s', () => {
     const f = stepsFixture()
     const other = f.add('other', f.task)
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: 'Done' } as Command, f.as(f.dev))
+    storedStatus(f.state, f.task, 'done', 'Done')
     expect(reply(f, f.task, other, 'Thanks, and the fixture?')).toEqual([[other]])
+  })
+})
+
+// A post to an agent whose session is down stays queued for it, as it must; its sender is told, in the command's result every CLI
+// prints, instead of hearing nothing (tester Q3, 2026-11-09).
+describe('a post to an agent whose session is down', () => {
+  const sent = (f: ReturnType<typeof stepsFixture>, by: string | null, recipientIds: string[], extra: Record<string, unknown> = {}) =>
+    f.run({ type: 'message.send', conversationId: f.task, text: 'Please rebase on main.', replyTo: null, recipientIds, ...extra } as Command, by ? f.as(by) : owner)
+  /** What a machine's report records (machines.ts recordAgentPresence): every session of the machine but those [running] is down now. */
+  const down = (f: ReturnType<typeof stepsFixture>, running: string[]) => recordAgentPresence(f.state, 'host', running, f.now)
+  /** The name its sender's app shows it by (agentNames.ts). */
+  const name = (f: ReturnType<typeof stepsFixture>, id: string) => agentDisplayName(f.state.agents, id)!
+
+  it('tells its sender the recipient is offline and will read it when it is back, and still queues the post for it', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    down(f, ['pm', 'dev'])
+    const done = sent(f, f.dev, [other])
+    expect(done.result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
+    expect(done.messages.filter(m => m.source?.kind !== 'system').map(m => m.recipients)).toEqual([[other]])
+    // A person's post to the agent says it too.
+    expect(sent(f, null, [other]).result.offline).toBe(`${name(f, other)} is offline; it will read this when it is back.`)
+  })
+
+  it('names two with "and", and three with commas, and says "they"', () => {
+    const f = stepsFixture()
+    const [a, b, c] = ['a', 'b', 'c'].map(id => f.add(id, f.task)) as [string, string, string]
+    down(f, ['pm', 'dev'])
+    expect(sent(f, f.dev, [a, b]).result.offline).toBe(`${name(f, a)} and ${name(f, b)} are offline; they will read this when they are back.`)
+    expect(sent(f, f.dev, [a, b, c]).result.offline).toBe(`${name(f, a)}, ${name(f, b)} and ${name(f, c)} are offline; they will read this when they are back.`)
+  })
+
+  it('names only the recipients that are down, and says nothing when none is', () => {
+    const f = stepsFixture()
+    const [a, b] = ['a', 'b'].map(id => f.add(id, f.task)) as [string, string]
+    down(f, ['pm', 'dev', 'a'])
+    expect(sent(f, f.dev, [a, b]).result.offline).toBe(`${name(f, b)} is offline; it will read this when it is back.`)
+    expect(sent(f, f.dev, [a]).result).not.toHaveProperty('offline')
+    expect(sent(f, f.dev, [f.lead]).result).not.toHaveProperty('offline')
+  })
+
+  it('says nothing of an agent told to stop, a post that names no agent, or an agent-only notice', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    // Everything is down, the Engineer too: an agent-only notice is its own, whatever its record says.
+    down(f, [])
+    agent(f.state, other).workDecision = 'stop'
+    expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
+    expect(sent(f, f.dev, []).result).not.toHaveProperty('offline')
+    expect(sent(f, f.dev, [f.dev], { agentOnly: true }).result).not.toHaveProperty('offline')
+  })
+
+  it('stops saying it once the session is back', () => {
+    const f = stepsFixture()
+    const other = f.add('other', f.task)
+    down(f, ['pm', 'dev'])
+    expect(sent(f, f.dev, [other]).result).toHaveProperty('offline')
+    down(f, ['pm', 'dev', 'other'])
+    expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
   })
 })

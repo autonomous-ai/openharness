@@ -5,11 +5,16 @@ import { devicesOf, forgetPushDevice, markSandbox, type PushDevice, type PushPla
 import { apnsSender } from './apns.js'
 import { fcmSender } from './fcm.js'
 import { dropMuted } from './muted.js'
+import { quietUnread } from './unread.js'
+import { quietRecent, type RingMemory } from './rings.js'
 import { pushKeysFromEnv, type PushEnv } from './keys.js'
 import type { PhoneNotice, Sender } from './sender.js'
 
 /** A platform's sender, or null when the server has no keys for it. */
 export type PhoneSenders = Record<PushPlatform, Sender | null>
+
+/** Which kind of notice it is, by its key's first word (`chat` since Swarm v4; reply, mention and decision before): never an id. */
+const kindOf = (notice: PhoneNotice): string => notice.key.slice(0, notice.key.indexOf(':'))
 
 /** Sends to Apple and Google at once: a 100-person thread's reply is done in a few rounds without opening 100 streams. */
 const AT_ONCE = 8
@@ -25,18 +30,25 @@ export function phoneSendersFromEnv(env: PushEnv): PhoneSenders {
 
 /**
  * Sends `notices` to the phones of the people they are for (task #2905), after the write that made them committed, less
- * the tags in chats their person muted (push/muted.ts). One read of those people's phones; each notice to each of its person's phones, AT_ONCE at a time. A dead token is forgotten, a
- * sandbox one remembered. It never throws: what failed is logged, by platform and Apple's or Google's reason, and counted.
+ * those of chats their person muted (push/muted.ts), an agent chat's quiet while it is unread (push/unread.ts) or once it
+ * sounded in the last five minutes ([rings], push/rings.ts). One read of those people's phones; each notice to each of its
+ * person's phones, AT_ONCE at a time. A dead token is forgotten, a sandbox one remembered. It never throws: what failed is
+ * logged, by platform and Apple's or Google's reason, and counted.
  */
-export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, given: PhoneNotice[]): Promise<void> {
+export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, given: PhoneNotice[], rings: RingMemory): Promise<void> {
   if (!given.length) return
   const started = Date.now()
   let notices = given
   try {
-    notices = await dropMuted(db, given)
+    // Both read by key, at once: the muted chats drop out, and the unread ones go quiet.
+    const [unmuted, weighed] = await Promise.all([dropMuted(db, given), quietUnread(db, given)])
+    const quiet = new Set(weighed.filter(n => n.quiet).map(n => `${n.personId}\u0000${n.key}`))
+    notices = unmuted.map(n => !n.quiet && quiet.has(`${n.personId}\u0000${n.key}`) ? { ...n, quiet: true as const } : n)
     const phones = new Map<string, PushDevice[]>()
     for (const device of await devicesOf(db, [...new Set(notices.map(n => n.personId))])) phones.set(device.userId, [...phones.get(device.userId) ?? [], device])
-    const sends = notices.flatMap(notice => (phones.get(notice.personId) ?? []).map(device => ({ notice, device })))
+    // Last, and only for people with a phone: what is dropped or already quiet never starts a chat's quiet.
+    const reaching = await quietRecent(rings, notices.filter(n => phones.has(n.personId)))
+    const sends = reaching.flatMap(notice => (phones.get(notice.personId) ?? []).map(device => ({ notice, device })))
     const skipped: Partial<Record<PushPlatform, number>> = {}
     const counts: Record<string, number> = {}
     let next = 0
@@ -46,12 +58,12 @@ export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, 
         const sender = senders[device.platform]
         if (!sender) {
           skipped[device.platform] = (skipped[device.platform] ?? 0) + 1
-          metrics.phonePush(device.platform, 'unconfigured')
+          metrics.phonePush(device.platform, 'unconfigured', kindOf(notice))
           continue
         }
         const result = await sender.send(device, notice)
         counts[result.outcome] = (counts[result.outcome] ?? 0) + 1
-        metrics.phonePush(device.platform, result.outcome)
+        metrics.phonePush(device.platform, result.outcome, kindOf(notice))
         if (result.outcome === 'gone') await forgetPushDevice(db, device.id)
         if (result.outcome === 'sandbox') await markSandbox(db, device.id)
         if (result.outcome === 'failed') logger.warn('phone push failed', { platform: device.platform, reason: result.reason })

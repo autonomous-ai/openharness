@@ -7,7 +7,6 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { logger } from '../src/utils/logger.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
-import { loadMachineAccounts } from '../src/superTabs/parts/index.js'
 import { filterOf, planDatabase, profiled } from './plans.test-support.js'
 import type { ProfileEntry } from './bench/profile.js'
 
@@ -32,11 +31,9 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A prod-sized Swarm on a store with prod's GitHub reads, each answering at once. */
+/** A prod-sized Swarm on a store. */
 async function swarm() {
-  const store = new SuperTabStore(db, Date.now, null, { pushOrigin: async () => 'clean', repositoryReach: async () => undefined,
-    pullRequestFiles: async () => null,
-    pullRequestReader: () => { throw new Error('No pull request is read here') } })
+  const store = new SuperTabStore(db, Date.now, null)
   const tab = (await store.create(owner, randomUUID(), 'Reads', 'public')).id
   const execute = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
   // One person adds at most 20 machines: the rest are copies of the first, as their own rows.
@@ -96,17 +93,12 @@ const measured = (entries: ProfileEntry[]) => {
  *  kind's listing, ~110 bytes a part, and the parts the command wrote: on prod, parts are larger and more. */
 const BUDGET = {
   'conversation.create': { queries: 24, kb: 36 },
-  'work.assign': { queries: 36, kb: 44 },
-  'work.status': { queries: 22, kb: 36 },
-  'work.status review': { queries: 36, kb: 52 },
   'post': { queries: 20, kb: 34 },
-  'react': { queries: 22, kb: 34 },
-  'dispatch pass': { queries: 12, kb: 32 },
 } as const
 
 describe('what a common command reads in a prod-sized Swarm (task #4368)', () => {
   let s: Awaited<ReturnType<typeof swarm>>
-  let worker: string, conversationId = '', assignmentId = '', messageId = ''
+  let worker: string, conversationId = ''
   const seen: Record<string, ReturnType<typeof measured>> = {}
   const measure = async (name: keyof typeof BUDGET, run: () => Promise<unknown>) => {
     seen[name] = measured(await profiled(db, run))
@@ -131,38 +123,11 @@ describe('what a common command reads in a prod-sized Swarm (task #4368)', () =>
     await measure('conversation.create', async () => { conversationId = await s.task('Measured') })
     within('conversation.create')
   })
-  it('work.assign', async () => {
-    await measure('work.assign', () => s.execute({ type: 'work.assign', conversationId, agentId: worker }))
-    assignmentId = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: s.tab, key: conversationId } })).data as { assignment: { id: string } }).assignment.id
-    within('work.assign')
-  })
-  it('work.status', async () => {
-    await measure('work.status', () => s.execute({ type: 'work.status', conversationId, assignmentId, status: 'working', result: 'On it.' } as Command, worker))
-    within('work.status')
-  })
   it('a post', async () => {
-    await measure('post', async () => { messageId = String((await s.execute({ type: 'message.send', conversationId, text: 'hello', replyTo: null, recipientIds: [] } as Command, worker)).result.messageId) })
+    // The agent posts in the task it is in.
+    await s.execute({ type: 'conversation.agent', conversationId, agentId: worker, present: true, lead: false })
+    await measure('post', () => s.execute({ type: 'message.send', conversationId, text: 'hello', replyTo: null, recipientIds: [] } as Command, worker))
     within('post')
-  })
-  it('a reaction', async () => {
-    await measure('react', () => s.execute({ type: 'message.react', conversationId, messageId, emoji: 'eyes', on: true } as Command))
-    within('react')
-  })
-  it('a Ready, with its GitHub reads', async () => {
-    await measure('work.status review', () => s.execute({ type: 'work.status', conversationId, assignmentId, status: 'review',
-      result: 'Ready: https://github.com/example/repo/pull/1' } as Command, worker))
-    within('work.status review')
-  })
-  it('the dispatch pass a write schedules', async () => {
-    await measure('dispatch pass', () => s.store.dispatchCrew(s.tab))
-    within('dispatch pass')
-  })
-  // Its match names the Swarm and live rows as the held index does: read by `_id`, named, it examines one machine of 60.
-  it('an agent\'s machine account, read by id', async () => {
-    const { key } = await db.swarmMachine.findFirstOrThrow({ where: { tabId: s.tab, deleted: false } })
-    const machines = (await profiled(db, () => db.$transaction(tx => loadMachineAccounts(tx, s.tab, [key]))))
-      .filter(e => e.ns.endsWith('.SwarmMachine') && e.op !== 'getmore')
-    expect(machines.map(e => [e.planSummary, e.docsExamined])).toEqual([['IXSCAN { _id: 1 }', 1]])
   })
 })
 
@@ -171,8 +136,7 @@ describe('a slow command names its phases', () => {
   it('logs its type, total and each phase, never its words, and nothing for a fast one', async () => {
     let now = 1_000_000, step = 0
     // Each read of the clock moves it on by `step`: a command that reads it a few times takes seconds, with no wait in the test.
-    const store = new SuperTabStore(db, () => (now += step), null, { pushOrigin: async () => 'clean', repositoryReach: async () => undefined,
-      pullRequestFiles: async () => null, pullRequestReader: () => { throw new Error('No pull request is read here') } })
+    const store = new SuperTabStore(db, () => (now += step), null)
     const tab = (await store.create(owner, randomUUID(), 'Phases', 'public')).id
     const create = (title: string) => store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'conversation.create', title, checks: [],
       task: { goal: `${title}.`, changes: 'The change.', constraints: 'None.', owns: ['backend/a.ts'] } } as Command })
@@ -187,7 +151,7 @@ describe('a slow command names its phases', () => {
       const fields = lines[0]![1] as { totalMs: number; phases: Record<string, number> }
       expect(fields).toMatchObject({ tabId: tab, type: 'conversation.create', byAgent: false })
       expect(fields.totalMs).toBeGreaterThanOrEqual(1_000)
-      expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['read:pushOrigin', 'read:repositoryReach', 'attempts', 'pool', 'body',
+      expect(Object.keys(fields.phases)).toEqual(expect.arrayContaining(['attempts', 'pool', 'body',
         'commit', 'stamps', 'afterCommit', 'other']))
       expect(fields.phases.attempts).toBe(1)
       expect(JSON.stringify(lines)).not.toContain('Secret words')

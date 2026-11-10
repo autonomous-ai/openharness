@@ -57,16 +57,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.1.2
-  espressif/esp_websocket_client:
-    component_hash: ae561d39222a399ddda5e470913c3d54a3c0f53dce15b8d21a3aaa4226dd74b1
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.2.3
   idf:
     source:
       type: idf
@@ -89,9 +79,8 @@ direct_dependencies:
 - espressif/esp_codec_dev
 - espressif/esp_lcd_co5300
 - espressif/esp_lcd_touch_cst816s
-- espressif/esp_websocket_client
 - idf
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: 3fb9a9a536aa7972cb650bdcc4845d5893439ecc253277b3eb4cc6016c4edab5
+manifest_hash: 05a751ba7d1fce9c755ecfb7ab30221ad6dac8dee84282139e4c31db00b234a5
 target: esp32s3
 version: 2.0.0

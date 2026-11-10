@@ -5,7 +5,7 @@ import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/ws/ws_conn.dart';
 
-import '../super_tab_activity_lists_test.dart' show swarm;
+import 'super_tab_swarm.dart' show swarm;
 import 'super_tab_fixture.dart';
 
 /// Swarm v4's review data: lampOS's agents and real posts from the week of 26 October 2026, laid out the v4 way. The
@@ -176,10 +176,22 @@ ConversationServer swarmV4Server() {
 
 /// What `gh` answers for lampOS's issues in these tests, as GitHub's GraphQL does: three open tasks (one nobody has, one for
 /// the seventh builder, one the first builder is on), and #5759's text with its newest two comments, signed by their agents as
-/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does.
-SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
+/// lampOS's builders sign them, and one before them. Every other call fails as an unknown issue does, and every call while
+/// [signedOut] says so fails as a `gh` that is not signed in does.
+SwarmGitHub swarmV4GitHub({
+  List<List<String>>? calls,
+  bool Function()? signedOut,
+}) => SwarmGitHub(
   run: (arguments) async {
     calls?.add(arguments);
+    if (signedOut?.call() ?? false) {
+      return ProcessResult(
+        0,
+        4,
+        '',
+        'To get started with GitHub CLI, please run:  gh auth login',
+      );
+    }
     final query = arguments
         .firstWhere((a) => a.startsWith('query='), orElse: () => '')
         .substring(6);
@@ -298,7 +310,127 @@ SwarmGitHub swarmV4GitHub({List<List<String>>? calls}) => SwarmGitHub(
                   ],
                 },
               },
+              // No task's, as most of lampOS's builder pull requests are: its CI check failed.
+              {
+                'number': 5771,
+                'title': 'Bump gh in CI to 2.62',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5771',
+                'isDraft': false,
+                'headRefName': 'seventh/ci-gh',
+                'headRefOid': 'a1b2c3d4e5f60718293a4b5c6d7e8f9011223344',
+                'baseRefName': 'main',
+                'body':
+                    'The runners carry gh 2.40, which lacks --json for runs.',
+                'mergeable': 'MERGEABLE',
+                'updatedAt': '2026-11-09T07:10:00Z',
+                'labels': {
+                  'nodes': [
+                    {'name': 'builder:seventh'},
+                  ],
+                },
+                'closingIssuesReferences': {'nodes': <Object?>[]},
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'FAILURE'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {'nodes': <Object?>[]},
+              },
+              // Green, and nobody has read it yet.
+              {
+                'number': 5772,
+                'title': 'Say the update rows out loud',
+                'url': 'https://github.com/autonomous-ai/lampOS/pull/5772',
+                'isDraft': false,
+                'headRefName': 'eighth/rows-say',
+                'headRefOid': 'b2c3d4e5f60718293a4b5c6d7e8f901122334455',
+                'baseRefName': 'main',
+                'body': 'The rows are said once they are scored.',
+                'mergeable': 'MERGEABLE',
+                'updatedAt': '2026-11-09T07:00:00Z',
+                'labels': {
+                  'nodes': [
+                    {'name': 'builder:eighth'},
+                  ],
+                },
+                'closingIssuesReferences': {'nodes': <Object?>[]},
+                'commits': {
+                  'nodes': [
+                    {
+                      'commit': {
+                        'statusCheckRollup': {'state': 'SUCCESS'},
+                      },
+                    },
+                  ],
+                },
+                'comments': {'nodes': <Object?>[]},
+              },
             ],
+          },
+        },
+      });
+    }
+    // #5770's own chat, as GitHub's pullRequest answers it: its text, a READ-OK, and a review that is one line comment.
+    if (query.contains('pullRequest(number:') &&
+        arguments.contains('number=5770')) {
+      return answer({
+        'repository': {
+          'pullRequest': {
+            'number': 5770,
+            'title': 'Score the update rows again',
+            'url': 'https://github.com/autonomous-ai/lampOS/pull/5770',
+            'createdAt': '2026-11-09T02:40:00Z',
+            'updatedAt': '2026-11-09T03:05:00Z',
+            'author': {'login': '69tc'},
+            'labels': {
+              'nodes': [
+                {'name': 'builder:first builder', 'color': '1d76db'},
+              ],
+            },
+            'body': 'Closes #5759\n\nScores both rows again from the lamp\'s readings.',
+            'state': 'OPEN',
+            'mergedAt': null,
+            'headRefName': 'first-builder/5759',
+            'comments': {
+              'totalCount': 1,
+              'pageInfo': {'hasPreviousPage': false, 'startCursor': 'p1'},
+              'nodes': [
+                {
+                  'author': {'login': '69tc'},
+                  'body': 'Migrate, 10:05 GMT+7: READ-OK f6edb44',
+                  'createdAt': '2026-11-09T03:05:00Z',
+                  'url': 'https://github.com/autonomous-ai/lampOS/pull/5770#issuecomment-9',
+                },
+              ],
+            },
+            'reviews': {
+              'nodes': [
+                {
+                  'state': 'COMMENTED',
+                  'submittedAt': '2026-11-09T02:50:00Z',
+                  'body': '',
+                  'url': 'https://github.com/autonomous-ai/lampOS/pull/5770#pullrequestreview-1',
+                  'author': {'login': 'deehw'},
+                  'comments': {
+                    'nodes': [
+                      {
+                        'body':
+                            'First builder, 09:50: keep the old row name too.',
+                        'createdAt': '2026-11-09T02:50:00Z',
+                        'url': 'https://github.com/autonomous-ai/lampOS/pull/5770#discussion_r1',
+                        'author': {'login': 'deehw'},
+                        'path': 'rows.py',
+                        'line': 40,
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
           },
         },
       });
@@ -390,6 +522,14 @@ class SwarmV4Computer {
   /// The next save is applied but its answer never comes, as when a link drops after the computer wrote the file.
   bool loseNextReply = false;
 
+  /// What else instructs the agent in its folder, as a read's answer carries it (`shared`, `skipped`), and beside the
+  /// code of a refused read. Null is a computer that sends none (an older one). Objects, so a test can send what the
+  /// app does not understand.
+  Object? shared, skipped;
+
+  /// Called as a read arrives, and the read is not answered until what it returns completes: a computer slow to answer.
+  Future<void> Function()? hold;
+
   static String versionOf(String? text) =>
       text == null ? '' : 'v${text.hashCode}';
 
@@ -399,13 +539,24 @@ class SwarmV4Computer {
     payload,
   ) async {
     requests.add((machineId, type, payload));
+    final around = {
+      if (type == 'agent_instructions_read') ...{
+        'shared': ?shared,
+        'skipped': ?skipped,
+      },
+    };
+    if (type == 'agent_instructions_read') await hold?.call();
     if (refuse case final code?) {
-      throw WsRequestFailure(responseType: '${type}_result', code: code);
+      throw WsRequestFailure(
+        responseType: '${type}_result',
+        code: code,
+        payload: {'error': code, ...around},
+      );
     }
     final key = '${payload['agentId']}/${payload['name']}';
     final text = files[key];
     if (type == 'agent_instructions_read') {
-      return {'text': text, 'version': versionOf(text)};
+      return {'text': text, 'version': versionOf(text), ...around};
     }
     if (payload['version'] != versionOf(text)) {
       throw WsRequestFailure(responseType: '${type}_result', code: 'CHANGED');

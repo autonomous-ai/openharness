@@ -9,9 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { leadSwitchOf, SWITCH_RECOVERY_MS, switchWithin } from './leadSwitch.js'
-import { isCrewRow } from './crew.js'
 import { identifier, object } from './wire.js'
-import { isTeamDaemon } from './teamDaemon.js'
 
 /** `leads`: the Leads of active projects here, which never lapse (owner, 2026-10-23: the Lead of an active project is never
  *  stopped in any case). Absent in a file from before Leads were kept.
@@ -19,11 +17,9 @@ import { isTeamDaemon } from './teamDaemon.js'
  *  owner with Stop Harness. Absent in a file from before Buddies were kept, which names none until the next roster.
  *  `assigned`: when the host first received each assignment its harnesses hold, epoch ms. Such a harness is in `harnesses`
  *  while it holds it and for ASSIGNED_GRACE_MS after it came, whatever its groups (task #2744). Absent in older files.
- *  `crew`: its project's crew here (crew.ts isCrewRow, task #3397), kept as Leads are: in no open group and past the lapse,
- *  and reopened by the core when gone. Absent in older files.
  *  `wakeableBuddies`: only main Buddies the server manages for sleep (#3824); ordinary Buddies gain no resume authority.
  *  `sleepingBuddies`: the subset its latest roster puts to sleep, revoking the internal close permit when awake. */
-interface Retention { version: 2; machineId: string; harnesses: string[]; leads?: string[]; crew?: string[]; buddies?: string[]; wakeableBuddies?: string[]; sleepingBuddies?: string[]; assigned?: Record<string, number> }
+interface Retention { version: 2; machineId: string; harnesses: string[]; leads?: string[]; buddies?: string[]; wakeableBuddies?: string[]; sleepingBuddies?: string[]; assigned?: Record<string, number> }
 export const retentionFile = (dataDir: string) => join(dataDir, 'super-tabs', 'retained.json')
 export const RETENTION_LAPSE_MS = 7 * 24 * 60 * 60_000
 const REFRESH_MS = 60 * 60_000
@@ -37,7 +33,6 @@ function read(file: string): Retention {
   try { value = object(JSON.parse(readFileSync(file, 'utf8'))) } catch { /* reported below */ }
   if (value.version !== 2 || !identifier(value.machineId) || !Array.isArray(value.harnesses) || !value.harnesses.every(identifier)
     || (value.leads !== undefined && (!Array.isArray(value.leads) || !value.leads.every(identifier)))
-    || (value.crew !== undefined && (!Array.isArray(value.crew) || !value.crew.every(identifier)))
     || (value.wakeableBuddies !== undefined && (!Array.isArray(value.wakeableBuddies) || !value.wakeableBuddies.every(identifier)))
     || (value.sleepingBuddies !== undefined && (!Array.isArray(value.sleepingBuddies) || !value.sleepingBuddies.every(identifier)))
     || (value.buddies !== undefined && (!Array.isArray(value.buddies) || !value.buddies.every(identifier)))
@@ -55,7 +50,7 @@ export function retainedHarnesses(dataDir: string, now = Date.now()): Set<string
   return new Set(read(file).harnesses)
 }
 
-/** Sessions a valid roster lets the core reopen: Leads, crew, managed main Buddies and a Buddy whose engine switch needs
+/** Sessions a valid roster lets the core reopen: Leads, managed main Buddies and a Buddy whose engine switch needs
  * rollback. A recovered unmanaged Buddy is excluded so its person's later Stop Harness stays effective. */
 export function retainedLeads(dataDir: string): Set<string> {
   try {
@@ -64,15 +59,14 @@ export function retainedLeads(dataDir: string): Set<string> {
       const switched = leadSwitchOf(dataDir, id)
       return !switched?.recovered && switchWithin(switched, Date.now(), SWITCH_RECOVERY_MS)
     })
-    return new Set([...kept.leads ?? [], ...kept.crew ?? [], ...kept.wakeableBuddies ?? [], ...switching])
+    return new Set([...kept.leads ?? [], ...kept.wakeableBuddies ?? [], ...switching])
   } catch { return new Set() }
 }
 
-/** Only the server's current sleep instruction grants an idle close, never a window's Close or a Team purge. A new
+/** Only the server's current sleep instruction grants an idle close, never a window's Close. A new
  *  awake roster revokes it even while checkpointing. Missing, lapsed or unreadable authority grants no sleep. */
 export function retainedSleepingBuddies(dataDir: string, now = Date.now()): Set<string> {
   try {
-    if (isTeamDaemon()) return new Set()
     const file = retentionFile(dataDir)
     if (now - statSync(file).mtimeMs > RETENTION_LAPSE_MS) return new Set()
     return new Set(read(file).sleepingBuddies ?? [])
@@ -112,7 +106,7 @@ export function retainContributions(dataDir: string, machineId: string, rows: un
   // file and another identity's entry. Unchanged rosters only refresh the lapse clock.
   let previous: Retention | null = null
   try { if (existsSync(file)) previous = read(file) } catch { /* rebuilt below */ }
-  const ids = new Set<string>(), leads = new Set<string>(), crew = new Set<string>(), buddies = new Set<string>(), wakeableBuddies = new Set<string>(), sleepingBuddies = new Set<string>()
+  const ids = new Set<string>(), leads = new Set<string>(), buddies = new Set<string>(), wakeableBuddies = new Set<string>(), sleepingBuddies = new Set<string>()
   for (const item of rows) {
     const row = object(item), agent = object(row.agent)
     if (!identifier(row.tabId) || !identifier(agent.harnessId) || agent.machineId !== machineId) continue
@@ -132,8 +126,6 @@ export function retainContributions(dataDir: string, machineId: string, rows: un
       }
     }
     if (row.lead === true) leads.add(agent.harnessId)
-    // One whose stop is asked for is no crew the core may reopen (security review 1 of #3222).
-    else if (isCrewRow(row) && row.stopRequested !== true) crew.add(agent.harnessId)
     else if (row.active === false && !buddies.has(agent.harnessId)) continue
     ids.add(agent.harnessId)
   }
@@ -145,7 +137,7 @@ export function retainContributions(dataDir: string, machineId: string, rows: un
   }
   for (const [id, at] of Object.entries(before)) if (!(id in assigned) && now - at < ASSIGNED_GRACE_MS) assigned[id] = at
   for (const id of Object.keys(assigned)) ids.add(id)
-  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort(), leads: [...leads].sort(), ...(crew.size ? { crew: [...crew].sort() } : {}), buddies: [...buddies].sort(), ...(wakeableBuddies.size ? { wakeableBuddies: [...wakeableBuddies].sort() } : {}),
+  const next: Retention = { version: 2, machineId, harnesses: [...ids].sort(), leads: [...leads].sort(), buddies: [...buddies].sort(), ...(wakeableBuddies.size ? { wakeableBuddies: [...wakeableBuddies].sort() } : {}),
     ...(sleepingBuddies.size ? { sleepingBuddies: [...sleepingBuddies].sort() } : {}),
     assigned: Object.fromEntries(Object.entries(assigned).sort(([a], [b]) => a.localeCompare(b))) }
   if (previous && JSON.stringify(previous) === JSON.stringify(next)) {

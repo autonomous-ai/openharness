@@ -5,7 +5,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'support/buddy_fixture.dart';
+import 'support/own_agent_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// The Product Managers ("product-managers") chat is gone (Dee, 2026-10-31):
@@ -14,11 +14,10 @@ import 'support/super_tab_fixture.dart';
 /// still does, Desktop drops it when it reads the Swarm, so no list shows it
 /// and nothing opens it.
 void main() {
-  /// Two projects, the owner's Buddy chat and, as an older server still sends
+  /// Two projects, the owner's chat with their agent and, as an older server still sends
   /// it, the Leads conversation with messages in it.
   ConversationServer swarm() {
     final server = ConversationServer();
-    server.state['buddies'] = true;
     server.state['projects'] = [
       projectFixture('lead', 'openharness', 'lead'),
       projectFixture('os', 'autonomous-os', 'os-lead'),
@@ -52,7 +51,7 @@ void main() {
       'agentIds': ['pm-1', 'pm-2'],
     });
     server.state['leadsConversationId'] = 'leads';
-    giveBuddy(
+    giveOwnAgent(
       server,
       person: 'owner',
       id: 'sol',
@@ -82,9 +81,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -118,48 +115,9 @@ void main() {
       'lead',
       'offline',
       'os-lead',
-      'buddy-owner-lead',
+      'agent-chat-sol',
     ]);
   });
-
-  testWidgets(
-    'an older server still sends it: listed nowhere, never opened, and project and Buddy chats stay',
-    (tester) async {
-      final server = swarm();
-      final reads = <String>[];
-      server.onRead = reads.add;
-      final controller = await show(tester, server);
-
-      expect(find.byKey(const ValueKey('super-group-leads')), findsNothing);
-      expect(find.text('product-managers'), findsNothing);
-      expect(find.text('# product-managers'), findsNothing);
-      expect(
-        find.text('I will take the roster file after #12 lands.'),
-        findsNothing,
-      );
-      // Project chats and the Buddy chat are listed as before.
-      for (final key in [
-        'super-group-lead',
-        'super-group-os-lead',
-        'super-buddy-lead',
-      ]) {
-        expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
-      }
-      expect(find.text('# openharness'), findsOneWidget);
-
-      // Nothing opens it, a link or a notification included.
-      expect(await controller.select('leads'), isFalse);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'lead');
-      expect(reads.where((path) => path.contains('/leads/')), isEmpty);
-      // The other chats still open.
-      expect(await controller.select('os-lead'), isTrue);
-      expect(await controller.select('buddy-owner-lead'), isTrue);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'buddy-owner-lead');
-      await close(tester, controller);
-    },
-  );
 
   testWidgets(
     'a view saved while it was open lands on the first project chat',

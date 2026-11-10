@@ -7,7 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -59,15 +59,12 @@ void main() {
         if (scene == 'no-agents') {
           server.state['agents'] = <dynamic>[];
         } else {
-          server.state['swarmBuddy'] = true;
           server.state['agents'] = [
-            // The person's one Buddy is of no project, as the server sends it.
+            // The person's own agent is of no project, as the server sends it.
             {
               ...(_agent('buddy', 'Buddy')..remove('projectId')),
-              'buddyScope': 'swarm',
-              'buddyOf': {'personId': 'owner'},
-              'kind': 'buddy',
-              'chatId': 'swarm-buddy-owner',
+              'kind': 'regular',
+              'chatId': 'agent-chat-buddy',
               'myAgent': true,
             },
             {
@@ -91,9 +88,8 @@ void main() {
             },
           ];
           groups.add({
-            ...conversationFixture('swarm-buddy-owner', 'Buddy'),
-            'kind': 'swarm-buddy',
-            'buddyOwnerId': 'owner',
+            ...conversationFixture('agent-chat-buddy', 'Buddy'),
+            'kind': 'agent-chat',
             'agentIds': ['buddy'],
           });
           groups.firstWhere((g) => g['id'] == 'lead')['leadId'] = 'orion';
@@ -123,22 +119,29 @@ void main() {
           };
         }
         server.append('Working on the fix.', conversationId: 'offline');
-        // Humans: the board's people with their points.
+        // Top Teams: the leaderboard's people with their points.
         (server.state['people'] as List).addAll([
           for (final id in ['dee', 'ken15'])
             {'id': id, 'email': '$id@example.com', 'role': 'collaborator'},
         ]);
-        server.leaderboard = {
-          'projectId': 'lead',
-          'week': 0,
+        server.shipping = {
+          'week': 1793577600000,
           'people': [
             for (final (i, (id, points)) in [
-              ('dee', 120),
-              ('ken15', 80),
-              ('owner', 12),
+              ('dee', 4.2),
+              ('ken15', 2.8),
+              ('owner', 1.0),
             ].indexed)
-              {'personId': id, 'points': points, 'rank': i + 1},
+              {
+                'personId': id,
+                'displayName': id,
+                'agentsShipping': 3 - i,
+                'level': 3 - i,
+                'points': points,
+                'rank': i + 1,
+              },
           ],
+          'failures': <dynamic>[],
         };
         (server.state['projects'] as List)
           ..first['repository'] = {
@@ -177,11 +180,9 @@ void main() {
                 controller: c,
                 app: app,
                 onNewSwarm: () {},
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Mac Studio',
-                board: true,
               ),
             ),
           ),

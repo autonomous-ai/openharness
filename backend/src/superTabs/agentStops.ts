@@ -3,7 +3,6 @@
  * 15 minutes, and its PM releasing it after an idle notice. Once, the time checks withdraw every stop no host is closing yet,
  * so a person can talk to their agents again (store.ts runTimeChecks clears the stop's run and session records).
  */
-import { isBuddy } from './buddies.js'
 import type { SuperTabState } from './model.js'
 
 /** A withdrawn stop: the agent, and the stop's release its run and session records name. */
@@ -15,7 +14,7 @@ export function withdrawV3Stops(state: SuperTabState, closing: ReadonlySet<strin
   state.v4StopsWithdrawn = true
   const withdrawn: WithdrawnStop[] = []
   for (const target of state.agents) {
-    if (target.workDecision !== 'stop' || isBuddy(target) || !target.releaseId || closing.has(target.id)) continue
+    if (target.workDecision !== 'stop' || !target.releaseId || closing.has(target.id)) continue
     withdrawn.push({ agentId: target.id, releaseId: target.releaseId, machineOwnerId: target.machineOwnerId })
     if (target.idleStop?.previous) target.workDecision = target.idleStop.previous
     else delete target.workDecision
@@ -25,6 +24,6 @@ export function withdrawV3Stops(state: SuperTabState, closing: ReadonlySet<strin
   return withdrawn
 }
 
-/** The agents [withdrawV3Stops] looks at: stopping, not a Buddy, once per Swarm. */
+/** The agents [withdrawV3Stops] looks at: stopping, once per Swarm. */
 export const v3Stopping = (state: SuperTabState) =>
-  state.v4StopsWithdrawn ? [] : state.agents.filter(a => a.workDecision === 'stop' && !isBuddy(a) && a.releaseId)
+  state.v4StopsWithdrawn ? [] : state.agents.filter(a => a.workDecision === 'stop' && a.releaseId)

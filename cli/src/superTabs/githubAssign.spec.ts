@@ -15,7 +15,7 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
   // A repository already set up for the flow: its labels, and its builders' (a fresh one is set apart below).
   const labels = ['status:taken', 'size:s', 'size:m', 'size:l', 'p0', 'p1', 'p2', 'builder:pip', 'builder:juno', 'builder:atlas'].map(name => ({ name }))
   const state = { open, closed, labelAnswer: 200, deleteAnswer: 200, commentAnswer: 201, signedOut: false, applied: false,
-    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>() }
+    files: new Map<string, string>(), labels: labels as Json[], pulls: [] as Json[], comments: new Map<number, Json[]>(), reviews: new Map<number, Json[]>(), compare: new Map<string, Json>() }
   const sent: Array<{ method: string; path: string; body: Json }> = []
   const get: GitHubGet = async (path, etag) => {
     if (state.signedOut) throw Object.assign(new Error('gh is not signed in on this computer: run `gh auth login`.'), { code: 'GH_SIGNED_OUT' })
@@ -29,6 +29,8 @@ function fakeGitHub(open: Json[], closed: Json[] = []) {
       : url.pathname === '/repos/acme/app/pulls' ? state.pulls.slice((Number(url.searchParams.get('page') ?? 1) - 1) * Number(url.searchParams.get('per_page') ?? 30),
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /^\/repos\/acme\/app\/issues\/\d+\/comments$/.test(url.pathname) ? state.comments.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/pulls\/\d+\/reviews$/.test(url.pathname) ? state.reviews.get(Number(url.pathname.split('/').at(-2))) ?? []
+      : /^\/repos\/acme\/app\/compare\/main\.\.\.[0-9a-f]+$/.test(url.pathname) ? state.compare.get(url.pathname.split('...').at(-1)!) ?? null
       : url.pathname === '/repos/acme/app/labels' ? state.labels
       // A page of the list, as GitHub pages it.
       : url.pathname === '/repos/acme/app/issues' ? (url.searchParams.get('state') === 'closed' ? state.closed : state.open)
@@ -235,6 +237,31 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       machines: crew().machines }
     const asks = (f: ReturnType<typeof setup>) => f.said().filter(([n]) => n === 30).map(([, body]) => String(body))
 
+    // lampOS #5212: a read posted as a review is a read; asked for another, its pull request waited on a reader it already had.
+    it('counts a READ-OK posted as a review as a read, and asks nobody else', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull()]
+      f.github.state.reviews.set(30, [{ id: 7, state: 'APPROVED', body: 'Juno, 07:10, to **Pip**: READ-OK f6edb44', submitted_at: '2026-11-09T07:10:00Z',
+        author_association: 'MEMBER', user: { login: 'deehw' } }])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([])
+    })
+
+    // lampOS lib.sh patch_of: a verdict on an earlier head whose change is the head's still stands. Updated from main with nothing of
+    // its own changed, the pull request was read again for nothing, or its HOLD asked about before its author fixed anything.
+    it('asks nobody again for a verdict on an earlier head whose change is the head\'s: a READ-OK stands, a HOLD waits for its author', async () => {
+      const change = { files: [{ filename: 'sandbox/quotes.py', status: 'modified', changes: 1, patch: '@@ -4,3 +4,3 @@\n x\n-    days = 1\n+    days = int(n)' }] }
+      for (const verdict of ['READ-OK', 'HOLD']) {
+        const f = setup([], { crew: team })
+        f.github.state.pulls = [pull()]
+        f.github.state.comments.set(30, [comment(`Juno, 07:10, to **Pip**: ${verdict} a1b2c3d`)])
+        f.github.state.compare.set('a1b2c3d', change)
+        f.github.state.compare.set(HEAD, change)
+        await f.assigner.tick()
+        expect(asks(f), verdict).toEqual([])
+      }
+    })
+
     it('counts no READ-OK its author signed, however its two-word name is written, and asks a reader', async () => {
       const two: Crew = { builders: [...crew().builders, { id: 'pip-two', name: 'Pip Two', label: 'builder:pip-two', machineId: 'mac', engine: 'claude' }],
         machines: crew().machines }
@@ -254,6 +281,43 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       await f.assigner.tick()
       expect(asks(f)).toEqual([expect.stringMatching(/: please read this pull request/)])
       expect(asks(f)[0]).not.toContain(name)
+    })
+
+    it('asks the login that opened the pull request to read again after its unsigned HOLD on an older head', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
+      f.github.state.comments.set(30, [comment('HOLD 1234567: off by one')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*deehw\*\*: the head is now f6edb44, after your HOLD on 1234567: please read it again/)])
+    })
+
+    // Swarm-sandbox #24, 2026-11-10: after a push, Harness asked "deehw" to read again for an unsigned READ-OK that never
+    // counted, and took that ask for a reader on its way, so it asked nobody who could read it.
+    it('asks no login to read again for its unsigned READ-OK on an older head, and asks a reader who signs', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
+      f.github.state.comments.set(30, [comment('READ-OK 1234567')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/: please read this pull request/)])
+      expect(asks(f)[0]).not.toContain('deehw')
+    })
+
+    it('counts no unsigned READ-OK from the login that opened the pull request, and asks a reader who signs', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ user: { login: 'deehw' } })]
+      f.github.state.comments.set(30, [comment('READ-OK f6edb44')])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with your name, as in "Atlas, \d\d:\d\d: READ-OK f6edb44"/)])
+    })
+
+    // The reader Harness asked as "Kai Lee" and that answered as "kai-lee" is one: it read, and is not still waited for.
+    it('knows a reader it asked by its verdict however it writes its name, and asks another for TWO READS', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ body: 'Closes #14. TWO READS' })]
+      f.github.state.comments.set(30, [comment('Harness, 07:20, to **Kai Lee**: please read this pull request, and start your comment with READ-OK f6edb44 '
+        + 'or HOLD f6edb44 (with the file, line and fix).', { created_at: '2026-11-09T07:20:00Z' }), comment('kai-lee, 07:25: READ-OK f6edb44', { created_at: '2026-11-09T07:25:00Z' })])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
     })
 
     it('asks none of a pull request\'s writers to read it: its label\'s agent nor its branch\'s', async () => {
@@ -368,7 +432,7 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull()]
       await f.assigner.tick()
-      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with READ-OK f6edb44 or HOLD f6edb44/)])
+      expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with your name, as in "Atlas, \d\d:\d\d: READ-OK f6edb44" or "Atlas, \d\d:\d\d: HOLD f6edb44" with the file, line and fix\.$/)])
       await f.assigner.tick()
       expect(asks(f)).toHaveLength(1)
     })
@@ -409,8 +473,8 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
         f.github.state.pulls = [pull({ head: { sha: NEW, ref: 'pip/14' } })]
         f.github.state.comments.set(30, [comment(`Juno, 14:00: ${verdict} f6edb44${verdict === 'HOLD' ? ': the day count is off by one.' : ''}`)])
         await f.assigner.tick()
-        expect(asks(f).map(body => body.replace(/^Harness, \d\d:\d\d,/, 'Harness, HH:MM,'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
-          + `after your ${verdict} on f6edb44: please read it again, and start your comment with READ-OK abcdef1 or HOLD abcdef1 (with the file, line and fix).`])
+        expect(asks(f).map(body => body.replaceAll(/\d\d:\d\d/g, 'HH:MM'))).toEqual([`Harness, HH:MM, to **Juno**: the head is now abcdef1, `
+          + `after your ${verdict} on f6edb44: please read it again, and start your comment with your name, as in "Juno, HH:MM: READ-OK abcdef1" or "Juno, HH:MM: HOLD abcdef1" with the file, line and fix.`])
         // Once: GitHub shows the ask, and Juno is still reading.
         f.github.state.comments.set(30, [...f.github.state.comments.get(30)!, comment(asks(f)[0]!)])
         await f.make().tick()

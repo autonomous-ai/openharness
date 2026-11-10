@@ -530,7 +530,7 @@ class SwarmSkeletonRows extends StatelessWidget {
 }
 
 /// A person's or an agent's round mark: their picture, or their initial on
-/// their colour; a person's status emoji at its corner while it lasts.
+/// their colour.
 class SwarmAvatar extends StatelessWidget {
   const SwarmAvatar({
     super.key,
@@ -538,7 +538,6 @@ class SwarmAvatar extends StatelessWidget {
     required this.name,
     this.size = 32,
     this.picture,
-    this.status,
   });
 
   final String id, name;
@@ -547,13 +546,10 @@ class SwarmAvatar extends StatelessWidget {
   /// What they chose to wear; null wears the initial.
   final SuperTabAvatarPicture? picture;
 
-  /// A person's status; null for an agent.
-  final SuperTabPersonStatus? status;
-
   @override
   Widget build(BuildContext context) {
     final color = swarmAvatarColor(id);
-    final face = SwarmFace(
+    return SwarmFace(
       picture: picture,
       size: size,
       tint: color,
@@ -573,7 +569,6 @@ class SwarmAvatar extends StatelessWidget {
         ),
       ),
     );
-    return SwarmStatusFace(name: name, size: size, status: status, face: face);
   }
 }
 
@@ -689,7 +684,8 @@ enum SwarmButtonStyle {
   link,
 }
 
-/// A button at least 44 points tall, in the app's sans face.
+/// A button at least 44 points tall, in the app's sans face; [compact], drawn
+/// at a control's height in a box 44 tall ([SwarmTapTarget]).
 class SwarmButton extends StatelessWidget {
   const SwarmButton({
     super.key,
@@ -698,9 +694,10 @@ class SwarmButton extends StatelessWidget {
     this.style = SwarmButtonStyle.plain,
     this.icon,
     this.wide = false,
+    this.compact = false,
     this.busy = false,
     this.busyLabel,
-  });
+  }) : assert(!(wide && compact), 'a wide button is never compact');
 
   final String label;
   final VoidCallback? onPressed;
@@ -709,6 +706,11 @@ class SwarmButton extends StatelessWidget {
 
   /// The whole width, taller and bolder: a screen's main action.
   final bool wide;
+
+  /// A row's own action (Activity's Reply and Approve): drawn at the
+  /// standard control height ([AppControl.height]) and pressed across the
+  /// 44-point box it is laid out in ([SwarmTapTarget]).
+  final bool compact;
 
   /// Working: a spinner and [busyLabel], and taps do nothing.
   final bool busy;
@@ -733,7 +735,7 @@ class SwarmButton extends StatelessWidget {
       fontWeight: wide ? FontWeight.w600 : FontWeight.w500,
       height: 1.25,
     );
-    return Semantics(
+    final button = Semantics(
       button: true,
       enabled: enabled,
       label: busy ? busyLabel ?? label : label,
@@ -753,13 +755,19 @@ class SwarmButton extends StatelessWidget {
                 }
               : null,
           child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: wide ? 52 : 44),
+            constraints: BoxConstraints(
+              minHeight: wide
+                  ? 52
+                  : compact
+                  ? AppControl.height
+                  : 44,
+            ),
             child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: style == SwarmButtonStyle.link
+                horizontal: style == SwarmButtonStyle.link || compact
                     ? AppSpace.m
                     : AppSpace.l,
-                vertical: AppSpace.s,
+                vertical: compact ? AppSpace.xs : AppSpace.s,
               ),
               child: Row(
                 mainAxisSize: wide ? MainAxisSize.max : MainAxisSize.min,
@@ -793,7 +801,32 @@ class SwarmButton extends StatelessWidget {
         ),
       ),
     );
+    return compact ? SwarmTapTarget(child: button) : button;
   }
+}
+
+/// [child], a control drawn smaller than a thumb, laid out in a box at least
+/// 44 points square that hands a touch anywhere in it to [child], as the
+/// themed buttons' padded target does: a row holding one is at least 44 tall
+/// (design system: Phone). A bare [TouchTarget] reaches only as far as its
+/// parents' bounds, and a row as tall as its words leaves it short.
+class SwarmTapTarget extends StatelessWidget {
+  const SwarmTapTarget({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(
+      minWidth: minTouchTarget,
+      minHeight: minTouchTarget,
+    ),
+    child: Center(
+      widthFactor: 1,
+      heightFactor: 1,
+      child: TouchTarget(child: child),
+    ),
+  );
 }
 
 /// A choice of a few, side by side, that takes effect on the tap — Settings'

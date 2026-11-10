@@ -38,7 +38,6 @@ import '../widgets/resting_section.dart'
     show confirmStopInUse, confirmSwitchAnyway;
 import '../widgets/finger_target.dart';
 import '../widgets/session_close_dialog.dart';
-import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/lead_guard.dart';
 import '../super_tabs/places.dart';
 import '../notify/system_notifications.dart';
@@ -86,12 +85,9 @@ import '../state/harness_launch_integration.dart';
 import '../super_tabs/new_agent.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
-import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/workspace.dart';
-import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
 import '../super_tabs/controller.dart' show SuperTabController, SuperTabFailure;
-import '../super_tabs/notifications.dart' show SuperTabMentions;
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
 import '../state/device_finder.dart';
@@ -768,17 +764,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.systemNotifications.onTap = (machineId, agentId) async {
       await revealWindow();
       if (!mounted) return;
-      // A tag's notice carries its Swarm tab and tag: the click opens it as the menu bar's row
-      // does, once the tag is still the person's to read.
-      if (machineId == SystemNotifications.mentionNoticeMachine) {
-        final slash = agentId.indexOf('/');
-        if (slash <= 0) return;
-        await _openTagNotice(
-          agentId.substring(0, slash),
-          agentId.substring(slash + 1),
-        );
-        return;
-      }
+      // A tag's notice from before Swarm v4 names no agent: the window came forward, and that is all.
+      if (machineId == SystemNotifications.mentionNoticeMachine) return;
       // A chat's New messages notice carries its Swarm tab and chat: the click opens that chat.
       if (machineId == SystemNotifications.chatNoticeMachine) {
         final slash = agentId.indexOf('/');
@@ -789,7 +776,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
         return;
       }
-      // A reply's notice carries its message link: the click opens it as the link does, in its thread.
+      // A thread reply's notice from before Swarm v4 carries its message link: the click opens it as the link does.
       if (machineId == SystemNotifications.messageNoticeMachine) {
         unawaited(swarmMessageLinkInbox.accept(agentId));
         return;
@@ -2321,7 +2308,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           app.questionFor(p.machineId, p.agentId!) != null,
                     )
                     .length +
-                tabWaiting(app, swarm),
+                tabAgentsAsking(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
                 activity,
@@ -2517,13 +2504,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _actOnNative(MethodCall call) async {
-    if (mounted && call.method == 'keymapCommand') {
-      final command = (call.arguments as Map?)?['command'];
-      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) {
-        return;
-      }
-    }
-
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
       if (keys is List &&
@@ -3142,6 +3122,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       context,
       workspaceTabNames(app)[id] ?? swarm.name,
       keymap: _keymap,
+      // A Swarm is renamed for everyone in it, not as this window's tab.
+      swarm: swarm.superTabId != null,
     );
     if (name == null) return;
     if (swarm.superTabId case final tabId?) {
@@ -3503,13 +3485,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     if (!mounted) return;
     switch (choice) {
       case AccountMenuChoice.profile:
-        await _dialog(
-          () => showAccountProfileSheet(
-            context,
-            app,
-            swarm: accountProfileSwarm(app),
-          ),
-        );
+        await _dialog(() => showAccountProfileSheet(context, app));
       case AccountMenuChoice.addPhone:
         await _addPhone(from: AddPhoneOpening.account);
       case AccountMenuChoice.devices:
@@ -3977,6 +3953,22 @@ class _SwarmScreenState extends State<SwarmScreen> {
         !app.activeSwarm.isOrchestrator &&
         (!app.activeSwarm.isSuperTab || app.activeSwarm.superTabId == null);
     HarnessLaunchIntegration? integration;
+    final swarmTab = superTab?.superTabId;
+    // A start that failed after its form closed: New Project or New Agent opens that form again, with why.
+    if (swarmTab != null && (newSwarmProject || newSwarmAgent)) {
+      final failed = app.swarmStarts.takeFailed(
+        swarmTab,
+        project: newSwarmProject,
+      );
+      if (failed != null) {
+        _openNewHarness(
+          machineId: failed.machineId,
+          controller: failed,
+          swarmId: target,
+        );
+        return;
+      }
+    }
     if (superTab != null &&
         requestedSplit == null &&
         placement != HarnessPlacement.newTab) {
@@ -4029,6 +4021,26 @@ class _SwarmScreenState extends State<SwarmScreen> {
       split: requestedSplit,
       placement: placement,
     );
+    final box = _newHarness;
+    if (swarmTab != null &&
+        integration != null &&
+        box?.integration == integration) {
+      integration.onStarted = () =>
+          _startInBackground(box!, swarmTab, project: newSwarmProject);
+    }
+  }
+
+  /// A Swarm's start under way (anh Dee, 2026-11-10: "as soon as i hit new project or new agent, just get me back to my
+  /// main screen"): its form closes, back to what its person was doing, and the start goes on, its row in the left pane
+  /// saying so. A check asked after it is already there.
+  void _startInBackground(
+    NewHarnessController box,
+    String tabId, {
+    required bool project,
+  }) {
+    if (!identical(_newHarness, box)) return;
+    _closeNewHarness(keepDraft: false, keepRunning: true);
+    app.swarmStarts.add(tabId, box, project: project);
   }
 
   /// The full form, on the answers the box already holds: what the box does
@@ -4108,6 +4120,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     HarnessPlacement? placement,
     bool embedded = false,
     HarnessLaunchIntegration? integration,
+    // A form shown again, with all it holds: a Swarm start that failed after it closed.
+    NewHarnessController? controller,
   }) {
     // A dialog's pop future can complete before didChangeDependencies refreshes
     // the cached route flag. Its live route already owns the next prompt.
@@ -4167,31 +4181,36 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final savedDraft = _newHarnessDrafts[origin];
     // A lost reply always restores its exact receipt. Otherwise explicit
     // product/machine choices and explicit task requests win over old defaults.
-    final resumed =
-        draft ??
-        (savedDraft != null &&
-                (savedDraft.attempt?.awaitingConfirmation == true ||
-                    (task == null && matchesSelection(savedDraft)))
-            ? savedDraft
-            : null);
+    final resumed = controller != null
+        ? null
+        : draft ??
+              (savedDraft != null &&
+                      (savedDraft.attempt?.awaitingConfirmation == true ||
+                          (task == null && matchesSelection(savedDraft)))
+                  ? savedDraft
+                  : null);
     if (resumed != null) _newHarnessDrafts.remove(origin);
-    final box = _newHarness = NewHarnessController(
-      app,
-      machineId: machineId,
-      engine: engine,
-      harnessId: harnessId,
-      folder: folder,
-      projectName: projectName,
-      task: task,
-      draft: resumed,
-      autoProject: autoProject,
-      offersStore: true,
-      swarmId: swarmId,
-      split: split,
-      placement: placement,
-      attachments: HarnessAttachments(onDeliveryProblem: _showPaneActionHint),
-      integration: integration,
-    );
+    final box = _newHarness =
+        controller ??
+        NewHarnessController(
+          app,
+          machineId: machineId,
+          engine: engine,
+          harnessId: harnessId,
+          folder: folder,
+          projectName: projectName,
+          task: task,
+          draft: resumed,
+          autoProject: autoProject,
+          offersStore: true,
+          swarmId: swarmId,
+          split: split,
+          placement: placement,
+          attachments: HarnessAttachments(
+            onDeliveryProblem: _showPaneActionHint,
+          ),
+          integration: integration,
+        );
     _newHarnessFormKey = GlobalKey<NewHarnessFormState>();
     _newHarnessDevicePort = DeviceFormPort();
     if (embedded) {
@@ -4435,7 +4454,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  void _closeNewHarness({bool restoreFocus = true, bool keepDraft = true}) {
+  /// [keepRunning]: its start goes on without it ([_startInBackground]), so it is not disposed.
+  void _closeNewHarness({
+    bool restoreFocus = true,
+    bool keepDraft = true,
+    bool keepRunning = false,
+  }) {
     final box = _newHarness;
     if (box == null) return;
     _canvasFocus.descendantsAreFocusable = true;
@@ -4453,7 +4477,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _rememberNewHarnessDraft(_newHarnessContext!, box.draft);
     }
     _newHarnessContext = null;
-    box.dispose();
+    if (!keepRunning) box.dispose();
     final previous = _searchReturnFocus;
     _searchReturnFocus = null;
     if (restoreFocus) {
@@ -6468,18 +6492,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
                   : 'Starts in ${groupTitle ?? 'Lead'}.',
               action: 'Add agent',
-              hidden: (row) =>
-                  app.superTabs
-                      .peek(superTabTarget.tabId)
-                      ?.snapshot
-                      ?.agents
-                      .any(
-                        (agent) =>
-                            agent.isBuddy &&
-                            agent.machineId == row.machineId &&
-                            agent.harnessId == row.agentId,
-                      ) ==
-                  true,
               unavailable: (row) {
                 final shared = app.superTabs
                     .peek(superTabTarget.tabId)
@@ -6504,8 +6516,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   return 'Only Claude Code or Codex can join this Swarm.';
                 }
                 if (agent != null) {
-                  // Buddies are personal; the picker does not list them either.
-                  if (agent.isBuddy) return 'Choose a running agent.';
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
                   }
@@ -6528,10 +6538,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       additionalDestinations: [
         if (superTabTarget != null && !attach)
           for (final agent
-              in app.superTabs
-                      .peek(superTabTarget.tabId)
-                      ?.snapshot
-                      ?.teamAgents ??
+              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.agents ??
                   [])
             SwarmDestination(
               id: agentDestinationId(agent.machineId, agent.harnessId),
@@ -6994,10 +7001,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
           agentId = search.agentSelectionId;
       if (machineId == null || agentId == null) return;
       _closeSearch(restoreFocus: true);
-      if (choice.destination.managesSwarmAccounts) {
-        if (mounted) await showSwarmAccounts(context, app, machineId);
-        return;
-      }
       final error = choice.destination.addsClaudeAccount
           ? await app.addClaudeAccount(machineId, agentId)
           : await app.changeAgent(
@@ -7298,8 +7301,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     );
   }
 
-  /// What Attach's picker lists and allows: a Claude Code or Codex session running on one of this person's own computers
-  /// (the server takes no other, backend agent.add), and none already on the team, which it does not list.
+  /// What Attach's picker lists and allows: a Claude Code or Codex session on one of this person's own computers, running
+  /// or stopped and resumable (the server takes no other, backend agent.add), and none already on the team, which it does
+  /// not list.
   HarnessPickerContext _attachContext(String tabId) {
     bool inSwarm(SwarmDestination row) =>
         app.superTabs
@@ -7332,7 +7336,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (engine != 'claude' && engine != 'codex') {
           return 'Only Claude Code or Codex can join this Swarm.';
         }
-        return native != null && native.terminalAvailable && !native.isStopped
+        // A stopped session is resumed as it joins (anh Dee 2026-11-10).
+        if (native != null && native.isStopped) {
+          return native.canPauseAndResume
+              ? null
+              : 'This session cannot resume.';
+        }
+        return native != null && native.terminalAvailable
             ? null
             : 'Choose a running agent.';
       },
@@ -7431,40 +7441,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  /// A click on a tag's system notice: the Swarm it is in, open here or not
-  /// (not loaded yet, its tab closed), opens at the tag. The account must
-  /// still be in that Swarm, and the server must list the tag as the person's
-  /// to answer now, in a read that succeeded; otherwise nothing opens, and a
-  /// Swarm loaded only to check is let go again.
-  Future<void> _openTagNotice(String tabId, String mentionId) async {
-    final name = app.superTabName(tabId);
-    if (name == null) return;
-    final loadedHere = app.superTabs.peek(tabId) == null;
-    // Unless the person went to that Swarm meanwhile: its view holds it now.
-    void letGo() {
-      if (loadedHere && app.activeSwarm.superTabId != tabId) {
-        app.superTabs.release(tabId);
-      }
-    }
-
-    final SuperTabController controller;
-    try {
-      controller = await app.superTabs.open(tabId);
-    } catch (_) {
-      return;
-    }
-    // One read decides and supplies the tag the view opens at.
-    final waiting = await SuperTabMentions.of(controller).waitingNow(mentionId);
-    if (!mounted || !waiting || controller.accessRevoked) return letGo();
-    if (_newHarness?.requestDismiss() == false) return letGo();
-    _closeNewHarness(restoreFocus: false);
-    _closeSearch(restoreFocus: false);
-    app.openSuperTab(tabId, name);
-    controller.openNotice('mention', mentionId);
-  }
-
   /// A chat's New messages notice: its Swarm tab comes forward on that chat,
-  /// once the person can still read it, as a tag's notice opens its tag.
+  /// once the person can still read it.
   Future<void> _openChatNotice(String tabId, String conversationId) async {
     final name = app.superTabName(tabId);
     if (name == null) return;
@@ -7494,8 +7472,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   /// A row of the menu bar's Swarm section: its Swarm tab comes forward and
-  /// opens the tag or decision there; View all (`all`) opens the Swarm's
-  /// Notifications page. One no longer listed opens nothing.
+  /// opens the agent's chat there; View all (`all`) brings the Swarm forward.
+  /// One no longer listed opens nothing.
   Future<void> _openSwarmNotice(Map receipt) async {
     final tabId = receipt['swarmTabId'], kind = receipt['kind'];
     final id = receipt['id'];
@@ -7929,7 +7907,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     for (var i = 1; i <= 9; i++)
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
-    'swarm.chat_with_pm': () => unawaited(openActiveBuddyChat(app)),
     'agent_messages.show': () => _showAgentMessages(app.activeSwarmId),
     'agent_messages.activity': _toggleTabActivity,
     'agent_messages.make_leader': _toggleFocusedLeader,
@@ -8363,8 +8340,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
               for (final id in _commands.keys) id: () => _runShortcut(id),
             },
             onPending: (keys) => setState(() => _pendingKeys = keys),
-            child: SuperTabQuickSwitcherScope(
-              app: app,
+            child: Focus(
               focusNode: _shellFocus,
               autofocus: app.panes.isNotEmpty,
               child: Scaffold(
@@ -8549,6 +8525,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           onAttachAgent: _attachAgent,
                                           onNewSwarm: () =>
                                               _newTab(superTab: true),
+                                          onRenameSwarm: () => unawaited(
+                                            _rename(app.activeSwarmId),
+                                          ),
                                           onAddAgent: (group) => unawaited(
                                             _addAgent(conversationId: group.id),
                                           ),
@@ -9327,7 +9306,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           final swarm = shown[index];
                           final selected = app.activeSwarmId == swarm.id;
                           final activity = activities[index];
-                          final tags = tabWaiting(app, swarm);
+                          final asking = tabAgentsAsking(app, swarm);
                           // A status cell animates only while its tab is in view.
                           Widget tabStatus(
                             Widget Function(bool visible) mark,
@@ -9452,7 +9431,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                             app.requestCloseSwarm(swarm.id),
                                           )
                                         : null,
-                                    attention: tags > 0,
+                                    attention: asking > 0,
                                     // A Swarm's tab is its name alone (Quiet Swarm, screen 0).
                                     activity:
                                         swarm.isSuperTab ||

@@ -24,12 +24,8 @@ export interface AuthUser {
   autonomousEnv: AutonomousEnvironment
   /** Set when the token is one Harness issued itself (lib/harnessSession.ts), not an Autonomous one. */
   harnessSessionId?: string
-  /** With [harnessSessionId]: a computer signed in by QR may connect as a machine; a viewer may not. A team
-   *  session (lib/teamSession.ts) may connect only as its own computer's machine, and do strictly less. */
-  harnessSessionKind?: 'viewer' | 'computer' | 'team'
-  /** With a team session: the computer it is bound to (normalized). With a computer session signed in by QR: the
-   *  computer it signed in as, which lets it turn itself into a team machine (routes/auth.ts). */
-  harnessComputerId?: string
+  /** With [harnessSessionId]: a computer signed in by QR may connect as a machine; a viewer may not. */
+  harnessSessionKind?: 'viewer' | 'computer'
 }
 
 export interface SsoProfile {
@@ -41,7 +37,6 @@ export class SsoAuthError extends Error {
   constructor(
     message: string,
     readonly code: 'INVALID_TOKEN' | 'AUTH_SERVICE_UNAVAILABLE' | 'AUTONOMOUS_ENV_MISMATCH' | 'AUTONOMOUS_ENV_NOT_ALLOWED'
-      | 'TEAM_SESSION_LIMITED'
       /** A Harness session SSO has not confirmed for longer than its grace (lib/ssoSession.ts): sign in again. */
       | 'SIGN_IN_AGAIN',
     readonly requiredEnv?: AutonomousEnvironment,
@@ -227,11 +222,6 @@ function accessTokenMetadata(token: string): { name?: string; roles?: string[] }
  *   the caller connects AS a machine: only a session a phone approved for a computer (its QR sign-in)
  *   may — a phone's own session is a viewer's, never a daemon's. FALSE refuses every Harness session.
  *
- * @param allowTeamSession Accept a team session (lib/teamSession.ts) too. Deny by default: only a caller
- *   that confines one to its own machine passes TRUE — the REST gate (middlewares/authMiddleware.ts, with
- *   its allowlist) and the machine socket (lib/adapterWs.ts, its bound computer). Everywhere else a team
- *   session is refused with `TEAM_SESSION_LIMITED`, whatever `allowHarnessSession` says.
- *
  * @param enforceEnv Gate the caller on the account plane their user row is stamped with. TRUE for the
  *   web, which can be pointed at either plane and must not let the two identities cross.
  *
@@ -250,13 +240,11 @@ export async function authenticateAccessToken(
   {
     enforceEnv = true,
     allowHarnessSession = true,
-    allowTeamSession = false,
     signUpAttribution,
     learnGoogleSubject = true,
   }: {
     enforceEnv?: boolean
     allowHarnessSession?: boolean | 'computer'
-    allowTeamSession?: boolean
     /** The sign-in's tags (lib/signInAttribution.ts), kept on the account only if this creates it. */
     signUpAttribution?: SignInAttribution
     /** FALSE where the caller reads the profile live itself (`GET /api/grid/profile`), so one request
@@ -271,10 +259,6 @@ export async function authenticateAccessToken(
     if (!allowHarnessSession) throw new SsoAuthError('This connection needs an Autonomous sign-in', 'INVALID_TOKEN')
     const { authenticateHarnessAccessToken } = await import('./harnessSession.js')
     const user = await authenticateHarnessAccessToken(token)
-    if (user.harnessSessionKind === 'team') {
-      if (!allowTeamSession) throw new SsoAuthError('This connection is not available to a team sign-in', 'TEAM_SESSION_LIMITED')
-      return user
-    }
     if (allowHarnessSession === 'computer' && user.harnessSessionKind !== 'computer') {
       throw new SsoAuthError('This connection needs a computer sign-in', 'INVALID_TOKEN')
     }

@@ -35,8 +35,6 @@ export interface Derived {
   otherProjectsWork?: Json[]
   /** The board's pulse of each project the reader sees, by project id (backend superTabs/pulse.ts, task #3384). */
   pulse?: Record<string, Json>
-  /** A person only. */
-  mentionsWaiting?: number
   /** A person only: a digest of which of their tags wait, moving when one is made, answered or expires. */
   mentionsDigest?: string
   /** A person only: a digest of which decisions asked of them are open (backend read/views.ts). */
@@ -66,7 +64,7 @@ export interface PartsPayload extends ReadMeta {
   derived: Derived
 }
 /** `GET /api/super-tabs/:tabId/parts` (design 4.3). */
-export interface FirstLoad extends PartsPayload { tabId: string; githubApp?: true; /** The backend opens steps (task steps design). */ steps?: true }
+export interface FirstLoad extends PartsPayload { tabId: string; /** The backend opens steps (task steps design). */ steps?: true }
 /** `GET /api/super-tabs/:tabId/changes?cursor=` (design 4.4); `{ reload: true }` asks for a first load instead. */
 export type ChangedParts = PartsPayload & { reload: false }
 export type Changes = ChangedParts | { reload: true }

@@ -240,16 +240,13 @@ model Machine {
   // device-auth grant and refreshed on every adapter-ws connect, so `harness auth device` on the same
   // box reconnects to THAT machine instead of minting a second one. Null on rows that predate it.
   computerId                      String?
-  // How the computer signed in on its LAST adapter-ws connect: `team` for a team session (lib/teamSession.ts),
-  // a Mac's team account running teammates' Swarm agents; `computer` for any other sign-in. A `team` row taken
-  // over by a normal sign-in is set to `computer` before that socket attaches, so `team` never names a machine a
-  // normal sign-in serves. Null on rows that predate it (never a team machine). A team session acts only for a
-  // row marked `team`; Swarm routing reads it (Task 3 of docs/plans/2026-10-24-swarm-team-account.md).
+  // How the computer signed in on its LAST adapter-ws connect: `computer`. `team` on a row a Harness Team account's
+  // session served before Team accounts went (anh Dee, 2026-11-10): never listed (MachineService.listForUser), set
+  // to `computer` before a normal sign-in's socket attaches, and soft-deleted once by superTabs/migration/teamMachinesJob.ts.
+  // Null on rows that predate it (never a team machine).
   sessionKind                     String?
-  // A team machine's Mac: the machineId of the owner's own machine on the computer whose Harness Team account this
-  // is, so every list shows that Mac once ("One machine" in docs/plans/2026-10-24-swarm-team-account.md). Copied from
-  // the team session (`HarnessSession.hostMachineId`) whenever that session registers its machine; nothing a team
-  // session sends sets it. Null for every other machine, a dedicated one (`harness team on`) included.
+  // A Harness Team account's machine's Mac: the machineId of the owner's own machine on that computer, written by Team
+  // sessions until they went (2026-11-10); written by nothing now. Null for every other machine.
   hostMachineId                   String?
   // Version string the CLIENT reported on its LAST adapter-ws connect (remote machines only) — the
   // client sends it as `?v=` and it is overwritten every time, so it reflects the most recent connect.
@@ -1130,11 +1127,6 @@ model SuperTabMessage {
   thread          String?
   /// A thread reply also shown in the conversation's main stream.
   alsoInChat      Boolean?
-  /// A reply in a Buddy thread session's thread (superTabs/buddySessions.ts): the main Buddy never reads it.
-  buddySession    Boolean?
-  /// The project a row of a person's one Buddy chat belongs to (superTabs/buddySessions.ts lostProjectRow): a project
-  /// session's thread and a PM's private line. Hidden once its person no longer reads that project.
-  buddyProject    String?
   /// When its author last edited its text (superTabs/messageEdits.ts); no earlier text is kept.
   editedAt        DateTime?
   /// When its author deleted it while replies hung under it: its text is then DELETED_TEXT and its files are gone. A deleted
@@ -1148,31 +1140,8 @@ model SuperTabMessage {
   @@index([tabId, conversationId, thread, sequence])
 }
 
-/// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
-/// Kept out of the tab state so an older backend still reads it; removed 30 days after createdAt by a TTL index.
-model SuperTabMention {
-  id             String    @id @map("_id")
-  tabId          String
-  personId       String
-  projectId      String
-  conversationId String
-  messageId      String
-  authorAgentId  String
-  createdAt      DateTime
-  resolvedAt     DateTime?
-  /// reply | done | worker
-  resolvedBy     String?
-  /// A tag the Lead made about a task with no worker: not listed before this time (superTabs/mentions.ts). Unset on every other tag.
-  holdUntil      DateTime?
-
-  @@index([tabId, personId, createdAt])
-  @@index([tabId, conversationId, personId])
-  /// A tag goes 30 days on (superTabs/mentions.ts ensureMentionExpiry). Declared so db push keeps the index; the worker sets its expiry.
-  @@index([createdAt], map: "mention_expiry")
-}
-
-/// One reactor's emoji on one message (superTabs/reactions.ts). The id is derived from all four, so adding the same
-/// reaction twice keeps one row; message pages count them.
+/// One reactor's emoji on one message, written until reactions went (2026-11-09) and read by nothing. A Swarm's purge
+/// (superTabs/purge.ts) removes its rows.
 model SuperTabReaction {
   id             String   @id @map("_id")
   tabId          String
@@ -1187,48 +1156,6 @@ model SuperTabReaction {
   @@index([tabId, messageId])
 }
 
-/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
-/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
-/// derived from all three, so one row per person and conversation; it only ever moves forward.
-/// A person's Activity row (superTabs/activity.ts): a reply to their message or a reaction to it, for them alone.
-model SuperTabActivity {
-  id             String    @id @map("_id")
-  tabId          String
-  /// Whom the row is for: the author of the message replied or reacted to.
-  personId       String
-  /// reply | reaction
-  kind           String
-  conversationId String
-  /// The reply, or the message reacted to.
-  messageId      String
-  /// The reply's thread root, or the reacted message's thread.
-  threadId       String?
-  /// person | agent
-  actorKind      String
-  actorId        String
-  emoji          String?
-  createdAt      DateTime
-  /// When the person saw it, on any device; unset while unread.
-  readAt         DateTime?
-  /// A reply's message sequence in its chat, so reading its thread or chat past it marks the row read (activity.ts); unset on a
-  /// reaction and on a row written before it was kept, which only opening Activity reads.
-  sequence       Int?
-  /// A reply also shown in the chat's main stream: the chat mark reads it, as well as its thread's.
-  alsoInChat     Boolean?
-  /// The one reply row of a thread that rings its person's phone (activity.ts writeReplyActivity, Tony's rule of 2026-11-09):
-  /// the first person's reply in a thread the person started. Unset on every other row.
-  rings          Boolean?
-
-  /// A person's rows, newest first: the list and the digest.
-  @@index([tabId, personId, createdAt])
-  /// One thread's or chat's rows of a person, for the read marks that clear them (activity.ts markActivityThreadRead).
-  @@index([tabId, personId, conversationId, threadId])
-  /// A person's unread rows, newest first: the digest each of their reads asks for (activity.ts activityDigest). Through the
-  /// index above it examined every row of 30 days to find the unread (task #3146).
-  @@index([tabId, personId, readAt, createdAt])
-  /// The sweep's rows past their expiry (activity.ts sweepActivity); no TTL option, which the app user cannot set (#2238).
-  @@index([createdAt])
-}
 /// A person's notification setting for one chat (superTabs/chatSettings.ts): all | mentions | muted. Their own, never shown to others.
 model SuperTabChatSetting {
   id             String   @id @map("_id")
@@ -1244,6 +1171,10 @@ model SuperTabChatSetting {
   /// The sweep's default rows untouched for a week (chatSettings.ts sweepChatSettings).
   @@index([updatedAt])
 }
+
+/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
+/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
+/// derived from all three, so one row per person and conversation; it only ever moves forward.
 model SuperTabReadMark {
   id             String   @id @map("_id")
   tabId          String
@@ -1259,26 +1190,6 @@ model SuperTabReadMark {
   /// A mark untouched for 180 days goes: by this index's expiry (superTabs/readMarks.ts ensureReadMarkExpiry), or where the
   /// database refuses it, by the worker's sweep (startReadMarkSweep). Declared so db push keeps the index.
   @@index([updatedAt], map: "read_mark_expiry")
-}
-
-/// A person's reminder of one message (superTabs/reminders.ts): bring it back to them at `dueAt`, in Activity's Reminders. Their
-/// own, never shown to others. One row per person and message: setting it again replaces its time, and opening it deletes it.
-/// At most REMINDER_CAP pending per person and Swarm; the worker's hourly sweep deletes those due more than REMINDER_EXPIRY_MS
-/// (30 days) ago, and a Swarm's purge its rows.
-model SuperTabReminder {
-  /// stableId(tabId, personId, messageId).
-  id             String   @id @map("_id")
-  tabId          String
-  personId       String
-  conversationId String
-  messageId      String
-  dueAt          DateTime
-  createdAt      DateTime
-
-  /// A person's reminders: the due list, the next one after now, the digest and the cap's count (parts/indexed.ts NAMED_INDEX).
-  @@index([tabId, personId, dueAt])
-  /// The sweep's reminders due more than 30 days ago (reminders.ts sweepReminders); no TTL option, which the app user cannot set.
-  @@index([dueAt])
 }
 
 /// How far a person has read one thread: the newest reply sequence they saw there (superTabs/readMarks.ts). Apart from
@@ -1355,61 +1266,6 @@ model SuperTabSweepCursor {
   updatedAt DateTime
 }
 
-/// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
-/// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
-/// writeDecisions removes answered rows older than LEDGER_WEEKS on the next ask; Swarm purge removes all its rows.
-model SuperTabDecision {
-  id             String    @id @map("_id")
-  tabId          String
-  /// The ask that put several questions to one person together.
-  batchId        String
-  projectId      String
-  conversationId String
-  /// The task whose needs_human asked it, or null for the Lead's decision.ask.
-  assignmentId   String?
-  personId       String
-  askerAgentId   String
-  question       String
-  options        String[]
-  recommended    Int
-  /// Optional recommendation deadline; absent on legacy questions, which keep their 24-hour fallback.
-  defaultAt      DateTime?
-  /// The server applied the recommendation at defaultAt; never a person’s choice or a legacy overdue answer.
-  defaulted      Boolean?
-  /// A rule says the person must agree (task #3826): no default applies. At defaultAt the PM is told once and defaultAt is
-  /// cleared, and the 24-hour sweep never takes it, so it waits for the person. Absent on every other decision.
-  mustAgree      Boolean?
-  unblocks       String
-  createdAt      DateTime
-  answeredAt     DateTime?
-  choice         Int?
-  note           String?
-  /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
-  delegated      Boolean?
-  /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (the sweep Swarm v4 removed).
-  overdue        Boolean?
-  /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
-  /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
-  kind           String?
-  /// Closed unanswered because the work it was asked about is over: its task done or cancelled, or its group archived
-  /// (decisions.ts withdrawIn; Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
-  /// with the answered ones after the ledger's weeks. Absent on every other decision.
-  withdrawn      Boolean?
-  /// With kind "buddy-send" (task #4525): the words its owner's Send posts as them, and the proposal's goal, scope, priority
-  /// and project (decisions.ts SendPayload), at most a message and a proposal's fields. Absent on every other decision.
-  send           Json?
-
-  @@index([tabId, personId, createdAt])
-  @@index([tabId, askerAgentId, createdAt])
-  @@index([tabId, projectId, createdAt])
-  /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
-  @@index([tabId, conversationId])
-  /// Read by the hourly overdue sweep Swarm v4 removed (the waiting decisions of the last 8 days); nothing reads it now.
-  @@index([answeredAt, createdAt], map: "decision_waiting_created")
-  /// Explicit deadlines use their own range so long-lived questions are not missed by the legacy creation window.
-  @@index([answeredAt, defaultAt], map: "decision_waiting_default")
-}
-
 /// One uploaded file, which one message of the actor that uploaded it can send once.
 model SuperTabAttachment {
   id             String   @id @map("_id")
@@ -1478,6 +1334,22 @@ model SuperTabOperation {
   @@index([createdAt], map: "operation_expiry")
 }
 
+/// Which agent wrote a GitHub comment it posted through Harness (superTabs/githubComments.ts). The id is "<repository lowercased>|
+/// <kind>|<GitHub's comment id>": first writer wins. Ids only, no words. Removed 90 days after createdAt by a TTL index.
+model SuperTabGithubComment {
+  id        String   @id @map("_id")
+  tabId     String
+  projectId String
+  agentId   String
+  createdAt DateTime
+
+  /// A Swarm's records, removed with it (purge.ts).
+  @@index([tabId])
+  /// A record goes 90 days after createdAt (githubComments.ts ensureCommentExpiry). Declared so db push keeps the index; the schema
+  /// step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "github_comment_expiry")
+}
+
 model SuperTabDelivery {
   id                    String   @id @map("_id")
   tabId                 String
@@ -1501,9 +1373,6 @@ model SuperTabDelivery {
   // Until when its agent's host holds it while the agent works (turnEnd.ts, task #3403): another agent's post to a crew member.
   // Cleared by the agent's own status change; unset on older rows and on what goes at once.
   waitsUntil            DateTime?
-  // A row gathered for its PM's inbox rather than the notice digest (inbox.ts, task #3545): "people" or "crew". At idle the
-  // inbox goes at once only for these; unset on notices and on older rows.
-  inboxSection          String?
   /// Server-derived proposal priority, 0 first. Absent on rows before proposal cards; retained until existing delivery compaction.
   inputPriority         Int?
   // A queued delivery whose claims keep answering SWARM_BUSY (prod 10-30, v1.3.71): written outside the failed claim, unset by
@@ -1573,6 +1442,9 @@ model RoutingPolicy {
   @@unique([userId, autonomousEnv])
 }
 
+/// A task's earlier attempt, as work.define and work.assign replaced it. Written no more since those commands went (Swarm v4,
+/// 2026-11-10); still read by a task's attempts (store.ts) until routing goes (S8). Its rows go with the old collections
+/// (migration/dropCollections.ts REMOVED_COLLECTIONS), which needs the owner's go.
 model SuperTabAttempt {
   id              String   @id @map("_id")
   tabId           String
@@ -1875,8 +1747,8 @@ model SwarmGroup {
   /// Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it.
   dormant            Boolean   @default(false)
   agentIds           String[]
-  /// The people and agents whose Tasks feed lists it (read/feedIds.ts); [] for a conversation that is no task. Set on every
-  /// write; parts written before it are set at worker startup (markFeedIds).
+  /// The people and agents whose Tasks feed listed it, written until Swarm v4 retired the feed (2026-11-10). Nothing reads or
+  /// writes it now; it goes with its index (slice S19).
   feedIds            String[]  @default([])
   /// The machine running its active assignment, for the host's change read.
   executionMachineId String?
@@ -1893,9 +1765,8 @@ model SwarmGroup {
   /// written before it (markFinishedGroups).
   workFinished       Boolean   @default(false)
 
-  /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, the only one that
-  /// does is the rollback script scripts/buddy-sessions/end-all.ts, across every Swarm; and every hot read keeps its plan
-  /// with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
+  /// Not indexed on `data.kind` (Atlas advisor, 2026-11-04, task #2841): no backend read filters by it, and every hot read
+  /// keeps its plan with such an index (the numbers are in task #2841's pull request). The top-level `kind` holds the same value.
   @@index([deleted, proposalDueAt, tabId, key])
   @@unique([tabId, key])
   @@index([tabId, changedAt])
@@ -2037,6 +1908,41 @@ model SwarmProgress {
   @@index([purgeAt], map: "part_purge")
 }
 
+/// What each agent shipped, as its person's daemon read it from GitHub with that person's own gh (superTabs/shipping/), for the
+/// Swarm's leaderboard: counts only, never a title, branch, path or repository. One row per agent and week that shipped something
+/// (`week` is the week's Monday 00:00 UTC in epoch ms) and one all-time row per agent (`week` 0), which also holds how far its
+/// reading is settled and why its last one failed. A week's row goes five weeks on, in the next report that comes (delete on
+/// write, shipping/report.ts); the all-time row, about 150 bytes, is kept for the life of the Swarm (every week is in it, and it
+/// is the only place the old ones are) and goes with it (superTabs/purge.ts). At most 6 rows per agent that ever reported.
+model SwarmShipping {
+  /// `${tabId}:${agentId}:${week}`: a report sets a row, so a report sent twice changes nothing.
+  id              String  @id @map("_id")
+  tabId           String
+  agentId         String
+  week            Float
+  /// The agent's person when it was read (a machine that moved to another account keeps its old weeks with their person).
+  personId        String
+  /// Issues shipped, by priority label: P0, P1, P2, P3, none (shipping/score.ts PRIORITIES).
+  shipped         Int[]
+  /// All-time row only: the first week still open to a revert, where the next reading starts (Monday ms).
+  settled         Float?
+  /// All-time row only: the name its last reading found the agent's issues under (`builder:<name>`). A rename settles the weeks
+  /// before the current one, whose issues carry the old name, so they are not read again under the new one.
+  name            String?
+  /// All-time row only: why the last reading failed (shipping/contract.ts READ_FAILURES), and on which machine; cleared by the next one.
+  failed          String?
+  failedMachineId String?
+  /// All-time row only: when that failure was last reported (epoch ms): the board shows it for a few hours, so one nobody reports
+  /// any more (a deleted agent, a stopped daemon) goes by itself.
+  failedAt        Float?
+
+  /// A board is one week's rows, or the all-time rows (week 0), of a Swarm; a person's own all-time rows (their failed readings) are
+  /// the same index with their id.
+  @@index([tabId, week, personId])
+  /// An agent's old weeks, which its own report deletes (shipping/report.ts): a range on its weeks.
+  @@index([tabId, agentId, week])
+}
+
 model ExperimentalSettings {
   id               String  @id @map("_id") @db.ObjectId
   userId           String
@@ -2108,14 +2014,10 @@ model HarnessSession {
   label       String
   /// `computer` — a computer signed in by a phone scanning its QR (lib/harnessSession.ts): it may
   /// connect AS a machine. Absent (every older row) or `viewer` — an app, which may not.
-  /// `team` — the daemon of a Mac's team account, minted by one of the account's computers
-  /// (lib/teamSession.ts): it may connect only as the machine of `computerId`, and do less than a computer.
+  /// `team` — a Harness Team account's daemon, issued until Team accounts went (anh Dee, 2026-11-10): refused, and
+  /// ended at its next refresh; its row ages out by `expiresAt`. Its `computerId` and `hostMachineId` stay on
+  /// such rows, read by nothing.
   kind        String?
-  /// With `kind: team`: the computer it is bound to (normalized, lib/deviceAuth.ts:normalizeComputerId).
-  computerId  String?
-  /// With `kind: team`: the machine of the Mac whose team account this is, recorded when the code was minted
-  /// (routes/auth.ts) and copied onto the team machine (`Machine.hostMachineId`). Null for a dedicated machine.
-  hostMachineId String?
   createdAt   DateTime  @default(now())
   lastUsedAt  DateTime  @default(now())
   /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.

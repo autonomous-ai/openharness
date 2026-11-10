@@ -19,6 +19,7 @@ import { swarmReadCache } from '../src/superTabs/cache.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
 
 // The hot reads of the roadmap's 2.7 (indexes) under Mongo's profiler: each must read only the documents it returns, never
@@ -63,7 +64,7 @@ async function scene({ sharedMachine, edit }: { sharedMachine?: string; edit?: (
   const lead = s.add('lead-harness', 'lead', true, ownerActor, leadMachine, owner.sub)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const done = s.group('Done work')
   const quiet = Array.from({ length: OTHERS }, (_, i) => s.group(`Quiet ${i}`))
   edit?.(s)
@@ -81,8 +82,6 @@ async function scene({ sharedMachine, edit }: { sharedMachine?: string; edit?: (
   const delivery = { tabId, conversationId: done, machineId, membershipGeneration: tabId, authorKind: 'person', authorId: owner.sub,
     authorGeneration: tabId, status: 'confirmed' }
   await db.superTabDelivery.createMany({ data: Array.from({ length: OTHERS }, (_, i) => ({ ...delivery, id: `${tabId}-d${i}`, agentId: `${tabId}-agent-${i}`, messageId: `${tabId}-other-${i}`, assignmentId: `${tabId}-old-work-${i}` })) })
-  await db.superTabDecision.createMany({ data: quiet.map((conversationId, i) => ({ id: `${tabId}-q${i}`, tabId, batchId: 'b', projectId: 'lead', conversationId,
-    personId: owner.sub, askerAgentId: lead, question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work', createdAt: new Date(MIGRATED) })) })
   return { tabId, machineId, lead, worker, web, done, message }
 }
 
@@ -249,9 +248,6 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
     // Another Swarm with running work: a read not bounded by its Swarm reads that one's rows too.
     await scene()
     s = await scene()
-    // One decision waiting in the work ended last, which that end closes (decisions.ts withdrawIn).
-    await db.superTabDecision.create({ data: { id: `${s.tabId}-web`, tabId: s.tabId, batchId: 'w', projectId: 'lead', conversationId: s.web,
-      personId: owner.sub, askerAgentId: s.lead, question: 'Ship?', options: ['A', 'B'], recommended: 0, unblocks: 'Work', createdAt: new Date(MIGRATED) } })
     const hosts = new HostReads(store, { now: () => clock })
     clock = Date.now()
     entries = await profiled(async () => {
@@ -261,10 +257,10 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
       await store.deliveries(owner, s.tabId, s.lead)
       // The worker's time checks (timeChecks.ts), which read the Swarm's open deliveries for its idle agents.
       await store.runTimeChecks(s.tabId)
-      // Last: ending the running work releases its run record and open deliveries.
-      const work = ((await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.data as { assignment: { id: string } }).assignment.id
+      // Last: ending the running work releases its run record and open deliveries. A model that keeps failing loses it, as its
+      // host reports (terminal.ts).
       await store.execute(owner, s.tabId, { operationId: randomUUID(),
-        command: { type: 'work.cancel', conversationId: s.web, assignmentId: work, reason: 'No longer needed.' } })
+        command: { type: 'agent.alert', agentId: s.worker, alert: 'model', active: true } }, s.worker)
     })
   })
 
@@ -296,14 +292,6 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
     const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'assignmentId', 'status'])
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned!)
-  })
-
-  it('ending work closes its waiting decisions reading only that conversation\'s, never the Swarm\'s others', async () => {
-    const rows = reads(entries, 'SuperTabDecision', ['tabId', 'conversationId'], ['personId'])
-    expect(rows.length, JSON.stringify(entries.filter(e => e.ns.endsWith('.SuperTabDecision')))).toBeGreaterThan(0)
-    // The other quiet conversations hold waiting decisions too: only the one in this work is examined.
-    for (const row of rows) expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(1)
-    expect(await db.superTabDecision.findUnique({ where: { id: `${s.tabId}-web` } })).toMatchObject({ withdrawn: true })
   })
 
   it('no read of these scans a whole collection', () => {

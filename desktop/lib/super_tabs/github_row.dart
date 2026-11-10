@@ -45,11 +45,12 @@ class SuperTabGitHubRow extends StatelessWidget {
   String get label {
     final number = _number == null ? '' : '#$_number';
     final where = _pull ? 'PR $number' : 'Issue $number';
+    final by = ' · $_login';
     return switch (_event) {
       'task' => 'New task · $number',
-      'review' => 'Review · $where · $_login',
-      'review-comment' => 'Line · $where · $_login',
-      _ => '$where · $_login',
+      'review' => 'Review · $where$by',
+      'review-comment' => 'Line · $where$by',
+      _ => '$where$by',
     };
   }
 
@@ -86,6 +87,42 @@ class SuperTabGitHubRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final path = message.source['path'] as String?;
     final line = message.source['line'] as int?;
+    Widget card(double room) => ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: room * SuperTabMessageRow.bubbleShare,
+      ),
+      child: SwarmChatCard(
+        icon: _pull ? AppIcons.gitPullRequest : AppIcons.circleDot,
+        label: label,
+        title: title,
+        action: 'Read',
+        details: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (path != null)
+              Padding(
+                padding: const EdgeInsets.only(
+                  bottom: SwarmLayout.chatCardLineGap,
+                ),
+                child: Text(
+                  line == null ? path : '$path, line $line',
+                  style: DesktopChrome.metadata(),
+                ),
+              ),
+            if (words.isNotEmpty) SuperTabMessageText(words),
+            if (_url.startsWith('https://github.com/')) ...[
+              const SizedBox(height: SwarmLayout.chatCardLineGap),
+              SwarmChatLink(
+                key: const ValueKey('swarm-github-open'),
+                label: 'Open in GitHub',
+                onPressed: () => openUrl(_url),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+
     return Padding(
       key: const ValueKey('swarm-github-row'),
       padding: const EdgeInsets.fromLTRB(
@@ -96,43 +133,7 @@ class SuperTabGitHubRow extends StatelessWidget {
       ),
       child: Align(
         alignment: Alignment.centerLeft,
-        child: LayoutBuilder(
-          builder: (context, room) => ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: room.maxWidth * SuperTabMessageRow.bubbleShare,
-            ),
-            child: SwarmChatCard(
-              icon: _pull ? AppIcons.gitPullRequest : AppIcons.circleDot,
-              label: label,
-              title: title,
-              action: 'Read',
-              details: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (path != null)
-                    Padding(
-                      padding: const EdgeInsets.only(
-                        bottom: SwarmLayout.chatCardLineGap,
-                      ),
-                      child: Text(
-                        line == null ? path : '$path, line $line',
-                        style: DesktopChrome.metadata(),
-                      ),
-                    ),
-                  if (words.isNotEmpty) SuperTabMessageText(words),
-                  if (_url.startsWith('https://github.com/')) ...[
-                    const SizedBox(height: SwarmLayout.chatCardLineGap),
-                    SwarmChatLink(
-                      key: const ValueKey('swarm-github-open'),
-                      label: 'Open in GitHub',
-                      onPressed: () => openUrl(_url),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ),
+        child: LayoutBuilder(builder: (context, room) => card(room.maxWidth)),
       ),
     );
   }

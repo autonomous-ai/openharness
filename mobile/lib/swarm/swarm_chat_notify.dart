@@ -5,7 +5,7 @@ import 'swarm_reader.dart';
 /// and the desktop's `SuperTabNotify` (backend chatSettings.ts): every new
 /// message, only tags of them (the default), or muted: greyed, never bold,
 /// never counting. Kept per person on the server, so it follows them to every
-/// device.
+/// device. A project's channel is never muted ([SwarmReader.notifyOf]).
 enum SwarmNotify {
   all('All new messages'),
   mentions('Mentions only'),
@@ -24,7 +24,7 @@ enum SwarmNotify {
   };
 }
 
-/// Whether [group] is muted for the reader: the setting they just chose on
-/// this phone, else the one the server last said ([SwarmReader.notifyOf]).
+/// Whether [group] is muted for the reader, as [SwarmReader.notifyOf] reads
+/// it: the setting they just chose on this phone, else the server's.
 bool swarmMuted(SwarmReader reader, SuperTabConversation group) =>
     reader.notifyOf(group.id) == SwarmNotify.muted;

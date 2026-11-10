@@ -1,10 +1,8 @@
-import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { RULE_MESSAGE_MS } from './rules.js'
-import { globMatch, MAX_RULES_BYTES, projectRulesSchema, requiredReads, rulesDiff, rulesEqual, SEED_RULES, testsFor, type ProjectRules } from './policy.js'
+import { MAX_RULES_BYTES, projectRulesSchema, rulesDiff, rulesEqual, SEED_RULES, type ProjectRules } from './policy.js'
 
 const copy = (): ProjectRules => structuredClone(SEED_RULES)
 const refused = (value: unknown) => projectRulesSchema.safeParse(value).success === false
@@ -169,207 +167,6 @@ const set = (baseRevision: number, rules: ProjectRules, extra: Partial<Extract<C
   ({ type: 'rules.set', projectId: 'lead', baseRevision, rules, summary: 'Releases start at 10', ...extra })
 const code = (run: () => unknown): unknown => { try { run() } catch (error) { return (error as { code?: string }).code ?? 'INVALID' } return undefined }
 
-// Task #3475 (review of #3250): the merge train used these patterns before it read the record. They held a file at two reads
-// wherever they matched, and the seed must hold at least as much (River, 11-05: fail closed on the review table).
-const OLD_TRAIN_AREAS: ReadonlyArray<{ area: string; paths: RegExp }> = [
-  { area: 'Sign-in', paths: /(^|\/)(auth|login|sign_?in|signin|session)[^/]*$|^backend\/src\/middlewares\//i },
-  { area: 'Tokens', paths: /token|^backend\/src\/github\//i },
-  { area: 'Encryption', paths: /crypt|cipher|secret|credential|key(s|chain)?\b/i },
-  { area: 'Access', paths: /access|permission|audience|membership/i },
-  { area: 'Buddy guard', paths: /guard/i },
-  { area: 'Device links', paths: /device|harness_?links|pairing|join_?link/i },
-  { area: 'Deletion', paths: /purge|delet|cleanup|sweep|prune/i },
-]
-const oldTrainHeldAtTwo = (file: string) => OLD_TRAIN_AREAS.some(({ paths }) => paths.test(file))
-
-describe('the seed asks two reads wherever the merge train did', () => {
-  it('holds the files the review of #3250 named at two reads', () => {
-    for (const file of ['backend/src/lib/deviceRevoke.ts', 'backend/src/lib/deviceKeyLog.ts', 'backend/src/lib/deviceWs.ts',
-      'backend/src/push/devices.ts', 'backend/src/superTabs/sessionScope.ts',
-      'backend/src/push/keys.ts', 'backend/src/routes/deviceKeys.ts', 'cli/src/gateway/tabKey.ts', 'cli/src/lib/terminalKeys.ts',
-      'backend/src/superTabs/ruleGuard.ts', 'backend/src/superTabs/sweeps.ts', 'backend/src/lib/attachmentSweep.ts',
-      'backend/src/lib/chunkSweep.ts', 'backend/src/lib/harness_links.ts', 'mobile/lib/join_link.dart', 'backend/src/audience.ts',
-      'backend/src/membership/rows.ts', 'tools/prune-caches.sh', 'backend/src/crypto/box.ts', 'backend/src/lib/keys/store.ts',
-      // SecAlder's security review of #3250.
-      'backend/src/routes/harnessLinks.ts', 'backend/src/lib/deviceLogCore.ts', 'cli/src/core/devicesLink.ts',
-      'cli/src/gateway/observerKey.ts', 'backend/src/lib/pendingUploadSweep.ts', 'cli/src/lib/worktreeSweep.ts',
-      // Kept when the false hits were narrowed (River, SecAlder, ReviewLinnea): the real sign-in sessions, guards, device code
-      // and the device link's own files in the firmware.
-      'website/src/lib/community/session.ts', 'os/packaging/labwc/session-lock-presentation.patch', 'cli/src/lib/turnTlsGuard.ts',
-      'cli/src/services/devicesGuard.ts', 'desktop/lib/super_tabs/lead_guard.dart', 'backend/src/superTabs/anyGuard.ts',
-      'desktop/lib/devices/wifi_robots.dart', 'mobile/lib/phone/add_device/saved_wifi.dart', 'cli/src/devices/client.ts',
-      'devices/harness-device/firmware/main/cable_client.c', 'devices/harness-pro/firmware/main/pair_ble.c',
-      // Aster's security review of #3250: the vLLM server's API-key check, the companions' secret-redaction guard, and the
-      // team handoff with its machine-key proof.
-      'store/agents/vllm/guard.py', 'companions/src/shared/guard.ts', 'cli/src/team/handoff.ts']) {
-      expect(requiredReads(SEED_RULES, [file]), file).toBe(2)
-    }
-  })
-
-  // River, 11-06: fail closed, but a pattern that catches unrelated files is narrowed. These stay at one read.
-  it('leaves the old matcher\'s false hits at one read', () => {
-    for (const file of ['devices/harness-device/firmware/main/app_main.c', '.github/assets/readme/device.gif',
-      'output/orchestrator-live/token/model.stl', 'docs/autonomous-device-integration.md', 'desktop/tool/accessibility_regression/main.dart',
-      'backend/src/lib/redisGuard.ts', 'cli/src/engines/claude/sessionStore.ts', 'cli/src/core/terminals/sessions.ts',
-      'desktop/lib/finder/widgets/finder_diff_keys.dart', 'docs/performance/2026-09-22-pane-data/pane-sweep-after-1.json']) {
-      expect(requiredReads(SEED_RULES, [file]), file).toBe(1)
-    }
-  })
-
-  // Every file the old matcher held stays at two reads, except what the reviews dropped on purpose: whole classes by rule
-  // here, and single files in policy.securityExclusions.json, each under its reason. A file dropping out of the security
-  // areas fails this until a review adds it there.
-  it('holds every file of this repository the old patterns held, at two reads, except the reviewed exclusions', () => {
-    const DROPPED_BY_RULE: ReadonlyArray<{ reason: string; test: (file: string) => boolean }> = [
-      { reason: 'Runs no code: images (not SVG, which can carry script), video, 3D models, Markdown, docs/, samples/, output/',
-        test: file => /\.(png|jpe?g|gif|webp|ico|icns|mp4|mov|webm|stl|step|stp|3mf|obj|glb|gltf|f3d|md)$|^(docs|samples|output)\//i.test(file) },
-      { reason: 'Firmware and hardware under devices/ that is not a link file (cable, pair, link and key files stay held)',
-        test: file => file.startsWith('devices/') },
-      { reason: 'Accessibility is not access control', test: file => /accessib/i.test(file) },
-    ]
-    const listed = new Set((JSON.parse(readFileSync(new URL('./policy.securityExclusions.json', import.meta.url), 'utf8')) as
-      { dropped: Array<{ reason: string; files: string[] }> }).dropped.flatMap(group => group.files))
-    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
-    const files = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean)
-    expect(files.length).toBeGreaterThan(100)
-    const missed = files.filter(file => oldTrainHeldAtTwo(file) && requiredReads(SEED_RULES, [file]) < 2
-      && !listed.has(file) && !DROPPED_BY_RULE.some(rule => rule.test(file)))
-    expect(missed, `${missed.length} files the train held at two now need one, and no review dropped them`).toEqual([])
-  })
-})
-
-describe('a saved record can raise a security area, never lower it below two reads', () => {
-  // River, 11-06 (#3475): the floor is code, whatever a saved record says.
-  const lowered = (reads: number): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews,
-    rows: SEED_RULES.reviews.rows.map(row => ({ ...row, reads })) } })
-  const removed = (): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews, rows: [] } })
-
-  it('keeps two reads on a security file when a record lowers or removes its area', () => {
-    for (const rules of [lowered(1), removed()]) {
-      expect(requiredReads(rules, ['backend/src/github/tokens.ts'])).toBe(2)
-      expect(requiredReads(rules, ['backend/src/lib/deviceRevoke.ts'])).toBe(2)
-      expect(requiredReads(rules, null)).toBe(2)
-      expect(requiredReads(rules, ['backend/src/superTabs/cards.ts'])).toBe(1)
-    }
-  })
-
-  // SecAlder, re-review of #3250: the non-code and accessibility filter trims the built-in patterns only. A path a person puts
-  // in a security row of their record counts exactly as written.
-  it('counts a path a person added to a security row as written, non-code and accessibility too', () => {
-    const added = (area: string, glob: string): ProjectRules => ({ ...copy(), reviews: { ...copy().reviews,
-      rows: SEED_RULES.reviews.rows.map(row => row.area === area ? { ...row, paths: [...row.paths, glob] } : row) } })
-    expect(requiredReads(added('Sign-in', 'samples/**'), ['samples/x.ts'])).toBe(2)
-    expect(requiredReads(added('Sign-in', 'web/**/*.svg'), ['web/a/login-form.svg'])).toBe(2)
-    expect(requiredReads(added('Sign-in', 'web/**/*.svg'), ['web/a/icon.svg'])).toBe(2)
-    expect(requiredReads(added('Access', '**/accessibility/**'), ['desktop/accessibility/main.dart'])).toBe(2)
-    expect(requiredReads(added('Access', 'docs/**'), ['docs/plan.md'])).toBe(2)
-    // The seed's own patterns still leave those out.
-    expect(requiredReads(SEED_RULES, ['samples/x.ts', 'desktop/accessibility/main.dart', 'docs/token.md'])).toBe(1)
-  })
-
-  // ReviewLinnea, re-review of #3250: account_keys decides which stored Swarm data is forgotten at sign-out (deletion).
-  it('holds the account storage keys forgotten at sign-out at two reads', () => {
-    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/account_keys.dart'])).toBe(2)
-  })
-
-  it('holds an SVG named for a security area: an SVG can carry script', () => {
-    expect(requiredReads(SEED_RULES, ['website/public/auth-logo.svg'])).toBe(2)
-  })
-
-  it('takes a record that raises a security area', () => {
-    expect(requiredReads(lowered(3), ['backend/src/github/tokens.ts'])).toBe(3)
-    expect(requiredReads(lowered(3), null)).toBe(3)
-  })
-})
-
-describe('reads and tests a change needs', () => {
-  it('matches globs as the review steps do: ** any folders, * and ? in one name, ignoring case', () => {
-    expect(globMatch('**/*auth*', 'backend/src/lib/ssoAuth.ts')).toBe(true)
-    expect(globMatch('**/*auth*', 'oauth.ts')).toBe(true)
-    expect(globMatch('desktop/**', 'desktop/lib/a.dart')).toBe(true)
-    expect(globMatch('desktop/*', 'desktop/lib/a.dart')).toBe(false)
-    expect(globMatch('a?c.ts', 'abc.ts')).toBe(true)
-    expect(globMatch('a?c.ts', 'a/c.ts')).toBe(false)
-    expect(globMatch('**/e2ee/**', 'mobile/lib/e2ee/box.dart')).toBe(true)
-    expect(globMatch('docs/a.md', 'docs/aXmd')).toBe(false)
-  })
-
-  // Review of #3216 (minor 2): a saved pattern became a backtracking regex, and many `*` against a long name could stall a
-  // server worker. The matcher's time grows with the name times the pattern, whatever the pattern.
-  it('matches a pattern of many wildcards against a long name quickly', () => {
-    const pattern = '*a'.repeat(40) + '*'
-    const name = 'a'.repeat(5_000) + '/b'
-    const started = performance.now()
-    expect(globMatch(pattern, name)).toBe(false)
-    expect(globMatch('**/' + '*a'.repeat(25) + 'z', 'x/'.repeat(500) + 'a'.repeat(3_000))).toBe(false)
-    expect(performance.now() - started).toBeLessThan(500)
-    expect(globMatch('**/' + '*a'.repeat(3), 'x/yaaa')).toBe(true)
-    expect(globMatch('**', 'any/thing/at.all')).toBe(true)
-    expect(globMatch('**/', 'a/b/')).toBe(true)
-    expect(globMatch('a/**/b.ts', 'a/b.ts')).toBe(true)
-    expect(globMatch('a/**/b.ts', 'a/x/y/b.ts')).toBe(true)
-    expect(globMatch('a/**/b.ts', 'a/x/y/c.ts')).toBe(false)
-  })
-
-  // Reviewers, after #3216: the linear matcher let `**/` end inside a name, so a folder pattern matched a name that only ends
-  // with it. The regex it replaced, `(?:.*/)?`, ends only at a slash or matches nothing.
-  it('ends a double star with a slash only at a folder boundary', () => {
-    expect(globMatch('a/**/b', 'a/xb')).toBe(false)
-    expect(globMatch('a/**/b', 'a/b')).toBe(true)
-    expect(globMatch('a/**/b', 'a/x/b')).toBe(true)
-    expect(globMatch('a/**/b', 'a/x/yb')).toBe(false)
-    expect(globMatch('**/tests/**', 'latests/x.ts')).toBe(false)
-    expect(globMatch('**/tests/**', 'pkg/latests/x.ts')).toBe(false)
-    expect(globMatch('**/tests/**', 'tests/x.ts')).toBe(true)
-    expect(globMatch('**/tests/**', 'pkg/tests/x.ts')).toBe(true)
-    expect(globMatch('**/e2ee/**', 'mobile/lib/notee2ee/box.dart')).toBe(false)
-    expect(globMatch('**/*auth*', 'backend/src/lib/ssoAuth.ts')).toBe(true)
-    expect(testsFor(SEED_RULES, ['desktop/lib/latests/a.dart'])).toEqual(['Desktop on a Mac'])
-  })
-
-  // The regex the matcher replaced (#3216), for short inputs where it is fast: both must say the same thing.
-  it('agrees with the regex it replaced on short random patterns and paths', () => {
-    const regex = (glob: string) => {
-      let source = ''
-      for (let i = 0; i < glob.length; i++) {
-        const c = glob[i]!
-        if (c === '*' && glob[i + 1] === '*') {
-          if (glob[i + 2] === '/') { source += '(?:.*/)?'; i += 2 } else { source += '.*'; i += 1 }
-        } else if (c === '*') source += '[^/]*'
-        else if (c === '?') source += '[^/]'
-        else source += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      }
-      return new RegExp(`^${source}$`, 'i')
-    }
-    let seed = 7
-    // A linear congruential generator's low bits repeat quickly: take the high ones.
-    const random = (n: number) => { seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648; return Math.floor(seed / 65_536) % n }
-    const pick = <T,>(items: readonly T[]) => items[random(items.length)]!
-    const globParts = ['a', 'b', '/', '*', '?', '**', '**/', '.'], pathParts = ['a', 'b', '/', '.', 'x']
-    for (let n = 0; n < 5_000; n++) {
-      const glob = Array.from({ length: 1 + random(6) }, () => pick(globParts)).join('')
-      const path = Array.from({ length: random(9) }, () => pick(pathParts)).join('')
-      expect(globMatch(glob, path), `${glob} on ${path}`).toBe(regex(glob).test(path))
-    }
-  })
-
-  it('asks the most reads any touched row asks, at least the default, and fails closed on files it cannot read', () => {
-    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart'])).toBe(1)
-    expect(requiredReads(SEED_RULES, ['desktop/lib/super_tabs/view.dart', 'backend/src/lib/ssoAuth.ts'])).toBe(2)
-    expect(requiredReads(SEED_RULES, ['backend/src/superTabs/deletion.ts'])).toBe(2)
-    expect(requiredReads(SEED_RULES, [])).toBe(1)
-    expect(requiredReads(SEED_RULES, null)).toBe(2)
-    const three = { ...copy(), reviews: { ...copy().reviews, defaultReads: 3 } }
-    expect(requiredReads(three, ['backend/src/lib/ssoAuth.ts'])).toBe(3)
-  })
-
-  it('names where a change runs, never for tests, fixtures and docs alone', () => {
-    expect(testsFor(SEED_RULES, ['desktop/lib/a.dart', 'cli/src/b.ts'])).toEqual(['Desktop on a Mac', 'The CLI on a Mac and on a Linux machine'])
-    expect(testsFor(SEED_RULES, ['desktop/test/a_test.dart', 'cli/src/b.spec.ts', 'docs/plans/x.md', 'backend/src/a.ts'])).toEqual([])
-    expect(testsFor(SEED_RULES, null)).toEqual([])
-  })
-})
-
 describe('rules.set', () => {
   it('validates, versions and records who, when, the diff and why, and changes no state or chat', () => {
     const f = fixture()
@@ -473,7 +270,7 @@ describe('who changes the rules', () => {
       .projectRules?.rules.instructionApprovals).toBeNull()
   })
 
-  it('refuses every other agent, the PM of another project and a Buddy', () => {
+  it('refuses every other agent and the PM of another project', () => {
     const f = fixture()
     f.invite()
     f.add('lead', 'lead', true)
@@ -484,9 +281,6 @@ describe('who changes the rules', () => {
     const otherLead = f.add('other-lead', other.conversationId, true)
     // Another project's PM reads nothing of this one.
     expect(code(() => f.run(set(0, later(), asked('lead')), as(otherLead), context))).toBe('NOT_FOUND')
-    const buddy = f.add('buddy', task)
-    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
-    expect(code(() => f.run(set(0, later(), asked(task)), as(buddy), context))).toBe('BUDDY_FORBIDDEN')
   })
 })
 

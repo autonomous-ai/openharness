@@ -63,6 +63,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 | `memory` | memory | an experiment: Memories across machines | on demand |
 | `router` | router | an experiment: where ⌘B sends a task, decided by Jev | on demand |
 | `cloud` | cloud | an experiment: cloud agents (Fo, Devin Cloud, Cursor Cloud), harnesses on their makers' servers | on demand |
+| `agentBrowser` | agentBrowser | Podman's calls and event stream, image builds, Podman's setup (`agentBrowserProcess.ts`, `core/agentBrowserLink.ts`) | on demand |
 
 A fault in one of the edge host's services can cost the others in it, never the core. Every service in
 `KNOWN_SERVICES` runs out of the core's process by default, unless `HARNESSD_SERVICES` names a subset, by
@@ -152,8 +153,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   asks the core over its link, in order, and hears only its own deliveries; the core lets a process deliver
   only when `TURN_DELIVERERS` (`src/core/api.ts`) names it: the experiments (below) and Agent Messages.
   The Swarm's host, which answers a person in their agent's own chat when the agent's turn ends, also hears each
-  live turn's end (`core.turns.onEnd`; `TURN_END_HEARERS`, told as `service_event` `turn_end`, never waited on) and
-  reads the answer of the turn that ended from the core (`last_turn`, core/experimentQueries.ts).
+  live turn's end (`core.turns.onEnd`; `TURN_END_HEARERS`, told as `service_event` `turn_end`, never waited on), which
+  names its turn by a hash of its prompt and a number, and asks the core for the answer of that turn (`core.turns.answerOf`, the
+  `turn_answer` query, core/experimentQueries.ts).
 - A service that graduates from an experiment keeps the same questions to the core and is answered by a link of its
   own, for what it uses alone, never by the experiments' hooks: Agent Messages in the edge host
   (`src/core/messagesLink.ts`, `MESSAGES_QUERIES` in `src/core/api.ts`) is shown the agents, told how this daemon is
@@ -226,7 +228,8 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
   which a core asks for this process. A core that speaks an older one never asks, so the master starts the
   process as that core binds (`ServiceSupervisor.unasked`). It is 3 by default, the experiments'; the
   devices, models and the gateway became on demand at protocol 4, which may also ask before it binds; the
-  viewers at protocol 5. Making another process on demand needs a protocol bump, and that number in its
+  viewers at protocol 5; the agent browser at protocol 7, asked for by an agent with Browser or as the core starts
+  when its state file is there (`core/agentBrowserLink.ts`). Making another process on demand needs a protocol bump, and that number in its
   `askedSince`. A newer core under an older master asks for a process that master started with the others,
   which changes nothing.
 - **Proof.** `e2e/experiments.e2e.ts`, `e2e/devicesOnDemand.e2e.ts`, `e2e/modelsOnDemand.e2e.ts`,

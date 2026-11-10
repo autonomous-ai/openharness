@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
+import { opensStep, storedStep, type StepCommand } from './steps.test-support.js'
+import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
-import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
+import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -14,7 +15,8 @@ function setup() {
   let state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
   state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
   let next = 0, messages: MessageDraft[] = []
-  const run = (command: Command, actor = owner, context: Partial<CommandContext> = {}) => {
+  const run = (command: Command | StepCommand, actor = owner, context: Partial<CommandContext> = {}) => {
+    if (opensStep(command)) return storedStep(state, command, actor).result
     const effect = applyCommand(state, actor, command, { operationId: `op${next++}`, now: 1000,
       contribution: { machineOwnerId: 'host', contributorId: actor.kind === 'person' ? actor.userId : 'owner' }, ...context })
     state = effect.state
@@ -297,25 +299,21 @@ describe('projects inside an invite-only swarm', () => {
     expect(projectsOf(f.state)[0]!.repository).toEqual(f.state.project)
   })
 
-  it('keeps active work visible after its contributed agent is removed', () => {
+  // Swarm v4 (anh Dee, 2026-11-10: "can't delete project lamp?"): a project's v3 task work refused its delete, "Resolve this
+  // project's active work", but v4 retired every command that settled it (S13a), so nothing could and the project stayed.
+  // Its work goes with it now, as its conversations do.
+  it('deletes a project whose v3 task work is still open, its work with it', () => {
     const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false), work = f.task(p.projectId)
-    f.run({ type: 'work.define', conversationId: work, brief: 'Finish the task',
-      checks: [{ description: 'Verified', independent: false }] })
-    f.run({ type: 'work.assign', conversationId: work, agentId })
+    storedAssignment(f.state, work, agentId, 1000)
     f.run({ type: 'agent.remove', agentId })
-    expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('active work')
     expect(readConversation(f.state, owner, work).assignment?.status).toBe('reconciling')
+    f.run({ type: 'project.delete', projectId: p.projectId })
+    expect(projectsOf(f.state).some(project => project.id === p.projectId)).toBe(false)
+    expect(f.state.conversations.some(c => c.id === work)).toBe(false)
   })
 })
 
 describe('project skill modes', () => {
-  const skills = (projectId: string, mode: 'default' | 'orchestration', askedIn?: { conversationId: string; messageId: string }): Command =>
-    ({ type: 'project.skills', projectId, mode, ...(askedIn ? { askedIn } : {}) })
-  const said = (id: string, patch: Record<string, unknown> = {}): Partial<CommandContext> => ({ askedIn: {
-    author: { kind: 'person', id, name: id, membershipGeneration: 'first' }, source: false, createdAt: 1000, ...patch } })
-  const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
-  const modeOf = (f: ReturnType<typeof setup>, projectId: string) => skillModeOf(projectOf(f.state, projectId))
-
   it('reads a project with no stored mode as Harness orchestration, and new projects and Swarms as Default', () => {
     const legacy = createSuperTab('old', 'Old', { id: 'owner', email: 'owner@example.com' }, 'test')
     delete legacy.projects
@@ -329,170 +327,6 @@ describe('project skill modes', () => {
     expect(projectOf(f.state, p.projectId).skillMode).toBe('default')
   })
 
-  // Skill modes are the project's instructions now (project instructions, phase 4): an older client's change is answered and
-  // kept nowhere, and the stored mode stays for older readers.
-  it('accepts an older client\'s mode change from whoever reads the project and keeps it nowhere', () => {
-    const f = setup(), p = f.project('public', peer), other = f.project('private')
-    const lead = agentActor(f.add(p.conversationId, 'app-lead'))
-    for (const [actor, context] of [[peer, {}], [owner, {}], [lead, said('peer')]] as const) {
-      expect(f.run(skills(p.projectId, 'orchestration', { conversationId: p.conversationId, messageId: 'm1' }), actor, context))
-        .toMatchObject({ ignored: true, note: expect.stringContaining('instructions') })
-    }
-    expect(modeOf(f, p.projectId)).toBe('default')
-    expect(f.messages).toEqual([])
-    expect(() => f.run(skills(other.projectId, 'orchestration'), peer)).toThrow('unavailable')
-  })
-})
-
-describe('custom role sets', () => {
-  type Kind = 'lead' | 'builder' | 'reviewer'
-  const role = (id: string, name: string, kind: Kind, text = `# ${name}`) => ({ id, name, kind, text })
-  const defaults = () => [role('lead', 'Product Manager', 'lead'), role('dev', 'Engineer', 'builder'), role('review', 'Reviewer', 'reviewer')]
-  const version = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
-  const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
-  const request = (conversationId: string, extra: Record<string, unknown> = {}) => ({ conversationId, machineId: 'machine', engine: 'codex',
-    name: 'Builder', cwd: '/work', worktree: true, ...extra,
-    requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } })
-  /** A public project owned by peer (not the Swarm owner), with the custom set an older client made before project instructions,
-   *  as the state keeps it: role saves are kept nowhere now. */
-  function custom(roles = defaults()) {
-    const f = setup(), p = f.project('public', peer)
-    projectOf(f.state, p.projectId).roles = roles.map(({ text, ...r }) => ({ ...r, version: version(text) }))
-    return { f, p, roles: () => projectOf(f.state, p.projectId).roles }
-  }
-
-  // Custom role sets are the project's instructions now (project instructions, phase 4): an older client's set and role saves are
-  // answered and kept nowhere; only the project's owner is answered, as before.
-  it('accepts an older client\'s role set saves from the project owner, keeps them nowhere, and refuses anyone else', () => {
-    const { f, p, roles } = custom()
-    const before = structuredClone(roles())
-    const commands: Command[] = [
-      { type: 'project.roles.create', projectId: p.projectId, roles: [role('dev', 'Engineer', 'builder')] },
-      { type: 'project.role.set', projectId: p.projectId, role: role('lead', 'Coordinator', 'builder', '# New') },
-      { type: 'project.role.remove', projectId: p.projectId, roleId: 'lead' },
-      { type: 'project.roles.reset', projectId: p.projectId, roles: [role('abcdefabcdef', 'Docs writer', 'reviewer')] }]
-    for (const command of commands) {
-      expect(f.run(command, peer), command.type).toMatchObject({ ignored: true, note: expect.stringContaining('instructions') })
-      expect(f.messages).toEqual([])
-    }
-    expect(roles()).toEqual(before)
-    const lead = agentActor(f.add(p.conversationId, 'app-lead'))
-    for (const command of commands) for (const actor of [owner, lead]) expect(() => f.run(command, actor)).toThrow('Only the project owner')
-    // The command shape is still checked: a role text over 64 KB is refused before anything.
-    expect(() => f.run({ type: 'project.role.set', projectId: p.projectId, role: role('aaaaaaaaaaaa', 'Big', 'builder', 'x'.repeat(65_537)) } as Command, peer))
-      .toThrow('64 KB')
-  })
-
-  it('reads Custom only while the stored mode is still Default, so an older release switching modes is followed', () => {
-    const { f, p } = custom()
-    Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom', skillMode: 'default' })
-    // What today's release writes when it switches this project: skillMode only.
-    projectOf(f.state, p.projectId).skillMode = 'orchestration'
-    expect(skillSetOf(projectOf(f.state, p.projectId))).toBe('orchestration')
-    expect(skillSetOf({ ...projectOf(f.state, p.projectId), skillMode: undefined })).toBe('orchestration')
-  })
-
-  // Role defaults live in the project's instructions now (project instructions, phase 4): a start fills none of an old set's.
-  it('keeps a role\'s default engine, model and effort for older readers, and a start that names no model takes none of it', () => {
-    const writer = { ...role('abcdefabcdef', 'Docs writer', 'builder'), defaults: { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'medium' } }
-    const { f, p, roles } = custom([...defaults(), writer])
-    Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
-    const work = f.task(p.projectId, peer)
-    expect(roles()!.find(r => r.id === 'abcdefabcdef')).toMatchObject({ defaults: { engine: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } })
-    const startWith = (extra: Record<string, unknown>) => {
-      const startId = String(f.run({ type: 'agent.start', request: request(work, extra) } as Command, peer, ownComputer(peer)).startId)
-      return f.state.starts!.find(s => s.id === startId)!.request
-    }
-    expect(startWith({ roleId: 'abcdefabcdef' })).not.toHaveProperty('model')
-    expect(startWith({ roleId: 'abcdefabcdef' })).not.toHaveProperty('effort')
-    expect(startWith({ roleId: 'abcdefabcdef', model: 'gpt-6-luna' })).toMatchObject({ model: 'gpt-6-luna' })
-    expect(startWith({ roleId: 'abcdefabcdef', model: 'gpt-6-luna' })).not.toHaveProperty('effort')
-    expect(startWith({ roleId: 'abcdefabcdef', engine: 'claude' })).not.toHaveProperty('model')
-    // The Engineer of the copied Default set has none: routing chooses.
-    expect(startWith({ roleId: 'dev' })).not.toHaveProperty('model')
-    const bad = (defaults: unknown) => () => f.run({ type: 'project.role.set', projectId: p.projectId, role: { ...writer, defaults } } as Command, peer)
-    expect(bad({ engine: 'cursor' })).toThrow()
-    expect(bad({ engine: 'codex', model: 'x'.repeat(201) })).toThrow()
-    expect(bad({ engine: 'codex', other: true })).toThrow()
-  })
-
-  // An older client's role id is kept for older readers and names the agent; its kind decides nothing (project instructions, phase 4).
-  it('starts and assigns in any role id an older client sends, keeping it and naming the agent by it', () => {
-    const { f, p } = custom([...defaults(), role('abcdefabcdef', 'Docs writer', 'builder')])
-    // The project's owner starts it on their own computer (task #4120: a start runs as the machine's own person).
-    const work = f.task(p.projectId, peer)
-    const start = (extra: Record<string, unknown>) => String(f.run({ type: 'agent.start', request: request(work, extra) } as Command, peer, ownComputer(peer)).startId)
-    for (const extra of [{ roleId: 'review' }, { roleId: 'lead' }, { roleId: 'eeeeeeeeeeee' }, { role: 'reviewer', roleId: 'dev' }]) {
-      const id = start(extra)
-      expect(f.state.starts!.find(s => s.id === id)!.request).toMatchObject(extra)
-    }
-    const startId = start({ roleId: 'abcdefabcdef' })
-    const worker = String(f.run({ type: 'agent.started', startId, harnessId: 'native', configuration }, peer, ownComputer(peer)).agentId)
-    expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ roleId: 'abcdefabcdef', roleName: 'Docs writer' })
-    const group = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Work', brief: 'Do it', checks: [{ description: 'Done', independent: false }] }, peer).conversationId)
-    f.run({ type: 'work.assign', conversationId: group, agentId: worker, roleId: 'review' }, peer)
-    // Its role name stays the one it started in.
-    expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ roleId: 'review', roleName: 'Docs writer' })
-    const plain = f.project('public', peer)
-    expect(f.run({ type: 'agent.start', request: request(f.task(plain.projectId), { roleId: 'dev' }) } as Command, owner, ownComputer(owner)).startId).toEqual(expect.any(String))
-  })
-
-  it('joins an agent with the role the New Harness form sends, kept with a reviewer role\'s kind for older readers and naming it', () => {
-    const { f, p } = custom()
-    let harness = 0
-    /** Exactly what Desktop's New Harness form sends (PR #1659): lead, the chosen role id, its configuration. */
-    const add = (lead: boolean, roleId?: string) => commandSchema.parse({ type: 'agent.add', conversationId: p.conversationId,
-      machineId: 'machine', harnessId: `added-${++harness}`, name: lead ? 'Lead' : 'Added', lead, ...(roleId ? { roleId } : {}), configuration })
-    const added = (agentId: string) => f.state.agents.find(a => a.id === agentId)!
-    const engineer = added(String(f.run(add(false, 'dev')).agentId))
-    expect(engineer).toMatchObject({ roleId: 'dev', roleName: 'Engineer' })
-    expect(engineer).not.toHaveProperty('role')
-    expect(added(String(f.run(add(false, 'review')).agentId))).toMatchObject({ roleId: 'review', role: 'reviewer', roleName: 'Reviewer' })
-    const lead = added(String(f.run(add(true, 'lead')).agentId))
-    expect(lead).toMatchObject({ roleId: 'lead', roleName: 'Product Manager' })
-    expect(lead).not.toHaveProperty('role')
-    const plainAgent = added(String(f.run(add(false)).agentId))
-    expect(plainAgent).not.toHaveProperty('roleId')
-    expect(plainAgent).not.toHaveProperty('roleName')
-    // A role of another kind, or one the set does not have, decides nothing (project instructions, phase 4).
-    expect(added(String(f.run(add(false, 'lead')).agentId))).toMatchObject({ roleId: 'lead', roleName: 'Product Manager' })
-    const unknown = added(String(f.run(add(false, 'eeeeeeeeeeee')).agentId))
-    expect(unknown).toMatchObject({ roleId: 'eeeeeeeeeeee' })
-    expect(unknown).not.toHaveProperty('roleName')
-    const plain = f.project('public', peer)
-    expect(f.run(commandSchema.parse({ type: 'agent.add', conversationId: plain.conversationId, machineId: 'machine',
-      harnessId: 'plain', name: 'Plain', configuration, lead: false, roleId: 'dev' })).agentId).toEqual(expect.any(String))
-  })
-
-  it('refuses no work or review groups to an agent whose kind has no role in an older client\'s set', () => {
-    const { f, p } = custom([role('lead', 'Product Manager', 'lead'), role('dev', 'Engineer', 'builder')])
-    f.add(p.conversationId, 'app-lead')
-    const reviewer = f.add(p.conversationId, 'app-reviewer', false)
-    f.state.agents.find(a => a.id === reviewer)!.role = 'reviewer'
-    const build = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Build', brief: 'Do it', checks: [{ description: 'Done', independent: false }] }, peer).conversationId)
-    // Switching to Custom is kept nowhere, and tells no agent anything.
-    f.run({ type: 'project.skills', projectId: p.projectId, mode: 'custom' }, peer)
-    expect(f.messages).toEqual([])
-    Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
-    // A role set decides nothing (project instructions, phase 4): a review group, a Reviewer's start and its assignment are accepted.
-    const review = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Review', brief: 'Check it', reviewOf: build, checks: [{ description: 'Read', independent: true }] }, peer).conversationId)
-    expect(f.run({ type: 'agent.start', request: request(build, { role: 'reviewer' }) } as Command, owner, ownComputer(owner)).startId).toEqual(expect.any(String))
-    f.run({ type: 'work.assign', conversationId: review, agentId: reviewer }, peer)
-    expect(f.state.conversations.find(c => c.id === review)!.assignment).toMatchObject({ agentId: reviewer })
-  })
-
-  it('shows clients the set, the project\'s skillSet and each agent\'s role id, never a role text', () => {
-    const { f, p } = custom()
-    const lead = f.add(p.conversationId, 'app-lead'), worker = f.add(p.conversationId, 'w1', false)
-    let visible = visibleState(f.state, peer)
-    expect(visible.projects!.find(x => x.id === p.projectId)).toMatchObject({ skillSet: 'default', roles: expect.any(Array) })
-    expect(visible.agents.find(a => a.id === worker)).not.toHaveProperty('roleId')
-    Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
-    visible = visibleState(f.state, peer)
-    expect(visible.projects!.find(x => x.id === p.projectId)!.skillSet).toBe('custom')
-    expect(visible.agents.filter(a => [lead, worker].includes(a.id)).map(a => a.roleId)).toEqual(['lead', 'dev'])
-    expect(visible.projects!.find(x => x.id === 'lead')!.skillSet).toBe('default')
-  })
 })
 
 describe('who may watch an agent\'s terminal (final review, Critical 1)', () => {
@@ -643,53 +477,6 @@ describe('whom a group\'s work is for', () => {
   })
 })
 
-// Security review 2 of #2492: the line comes with each task, from that task's requester, never once at the agent's start.
-describe('whom a task\'s pull requests are for', () => {
-  // By name, never email (task #2954): agents copied the email into pull requests and a privacy hook stopped them.
-  const line = (name: string) => `Start each pull request body with: Requested by ${name} through Harness.`
-  it('ends each task\'s message with its own requester, for an Engineer reused across two people\'s tasks', () => {
-    const f = setup()
-    f.state.people.push({ id: 'third', email: 'third@example.com', role: 'collaborator', generation: 'first' })
-    f.add('lead', 'lead-harness')
-    const worker = f.add('lead', 'worker-harness', false)
-    expect(f.state.agents.find(a => a.id === worker)!.machineOwnerId).toBe('host')
-    const ask = (requesterId: string) => String(f.run({ type: 'conversation.create', title: requesterId, brief: `Work for ${requesterId}`,
-      checks: [{ description: 'Done', independent: false }], requesterId }).conversationId)
-    const first = ask('peer'), second = ask('third')
-    const assigned = (group: string) => {
-      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
-      return f.messages.find(m => m.conversationId === group && m.recipients?.includes(worker))!.text
-    }
-    expect(assigned(first)).toBe(`Work for peer\n\nAcceptance checks:\n- Done\n\n${line('peer')}`)
-    f.run({ type: 'work.cancel', conversationId: first, assignmentId: f.state.conversations.find(c => c.id === first)!.assignment!.id, reason: 'Next one' })
-    const text = assigned(second)
-    expect(text.endsWith(line('third'))).toBe(true)
-    expect(text).not.toContain('peer')
-    expect(text).not.toContain('@')
-  })
-
-  it('is the owner\'s for a group nobody asked for, and absent on the owner\'s own machine and for a review', () => {
-    const f = setup()
-    const worker = f.add('lead', 'worker-harness', false)
-    const plain = String(f.run({ type: 'conversation.create', title: 'Plain', brief: '', checks: [] }).conversationId)
-    const review = String(f.run({ type: 'conversation.create', title: 'Review', brief: '', checks: [], reviewOf: plain }).conversationId)
-    const group = (id: string) => f.state.conversations.find(c => c.id === id)!
-    const project = projectOf(f.state, 'lead'), agentOf = (owner: string) => ({ ...f.state.agents.find(a => a.id === worker)!, machineOwnerId: owner })
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner'))
-    // The name they show, written as plain words (personNames.ts writtenNameOf).
-    f.state.people.find(p => p.id === 'owner')!.name = 'Ken *15*'
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('Ken \\*15\\*'))
-    // Never an email, even one they took as their name.
-    f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner'))
-    delete f.state.people.find(p => p.id === 'owner')!.name
-    expect(requestedByLine(f.state, project, group(plain), agentOf('owner'))).toBeNull()
-    expect(requestedByLine(f.state, project, group(review), agentOf('host'))).toBeNull()
-    // An owner with no email on their row: no line, as the start gave none.
-    f.state.people.find(p => p.id === 'owner')!.email = ''
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBeNull()
-  })
-})
 
 // The implementations before Part 5 (spec 2026-11-02, hot loops), kept here only to pin that the one-pass lookups answer
 // exactly as they did.
@@ -745,8 +532,8 @@ type Random = ReturnType<typeof seeded>
 const STATUSES: WorkStatus[] = ['planned', 'working', 'needs_human', 'blocked', 'review', 'done', 'stopped', 'cancelled', 'reconciling', 'lost']
 /** A Swarm of up to 2,000 conversations, 50 agents and 20 projects (exactly that when [full]): no projects at all or the legacy
  *  single one, private projects, Leads without a conversation, an agent leading two projects, lost assignments, audience
- *  conversations, agents already marked, and the odd conversation whose project lookup refuses (a removed Leads one, a Swarm
- *  Buddy chat). Most are small, so 200 of them compare quickly against the quadratic legacy code. */
+ *  conversations, agents already marked, and the odd conversation whose project lookup refuses (a removed Leads one). Most are
+ *  small, so 200 of them compare quickly against the quadratic legacy code. */
 function generatedSwarm(random: Random, full = false): SuperTabState {
   const agentCount = full ? 50 : 1 + random.below(50), projectCount = full ? 20 : random.below(21)
   const conversationCount = full ? 2_000 : Math.floor(random.next() ** 2 * 2_000)
@@ -770,7 +557,7 @@ function generatedSwarm(random: Random, full = false): SuperTabState {
     ...(random.chance(0.5) ? { workDecision: random.pick(['awaiting', 'keep', 'stop'] as const) } : {}),
   }))
   const conversations = conversationIds.map((id): Conversation => {
-    const kind = random.chance(0.01) ? 'leads' as const : random.chance(0.01) ? 'swarm-buddy' as const : random.chance(0.02) ? 'buddy' as const : undefined
+    const kind = random.chance(0.01) ? 'leads' as const : undefined
     return {
       id, title: id, archived: false, brief: '', checks: [], lastMessageSequence: 0,
       ...(kind ? { kind } : {}),

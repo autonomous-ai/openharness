@@ -353,6 +353,56 @@ void main() {
       expect(transport.socketPath, isNull);
     });
 
+    // A daemon that stops while this app's kept-alive connection is in use: what that request fails
+    // with depends on which side saw the close first (on Linux the reused connection is reset, and
+    // dart:io reports that as an HttpException, not a SocketException). Once the socket file is
+    // gone, any failure on it is the daemon being down.
+    test('fails as a daemon that is down when a kept connection breaks as it stops', () async {
+      final tcp = await start(_Daemon.tcp());
+      final server = await ServerSocket.bind(
+        InternetAddress(socketPath, type: InternetAddressType.unix),
+        0,
+      );
+      addTearDown(server.close);
+      var asked = 0;
+      server.listen((socket) {
+        var heard = '';
+        socket.listen((data) async {
+          // A request may arrive in pieces: count whole ones (a GET ends at its blank line).
+          heard += latin1.decode(data);
+          final whole = '\r\n\r\n'.allMatches(heard).length;
+          if (whole == asked) return;
+          asked = whole;
+          if (asked == 1) {
+            const body = '{"success":true,"data":{"via":"unix"}}';
+            socket.write(
+              'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n'
+              'content-length: ${body.length}\r\n\r\n$body',
+            );
+            return;
+          }
+          // Stopping: its socket file goes, and the connection breaks mid-answer.
+          File(socketPath).deleteSync();
+          await server.close();
+          socket.write('\x00\r\n\r\n');
+          await socket.flush();
+          socket.destroy();
+        });
+      });
+      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final api = ApiClient(
+        config: configFor(tcp),
+        session: AuthSession(),
+        localTransport: transport,
+      );
+
+      expect(await api.me(), {'via': 'unix'});
+      await expectLater(api.me(), throwsA(anything));
+      expect(asked, 2);
+      expect(tcp.hits, isEmpty);
+      expect(transport.socketPath, isNull);
+    });
+
     test('never sends a request for another address down the socket', () async {
       final tcp = await start(_Daemon.tcp());
       final other = await start(_Daemon.tcp());

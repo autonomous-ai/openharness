@@ -153,13 +153,6 @@ export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts
     start: { ...live, finishedAt: null }, progress: live })
 }
 
-/** The head and the live groups with these keys, dormant ones too, and no other part: what the GitHub reads before a
- *  command look up (store.ts factsLoad). A whole command load there read every agent and machine (task #4368). */
-export function loadGroupsByKey(tx: Transaction, tabId: string, keys: string[]): Promise<SwarmParts> {
-  return assemble(tx, tabId, { member: null, agent: null, machine: null, start: null, progress: null,
-    group: keys.length ? [['key', { key: { $in: [...new Set(keys)] } }]] : [] })
-}
-
 /** What a read check needs of a Swarm, and no more (read/service.ts oneGroup, task #2875): its head, members and agents. The
  *  read cache holds it as `access` and patches it from those kinds alone (cachePatch.ts accessRule). */
 export function loadAccess(tx: Transaction, tabId: string): Promise<SwarmParts> {
@@ -179,20 +172,6 @@ export async function loadGroupUnless(tx: Transaction, tabId: string, key: strin
   if (!row) return null
   if (held && row.data === undefined && Number(row.version) === held.version && ms(row.changedAt) === held.changedAt) return held
   return toPart<GroupData>('group', rawGroupRow(row))
-}
-
-/** These live machine parts by key, in one read by `_id`, with only what says which account an agent there runs as
- *  (projects.ts teamAccountPool): its host Mac and its session kind. Its lists read empty. What a one-group read checks an
- *  agent's host against (read/service.ts oneGroup), never a whole machine row with its readings. By `_id`, named: with `tabId`
- *  and `deleted` in its match, Mongo could plan it on the held index and examine every machine of the Swarm (task #4368). */
-export async function loadMachineAccounts(tx: Transaction, tabId: string, keys: string[]): Promise<Part<MachineData>[]> {
-  if (!keys.length) return []
-  const none = { $literal: [] }
-  const rows = await readBy(tx, 'SwarmMachine', 'id', [{ $match: { _id: { $in: [...new Set(keys)].map(key => partId(tabId, key)) }, tabId, deleted: false } },
-    { $project: { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, 'data.machineId': 1, 'data.contribution.machineId': 1,
-      'data.contribution.hostMachineId': 1, 'data.contribution.observation.sessionKind': 1, 'data.reservations': none, 'data.released': none,
-      'data.closingSessions': none, 'data.cleanups': none } }])
-  return rows.map(row => toPart<MachineData>('machine', rawPartRow(row)))
 }
 
 /** A Swarm's live finished starts (they expire 7 days after finishing, sweeps.ts). A plain match: Prisma's `not: null` on
@@ -366,29 +345,6 @@ export async function loadDormant(tx: Transaction, tabId: string,
   return [...same, ...older].map(row => toPart<GroupData>('group', rawGroupRow(row)))
 }
 
-export const FEED_PAGE = 50
-/** Most reads one feed page makes: rows its reads return that the feed then refuses are rare (the reads leave out other
- *  memberships and lost projects), so a page that would need more ends there, and says so (read/personalTasks.ts). */
-export const FEED_READS = 3
-/** Most ids one feed read names: the person and their newest own agents. The index serves an `$in` of up to 200 as points. */
-export const FEED_IDS = 200
-
-/** The conversations naming any of `ids` in their feed column (read/feedIds.ts) in `projectIds` (null: stored with no project),
- *  newest activity first, then by key, at most FEED_PAGE, each with its stored activity time for the next cursor. The projects
- *  are the reader's readable ones: a task in a project they lost is left behind in the database, never read out to be skipped.
- *  A later page reads as loadDormant's do: the rest of its cursor's moment by key, then what is older, each bounded by the
- *  `feed` index. */
-export async function loadFeed(tx: Transaction, tabId: string, ids: string[], projectIds: Array<string | null>,
-  before?: { lastActivityAt: number; key: string }): Promise<Array<{ part: Part<GroupData>; activityAt: number }>> {
-  if (!ids.length || !projectIds.length) return []
-  const read = async (match: Where, limit: number) => limit <= 0 ? [] : groupsBy(tx, 'feed', [
-    { $match: { tabId, deleted: false, feedIds: { $in: ids.slice(0, FEED_IDS) }, projectId: { $in: projectIds }, ...match } as Prisma.InputJsonValue },
-    { $sort: { lastActivityAt: -1, key: -1 } }, { $limit: limit }])
-  const at = before && { $date: new Date(before.lastActivityAt).toISOString() }
-  const same = before ? await read({ lastActivityAt: at, key: { $lt: before.key } }, FEED_PAGE) : []
-  const older = await read(at ? { lastActivityAt: { $lt: at } } : {}, FEED_PAGE - same.length)
-  return [...same, ...older].map(row => ({ part: toPart<GroupData>('group', rawGroupRow(row)), activityAt: ms(row.lastActivityAt) }))
-}
 
 /** The newest data change of each Swarm, over all its parts (design section 3.7). A touch does not count.
  *  One `$group` with `$max` per part kind, run by Mongo itself: Prisma's groupBy here can panic its engine on Mongo, which

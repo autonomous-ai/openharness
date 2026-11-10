@@ -21,7 +21,8 @@ describe('an agent post that only acknowledges', () => {
   it('is refused with ACK_ONLY and the next step', () => {
     const f = stepsFixture()
     for (const text of ['on it', 'Got it, thanks!', 'will do']) {
-      expect(() => send(f, f.dev, text)).toThrow(expect.objectContaining({ code: 'ACK_ONLY', message: expect.stringMatching(/react/i) }))
+      // The next step is to say nothing until there is substance.
+      expect(() => send(f, f.dev, text)).toThrow(expect.objectContaining({ code: 'ACK_ONLY', message: expect.stringMatching(/^(?!.*react).*substance/is) }))
     }
   })
 

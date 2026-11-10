@@ -34,11 +34,10 @@ function seeded({ people, agents, conversations }: { people: number; agents: num
       state.conversations.push(row)
     }
     state.agents.find(a => a.id === ids[2 % ids.length])!.confidential = true
-    state.agents.find(a => a.id === ids[3 % ids.length])!.teamAccount = true
   })
   const lookups = (confidential: string[] = []): HostLookups => ({
     people: [{ id: owner.userId, email: owner.email }, ...persons.map(p => ({ id: p.userId, email: p.email }))],
-    confidential: new Set(confidential), agentGrant: async () => {}, githubApp: false,
+    confidential: new Set(confidential), agentGrant: async () => {},
   })
   return { state: s.state, persons, ids, lookups }
 }

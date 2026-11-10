@@ -7,13 +7,13 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/leaderboard/reader.dart';
+import 'package:harness/super_tabs/leaderboard/shipping.dart';
 import 'package:harness/super_tabs/model.dart' show SuperTabAgent;
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show load, swarm;
+import 'support/super_tab_swarm.dart' show load, swarm;
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -55,7 +55,6 @@ void main() {
   Future<SuperTabController> show(
     WidgetTester tester, {
     List<Map<String, dynamic>>? agents,
-    bool board = true,
     void Function(ConversationServer server)? setup,
     List<String>? selected,
     List<String>? created,
@@ -65,14 +64,13 @@ void main() {
     List<SwarmPage>? pages,
     SwarmPage? page,
     String? boardProjectId,
-    SuperTabLeaderboardReader? leaderboard,
+    SuperTabShippingReader? leaderboard,
     AppNotifier? withApp,
   }) async {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
     setup?.call(server);
-    final activity = (await tester.runAsync(() => load(server)))!;
-    final c = activity.controller;
+    final c = (await tester.runAsync(() => load(server)))!;
     final app = withApp ?? createApp();
     if (withApp == null) addTearDown(app.dispose);
     // The design tokens follow the app's brightness, which main.dart sets from the theme.
@@ -98,16 +96,13 @@ void main() {
               },
               onNewAgent: () => created?.add('new'),
               onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
-              places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
               onPage: (page) => pages?.add(page),
               page: page,
               boardProjectId: boardProjectId,
               leaderboard: leaderboard,
-              attention: activity.attention,
               onManage: () {},
-              board: board,
             ),
           ),
         ),
@@ -186,7 +181,6 @@ void main() {
       expect(key('super-agent-kestrel'), findsOneWidget);
       expect(key('super-agent-orion'), findsOneWidget);
       expect(key('super-agent-tuan-agent'), findsNothing);
-      expect(key('super-swarm-buddy'), findsNothing);
       // The PM still wears the gold ring, and no row says more than its name.
       expect(ring('orion'), findsOneWidget);
       expect(ring('kestrel'), findsNothing);
@@ -214,27 +208,35 @@ void main() {
     });
   });
   group('the left pane\'s sections fold', () {
-    SuperTabLeaderboardReader board() {
-      final reader = SuperTabLeaderboardReader(
+    SuperTabShippingReader board() {
+      final reader = SuperTabShippingReader(
         tabId: 'tab',
         request: (method, path, {body}) async => {
-          'projectId': 'lead',
-          'week': 0,
+          'week': 1793577600000,
           'people': [
-            {'personId': 'dee', 'points': 120, 'rank': 1},
+            {
+              'personId': 'dee',
+              'displayName': 'dee',
+              'agentsShipping': 3,
+              'level': 3,
+              'points': 12.5,
+              'rank': 1,
+            },
           ],
+          'failures': <dynamic>[],
         },
       );
       addTearDown(reader.dispose);
       return reader;
     }
 
-    // Two computers of this account, one a team's, one another's: only the account's own are its machines.
-    AppNotifier appWithMachines() {
+    // Two computers of this account, one a team's, one another's: only the account's own are its machines. Old Rig is off,
+    // unless [rigUp].
+    AppNotifier appWithMachines({bool rigUp = false}) {
       final app = createApp();
       addTearDown(app.dispose);
-      app.machines = const [
-        Machine(
+      app.machines = [
+        const Machine(
           machineId: 'm3',
           authMode: MachineAuthMode.remote,
           name: 'Mac 3',
@@ -244,16 +246,16 @@ void main() {
           machineId: 'rig',
           authMode: MachineAuthMode.remote,
           name: 'Old Rig',
-          status: 'offline',
+          status: rigUp ? 'running' : 'offline',
         ),
-        Machine(
+        const Machine(
           machineId: 'team',
           authMode: MachineAuthMode.remote,
           name: 'Studio · Team',
           status: 'running',
           sessionKind: 'team',
         ),
-        Machine(
+        const Machine(
           machineId: 'theirs',
           authMode: MachineAuthMode.remote,
           name: 'Teammate Mac',
@@ -274,10 +276,10 @@ void main() {
         setup: people,
         leaderboard: await tester.runAsync(() async {
           final reader = board();
-          await reader.show('lead');
+          await reader.show();
           return reader;
         }),
-        withApp: appWithMachines(),
+        withApp: appWithMachines(rigUp: true),
       );
       expect(key('super-agent-kestrel'), findsOneWidget);
       for (final project in c.snapshot!.projects) {
@@ -348,6 +350,7 @@ void main() {
       expect(saved['agentsGroupOpen'], isTrue);
       expect(saved['projectsGroupOpen'], isFalse);
       expect(saved['yourMachinesGroupOpen'], isFalse);
+      expect(saved['yourMachinesGroupChosen'], isFalse);
       expect(saved['topTeamsGroupOpen'], isFalse);
       await tester.runAsync(c.flush);
     });
@@ -359,8 +362,7 @@ void main() {
         agents: [_agent('kestrel', 'Kestrel')],
         withApp: appWithMachines(),
       );
-      await tester.tap(key('project-sidebar-machines'));
-      await settle(tester);
+      // Old Rig is off: the list is open without a click.
       // Alphabetical; a team's pool and a teammate's computer are not its own.
       expect(key('super-machine-m3'), findsOneWidget);
       expect(key('super-machine-rig'), findsOneWidget);
@@ -396,6 +398,93 @@ void main() {
       await tester.runAsync(c.flush);
     });
 
+    testWidgets('Your Machines opens by itself while a computer is off, and '
+        'what its person chose stands', (tester) async {
+      // A computer is off: open, so why an agent is silent is in sight.
+      final app = appWithMachines();
+      final c = await show(
+        tester,
+        agents: [_agent('kestrel', 'Kestrel')],
+        withApp: app,
+      );
+      expect(key('super-machine-rig'), findsOneWidget);
+      expect(c.yourMachinesGroupChosen, isFalse);
+      // Their click folds it, and it stays folded while the computer is still off.
+      await tester.tap(key('project-sidebar-machines'));
+      await settle(tester);
+      expect(key('super-machine-rig'), findsNothing);
+      expect(c.yourMachinesGroupChosen, isTrue);
+      expect(c.yourMachinesGroupOpen, isFalse);
+      // The sidebar redraws as the Swarm reads again.
+      await tester.runAsync(c.refresh);
+      await settle(tester);
+      expect(key('super-machine-rig'), findsNothing);
+      // Opened again, it is theirs to keep open.
+      await tester.tap(key('project-sidebar-machines'));
+      await settle(tester);
+      expect(key('super-machine-rig'), findsOneWidget);
+      expect(c.savedForTest['yourMachinesGroupOpen'], isTrue);
+      expect(c.savedForTest['yourMachinesGroupChosen'], isTrue);
+      await tester.runAsync(c.flush);
+    });
+
+    testWidgets('Your Machines stays folded while every computer is up, and '
+        'opens when one goes off', (tester) async {
+      final app = appWithMachines(rigUp: true);
+      final c = await show(
+        tester,
+        agents: [_agent('kestrel', 'Kestrel')],
+        withApp: app,
+      );
+      expect(key('super-machine-m3'), findsNothing);
+      app.machines = [
+        for (final m in app.machines)
+          if (m.machineId == 'm3')
+            Machine(
+              machineId: 'm3',
+              authMode: MachineAuthMode.remote,
+              name: 'Mac 3',
+              status: 'offline',
+            )
+          else
+            m,
+      ];
+      await tester.runAsync(c.refresh);
+      await settle(tester);
+      expect(key('super-machine-m3'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('super-machine-m3'),
+          matching: find.text('offline'),
+        ),
+        findsOneWidget,
+      );
+      await tester.runAsync(c.flush);
+    });
+
+    test('a view saved with Your Machines open keeps it open; one saved '
+        'folded follows the computers', () {
+      SuperTabController saved(Map<String, dynamic> flags) =>
+          swarm().controller(
+            initial: {'tabId': 'tab', 'accountId': 'owner', ...flags},
+          );
+      expect(
+        saved({'yourMachinesGroupOpen': true}).yourMachinesGroupChosen,
+        isTrue,
+      );
+      expect(
+        saved({'yourMachinesGroupOpen': false}).yourMachinesGroupChosen,
+        isFalse,
+      );
+      expect(saved(const {}).yourMachinesGroupChosen, isFalse);
+      final chose = saved({
+        'yourMachinesGroupOpen': false,
+        'yourMachinesGroupChosen': true,
+      });
+      expect(chose.yourMachinesGroupChosen, isTrue);
+      expect(chose.yourMachinesGroupOpen, isFalse);
+    });
+
     testWidgets('a person with no computer of their own sees no Your '
         'Machines', (tester) async {
       final app = createApp()..machines = const [];
@@ -405,15 +494,27 @@ void main() {
     });
   });
   group('Humans is the Leaderboard', () {
-    SuperTabLeaderboardReader board(List<(String, int)> people) {
-      final reader = SuperTabLeaderboardReader(
+    SuperTabShippingReader board(
+      List<(String, double)> people, {
+      List<String> failures = const [],
+    }) {
+      final reader = SuperTabShippingReader(
         tabId: 'tab',
         request: (method, path, {body}) async => {
-          'projectId': 'lead',
-          'week': 0,
+          'week': 1793577600000,
           'people': [
             for (final (i, (id, points)) in people.indexed)
-              {'personId': id, 'points': points, 'rank': i + 1},
+              {
+                'personId': id,
+                'displayName': id,
+                'agentsShipping': 1,
+                'level': 1,
+                'points': points,
+                'rank': i + 1,
+              },
+          ],
+          'failures': [
+            for (final code in failures) {'machineId': 'mac-1', 'code': code},
           ],
         },
       );
@@ -430,8 +531,8 @@ void main() {
     testWidgets('lists people most points first, their points on the right', (
       tester,
     ) async {
-      final reader = board([('dee', 120), ('ken', 80), ('owner', 0)]);
-      await tester.runAsync(() => reader.show('lead'));
+      final reader = board([('dee', 12.5), ('ken', 8), ('owner', 0)]);
+      await tester.runAsync(reader.show);
       final c = await show(tester, setup: people, leaderboard: reader);
       expect(
         find.descendant(
@@ -449,12 +550,15 @@ void main() {
       expect(top('super-human-ken'), lessThan(top('super-human-owner')));
       final points = find.descendant(
         of: key('super-human-dee'),
-        matching: find.text('120'),
+        matching: find.text('12.5'),
       );
       expect(points, findsOneWidget);
       // Zero still shows, so the column holds.
       expect(
-        find.descendant(of: key('super-human-owner'), matching: find.text('0')),
+        find.descendant(
+          of: key('super-human-owner'),
+          matching: find.text('0.0'),
+        ),
         findsOneWidget,
       );
       expect(
@@ -468,8 +572,8 @@ void main() {
 
     testWidgets('at most 8 people; the heading folds them and every person '
         'opens the whole board', (tester) async {
-      final reader = board([for (var i = 0; i < 12; i++) ('p$i', 12 - i)]);
-      await tester.runAsync(() => reader.show('lead'));
+      final reader = board([for (var i = 0; i < 12; i++) ('p$i', 12.0 - i)]);
+      await tester.runAsync(reader.show);
       final pages = <SwarmPage>[];
       final c = await show(
         tester,
@@ -486,9 +590,40 @@ void main() {
       await tester.runAsync(c.flush);
     });
 
+    testWidgets('a Swarm of one person with no points yet shows nothing; a '
+        'team with none keeps the heading, its way to the Leaderboard', (
+      tester,
+    ) async {
+      final reader = board([('owner', 0)]);
+      await tester.runAsync(reader.show);
+      final c = await show(tester, leaderboard: reader);
+      expect(key('project-sidebar-humans'), findsNothing);
+      expect(find.text('Top Teams'), findsNothing);
+      await tester.runAsync(c.flush);
+
+      final team = board([('dee', 0), ('owner', 0)]);
+      await tester.runAsync(team.show);
+      final c2 = await show(tester, setup: people, leaderboard: team);
+      expect(key('project-sidebar-humans'), findsOneWidget);
+      await tester.runAsync(c2.flush);
+    });
+
+    testWidgets('a Swarm of one person with no points because GitHub could '
+        'not be read says why', (tester) async {
+      final reader = board([('owner', 0)], failures: ['GH_SIGNED_OUT']);
+      await tester.runAsync(reader.show);
+      final c = await show(tester, leaderboard: reader);
+      expect(key('project-sidebar-humans'), findsOneWidget);
+      // Top Teams starts folded: its person opens it.
+      await tester.tap(key('project-sidebar-humans'));
+      await settle(tester);
+      expect(key('super-human-reading'), findsOneWidget);
+      await tester.runAsync(c.flush);
+    });
+
     testWidgets('before the board is read, nothing: an empty list shows no '
         'heading', (tester) async {
-      await show(tester, leaderboard: board([('dee', 1)]));
+      await show(tester, leaderboard: board([('dee', 1.0)]));
       expect(key('project-sidebar-humans'), findsNothing);
       expect(key('super-human-dee'), findsNothing);
       expect(find.byType(CircularProgressIndicator), findsNothing);
@@ -519,13 +654,11 @@ void main() {
             body: SuperTabView(
               controller: c,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onNewAgent: onNewAgent,
               onAttachAgent: onAttachAgent,
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              board: true,
             ),
           ),
         ),
@@ -620,11 +753,9 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              board: true,
             ),
           ),
         ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -27,6 +28,8 @@ Future<SuperTabController> mount(
   WidgetTester tester, {
   ConversationServer? fixture,
   double width = 1200,
+  String? name,
+  double textScale = 1,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = Size(width, 900);
@@ -35,9 +38,10 @@ Future<SuperTabController> mount(
   server.state['machines'] = [
     machine(
       'mine',
-      width < 500
-          ? 'A very long machine hostname that must truncate without increasing the row height'
-          : 'My Mac',
+      name ??
+          (width < 500
+              ? 'A very long machine hostname that must truncate without increasing the row height'
+              : 'My Mac'),
       'owner',
       0,
     ),
@@ -61,15 +65,16 @@ Future<SuperTabController> mount(
   await tester.pumpWidget(
     MaterialApp(
       theme: grid.buildAppTheme(brightness: Brightness.light),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
       home: Scaffold(
         body: ListenableBuilder(
           listenable: c,
-          builder: (context, _) => SuperTabMachines(
-            controller: c,
-            onAddAgent: (_) {},
-            manage: true,
-            ticks: false,
-          ),
+          builder: (context, _) =>
+              SuperTabMachines(controller: c, onAddAgent: (_) {}, ticks: false),
         ),
       ),
     ),
@@ -102,13 +107,13 @@ void main() {
   });
 
   testWidgets(
-    'Manage rows have leading dots, owner badge and aligned disk bars',
+    'Manage rows have leading dots, owner badge and aligned disk bars, and no crew (v3)',
     (tester) async {
       await mount(tester);
       expect(find.text('OWNER'), findsOneWidget);
       for (final id in ['mine', 'build', 'sleep', 'old']) {
         expect(tester.getSize(key('machines-line-$id')).height, 56);
-        expect(key('machines-crew-$id'), findsOneWidget);
+        expect(key('machines-crew-$id'), findsNothing);
         expect(key('machines-disk-$id'), findsOneWidget);
         expect(
           tester.getTopLeft(key('machines-dot-$id')).dx,
@@ -120,6 +125,11 @@ void main() {
         tester.getTopLeft(key('machines-disk-build')).dx,
       );
       expect(find.text('200 GB free'), findsNWidgets(4));
+      // A crew member's machine (crew-one, from an older server) reads no crew.
+      expect(
+        find.textContaining(RegExp('crew', caseSensitive: false)),
+        findsNothing,
+      );
       expect(find.textContaining('last seen'), findsWidgets);
     },
   );
@@ -164,16 +174,6 @@ void main() {
     expect(find.text('Online 1'), findsOneWidget);
     expect(find.text('Asleep 2'), findsOneWidget);
     expect(find.text('1 online · 2 asleep · 1 offline'), findsOneWidget);
-  });
-
-  testWidgets('crew chip expands the existing machine details', (tester) async {
-    final c = await mount(tester);
-    expect(find.text('1 crew'), findsOneWidget);
-    await tester.tap(key('machines-crew-mine'));
-    await tester.pump();
-    expect(c.isMachineExpanded('mine'), isTrue);
-    expect(key('super-machine-crew-member-mine-0'), findsOneWidget);
-    await c.flush();
   });
 
   testWidgets(
@@ -246,7 +246,6 @@ void main() {
           body: SuperTabMachines(
             controller: c,
             onAddAgent: (_) {},
-            manage: true,
             ticks: false,
           ),
         ),
@@ -279,4 +278,53 @@ void main() {
       await c.flush();
     },
   );
+
+  // The test font draws every letter 1em wide: these names fit the row, and not half of it.
+  for (final (width, name) in [
+    (880.0, 'Dee\'s MacBook Pro (M4)'),
+    // In the app a window 880 wide leaves Manage a row this narrow, beside the Swarm's sidebar.
+    (600.0, 'Dee\'s MBP16'),
+  ]) {
+    testWidgets('at $width wide a long machine name stays whole', (
+      tester,
+    ) async {
+      await mount(tester, width: width, name: name);
+      expect(
+        tester
+            .renderObject<RenderParagraph>(
+              find.descendant(
+                of: key('super-machine-name-mine'),
+                matching: find.byType(RichText),
+              ),
+            )
+            .didExceedMaxLines,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('at twice the text size the disk figures grow with the text '
+      'and stay whole and aligned', (tester) async {
+    await mount(tester, textScale: 2);
+    for (final id in ['mine', 'build', 'sleep', 'old']) {
+      final texts = find.descendant(
+        of: key('machines-disk-$id'),
+        matching: find.byType(RichText),
+      );
+      expect(texts, findsNWidgets(2));
+      for (final text in texts.evaluate()) {
+        expect(
+          (text.renderObject! as RenderParagraph).didExceedMaxLines,
+          isFalse,
+          reason: id,
+        );
+      }
+      expect(
+        tester.getTopLeft(key('machines-disk-$id')).dx,
+        tester.getTopLeft(key('machines-disk-mine')).dx,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
 }

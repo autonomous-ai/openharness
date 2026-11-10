@@ -668,7 +668,6 @@ describe('registry remote display names', () => {
       at('old-codex-buddy', '%53', { permissionMode: 'readOnlyAsk', bypassPermission: true }),
       at('own-full', '%54', { permissionMode: 'full', bypassPermission: true }),
       at('swarm-ask', '%55', { swarmSkill, permissionMode: 'ask' }),
-      at('team-written', '%56', { swarmSkill, permissionMode: 'teamWritten', bypassPermission: true }),
     ]
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
     // As a machine upgrading from a build before the sweep: no marker yet.
@@ -683,7 +682,6 @@ describe('registry remote display names', () => {
     }
     expect([reloaded.byAgent('own-full')?.permissionMode, reloaded.byAgent('own-full')?.bypassPermission]).toEqual(['full', true])
     expect(reloaded.byAgent('swarm-ask')?.permissionMode).toBe('ask')
-    expect(reloaded.byAgent('team-written')?.permissionMode).toBe('teamWritten')
     const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
     expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('permissionMode')
     expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('bypassPermission')
@@ -2054,6 +2052,35 @@ describe('registry across a reboot and pane loss', () => {
     void registry; void strictPersistedRow
   })
 
+  // The agent browser (services/agentBrowser.ts) starts only for an agent created with Browser ticked.
+  it('browser:true survives persist, parse and rebind; cleared on separate shell', async () => {
+    const { registry, strictPersistedRow } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%51' }], cwd: '/tmp/demo', browser: true })!
+    expect(pending.browser).toBe(true)
+    const plain = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%52' }], cwd: '/tmp/demo' })!
+    expect(plain).not.toHaveProperty('browser')
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(pending.agentId)?.browser).toBe(true)
+    expect(reloaded.byAgent(plain.agentId)).not.toHaveProperty('browser')
+    const transcriptPath = join(dataDir, 'session-browser.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    expect(reloaded.register({ sessionId: 'session-browser', transcriptPath, tmuxPane: '%51', cwd: '/tmp/demo' })?.entry.browser).toBe(true)
+    const row = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')).find((r: { agentId: string }) => r.agentId === pending.agentId)
+    expect(strictPersistedRow(row)?.browser).toBe(true)
+    expect(strictPersistedRow({ ...row, browser: 'yes' })).not.toHaveProperty('browser')
+    // A hand-edited value on disk loads without the field.
+    const file = join(dataDir, 'registry.json')
+    const rows = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>
+    writeFileSync(file, JSON.stringify(rows.map(r => ({ ...r, browser: 1 }))), { mode: 0o600 })
+    const { registry: hand } = await loadRegistryModule()
+    hand.load()
+    expect(hand.byAgent(pending.agentId)).not.toHaveProperty('browser')
+    // The shell left under a new identity is the person's: the agent's browser stays the agent's.
+    expect(reloaded.releaseEngine(pending.agentId, true)).not.toHaveProperty('browser')
+  })
+
   // The conversation a fresh move onto a grid left (core/agents/retarget.ts): the way home reopens it.
   it('keeps the remembered subscription session across a reload and the binds on the grid', async () => {
     const { registry } = await loadRegistryModule()
@@ -2415,6 +2442,61 @@ describe('a terminal: a pane that becomes an engine and back', () => {
     expect(bound?.entry.agentId).toBe(opened.agentId)
     expect(bound?.entry.terminalHost).toBe(true)
     expect(registry.list()).toHaveLength(1)
+  })
+
+  // The path a restore takes when it cannot see a pane's engine: the harness is archived (`retainExitedSession` saves
+  // it), its pane goes to a new terminal row (`releaseEngine(…, true)`), and its engine runs on. Seen again, it comes
+  // back on that pane under its own id (DESKTOP-0TFH0OJ, 2026-11-10, CLI 0.5.97 and Hermes).
+  it('gives a pane back to the archived harness whose own engine never left it, and only then', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const harness = registry.openPendingAgent({ engine: 'hermes', runtimes: [pane], cwd: '/tmp/work' })!
+    registry.updateProcessIdentity(harness.agentId, processIdentity(25492))
+    const saved = { ...registry.byAgent(harness.agentId)!, active: false }
+    const shell = registry.releaseEngine(harness.agentId, true)!
+    expect(shell.agentId).not.toBe(harness.agentId)
+    expect(registry.byAgent(harness.agentId)).toBeUndefined()
+
+    // A conversation bound elsewhere, or an id live already, refuses and changes nothing.
+    expect(registry.reinstateArchived(shell.agentId, { ...saved, agentId: shell.agentId }, processIdentity(25492))).toBeNull()
+    expect(registry.reinstateArchived('no-such-row', saved, processIdentity(25492))).toBeNull()
+    expect(registry.byAgent(shell.agentId)?.engine).toBe('terminal')
+
+    const back = registry.reinstateArchived(shell.agentId, saved, processIdentity(25492))!
+    expect(back).toMatchObject({ agentId: harness.agentId, engine: 'hermes', defaultName: harness.defaultName, active: true,
+      launch: { state: 'ready' }, processIdentity: processIdentity(25492) })
+    expect(registry.byAgent(shell.agentId)).toBeUndefined()
+    expect(registry.byRuntimeEngine(pane, 'hermes')?.agentId).toBe(harness.agentId)
+    expect(registry.byProcess('hermes', processIdentity(25492))?.agentId).toBe(harness.agentId)
+    expect(registry.list().map((row) => row.agentId)).toEqual([harness.agentId])
+    // Not twice, and never over a row that is not a terminal.
+    expect(registry.reinstateArchived(shell.agentId, saved, processIdentity(25492))).toBeNull()
+    expect(registry.reinstateArchived(harness.agentId, saved, processIdentity(25492))).toBeNull()
+
+    registry.flush()
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(harness.agentId)).toMatchObject({ engine: 'hermes', processIdentity: processIdentity(25492) })
+  })
+
+  it('takes the pane back from a terminal row that adopted the engine already, never from one with a conversation', async () => {
+    const transcriptPath = join(dataDir, 'session-r.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const harness = registry.openPendingAgent({ engine: 'claude', runtimes: [pane], cwd: '/tmp/work' })!
+    registry.updateProcessIdentity(harness.agentId, processIdentity(915))
+    const saved = { ...registry.byAgent(harness.agentId)!, active: false }
+    const shell = registry.releaseEngine(harness.agentId, true)!
+    const adopted = registry.adoptEngine(shell.agentId, 'claude', processIdentity(915))!
+    expect(registry.reinstateArchived(adopted.agentId, { ...saved, engine: 'codex' }, processIdentity(915))).toBeNull()
+
+    registry.register({ engine: 'claude', sessionId: 'session-r', transcriptPath, tmuxPane: '%9', processIdentity: processIdentity(915) })
+    expect(registry.byAgent(adopted.agentId)?.sessionId).toBe('session-r')
+    expect(registry.reinstateArchived(adopted.agentId, saved, processIdentity(915))).toBeNull()
+    registry.unbindSession('session-r')
+    expect(registry.reinstateArchived(adopted.agentId, saved, processIdentity(915))?.agentId).toBe(harness.agentId)
+    expect(registry.byAgent(adopted.agentId)).toBeUndefined()
   })
 
   it('tells the core each session\'s engine as it enters: opened, adopted, registered and loaded', async () => {

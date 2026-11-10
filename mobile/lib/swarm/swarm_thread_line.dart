@@ -26,7 +26,7 @@ typedef SwarmThreadFace = ({
   String id,
   bool agent,
   bool pm,
-  SwarmLook look,
+  SuperTabAvatarPicture? picture,
 });
 
 /// The newest reply authors of [thread] as [snapshot] names and dresses them:
@@ -54,7 +54,7 @@ List<SwarmThreadFace> swarmThreadFaces(
               id: id,
               agent: true,
               pm: snapshot?.isLead(id) ?? false,
-              look: snapshot?.agentLook(id) ?? (picture: null, status: null),
+              picture: snapshot?.agent(id)?.avatar,
             )
           : (
               name:
@@ -66,7 +66,7 @@ List<SwarmThreadFace> swarmThreadFaces(
               id: id,
               agent: false,
               pm: false,
-              look: snapshot?.personLook(id) ?? (picture: null, status: null),
+              picture: snapshot?.person(id)?.avatar,
             ),
 ];
 
@@ -115,8 +115,7 @@ class SwarmThreadLine extends StatelessWidget {
                   id: who.id,
                   agent: who.agent,
                   pm: who.pm,
-                  picture: who.look.picture,
-                  status: who.look.status,
+                  picture: who.picture,
                   diameter: face,
                 ),
                 const SizedBox(width: AppSpace.xs),

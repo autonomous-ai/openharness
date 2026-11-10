@@ -297,6 +297,68 @@ class ForkedFrom {
   }
 }
 
+/// The agent's own Chrome, as its daemon reports it (cli agentFrame.ts `browser`). Only values this build has words for are
+/// kept: a newer daemon's step or error is dropped rather than shown as a code.
+class AgentBrowser {
+  const AgentBrowser({required this.state, this.step, this.error});
+
+  /// `setup`, `starting`, `ready` or `failed`.
+  final String state;
+
+  /// During `setup`: `installing`, `starting_podman` or `building`.
+  final String? step;
+
+  /// During `failed`: one of [errors].
+  final String? error;
+
+  static const steps = {
+    'installing',
+    'starting_podman',
+    'building',
+  };
+  static const errors = {
+    'needs_setup',
+    'podman_install_failed',
+    'podman_manual',
+    'podman_old',
+    'podman_memory',
+    'state_unreadable',
+    'podman_down',
+    'image_failed',
+    'browser_stopped',
+    'profile_unwritable',
+    'proxy_failed',
+    'browser_limit',
+    'device_failed',
+  };
+
+  static AgentBrowser? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final state = raw['state'];
+    if (state is! String ||
+        !const {'setup', 'starting', 'ready', 'failed'}.contains(state)) {
+      return null;
+    }
+    final step = raw['step'], error = raw['error'];
+    return AgentBrowser(
+      state: state,
+      step: state == 'setup' && steps.contains(step) ? step as String : null,
+      error: state == 'failed' && errors.contains(error)
+          ? error as String
+          : null,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is AgentBrowser &&
+      state == other.state &&
+      step == other.step &&
+      error == other.error;
+  @override
+  int get hashCode => Object.hash(state, step, error);
+}
+
 /// Display-only fallbacks; never send these to a CLI as a user rename.
 const kUntitledPane = 'Untitled Pane';
 final _automaticHarnessName = RegExp(
@@ -492,6 +554,10 @@ class Agent {
   /// title. Null from a daemon that does not say; only a true one is sent to
   /// the Swarm (task #2920).
   final bool? nameChosen;
+
+  /// What a message to it waits for now (the daemon's `waitingFor`): `engine` while its engine starts, else null. The daemon
+  /// sends the agent's frame again when it changes, so a client that reconnects reads it as it is.
+  final String? waitingFor;
   final String? closePlanState;
   final String? closePlanDetail;
 
@@ -527,6 +593,9 @@ class Agent {
   /// The URL of the harness's viewer for this agent, served on the agent's machine, or null
   /// when there is none (yet). A change means the viewer pane must navigate.
   final String? viewerUrl;
+
+  /// Its Browser, or null for an agent made without one or from an older daemon.
+  final AgentBrowser? browser;
 
   /// Why this remote viewer could not be forwarded, including old-daemon update guidance.
   final String? viewerError;
@@ -607,6 +676,7 @@ class Agent {
     this.createdAt,
     this.closeSupported = false,
     this.nameChosen,
+    this.waitingFor,
     this.closePlanState,
     this.closePlanDetail,
     this.lastOpenedAt,
@@ -622,6 +692,7 @@ class Agent {
     this.dsh,
     this.dshName,
     this.viewerUrl,
+    this.browser,
     this.viewerError,
     this.viewerName,
     this.verdict,
@@ -783,6 +854,7 @@ class Agent {
           : null,
       closeSupported: j['closeSupported'] == true,
       nameChosen: j['nameChosen'] is bool ? j['nameChosen'] as bool : null,
+      waitingFor: j['waitingFor'] is String ? j['waitingFor'] as String : null,
       closePlanState:
           j['closePlan'] is Map &&
               const {'waiting', 'failed'}.contains(j['closePlan']['state'])
@@ -814,6 +886,7 @@ class Agent {
       dsh: _safeDsh(j['dsh']),
       dshName: _safeLabel(j['dshName']),
       viewerUrl: _safeViewerUrl(j['viewerUrl']),
+      browser: AgentBrowser.fromJson(j['browser']),
       viewerError: _safeDetail(j['viewerError']),
       viewerName: _safeLabel(j['viewerName']),
       verdict: AgentVerdict.fromJson(j['verdict']),
@@ -869,6 +942,7 @@ class Agent {
     createdAt: createdAt,
     closeSupported: closeSupported,
     nameChosen: nameChosen,
+    waitingFor: waitingFor,
     closePlanState: clearClosePlan ? null : closePlanState,
     closePlanDetail: clearClosePlan ? null : closePlanDetail,
     lastOpenedAt: lastOpenedAt ?? this.lastOpenedAt,
@@ -884,6 +958,7 @@ class Agent {
     dsh: dsh,
     dshName: dshName,
     viewerUrl: viewerUrl,
+    browser: browser,
     viewerError: viewerError,
     viewerName: viewerName,
     verdict: verdict,
@@ -1036,6 +1111,7 @@ class AgentVerdict {
     this.errors = 0,
     this.warnings = 0,
     this.artifact,
+    this.preview,
     this.phases = const [],
     this.updatedAt,
   });
@@ -1050,6 +1126,10 @@ class AgentVerdict {
 
   /// Workspace-relative path of the primary thing to look at, when the harness named one.
   final String? artifact;
+
+  /// The page the agent serves itself on its machine (`http://127.0.0.1:5173/`), which the viewer shows
+  /// once it answers: the address its pages have there.
+  final String? preview;
 
   /// Where the work is, in order — at most twelve; empty when the harness
   /// names no phases, and then the header draws no strip.
@@ -1083,6 +1163,7 @@ class AgentVerdict {
       errors: _safeCount(raw['errors']),
       warnings: _safeCount(raw['warnings']),
       artifact: _safeText(raw['artifact'], 1024),
+      preview: _safeText(raw['preview'], 2048),
       phases: _phases(raw['phases']),
       updatedAt: updated is String ? DateTime.tryParse(updated) : null,
     );
@@ -1113,6 +1194,7 @@ class AgentVerdict {
       other.errors == errors &&
       other.warnings == warnings &&
       other.artifact == artifact &&
+      other.preview == preview &&
       listEquals(other.phases, phases) &&
       other.updatedAt == updatedAt;
 
@@ -1123,6 +1205,7 @@ class AgentVerdict {
     errors,
     warnings,
     artifact,
+    preview,
     Object.hashAll(phases),
     updatedAt,
   );

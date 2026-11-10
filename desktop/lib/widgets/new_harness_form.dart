@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:xterm/xterm.dart' show TerminalTheme;
 
+import '../browser/browser_pill.dart';
+import '../browser/browser_setup_dialog.dart';
 import '../shortcuts/app_keymap.dart';
 import '../shortcuts/keymap.dart';
 import '../core/dsh_catalog.dart';
@@ -177,10 +179,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     });
   }
 
-  /// How often a request the machine holds is asked after ([_followHeld]).
-  @visibleForTesting
-  static Duration heldFollowInterval = const Duration(seconds: 3);
-
   Timer? _heldFollow;
 
   /// A request the machine holds or is starting completes by itself (an agent
@@ -196,7 +194,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       return;
     }
     if (_heldFollow != null) return;
-    _heldFollow = Timer(heldFollowInterval, () async {
+    _heldFollow = Timer(NewHarnessController.heldFollowInterval, () async {
       _heldFollow = null;
       if (!mounted) return;
       final outcome = await box.followHeld();
@@ -985,6 +983,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       _revealRow();
       return;
     }
+    if (box.browser && box.browserNeedsSetup) {
+      final availability = box.browserAvailability!;
+      final install = await showBrowserSetupDialog(
+        context,
+        ownMachine: availability.ownMachine,
+      );
+      if (!mounted || !install || !await box.setUpBrowser() || !mounted) {
+        return;
+      }
+    }
     _checkingLaunch = box.checking;
     final outcome = existingFolder
         ? await box.useExistingFolder(resendAttachments: resendAttachments)
@@ -1720,24 +1728,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  if (box.integration?.heading
-                                      case final heading?) ...[
-                                    Text(
-                                      heading,
-                                      style: DesktopChrome.heading(),
-                                    ),
-                                    if (box.integration?.intro
-                                        case final intro?) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        intro,
-                                        style: DesktopChrome.text(
-                                          color: DesktopChrome.muted,
-                                        ),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 14),
-                                  ],
                                   _desktopHeader(),
                                   const SizedBox(height: 12),
                                   if (_installing case final run?)
@@ -1745,8 +1735,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                                   else ...[
                                     _desktopTaskEditor(),
                                     const SizedBox(height: 6),
-                                    // A Buddy runs as the Swarm starts it.
-                                    if (!box.bringsBuddy) _desktopSettings(),
+                                    _desktopSettings(),
                                     if (box.placesLead) _desktopLeadBlocked(),
                                     if (box.requiredChoice
                                         case final required?) ...[
@@ -2016,9 +2005,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               ),
             // Fo takes no repository; a cloud coding agent works on the chosen
             // repository's GitHub copy, never on this computer's folder.
-            // A Buddy has a folder of its own (task #4196).
-            if (!box.bringsBuddy &&
-                (!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
+            if ((!box.isCloud || cloudAgentTakesRepository(box.engine)) &&
                 (!box.asGuest ||
                     box.fields.contains(NewHarnessField.projectMenu)))
               _desktopField(
@@ -2453,6 +2440,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
       final gitControls = Row(
         key: const ValueKey('new-harness-git-settings'),
         mainAxisSize: MainAxisSize.min,
+        // Browser's line hangs under its pill; the other pills keep their row.
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // A Product Manager always gets its own worktree.
           if (box.canUseWorktree && !box.placesLead)
@@ -2480,6 +2469,16 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 ),
               ),
             ),
+          if (box.offersBrowser)
+            FocusTraversalOrder(
+              order: const NumericFocusOrder(8.5),
+              child: BrowserPill(
+                on: box.browser,
+                unavailable: box.browserUnavailable,
+                needsSetup: box.browserNeedsSetup,
+                onPressed: box.locked ? null : box.toggleBrowser,
+              ),
+            ),
           if (!box.isCloud &&
               !box.leadThroughSwarm &&
               (box.choosesBranch || box.checkingGit || box.gitError != null))
@@ -2505,6 +2504,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               spacing: 16,
               children: [controls, gitControls],
             ),
@@ -2645,15 +2645,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           box.integration?.projectVisibility != null &&
           (box.agentKind ?? 'lead') == 'lead')
         _desktopProjectVisibility(9.95),
-      // A Buddy is an offer: saying no is as plain as saying yes (#4442).
-      if (box.bringsBuddy && !widget.embedded)
-        TextButton(
-          key: const ValueKey('new-harness-not-now'),
-          onPressed: () {
-            if (box.requestDismiss()) widget.onClose();
-          },
-          child: const Text('Not now'),
-        ),
       // Chosen where the agent is started, directly left of Start (product owner, task #4445).
       if (includeChoices)
         if (box.agentKind case final kind?) _desktopKindChip(kind),

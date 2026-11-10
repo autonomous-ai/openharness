@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -13,7 +14,6 @@ import { MemoryAttachmentStore, MemoryAvatarStore, SharedAvatarStore } from '../
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
-import { RETIRED_NOTE } from '../src/superTabs/retired.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -31,19 +31,20 @@ const read = async (tab: string, user: AuthUser, path = 'parts') => {
   const response = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/${path}`, headers: { authorization: `Bearer ${user.sub}` } })
   return { status: response.statusCode, body: response.json(), text: response.body }
 }
-type Uploaded = { id: string }
-const upload = async (tab: string, bytes: Uint8Array, name = 'me.png', mime = 'image/png', user = owner, asAgentId?: string) => {
-  const form = new FormData()
-  form.append('file', new Blob([bytes], { type: mime }), name)
-  const encoded = new Request('http://upload.test', { method: 'POST', body: form })
-  const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/avatars${asAgentId ? `?asAgentId=${asAgentId}` : ''}`,
-    headers: { authorization: `Bearer ${user.sub}`, 'content-type': encoded.headers.get('content-type')! }, payload: Buffer.from(await encoded.arrayBuffer()) })
-  const body = response.json()
-  return { status: response.statusCode, code: body.error?.code ?? body.code, avatar: body.data?.avatar as Uploaded }
-}
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const image = (size: number, head: number[] = PNG) => { const bytes = new Uint8Array(size).map((_, i) => i % 251); bytes.set(head); return bytes }
-const stored = async (id: string) => pictures.objects.get((await db.superTabAttachment.findUniqueOrThrow({ where: { id } })).objectKey)
+// A picture already set, as the avatar commands set them before they were retired (2026-11-09): nothing sets one now, so the
+// object goes in the store, in the folder its links are signed for (avatarLinks.ts), and its key on the member's part, which is
+// what a read finds. The stores here read no cache, so a part written straight is what the next read sees.
+const keepPicture = async (bucket: MemoryAttachmentStore, tab: string, bytes: Uint8Array = image(64), folder = 'super-tabs') => {
+  const objectKey = `${folder}/${tab}/${randomUUID().replaceAll('-', '')}/avatar`
+  await bucket.put(objectKey, { name: 'avatar', mime: 'image/png' }, Readable.from([Buffer.from(bytes)]), 1024 * 1024)
+  return objectKey
+}
+const setPicture = async (tab: string, userId: string, objectKey: string) => {
+  const row = await db.swarmMember.findUniqueOrThrow({ where: { tabId_key: { tabId: tab, key: userId } } })
+  await db.swarmMember.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(), data: { ...row.data as object, avatar: { kind: 'upload', key: objectKey } } } })
+}
 async function swarm() {
   const tab = (await store.create(owner, randomUUID(), 'Office')).id
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
@@ -59,7 +60,7 @@ beforeAll(async () => {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
   db = new PrismaClient({ datasources: { db: { url: uri } } })
-  store = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures })
+  store = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures }, { readCache: null })
   for (const user of [owner, peer, outsider]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`,
     email: user.email, autonomousEnv: user.autonomousEnv } })
   // The owner's own machine runs the agents, so acting as one needs no machine share.
@@ -81,88 +82,27 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-// Swarm v4 has no status, time zone, name or username to set (2026-11-09), but Desktop and phone from the last 30 days still send them.
-describe('the profile commands an older app still sends', () => {
-  it('answers each as ignored, and nothing a member reads changes', async () => {
-    const tab = await swarm()
-    const before = (await read(tab, peer)).body.data.members
-    for (const command of [{ type: 'member.status', status: { text: 'Heads down', emoji: '🎯' } }, { type: 'member.timeZone', timeZone: 'Asia/Ho_Chi_Minh' },
-      { type: 'member.username', username: 'pilot' }, { type: 'member.name', name: 'Minh Nguyen' }] as unknown as Command[]) {
-      expect((await run(tab, command)).result, command.type).toEqual({ ignored: true, note: RETIRED_NOTE })
-    }
-    expect((await read(tab, peer)).body.data.members).toEqual(before)
-  })
-})
-
-describe('avatar uploads', () => {
-  it('stores a png, jpg or webp of at most 1 MB as the image its bytes are', async () => {
-    const tab = await swarm()
-    const png = await upload(tab, image(1024 * 1024))
-    expect(png.status).toBe(200)
-    // No link comes back: a picture is only ever reached through a member read's signed link.
-    expect(png.avatar).toEqual({ id: expect.any(String) })
-    expect(await stored(png.avatar.id)).toMatchObject({ contentType: 'image/png' })
-    // A .png that is really a JPEG still shows, as what it is.
-    const jpeg = await upload(tab, image(2048, [0xff, 0xd8, 0xff]), 'me.png', 'image/png', peer)
-    expect(jpeg.status).toBe(200)
-    expect(await stored(jpeg.avatar.id)).toMatchObject({ contentType: 'image/jpeg' })
-    const webp = await upload(tab, image(64, [...Buffer.from('RIFF'), 0, 0, 0, 0, ...Buffer.from('WEBP')]), 'me.webp', 'image/webp')
-    expect(webp.status).toBe(200)
-  })
-
-  it('refuses a file over 1 MB, a gif, and a page or script that says it is an image', async () => {
-    const tab = await swarm()
-    const before = pictures.objects.size
-    expect(await upload(tab, image(1024 * 1024 + 1))).toMatchObject({ status: 413, code: 'AVATAR_TOO_LARGE' })
-    expect(await upload(tab, image(64, [...Buffer.from('GIF89a')]), 'me.gif', 'image/gif')).toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
-    expect(await upload(tab, new TextEncoder().encode('<html><script>alert(1)</script></html>'), 'me.png', 'image/png'))
-      .toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
-    expect(await upload(tab, new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'me.svg', 'image/svg+xml'))
-      .toMatchObject({ status: 415, code: 'AVATAR_TYPE' })
-    expect(pictures.objects.size).toBe(before)
-  })
-
-  it('is refused outside the Swarm and for a viewer', async () => {
-    const tab = await swarm()
-    // Outside it, refused as a Swarm that does not exist (routes/superTabs.ts NOT_AVAILABLE).
-    expect(await upload(tab, image(64), 'me.png', 'image/png', outsider)).toMatchObject({ status: 404, code: 'NOT_FOUND' })
-    const viewing = (await store.create(owner, randomUUID(), 'Read only')).id
-    const invitation = await run(viewing, { type: 'invite.create', email: peer.email, role: 'viewer', conversationId: 'lead' })
-    await run(viewing, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
-    expect(await upload(viewing, image(64), 'me.png', 'image/png', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
-  })
-
-  it('is never sendable as a chat file', async () => {
-    const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await expect(run(tab, { type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [avatar.id] }))
-      .rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
-  })
-})
-
-describe('setting avatars', () => {
+describe('a picture already set', () => {
   const HOUR = 3_600_000
-  const avatarOf = async (tab: string, key: string) =>
-    ((await read(tab, peer)).body.data.members as Array<{ key: string; data: { avatar?: unknown } }>).find(m => m.key === key)!.data.avatar
   const linkFor = async (tab: string, reader: AuthUser, who: string) =>
     ((await read(tab, reader)).body.data.derived?.avatars ?? {})[who] as string | undefined
 
-  it('puts the person’s own upload on their member record, once', async () => {
+  it('is never sendable as a chat file', async () => {
     const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })
-    expect(await avatarOf(tab, owner.sub)).toEqual({ kind: 'upload' })
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+    const objectKey = await keepPicture(pictures, tab)
+    const row = await db.superTabAttachment.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: tab, conversationId: '', actorKey: `person:${owner.sub}`,
+      name: 'avatar', mime: 'image/png', size: 64, objectKey, purpose: 'avatar' } })
+    await expect(run(tab, { type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [row.id] }))
+      .rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
   })
 
   it('reaches members only through a signed link that stops opening within an hour', async () => {
     const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })
+    const objectKey = await keepPicture(pictures, tab)
+    await setPicture(tab, owner.sub, objectKey)
     const first = await read(tab, peer)
     // The record says only that there is a picture; the bucket opens nothing without a signature, its path alone included.
     expect(first.body.data.members.find((m: { key: string }) => m.key === owner.sub).data.avatar).toEqual({ kind: 'upload' })
-    const objectKey = (await db.superTabAttachment.findUniqueOrThrow({ where: { id: avatar.id } })).objectKey
     expect(pictures.open(`https://avatars.example.test/${objectKey}`, Date.now())).toBeNull()
     const link = await linkFor(tab, peer, `person:${owner.sub}`)
     expect(link).toMatch(/^https:\/\/avatars\.example\.test\//)
@@ -177,8 +117,7 @@ describe('setting avatars', () => {
 
   it('gives no link to someone outside the Swarm or removed from it', async () => {
     const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    await run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })
+    await setPicture(tab, owner.sub, await keepPicture(pictures, tab))
     const kept = await linkFor(tab, peer, `person:${owner.sub}`)
     const stranger = await read(tab, outsider)
     expect(stranger.status).not.toBe(200)
@@ -190,42 +129,17 @@ describe('setting avatars', () => {
     // What they kept stops opening within the hour.
     expect(pictures.open(kept!, Date.now() + HOUR + 1)).toBeNull()
   })
-
-  it('refuses someone else’s upload and a chat file', async () => {
-    const tab = await swarm()
-    const theirs = (await upload(tab, image(64), 'me.png', 'image/png', peer)).avatar
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: theirs.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
-    const chat = await store.upload(owner, tab, 'lead', { name: 'shot.png', mime: 'image/png', body: (await import('node:stream')).Readable.from([Buffer.from(image(64))]) })
-    await expect(run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: chat.attachment.id } })).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
-    expect(await avatarOf(tab, owner.sub)).toBeUndefined()
-  })
-
-  it('lets only one of two commands racing for the same upload take it', async () => {
-    const tab = await swarm()
-    const { avatar } = await upload(tab, image(64))
-    const results = await Promise.allSettled([1, 2].map(() => run(tab, { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } })))
-    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1)
-    expect(await db.superTabAttachment.findUnique({ where: { id: avatar.id } })).toMatchObject({ usedBy: expect.any(String) })
-  })
-
-  it('without a private avatar bucket, refuses uploads and still takes presets', async () => {
-    const plain = new SuperTabStore(db, Date.now, { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
-    const tab = (await plain.create(owner, randomUUID(), 'No bucket')).id
-    const { Readable } = await import('node:stream')
-    await expect(plain.uploadAvatar(owner, tab, { body: Readable.from([Buffer.from(image(64))]) })).rejects.toMatchObject({ code: 'AVATARS_UNAVAILABLE', status: 503 })
-    await plain.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } } })
-  })
 })
 
 // Prod has no avatar bucket (Ken, 2026-10-28): pictures go in the attachments bucket under avatars/ and are linked as chat
 // files are, by signed links that stop opening (fileLinks.ts), so they keep working once the bucket is no longer public.
-describe('avatars in the attachments bucket', () => {
+describe('a picture already set, in the attachments bucket', () => {
   const bucket = new MemoryAttachmentStore()
   let shared: SuperTabStore
   let reads: FastifyInstance
   beforeAll(async () => {
     shared = new SuperTabStore(db, Date.now, { store: bucket, prefix: 'super-tabs', publicBase: 'https://cdn.example.test',
-      avatars: new SharedAvatarStore(bucket), avatarPrefix: 'avatars' })
+      avatars: new SharedAvatarStore(bucket), avatarPrefix: 'avatars' }, { readCache: null })
     reads = Fastify()
     reads.setErrorHandler(errorHandler)
     reads.addHook('onRequest', async request => { request.user = [owner, peer].find(u => `Bearer ${u.sub}` === request.headers.authorization) })
@@ -233,196 +147,73 @@ describe('avatars in the attachments bucket', () => {
     await reads.ready()
   })
   afterAll(async () => { await reads?.close() })
-  const picture = async (tab: string, bytes: Uint8Array) => {
-    const { Readable } = await import('node:stream')
-    const { avatar } = await shared.uploadAvatar(owner, tab, { body: Readable.from([Buffer.from(bytes)]) })
-    await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } } })
-    return (await db.superTabAttachment.findUniqueOrThrow({ where: { id: avatar.id } })).objectKey
-  }
   const linkFor = async (tab: string) => {
     const response = await reads.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } })
     return response.json().data.derived?.avatars?.[`person:${owner.sub}`] as string | undefined
   }
 
-  it('uploads, reads and replaces a picture, by a signed link that stops opening', async () => {
+  it('is read by a signed link that stops opening, and a replaced one by the new picture\'s', async () => {
     const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
     const invitation = await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } })
     await shared.execute(peer, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    const first = await picture(tab, image(64))
+    const first = await keepPicture(bucket, tab, image(64), 'avatars')
+    await setPicture(tab, owner.sub, first)
     expect(first).toMatch(new RegExp(`^avatars/${tab}/[0-9a-f]{32}/avatar$`))
-    expect(bucket.objects.get(first)).toMatchObject({ contentType: 'image/png' })
     const firstLink = (await linkFor(tab))!
     expect(firstLink).toMatch(new RegExp(`^https://storage\\.memory\\.test/${first}\\?expires=\\d+&signature=`))
     expect(bucket.open(firstLink)).toEqual(Buffer.from(image(64)))
     expect(bucket.open(firstLink, Number(new URL(firstLink).searchParams.get('expires')))).toBeNull()
-    const second = await picture(tab, image(96))
-    expect(second).not.toBe(first)
+    const second = await keepPicture(bucket, tab, image(96), 'avatars')
+    await setPicture(tab, owner.sub, second)
     expect(bucket.open((await linkFor(tab))!)).toEqual(Buffer.from(image(96)))
   })
-
-  it('keeps chat files out of the avatar folder and out of avatar links', async () => {
-    const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
-    const { Readable } = await import('node:stream')
-    const chat = await shared.upload(owner, tab, 'lead', { name: 'contract.pdf', mime: 'application/pdf', body: Readable.from([Buffer.from('private')]) })
-    const chatKey = (await db.superTabAttachment.findUniqueOrThrow({ where: { id: chat.attachment.id } })).objectKey
-    expect(chatKey).toMatch(/^super-tabs\//)
-    await expect(shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id: chat.attachment.id } } }))
-      .rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
-    expect([...bucket.objects.keys()].filter(objectKey => objectKey.startsWith('avatars/'))).not.toContain(chatKey)
-  })
 })
 
-describe('reactions', () => {
-  const post = async (tab: string, text = 'Shipped the fix') =>
-    (await run(tab, { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId as string
-  const react = (tab: string, messageId: string, on: boolean, user = owner, emoji: 'tada' | 'heart' = 'tada', operationId = randomUUID()) =>
-    run(tab, { type: 'message.react', conversationId: 'lead', messageId, emoji, on }, user, undefined, operationId)
-  const page = async (tab: string, user = owner) =>
-    (await read(tab, user, 'conversations/lead/messages')).body.data.messages as Array<{ id: string; reactions: Array<{ emoji: string; count: number }> }>
-  const countsOf = async (tab: string, messageId: string, user = owner) => (await page(tab, user)).find(m => m.id === messageId)!.reactions
+// anh Dee, 2026-11-10: with no editor left, a person's name in a Swarm follows their account's (personNames.ts nameFromAccount).
+describe('a name that follows the account', () => {
+  const nameOf = async (tab: string, key: string) =>
+    ((await read(tab, peer)).body.data.members as Array<{ key: string; data: Record<string, unknown> }>).find(m => m.key === key)!.data
+  const rename = (user: AuthUser, name: string | null) => db.user.update({ where: { id: user.sub }, data: { name } })
 
-  it('adds and removes idempotently, and bumps the group only on a change', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    const seq = async () => ((await read(tab, owner)).body.data.groups as Array<{ key: string; data: { reactionSeq?: number } }>)
-      .find(g => g.key === 'lead')!.data.reactionSeq ?? 0
-    expect((await react(tab, messageId, true)).result).toMatchObject({ changed: true })
-    expect((await react(tab, messageId, true)).result).toMatchObject({ changed: false })
-    expect(await countsOf(tab, messageId)).toEqual([{ emoji: 'tada', count: 1, by: [{ kind: 'person', id: owner.sub }] }])
-    expect(await seq()).toBe(1)
-    await react(tab, messageId, false)
-    expect((await react(tab, messageId, false)).result).toMatchObject({ changed: false })
-    expect(await countsOf(tab, messageId)).toEqual([])
-    expect(await seq()).toBe(2)
+  it('shows the account name once the account is renamed, in every Swarm the person is in, and never the name chosen before', async () => {
+    const [one, two] = [await swarm(), await swarm()]
+    // A name chosen in one of them before, as `member.name` left it.
+    const row = await db.swarmMember.findUniqueOrThrow({ where: { tabId_key: { tabId: one, key: owner.sub } } })
+    await db.swarmMember.update({ where: { id: row.id }, data: { version: row.version + 1, changedAt: new Date(), data: { ...row.data as object, name: 'Ken (ops)' } } })
+    await rename(owner, 'Ken Tran')
+    // Earlier tests' Swarms are the owner's too: at least these two change, none fails.
+    const renamed = await store.accountRenamed({ userId: owner.sub, autonomousEnv: owner.autonomousEnv })
+    expect(renamed.changed).toBeGreaterThanOrEqual(2)
+    expect(renamed.failed).toBe(0)
+    for (const tab of [one, two]) {
+      const member = await nameOf(tab, owner.sub)
+      expect(member.name, tab).toBe('Ken Tran')
+      expect(member, tab).not.toHaveProperty('chosenName')
+    }
+    // Asked again with nothing new, it writes nothing.
+    expect(await store.accountRenamed({ userId: owner.sub, autonomousEnv: owner.autonomousEnv })).toEqual({ changed: 0, failed: 0 })
+    await rename(owner, null)
   })
 
-  it('keeps one row when the same reaction arrives twice at once, and counts two reactors racing', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    await Promise.all([react(tab, messageId, true), react(tab, messageId, true), react(tab, messageId, true, peer)])
-    expect(await countsOf(tab, messageId)).toMatchObject([{ emoji: 'tada', count: 2 }])
-    expect(await db.superTabReaction.count({ where: { tabId: tab, messageId } })).toBe(2)
+  it('takes the account name when the person joins, and when they create a Swarm', async () => {
+    await rename(peer, 'Peer Person')
+    await rename(owner, 'Owner Person')
+    try {
+      const tab = await swarm()
+      expect((await nameOf(tab, peer.sub)).name).toBe('Peer Person')
+      expect((await nameOf(tab, owner.sub)).name).toBe('Owner Person')
+    } finally {
+      await rename(peer, null)
+      await rename(owner, null)
+    }
   })
 
-  it('answers a retried operation with its first result', async () => {
+  it('brings every person of a Swarm to their account name in one pass, the one-time job\'s', async () => {
     const tab = await swarm()
-    const messageId = await post(tab)
-    const operationId = randomUUID()
-    const first = await react(tab, messageId, true, owner, 'tada', operationId)
-    expect((await react(tab, messageId, true, owner, 'tada', operationId)).result).toEqual(first.result)
-  })
-
-  it('drops a member who left from the counts, and refuses a reader outside the Swarm', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    await react(tab, messageId, true, peer, 'heart')
-    await react(tab, messageId, true, owner, 'heart')
-    await run(tab, { type: 'member.remove', userId: peer.sub })
-    expect(await countsOf(tab, messageId)).toEqual([{ emoji: 'heart', count: 1, by: [{ kind: 'person', id: owner.sub }] }])
-    await expect(react(tab, messageId, true, outsider)).rejects.toMatchObject({ status: 403 })
-    await expect(react(tab, messageId, true, peer)).rejects.toMatchObject({ status: 403 })
-  })
-
-  it('tells a poll for new messages that reactions changed, so it reads the page again', async () => {
-    const tab = await swarm()
-    const messageId = await post(tab)
-    const poll = async () => (await read(tab, peer, 'conversations/lead/messages?after=1000000')).body.data as { messages: unknown[]; reactionSeq: number }
-    expect(await poll()).toEqual({ messages: [], next: null, reactionSeq: 0, threads: [] })
-    await react(tab, messageId, true)
-    expect((await poll()).reactionSeq).toBe(1)
-  })
-
-  it('refuses a message from another conversation or another Swarm', async () => {
-    const tab = await swarm()
-    const other = await swarm()
-    const elsewhere = await post(other)
-    await expect(react(tab, elsewhere, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    const group = (await run(tab, { type: 'conversation.create', title: 'Side', brief: 'Side work.', checks: [] })).result.conversationId as string
-    const side = (await run(tab, { type: 'message.send', conversationId: group, text: 'here', replyTo: null, recipientIds: [] })).result.messageId as string
-    await expect(react(tab, side, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
-  })
-
-  // Agents acknowledge with reactions, as Slack bots do (the swarm skills): 👀 started, ✅ done, 🚀 merged.
-  const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-  const agentIn = async (tab: string, conversationId: string, name: string, lead = false) =>
-    (await run(tab, { type: 'agent.add', conversationId, machineId: 'host', harnessId: randomUUID(), name, configuration: config, lead })).result.agentId as string
-  const agentReact = (tab: string, conversationId: string, messageId: string, agentId: string, emoji: 'eyes' | 'check' | 'rocket', on = true) =>
-    run(tab, { type: 'message.react', conversationId, messageId, emoji, on }, owner, agentId)
-
-  it('shows an agent\'s 👀 and then ✅ on the message it took, to every reader of the conversation', async () => {
-    const tab = await swarm()
-    // Kai coordinates: the project chat holds only its coordinator among agents (#2207).
-    const builder = await agentIn(tab, 'lead', 'Kai', true)
-    const messageId = await post(tab, 'Kai, please add avatars.')
-    await agentReact(tab, 'lead', messageId, builder, 'eyes')
-    expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: builder }] }])
-    await agentReact(tab, 'lead', messageId, builder, 'eyes', false)
-    await agentReact(tab, 'lead', messageId, builder, 'check')
-    expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'check', count: 1, by: [{ kind: 'agent', id: builder }] }])
-  })
-
-  it('privacy: an agent reacts only where it takes part, never on another agent\'s private notice, and a reader outside a private project sees none of it', async () => {
-    const tab = await swarm()
-    const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result as
-      { projectId: string; conversationId: string }
-    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [owner.sub] })
-    const pm = await agentIn(tab, conversationId, 'Secret PM', true)
-    const secret = (await run(tab, { type: 'message.send', conversationId, text: 'Ship the secret.', replyTo: null, recipientIds: [] })).result.messageId as string
-    await agentReact(tab, conversationId, secret, pm, 'rocket')
-    // The project's own reader sees it; a member outside the project reads neither the conversation nor its counter.
-    expect((await read(tab, owner, `conversations/${conversationId}/messages`)).body.data.messages
-      .find((m: { id: string }) => m.id === secret).reactions).toEqual([{ emoji: 'rocket', count: 1, by: [{ kind: 'agent', id: pm }] }])
-    const outside = await read(tab, peer, `conversations/${conversationId}/messages`)
-    expect(outside.status).toBe(404)
-    expect(outside.text).not.toContain(secret)
-    const parts = await read(tab, peer)
-    expect(parts.text).not.toContain(conversationId)
-    // An agent outside the private project is not even told it exists, and another agent's private notice is not there for it to mark.
-    // Both agents share a task, as the project chat holds only its coordinator among agents (#2207).
-    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.', checks: [] })).result.conversationId as string
-    const builder = await agentIn(tab, group, 'Kai')
-    await expect(agentReact(tab, conversationId, secret, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
-    const lead = await agentIn(tab, group, 'River', true)
-    const notice = (await run(tab, { type: 'message.send', conversationId: group, text: 'Your skill changed.', replyTo: null, recipientIds: [lead],
-      agentOnly: true }, owner, lead)).result.messageId as string
-    await expect(agentReact(tab, group, notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await agentReact(tab, group, notice, lead, 'eyes')
-    expect(((await read(tab, peer, `conversations/${group}/messages`)).body.data.messages as Array<{ id: string }>).map(m => m.id)).not.toContain(notice)
-  })
-})
-
-describe('the ship moment', () => {
-  const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
-  // The task's own thread says it merged, in place of the Shipped line (taskLine.ts; plain chat, Dee, 11-03).
-  it('replies Merged in the task\'s thread when its merge is recorded, once on a retry, waking nobody', async () => {
-    const tab = await swarm()
-    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'host', harnessId: randomUUID(), name: 'River', configuration: config, lead: true })
-    // Asked for in the owner's own message, whose thread is the task's (#2925).
-    const asked = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Can we have avatars?', replyTo: null, recipientIds: [] }))
-      .result.messageId as string
-    const group = (await run(tab, { type: 'conversation.create', title: 'Avatars', brief: 'Add avatars.', requestMessageId: asked,
-      checks: [{ description: 'Tests pass', independent: false }] })).result.conversationId as string
-    const builder = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'host', harnessId: randomUUID(), name: 'Kai',
-      configuration: config, lead: false })).result.agentId as string
-    await run(tab, { type: 'work.assign', conversationId: group, agentId: builder })
-    const state = (await store.read(owner, tab)).state
-    const work = state.conversations.find(c => c.id === group)!
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId: work.assignment!.id, checkId: work.checks[0]!.id, passed: true,
-      evidence: 'npm test: 12 passed' }, owner, builder)
-    const operationId = randomUUID()
-    const done: Command = { type: 'work.status', conversationId: group, assignmentId: work.assignment!.id, status: 'done',
-      result: 'Review passed: https://github.com/example/app/pull/7' }
-    await run(tab, done, owner, builder, operationId)
-    await run(tab, done, owner, builder, operationId)
-    const merged: Command = { type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' }
-    const mergeId = randomUUID()
-    await run(tab, merged, owner, undefined, mergeId)
-    await run(tab, merged, owner, undefined, mergeId)
-    const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' } })
-    expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'ship')).toEqual([])
-    expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'task-line')).toEqual([])
-    const merges = rows.filter(m => m.thread === asked && m.text.startsWith('Merged'))
-    expect(merges).toEqual([expect.objectContaining({ text: 'Merged: PR #7. Ships in the next release.', recipientIds: [] })])
-    expect(await db.superTabDelivery.count({ where: { tabId: tab, messageId: { in: [merges[0]!.id] } } })).toBe(0)
+    await rename(peer, 'Peer Again')
+    expect(await store.followAccountNames(tab)).toBe(1)
+    expect((await nameOf(tab, peer.sub)).name).toBe('Peer Again')
+    expect(await store.followAccountNames(tab)).toBe(0)
+    await rename(peer, null)
   })
 })

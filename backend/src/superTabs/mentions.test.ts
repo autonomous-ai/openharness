@@ -2,8 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { answeredAgents, checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
-import { openSwarmBuddyChat } from './buddies.js'
+import { checkMentions, MAX_MENTIONS, tagTokens } from './mentions.js'
 import { createSuperTab, type Actor } from './model.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -30,8 +29,9 @@ function fixture() {
   const worker = run({ type: 'agent.add', conversationId: app.conversationId, harnessId: 'worker', machineId: 'machine', name: 'Worker', lead: false,
     configuration }).result.agentId as string
   const group = run({ type: 'conversation.create', projectId: app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
-  // A conversation only `peer` reads: their chat with their Buddy.
-  const pmChat = run({ type: 'buddy.chat', projectId: app.projectId }, peer).result.conversationId as string
+  // A conversation only `peer` reads: their chat with their own agent.
+  const pmChat = run({ type: 'agent.new', kind: 'regular', machineId: 'peer-mac', engine: 'claude', local: true }, peer,
+    { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }).result.conversationId as string
   const send = (conversationId: string, mentions: string[], actor: Actor = owner) => run({ type: 'message.send', conversationId,
     text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.find(m => !m.source)!
   /** A post that tags only by what its text says, as people type in chat. */
@@ -77,14 +77,14 @@ describe('people tagging people', () => {
   })
 
   // Who tags a person is workflow (project instructions, phase 4): any agent of the project, in its own project only.
-  it('checks any agent’s tags, and routes a worker’s to the PM', () => {
+  it('checks any agent’s tags, and a worker’s reach the people it tags', () => {
     const f = fixture()
     const worker: Actor = { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' }
     const group = (id: string) => f.state.conversations.find(c => c.id === id)!
     expect(checkMentions(f.state, worker, group(f.group), ['peer', 'third', 'peer'])).toEqual(['peer', 'third'])
-    // People talk only to the PM (crewNeeds.ts, task #3404): the worker's tags are checked as before, and go to the PM.
-    expect(f.send(f.group, ['peer'], worker).mentions ?? []).toEqual([])
-    expect(f.say(f.group, '@third please confirm', worker).mentions ?? []).toEqual([])
+    // Swarm v4 routes no tag through the PM: a worker tags a person as the PM does.
+    expect(f.send(f.group, ['peer'], worker).mentions).toEqual(['peer'])
+    expect(f.say(f.group, '@third please confirm', worker).mentions).toEqual(['third'])
     expect(() => checkMentions(f.state, worker, group(storeOldLeads(f.state)), ['peer']))
       .toThrow(expect.objectContaining({ code: 'INVALID_MENTION' }))
   })
@@ -97,39 +97,6 @@ describe('people tagging people', () => {
     const group = f.state.conversations.find(c => c.id === f.group)!
     expect(() => checkMentions(f.state, outsider, group, ['peer'])).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(() => f.send(f.group, ['peer'], outsider)).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
-  })
-})
-
-describe('answeredAgents', () => {
-  const post = (f: ReturnType<typeof fixture>, conversationId: string, recipientIds: string[], actor: Extract<Actor, { kind: 'person' }> = owner) => {
-    const draft = f.run({ type: 'message.send', conversationId, text: 'Done.', replyTo: null, recipientIds, mentions: [] }, actor).messages.find(m => !m.source)!
-    return answeredAgents(f.state, actor, f.state.conversations.find(c => c.id === conversationId)!, draft.recipients)
-  }
-
-  it('a plain post in a project chat answers its coordinator', () => {
-    const f = fixture()
-    expect(post(f, f.app.conversationId, [])).toEqual([f.lead])
-  })
-
-  it('a post addressed to another agent leaves the PM\'s tags', () => {
-    const f = fixture()
-    expect(answeredAgents(f.state, owner, f.state.conversations.find(c => c.id === f.app.conversationId)!, [f.worker])).toEqual([f.worker])
-  })
-
-  it('the Swarm Buddy chat clears coordinators of readable projects only', () => {
-    const f = fixture()
-    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
-    const secretLead = f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'secret-lead', machineId: 'machine', name: 'Secret Lead', lead: true,
-      configuration }).result.agentId as string
-    const chat = openSwarmBuddyChat(f.state, f.state.people.find(p => p.id === 'peer')!)
-    const answered = answeredAgents(f.state, peer, chat, [])
-    expect(answered).toContain(f.lead)
-    expect(answered).not.toContain(secretLead)
-  })
-
-  it('a project Buddy chat answers its Buddy and that project\'s coordinator', () => {
-    const f = fixture()
-    expect(answeredAgents(f.state, peer, f.state.conversations.find(c => c.id === f.pmChat)!, [f.worker])).toEqual([f.worker, f.lead])
   })
 })
 
@@ -174,14 +141,13 @@ describe('tags in the text', () => {
     expect(f.say(f.group, '@owner and @peer').mentions).toEqual(['peer'])
   })
 
-  it('tags from the text of the PM, and not of another agent', () => {
+  it('tags from the text of the PM and of any other agent', () => {
     const f = fixture()
     const lead = { kind: 'agent' as const, agentId: f.lead, machineOwnerId: 'owner' }
     expect(f.say(f.app.conversationId, '@peer please confirm', lead).mentions).toEqual(['peer'])
-    // A worker posts in a task: the project chat holds only its coordinator among agents (#2207). People talk only to the PM
-    // (crewNeeds.ts, task #3404): its tag is the PM's crew need, and its words are kept.
+    // A worker posts in a task: the project chat holds only its coordinator among agents (#2207).
     const worker = f.say(f.group, '@peer please confirm', { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' })
-    expect(worker.mentions ?? []).toEqual([])
+    expect(worker.mentions).toEqual(['peer'])
     expect(worker.text).toBe('@peer please confirm')
   })
 

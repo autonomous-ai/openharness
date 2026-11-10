@@ -54,11 +54,6 @@ class SuperTabPerson {
       generation = row['generation'] as String?,
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']),
-      timeZone = switch (row['timeZone']) {
-        final String zone when zone.trim().isNotEmpty => zone,
-        _ => null,
-      },
       chosenUsername = row['username'] as String?,
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
@@ -74,17 +69,10 @@ class SuperTabPerson {
       generation = person.generation,
       joinedVia = person.joinedVia,
       avatar = person.avatar,
-      status = person.status,
-      timeZone = person.timeZone,
       chosenUsername = person.chosenUsername,
       name = person.name;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
-  final SuperTabPersonStatus? status;
-
-  /// Their time zone's IANA name, as their own app told the Swarm (Desktop's
-  /// local_time_zone.dart); null until it has. The phone shows no card yet.
-  final String? timeZone;
 
   /// How the Swarm tags them (`@username`), as the server sends it; from an
   /// older server, their default ([superTabUsernames]). Desktop's rule.
@@ -93,17 +81,13 @@ class SuperTabPerson {
   /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
 
-  /// The name they set for the Swarm to show (`member.name`, "Minh Nguyen");
-  /// null until they set one, and from an older server.
+  /// The name they set for the Swarm to show ("Minh Nguyen"), before choosing
+  /// one went; null when they never set one, and from an older server.
   final String? name;
 
   /// How the Swarm shows them: their [name], else their [username]. A tag
   /// still types and matches the [username].
   String get shownName => name ?? username;
-
-  /// Their status while it lasts.
-  SuperTabPersonStatus? statusAt(DateTime now) =>
-      status?.shownAt(now) == true ? status : null;
 
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.
@@ -492,6 +476,11 @@ class SuperTabConversation {
   /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.
   bool get isSwarmBuddyChat => kind == 'swarm-buddy';
 
+  /// A person's 1:1 chat with one agent of theirs (Swarm v4, backend
+  /// projects.ts isAgentChat): only they read it, and its agent's words ring
+  /// their phone ([SwarmChatNotices]).
+  bool get isAgentChat => kind == 'agent-chat';
+
   /// The person a Buddy chat belongs to; only they read it.
   final String? buddyOwnerId;
 
@@ -598,8 +587,9 @@ class SuperTabConversation {
   /// not, as it is not in the chat.
   int get mainSequence => lastMainSequence ?? lastMessageSequence;
 
-  /// Moves whenever a reaction here is added or taken back (backend
-  /// reactions.ts): the messages shown are read again for their counts.
+  /// Moves whenever a message here is edited or deleted (backend
+  /// messageEdits.ts): the messages shown are read again. Named for the
+  /// reactions it first counted, which are gone.
   final int reactionSeq;
 
   /// When it last changed, a message included: its part's `changedAt`,
@@ -621,7 +611,7 @@ class SuperTabConversation {
 }
 
 /// The zone a project's day is read in when its digest names none (backend
-/// costs/reflection.ts `DEFAULT_TIME_ZONE`).
+/// superTabs/localTime.ts `DEFAULT_TIME_ZONE`).
 const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
 
 class SuperTabProject {
@@ -1141,8 +1131,8 @@ class SuperTabSnapshot {
   /// shows no reminders yet.
   final String? remindersDigest;
 
-  /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts).
-  /// Read as the desktop's model reads it; the phone does not apply it yet.
+  /// The reader's own notification setting by conversation, `all`, `mentions` or `muted` (backend chatSettings.ts),
+  /// as stored: the phone applies it through `SwarmReader.notifyOf`.
   final Map<String, String> chatSettings;
 
   /// False only where the server does not try Harness Team accounts yet
@@ -1162,6 +1152,9 @@ class SuperTabSnapshot {
   late final _conversationsById = _byId(conversations, (c) => c.id);
   late final _agentsById = _byId(agents, (a) => a.id);
   late final _projectsById = _byId(projects, (p) => p.id);
+  late final _leadConversations = {
+    for (final p in projects) p.leadConversationId,
+  };
   late final _projectsByLead = <String, SuperTabProject>{
     for (final p in projects.reversed)
       ?conversation(p.leadConversationId)?.leadId: p,
@@ -1177,7 +1170,7 @@ class SuperTabSnapshot {
   }
 
   bool isProjectLead(String conversationId) =>
-      projects.any((p) => p.leadConversationId == conversationId);
+      _leadConversations.contains(conversationId);
 
   SuperTabProject? leadProjectForAgent(String agentId) =>
       _projectsByLead[agentId];
@@ -1786,11 +1779,11 @@ class SuperTabMessage {
       editedAt = DateTime.tryParse(row['editedAt'] as String? ?? ''),
       deletedAt = DateTime.tryParse(row['deletedAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
-      reactions = List.unmodifiable(
-        SuperTabReactionCount.listFromJson(row['reactions']),
-      ),
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
+      recipientIds = List.unmodifiable(
+        (row['recipientIds'] as List?)?.whereType<String>() ?? const <String>[],
       ),
       deliveries = _list(
         row['deliveries'] ?? const [],
@@ -1831,15 +1824,17 @@ class SuperTabMessage {
 
   /// When its author deleted it: kept only as the root of a thread with
   /// replies, its text then the backend's "This message was deleted.", with
-  /// no files and no reactions. One without replies leaves the pages.
+  /// and no files. One without replies leaves the pages.
   final DateTime? deletedAt;
 
   bool get deleted => deletedAt != null;
   final List<SuperTabAttachment> attachments;
-  final List<SuperTabReactionCount> reactions;
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;
+
+  /// The agents it was sent to (backend `recipientIds`), as the desktop reads them: the phone draws nothing of them yet.
+  final List<String> recipientIds;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

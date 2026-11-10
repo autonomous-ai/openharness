@@ -4,9 +4,8 @@ import 'package:harness/super_tabs/model.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
-  final now = DateTime.utc(2026, 10, 27, 9);
-
-  test('a person carries their avatar and a status until it is over', () {
+  test('a person carries their avatar; a status or zone an older server still '
+      'sends is not read', () {
     final person = SuperTabPerson.fromJson({
       'id': 'p1',
       'email': 'dee@example.com',
@@ -20,15 +19,14 @@ void main() {
         'emoji': '🌴',
         'until': '2026-10-27T14:00:00.000Z',
       },
+      'timeZone': 'Asia/Ho_Chi_Minh',
     });
     expect(person.avatar, isA<SuperTabUploadedAvatar>());
     expect(
       (person.avatar! as SuperTabUploadedAvatar).url,
       Uri.parse('https://storage.googleapis.com/avatars/a?X-Goog-Signature=s'),
     );
-    expect(person.status!.label, '🌴 Out until 2pm');
-    expect(person.statusAt(now)?.text, 'Out until 2pm');
-    expect(person.statusAt(DateTime.utc(2026, 10, 27, 14)), isNull);
+    expect(person.shownName, 'dee');
   });
 
   test(
@@ -79,45 +77,18 @@ void main() {
     },
   );
 
-  test(
-    'an agent carries its avatar; a message carries its reaction counts',
-    () {
-      final agent = SuperTabAgent.fromJson({
-        'id': 'a1',
-        'name': 'Kai',
-        'machineId': 'm',
-        'harnessId': 'h',
-        'contributorId': 'p1',
-        'configuration': {'engine': 'claude'},
-        'avatar': {'kind': 'preset', 'key': 'owl'},
-      });
-      expect((agent.avatar! as SuperTabPresetAvatar).key, 'owl');
-      final message = SuperTabMessage.fromJson({
-        'id': 'm1',
-        'conversationId': 'lead',
-        'text': 'Shipped',
-        'sequence': 3,
-        'author': {'kind': 'person', 'id': 'p1', 'name': 'dee@example.com'},
-        'reactions': [
-          {
-            'emoji': 'tada',
-            'count': 2,
-            'by': [
-              {'kind': 'person', 'id': 'p1'},
-              {'kind': 'agent', 'id': 'a1'},
-            ],
-          },
-          {'emoji': 'skull', 'count': 1, 'by': []},
-        ],
-      });
-      expect(message.reactions, hasLength(1));
-      expect(message.reactions.single.emoji, SuperTabReactionEmoji.tada);
-      expect(message.reactions.single.count, 2);
-      expect(message.reactions.single.includes('person', 'p1'), isTrue);
-      expect(message.reactions.single.includes('person', 'p2'), isFalse);
-      expect(SuperTabReactionEmoji.tada.glyph, '🎉');
-    },
-  );
+  test('an agent carries its avatar', () {
+    final agent = SuperTabAgent.fromJson({
+      'id': 'a1',
+      'name': 'Kai',
+      'machineId': 'm',
+      'harnessId': 'h',
+      'contributorId': 'p1',
+      'configuration': {'engine': 'claude'},
+      'avatar': {'kind': 'preset', 'key': 'owl'},
+    });
+    expect((agent.avatar! as SuperTabPresetAvatar).key, 'owl');
+  });
 
   test(
     'a read’s signed link becomes the avatar of the person or agent it names',

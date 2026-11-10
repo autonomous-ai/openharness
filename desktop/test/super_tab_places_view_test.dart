@@ -9,7 +9,7 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'support/super_tab_fixture.dart';
 
 /// Lets the server's answers in and draws a few frames: the Swarm view is
@@ -23,25 +23,21 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
-/// This week's Leaderboard with the owner on it, so Humans shows.
+/// This week's Leaderboard with the owner on it, so Top Teams shows.
 void withPoints(ConversationServer server) {
-  server.leaderboard = {
-    'projectId': 'lead',
-    'allProjects': true,
+  server.shipping = {
     'week': 1793577600000,
     'people': [
       {
         'personId': 'owner',
         'displayName': 'Owner',
+        'agentsShipping': 2,
+        'level': 2,
+        'points': 2.4,
         'rank': 1,
-        'points': 4,
-        'shipped': {'count': 1},
-        'accepted': 1,
-        'unblocked': {'count': 0},
-        'agentsBrought': 2,
-        'streakDays': 1,
       },
     ],
+    'failures': <dynamic>[],
   };
 }
 
@@ -57,7 +53,6 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final server = swarm();
     server.append('A root to thread on');
-    server.ask(['Ship it?']);
     prepare?.call(server);
     final c = server.controller(
       account: 'owner',
@@ -69,9 +64,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
-            board: board,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
@@ -106,14 +99,8 @@ void main() {
       await tap(tester, 'project-sidebar-humans');
       await tap(tester, 'super-human-owner');
       expect(find.text('This week'), findsOneWidget);
-      expect(key('weekly-person-owner'), findsOneWidget);
-      expect(
-        server.leaderboardReads.any((path) {
-          final query = Uri.parse(path).queryParameters;
-          return query['scope'] == 'all' && !query.containsKey('period');
-        }),
-        isTrue,
-      );
+      expect(key('leaderboard-person-owner'), findsOneWidget);
+      expect(server.shippingReads, isNotEmpty);
       // Back to the project's channel it was opened from (Swarm v4).
       SuperTabPlaces.of(c).step(-1);
       await _settle(tester);

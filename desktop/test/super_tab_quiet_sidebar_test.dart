@@ -19,7 +19,6 @@ void main() {
     bool manageSelected = false,
   }) async {
     final server = ConversationServer();
-    server.state['swarmBuddy'] = true;
     server.state['projects'] = [projectFixture('lead', 'openharness', 'lead')];
     final c = server.controller();
     await c.refresh();
@@ -51,29 +50,6 @@ void main() {
     });
     return c;
   }
-
-  double top(WidgetTester tester, String key) =>
-      tester.getTopLeft(find.byKey(ValueKey(key))).dy;
-
-  testWidgets('its rows, in the design\'s order', (tester) async {
-    await show(tester);
-    final order = [
-      'super-swarm-switcher',
-      'project-sidebar-projects',
-      'super-swarm-buddy',
-      'super-project-lead',
-      'super-manage',
-    ];
-    for (var i = 1; i < order.length; i++) {
-      expect(
-        top(tester, order[i - 1]),
-        lessThan(top(tester, order[i])),
-        reason: '${order[i - 1]} over ${order[i]}',
-      );
-    }
-    // The Buddy row with no agent yet reads as the person's agent (task #4568).
-    expect(find.text('Your agent'), findsWidgets);
-  });
 
   testWidgets('none of what moved', (tester) async {
     await show(tester);
@@ -109,15 +85,16 @@ void main() {
     tester,
   ) async {
     await show(tester, manageSelected: true);
-    final row = tester.widget<Semantics>(
-      find
-          .ancestor(
-            of: find.byKey(const ValueKey('super-manage')),
+    bool lit(String key) => tester
+        .widgetList<Semantics>(
+          find.descendant(
+            of: find.byKey(ValueKey(key)),
             matching: find.byType(Semantics),
-          )
-          .first,
-    );
-    expect(row.properties.selected, isTrue);
+          ),
+        )
+        .any((s) => s.properties.selected == true);
+    expect(lit('super-manage'), isTrue);
+    expect(lit('super-group-lead'), isFalse);
   });
 
   testWidgets(

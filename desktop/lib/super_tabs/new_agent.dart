@@ -34,6 +34,7 @@ HarnessLaunchIntegration swarmNewAgent(
     );
   }
   String? name, chatId, engine, task, machineId, harnessId;
+  late final HarnessLaunchIntegration integration;
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -79,10 +80,11 @@ HarnessLaunchIntegration swarmNewAgent(
       }
     }
     await app.wakeSuperTabHost(machineId!);
-    // Its person goes on in their chat with it.
+    // Its person goes on in their chat with it, unless the start went on without its form: they go in when they choose
+    // (anh Dee, 2026-11-10).
     final controller = await app.superTabs.open(tabId);
     await controller.refresh();
-    await controller.select(chatId!);
+    if (!integration.inBackground) await controller.select(chatId!);
     // How long + New agent took to a running agent in its chat: the measure that warns first if it slows (task #4196).
     appLog.info(
       'super-tabs',
@@ -90,19 +92,20 @@ HarnessLaunchIntegration swarmNewAgent(
     );
   }
 
-  late final HarnessLaunchIntegration integration;
   integration = HarnessLaunchIntegration(
     creationId: creationId,
     actionLabel: 'New agent',
     // A Swarm agent runs Claude Code or Codex, on its person's own computer and account.
     engines: const ['claude', 'codex'],
     ownMachinesOnly: true,
+    offersBrowser: true,
     swarmRole: 'dev',
     prepare: (machine, text, base) async {
       final snapshot = await app.superTabs.readSnapshot(tabId);
       name ??= freshAgentName([
         for (final agent in snapshot.agents) agent.displayName ?? agent.name,
       ]);
+      integration.name = name;
       engine = base;
       task = text;
       final chat = await run('chat', {
@@ -132,12 +135,37 @@ HarnessLaunchIntegration swarmNewAgent(
   return integration;
 }
 
-/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"): an agent
-/// already running on one of its person's own computers joins their team as + New agent's does, with its own 1:1 chat,
-/// which opens. Its name is the one its person gave it, else one of the Swarm's. Nothing is typed into it: it goes on with
-/// what it was doing, and its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection
-/// lost is tried again as the same operation, which never adds it twice.
-Future<void> swarmAttachAgent(
+/// A join begun on this Desktop and not finished: what it asks the Swarm for, kept so that trying it again is the same request
+/// under the same operation (the server answers an operation again only for the request it first had), so it never makes a
+/// second chat, from whichever view or picker it is tried. [step] is the chat's step: `chat`, or `chat-named` once the
+/// server refused the agent's own name. By Swarm and session; per app, at most [_joinsKept].
+typedef _Join = ({
+  String operation,
+  String step,
+  String name,
+  bool own,
+  String? model,
+  String? effort,
+});
+final _joins = Expando<Map<(String, String, String), _Join>>();
+const _joinsKept = 64;
+
+/// The server's refusals of a name (backend superTabs/agentRename.ts).
+const _nameRefusals = {
+  'AGENT_NAME_TAKEN',
+  'AGENT_NAME_ROLE',
+  'INVALID_AGENT_NAME',
+};
+
+/// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"), and a click on a
+/// pane's row in Your Team: an agent already running on one of its person's own computers joins their team as + New agent's
+/// does, with its own 1:1 chat, which opens; the chat's id is the answer. A stopped one is resumed first, in the same step
+/// (anh Dee 2026-11-10). It keeps its own name (anh Dee 2026-11-10, attaching juno and pip: "they got different name?")
+/// unless that name is automatic or the Swarm already uses or refuses it, or another join begun here holds it, when it gets
+/// one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and its daemon tells it the team's ways
+/// once it is in (cli superTabs/host.ts). A join the connection lost is tried again as the same operation, which never adds
+/// it twice; one that failed is finished by the next try ([_Join]).
+Future<String> swarmAttachAgent(
   AppNotifier app,
   String tabId,
   String machineId,
@@ -151,14 +179,41 @@ Future<void> swarmAttachAgent(
       'Only Claude Code or Codex can join this Swarm.',
     );
   }
-  final creationId = superTabOperationId();
   final started = DateTime.now();
-  final snapshot = await app.superTabs.readSnapshot(tabId);
-  final name = native.nameChosen == true
-      ? native.name
-      : freshAgentName([
-          for (final agent in snapshot.agents) agent.displayName ?? agent.name,
-        ]);
+  if (native.isStopped) {
+    final refused = await app.resumeStoppedSession(machineId, native.id);
+    if (refused != null) throw SuperTabFailure('AGENT_UNAVAILABLE', refused);
+  }
+  final joins = _joins[app] ??= {};
+  final key = (tabId, machineId, native.id);
+  // The names its Swarm has, and those other joins begun here into it hold.
+  Future<List<String>> taken() async => [
+    for (final agent in (await app.superTabs.readSnapshot(tabId)).agents)
+      agent.displayName ?? agent.name,
+    for (final MapEntry(key: other, :value) in joins.entries)
+      if (other != key && other.$1 == tabId) value.name,
+  ];
+  var join = joins[key];
+  if (join == null) {
+    final names = await taken();
+    final own = native.name.trim();
+    final keepOwn =
+        own.isNotEmpty &&
+        !isAutomaticHarnessName(own) &&
+        !names.any((name) => name.toLowerCase() == own.toLowerCase());
+    join = joins[key] ??= (
+      operation: superTabOperationId(),
+      step: 'chat',
+      name: keepOwn ? own : freshAgentName(names),
+      own: keepOwn,
+      model: native.modelName,
+      effort: native.modelEffort,
+    );
+    if (joins.length > _joinsKept) joins.remove(joins.keys.first);
+  }
+  // What this try asks for: the join kept, or the one a refused name gives way to.
+  var current = join;
+  final creationId = current.operation;
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -184,30 +239,54 @@ Future<void> swarmAttachAgent(
     }
   }
 
-  final chat = await run('chat', {
+  Future<Map<String, dynamic>> newChat(String step) => run(step, {
     'type': 'agent.new',
     'kind': 'regular',
     'machineId': machineId,
     'engine': engine,
-    'name': name,
+    'name': current.name,
     'local': true,
   });
+  Map<String, dynamic> chat;
+  try {
+    chat = await newChat(current.step);
+  } on SuperTabFailure catch (failure) {
+    if (!_nameRefusals.contains(failure.code)) rethrow;
+    // A name of the Swarm's refused too: the next try starts over, with a name read then.
+    if (!current.own) {
+      joins.remove(key);
+      rethrow;
+    }
+    // The server refuses names Desktop cannot see (a person's here, a reserved
+    // word): its own name then gives way, as an automatic one does.
+    current = joins[key] = (
+      operation: current.operation,
+      step: 'chat-named',
+      name: freshAgentName([...await taken(), current.name]),
+      own: false,
+      model: current.model,
+      effort: current.effort,
+    );
+    chat = await newChat(current.step);
+  }
   final chatId = chat['conversationId'] as String;
   await run('join', {
     'type': 'agent.add',
     'conversationId': chatId,
     'machineId': machineId,
     'harnessId': native.id,
-    'name': name,
+    'name': current.name,
     'lead': false,
     'configuration': {
       'engine': engine,
-      'model': native.modelName,
-      'effort': native.modelEffort,
+      'model': current.model,
+      'effort': current.effort,
       'contextWindow': null,
       'engineVersion': null,
     },
   });
+  // It is in: a later try is a new join.
+  joins.remove(key);
   await app.wakeSuperTabHost(machineId);
   final controller = await app.superTabs.open(tabId);
   await controller.refresh();
@@ -216,4 +295,5 @@ Future<void> swarmAttachAgent(
     'super-tabs',
     'Agent attached in ${DateTime.now().difference(started).inMilliseconds} ms',
   );
+  return chatId;
 }

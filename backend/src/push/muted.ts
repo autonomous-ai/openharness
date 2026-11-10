@@ -3,9 +3,9 @@ import { logger } from '../utils/logger.js'
 import type { PhoneNotice } from './sender.js'
 
 /**
- * `notices` less the tags whose chat their person muted (anh Dee, 2026-11-09): a muted chat rings no phone, a tag there
- * included; the tag stays in the person's tags and on the badge. One read of the tags' settings by id, after the write
- * committed, so the write never waits on it. A read that fails sends every tag, and says so: a tag is never lost to it.
+ * `notices` less an agent's words in its 1:1 chat whose chat their person muted (anh Dee, 2026-11-09): a muted chat rings no
+ * phone. One read of those chats' settings by id, after the write committed, so the write never waits on it. A read that fails
+ * sends every notice, and says so: a notice is never lost to it.
  */
 export async function dropMuted(db: PrismaClient, notices: PhoneNotice[]): Promise<PhoneNotice[]> {
   const ids = [...new Set(notices.flatMap(n => n.setting ? [n.setting] : []))]

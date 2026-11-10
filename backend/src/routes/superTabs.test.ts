@@ -1,10 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHash } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { Prisma, type PrismaClient } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 
 // Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
-// stores, as routes/control.test.ts does, so the real authentication and team gate run.
+// stores, as routes/control.test.ts does, so the real authentication runs.
 const fakes = vi.hoisted(() => {
   const redis = new Map<string, string>()
   const sessions: Array<Record<string, unknown> & { id: string }> = []
@@ -31,12 +30,6 @@ const fakes = vi.hoisted(() => {
         }),
         findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => pick(where)),
       },
-      machine: {
-        findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-          ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
-        // Other accounts' Team machines on the redeeming computer (superTabs/computerMoves.ts teamCleanupPending): none here.
-        aggregateRaw: vi.fn(async () => []),
-      },
     },
     user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },
   }
@@ -54,10 +47,6 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
-import { counted, OLD_PAYLOADS } from '../superTabs/retired.test-support.js'
-import { SuperTabStore } from '../superTabs/store.js'
-import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { HOT_BODY_LIMIT, NOT_AVAILABLE, READINGS_MAX, superTabRoutes } from './superTabs.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
 import { logger } from '../utils/logger.js'
@@ -98,48 +87,9 @@ describe('Super Tab route failures', () => {
   })
 })
 
-// An older app, host or agent still sends a command v4 dropped (superTabs/retired.ts): the route accepts it, and the real
-// store answers it as ignored without a read or a write.
-describe('a command Swarm v4 no longer has, over HTTP', () => {
-  let app: FastifyInstance
-  const queries: Query[] = []
-  beforeEach(async () => {
-    queries.length = 0
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    await app.register(superTabRoutes, { store: new SuperTabStore(recordingDb(queries) as PrismaClient), github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-  const send = (command: object, asAgentId?: string) => app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', headers: { 'x-harness-client': 'desktop/1.2.3' },
-    payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
-
-  it.each(RETIRED_COMMANDS)('answers %s ok and ignored, as an agent too, counts the client it declares and touches no data', async type => {
-    const before = await counted(type, 'desktop')
-    for (const asAgentId of [undefined, 'agent-1']) {
-      const res = await send({ type, ...OLD_PAYLOADS[type] }, asAgentId)
-      expect(res.statusCode).toBe(200)
-      expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
-    }
-    expect(await counted(type, 'desktop')).toBe(before + 2)
-    expect(queries).toEqual([])
-  })
-
-  it('still refuses a type no version had, and a host\'s start route that names no start', async () => {
-    expect((await send({ type: 'project.nonsense', projectId: 'lead' })).statusCode).toBe(400)
-    const host = await app.inject({ method: 'POST', url: '/api/super-tabs/hosts/m1/starts/tab-1/s1',
-      payload: { operationId: 'op-1', command: { type: 'project.digest', ...OLD_PAYLOADS['project.digest'] } } })
-    expect(host.statusCode).toBe(403)
-    expect(queries).toEqual([])
-  })
-})
-
-// Terminal recording is gone with Swarm v4, but an older Desktop still opens a terminal's context and an older host still reads it and
-// records into it. Each is answered ok and ignored, to everyone, and nothing is read. A host drops an observation once it is
-// acknowledged by the id it makes of it (cli superTabs/native.ts eventId): so that one carries the same id, and a journal from before
-// drains instead of being sent again for ever.
-describe('the retired terminal recording', () => {
+// Swarm v4 is built from scratch (anh Dee, 2026-11-10): what v1-v3 had is gone, with no answer kept for their clients. An old
+// command is refused as one no version had, before the store is reached, and an old read or write is no route at all.
+describe('what Swarm v1-v3 had, over HTTP', () => {
   let app: FastifyInstance
   beforeEach(async () => {
     app = Fastify()
@@ -150,55 +100,40 @@ describe('the retired terminal recording', () => {
     await app.ready()
   })
   afterEach(async () => { await app.close() })
-  /** The id the CLI's recorder makes of an observation (cli superTabs/native.ts eventId). */
-  const recorderId = (contextId: string, turnId: string, kind: string) =>
-    createHash('sha256').update(JSON.stringify(['native-event', contextId, turnId, kind])).digest('hex').slice(0, 24)
-  const observation = (kind: string) => ({ turnId: 'turn-1', kind, previousEventId: null, text: 'hi', truncated: false, interrupted: false })
 
-  it('answers the open and the read ok and ignored, whatever the Swarm, and reads nothing', async () => {
-    for (const tab of ['tab-1', 'tab-2']) {
-      const opened = await app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/native`, payload: { operationId: 'op-1', conversationId: 'lead', agentId: 'agent-1' } })
-      expect(opened.statusCode).toBe(200)
-      expect(opened.json()).toEqual({ success: true, data: { ok: true, ignored: true } })
-      const read = await app.inject({ method: 'GET', url: `/api/super-tabs/${tab}/native/ctx-1` })
-      expect(read.statusCode).toBe(200)
-      expect(read.json()).toEqual({ success: true, data: { ok: true, ignored: true } })
+  it('refuses its commands as unknown, an agent\'s too', async () => {
+    for (const command of [{ type: 'work.assign', conversationId: 'task-1', agentId: 'agent-2' }, { type: 'decision.answer', decisionId: 'd1', choice: 1 },
+      { type: 'proposal.create', projectId: 'lead', title: 'Sync' }, { type: 'message.react', conversationId: 'c', messageId: 'm', emoji: 'eyes', on: true },
+      { type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: 'task-1', checks: [] },
+      { type: 'conversation.create', title: 'Fix', brief: 'Fix it.', checks: [], requestMessageId: 'm1' },
+      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], handoff: 'm1' },
+      { type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], mentionsIfNoWorker: true },
+      { type: 'instructions.save', projectId: 'lead', baseRevision: 1, text: '# Mine', summary: 'Mine' },
+      { type: 'note.add', projectId: 'lead', text: 'Ship on Fridays', askedBy: 'u1' }, { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
+      { type: 'project.skills', projectId: 'lead', mode: 'default' }, { type: 'project.role.remove', projectId: 'lead', roleId: 'review' },
+      { type: 'project.coordinatorName', projectId: 'lead', name: 'Boss' }, { type: 'tab.routingPolicy', policy: null }, { type: 'tab.tidy', enabled: true }]) {
+      for (const asAgentId of [undefined, 'agent-1']) {
+        const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
+        expect(res.statusCode, JSON.stringify(command)).toBe(400)
+      }
     }
   })
 
-  it.each(['prompt', 'answer', 'gap'])('acknowledges a %s by the id its host makes of it', async kind => {
-    const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload: observation(kind) })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ success: true, data: { ok: true, ignored: true, eventId: recorderId('ctx-1', 'turn-1', kind) } })
-  })
-
-  it('still refuses an observation that names no turn or no kind', async () => {
-    for (const payload of [{ kind: 'prompt' }, { turnId: 'turn-1' }, { turnId: 'turn-1', kind: 'typed' }]) {
-      expect((await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload })).statusCode, JSON.stringify(payload)).toBe(400)
-    }
-  })
-})
-
-// The scorecard is gone with Swarm v4, and an older Desktop's Scorecard tab still reads it: it gets no days, whoever asks and
-// whichever Swarm it names, and nothing is read. integration/superTabNotAvailable.test.ts tries it against the real store.
-describe('the retired scorecard read', () => {
-  let app: FastifyInstance
-  beforeEach(async () => {
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    // A store, reads and host reads that fail on any call: the answer must not touch them.
-    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-
-  it('answers no days, with the query an older Desktop sends or none, and reads nothing', async () => {
-    for (const url of ['/api/super-tabs/tab-1/scorecard?projectId=lead', '/api/super-tabs/tab-1/scorecard?projectId=lead&scope=all', '/api/super-tabs/tab-2/scorecard']) {
-      const res = await app.inject({ method: 'GET', url })
-      expect(res.statusCode, url).toBe(200)
-      expect(res.json(), url).toEqual({ success: true, data: { days: [] } })
-    }
+  it('serves none of its reads and writes', () => {
+    const gone: Array<['GET' | 'POST', string]> = [
+      ['GET', '/api/super-tabs'], ['GET', '/api/super-tabs/:tabId'], ['GET', '/api/super-tabs/hosts/:machineId'],
+      ['GET', '/api/super-tabs/hosts/:machineId/pools'], ['GET', '/api/super-tabs/hosts/:machineId/assignments'],
+      ['POST', '/api/super-tabs/:tabId/native'], ['GET', '/api/super-tabs/:tabId/native/:contextId'], ['POST', '/api/super-tabs/:tabId/native/:contextId'],
+      ['GET', '/api/super-tabs/:tabId/scorecard'], ['GET', '/api/super-tabs/:tabId/decisions'], ['GET', '/api/super-tabs/:tabId/mentions'],
+      ['GET', '/api/super-tabs/:tabId/activity'], ['GET', '/api/super-tabs/:tabId/reminders'], ['GET', '/api/super-tabs/:tabId/threads'],
+      ['GET', '/api/super-tabs/:tabId/inbox'], ['GET', '/api/super-tabs/:tabId/personal-tasks'], ['GET', '/api/super-tabs/:tabId/proposals'],
+      ['GET', '/api/super-tabs/:tabId/conversations/:conversationId/catch-up'], ['POST', '/api/super-tabs/:tabId/activity/read'],
+      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow'],
+      ['POST', '/api/super-tabs/:tabId/conversations/:conversationId/messages/:messageId/reminder'], ['POST', '/api/super-tabs/:tabId/avatars'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions'],
+      ['GET', '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision'], ['GET', '/api/super-tabs/:tabId/projects/:projectId/roles/:roleId'],
+      ['GET', '/api/super-tabs/routing-policy'], ['POST', '/api/super-tabs/routing-policy']]
+    for (const [method, url] of gone) expect(app.hasRoute({ method, url }), `${method} ${url}`).toBe(false)
   })
 })
 
@@ -339,15 +274,13 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
 })
 
 // The web calls Swarm routes straight from the browser with the person's own sign-in (docs/specs/2026-10-30-web-swarm-
-// direct.md): a viewer session reaches them as the person, through the real authentication; a team sign-in is still
-// refused as the person (the store refuses it on the routes the team gate admits for its agents, superTabBuddies).
+// direct.md): a viewer session reaches them as the person, through the real authentication.
 describe('the browser\'s own sign-in on Swarm routes', () => {
   let app: FastifyInstance
-  let viewer: string, team: string
+  let viewer: string
   const seen: Array<{ route: string; user: AuthUser }> = []
   beforeAll(async () => {
-    viewer = (await redeemHandoff((await startHandoff(fakes.user.id, 'viewer')).code, 'Safari on iPhone'))!.token
-    team = (await redeemHandoff((await startHandoff(fakes.user.id, 'team')).code, 'MacBook Pro · Team', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))!.token
+    viewer = (await redeemHandoff((await startHandoff(fakes.user.id)).code, 'Safari on iPhone'))!.token
     app = Fastify()
     app.setErrorHandler(errorHandler)
     registerAuthMiddleware(app)
@@ -373,16 +306,6 @@ describe('the browser\'s own sign-in on Swarm routes', () => {
     expect(post.statusCode).toBe(200)
     expect(seen.map(s => s.route)).toEqual(['parts', 'commands'])
     for (const { user } of seen) expect(user).toMatchObject({ sub: 'owner', harnessSessionKind: 'viewer' })
-  })
-
-  it('refuses a team sign-in as the person, before any Swarm is read', async () => {
-    const auth = { authorization: `Bearer ${team}` }
-    for (const url of ['/api/super-tabs/tab-1/parts', '/api/super-tabs/list']) {
-      const res = await app.inject({ method: 'GET', url, headers: auth })
-      expect(res.statusCode, url).toBe(403)
-      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
-    }
-    expect(seen).toEqual([])
   })
 
   it('refuses no sign-in at all', async () => {
@@ -492,33 +415,3 @@ describe('the machine lines of a change read', () => {
   })
 })
 
-// The Tasks view's Proposals (#2569): one project's open Buddy proposals, read by the store as the project chat's reader.
-describe('a project\'s open proposals', () => {
-  let app: FastifyInstance
-  const calls: unknown[][] = []
-  beforeEach(async () => {
-    calls.length = 0
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    const store = { proposals: async (...args: unknown[]) => { calls.push(args); return { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } } }
-    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-
-  it('answers the store\'s list for the project named, as the signed-in person', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/super-tabs/tab-1/proposals?projectId=app' })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ success: true, data: { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } })
-    expect(calls).toEqual([[expect.objectContaining({ sub: 'u1' }), 'tab-1', 'app']])
-  })
-
-  it('refuses a read that names no project, or anything else', async () => {
-    for (const query of ['', '?projectId=', '?projectId=app&asAgentId=a1']) {
-      const res = await app.inject({ method: 'GET', url: `/api/super-tabs/tab-1/proposals${query}` })
-      expect(res.statusCode, query).toBe(400)
-    }
-    expect(calls).toEqual([])
-  })
-})

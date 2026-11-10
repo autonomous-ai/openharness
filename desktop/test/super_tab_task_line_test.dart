@@ -4,7 +4,6 @@ import 'package:harness/widgets/engine_identity.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';
-import 'package:harness/super_tabs/ship_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/thread_panel.dart';
@@ -41,15 +40,6 @@ Map<String, dynamic> _root(String kind, {bool legacy = false}) => {
     } else
       'personId': 'requester',
   },
-  'reactions': [
-    {
-      'emoji': 'heart',
-      'count': 1,
-      'by': [
-        {'kind': 'agent', 'id': 'buddy'},
-      ],
-    },
-  ],
 };
 
 ConversationServer _server(String kind, {bool legacy = false}) {
@@ -99,7 +89,7 @@ void main() {
       tester,
     ) async {
       final server = _server(kind);
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       final row = _row('root');
       expect(tester.widget(row), isA<SuperTabMessageRow>());
       expect(
@@ -124,66 +114,14 @@ void main() {
         find.descendant(of: row, matching: find.byTooltip('Reply')),
         findsOneWidget,
       );
-      expect(
-        find.descendant(of: row, matching: find.byTooltip('Add reaction')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const ValueKey('super-reaction-root-heart')));
-      await tester.pumpAndSettle();
-      final sent =
-          server.posts.lastWhere(
-                (p) => (p['command'] as Map?)?['type'] == 'message.react',
-              )['command']
-              as Map;
-      expect(sent['messageId'], 'root');
-      expect(sent['emoji'], 'heart');
-      expect(sent['on'], isTrue);
-      expect(
-        find.descendant(of: row, matching: find.text('2')),
-        findsOneWidget,
-      );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
-
-    testWidgets(
-      '$kind Reply opens the ordinary project thread and sends there',
-      (tester) async {
-        final server = _server(kind);
-        final c = await showView(tester, server, board: false);
-        await tester.tap(
-          find.descendant(of: _row('root'), matching: find.byTooltip('Reply')),
-        );
-        await tester.pumpAndSettle();
-        expect(c.selectedId, 'lead');
-        expect(c.openedThread?.root, 'root');
-        expect(find.byType(SuperTabThreadPanel), findsOneWidget);
-        expect(find.textContaining('Scope: Desktop and phone'), findsOneWidget);
-        await tester.enterText(
-          find.byKey(const ValueKey('super-thread-composer')),
-          'Please include attachments.',
-        );
-        await tester.pump();
-        await tester.tap(find.byKey(const ValueKey('super-thread-send')));
-        await tester.pumpAndSettle();
-        final sent =
-            server.posts.lastWhere(
-                  (p) => (p['command'] as Map?)?['type'] == 'message.send',
-                )['command']
-                as Map;
-        expect(sent['conversationId'], 'lead');
-        expect(sent['replyTo'], 'root');
-        expect(sent['text'], 'Please include attachments.');
-        expect(find.text('Please include attachments.'), findsOneWidget);
-      },
-    );
 
     testWidgets(
       'legacy $kind keeps its complete text and ordinary thread at narrow width',
       (tester) async {
-        final c = await showView(
-          tester,
-          _server(kind, legacy: true),
-          board: false,
-        );
+        final c = await showView(tester, _server(kind, legacy: true));
         await tester.binding.setSurfaceSize(const Size(800, 800));
         await tester.pumpAndSettle();
         final row = _row('root');
@@ -239,36 +177,6 @@ void main() {
     );
   }
 
-  testWidgets('a legacy task root keeps its recorded ship message visible', (
-    tester,
-  ) async {
-    final server = _server('task-line', legacy: true);
-    server.messages.add({
-      'id': 'ship',
-      'conversationId': 'lead',
-      'thread': 'ship',
-      'sequence': 3,
-      'text': 'Shipped: Offline drafts',
-      'createdAt': '2026-11-03T09:02:00Z',
-      'author': {'kind': 'agent', 'id': 'buddy', 'name': 'Draft Buddy'},
-      'source': {
-        'kind': 'ship',
-        'conversationId': 'offline',
-        'title': 'Offline drafts',
-        'requesterId': 'requester',
-        'builderIds': ['buddy'],
-      },
-    });
-    (server.state['conversations'] as List).first['lastMessageSequence'] = 3;
-    await showView(tester, server, board: false);
-    expect(find.text('Save offline drafts · in review'), findsOneWidget);
-    expect(find.byType(SuperTabShipRow), findsOneWidget);
-    expect(find.text('Offline drafts'), findsOneWidget);
-    await tester.tap(find.text('What changed'));
-    await tester.pumpAndSettle();
-    expect(find.text('Built by'), findsOneWidget);
-  });
-
   // Dee, 2026-11-04 (#2552): an ask's row reads as its title alone, with where
   // it stands after the time; older rows still carry the old prefix.
   group('an ask row', () {
@@ -276,10 +184,8 @@ void main() {
       for (final text in ["Let's build: Offline drafts", 'Offline drafts']) {
         testWidgets('$kind "$text" shows the title alone', (tester) async {
           final server = _server(kind);
-          server.messages.first
-            ..['text'] = text
-            ..['reactions'] = <dynamic>[];
-          await showView(tester, server, board: false);
+          server.messages.first['text'] = text;
+          await showView(tester, server);
           expect(
             find.descendant(
               of: _row('root'),
@@ -288,6 +194,8 @@ void main() {
             findsOneWidget,
           );
           expect(find.textContaining("Let's build"), findsNothing);
+          // The view saves its read mark 200 ms after the change: let it land.
+          await tester.pump(const Duration(milliseconds: 250));
         });
       }
     }
@@ -297,7 +205,7 @@ void main() {
         tester,
       ) async {
         final server = _server('buddy-proposal')..threadAsks['root'] = ask;
-        await showView(tester, server, board: false);
+        await showView(tester, server);
         final shown = find.descendant(
           of: _row('root'),
           matching: find.text(tag),
@@ -311,19 +219,23 @@ void main() {
           tester.getTopLeft(find.text('dee')).dx,
           lessThan(tester.getTopLeft(shown).dx),
         );
+        // The view saves its read mark 200 ms after the change: let it land.
+        await tester.pump(const Duration(milliseconds: 250));
       });
     }
 
     testWidgets('has no tag once the PM has replied with no task', (
       tester,
     ) async {
-      await showView(tester, _server('buddy-proposal'), board: false);
+      await showView(tester, _server('buddy-proposal'));
       for (final tag in ['✋ Proposal', '● On it', '✓ Shipped', 'Task']) {
         expect(
           find.descendant(of: _row('root'), matching: find.textContaining(tag)),
           findsNothing,
         );
       }
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     // Anh Dee, 11-04 ('bot messages'): a task's agent reacts 👀 and ✅ on
@@ -336,13 +248,15 @@ void main() {
         final server = _server('task-line');
         server.messages.first.remove('source');
         server.threadAsks['root'] = ask;
-        await showView(tester, server, board: false);
+        await showView(tester, server);
         for (final tag in ['● On it', '✓ Shipped', 'On it', 'Shipped']) {
           expect(
             find.descendant(of: _row('root'), matching: find.text(tag)),
             findsNothing,
           );
         }
+        // The view saves its read mark 200 ms after the change: let it land.
+        await tester.pump(const Duration(milliseconds: 250));
       });
     }
 
@@ -363,7 +277,7 @@ void main() {
           'name': 'dee@example.com',
         },
       });
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       expect(find.text("Let's build: a shed"), findsOneWidget);
       expect(
         find.descendant(
@@ -372,6 +286,8 @@ void main() {
         ),
         findsNothing,
       );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('an agent\'s name comes before its tag, with no engine mark', (
@@ -392,7 +308,7 @@ void main() {
         'id': 'pm',
         'name': 'Lead',
       };
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       double left(Finder within) => tester.getTopLeft(within).dx;
       final name = find.descendant(
         of: _row('root'),
@@ -409,6 +325,8 @@ void main() {
         findsNothing,
       );
       expect(left(name), lessThan(left(tag)));
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('keeps its header when the same person wrote just before', (
@@ -428,7 +346,7 @@ void main() {
           'name': 'dee@example.com',
         },
       });
-      await showView(tester, server, board: false);
+      await showView(tester, server);
       expect(
         find.descendant(of: _row('root'), matching: find.text('✋ Proposal')),
         findsOneWidget,
@@ -437,11 +355,13 @@ void main() {
         find.descendant(of: _row('root'), matching: find.text('dee')),
         findsOneWidget,
       );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets('has no tag at the head of its own thread', (tester) async {
       final server = _server('task-line')..threadAsks['root'] = 'proposal';
-      final c = await showView(tester, server, board: false);
+      final c = await showView(tester, server);
       c.openThread('root');
       await tester.pumpAndSettle();
       expect(
@@ -459,13 +379,7 @@ void main() {
   ) async {
     await loadPreviewFonts();
     final server = _server('buddy-proposal');
-    server.messages.first['reactions'] = <dynamic>[];
-    final c = await showView(
-      tester,
-      server,
-      brightness: Brightness.light,
-      board: false,
-    );
+    final c = await showView(tester, server, brightness: Brightness.light);
     await shot(tester, 'desktop-plain-chat');
     c.openThread('root');
     await tester.pumpAndSettle();

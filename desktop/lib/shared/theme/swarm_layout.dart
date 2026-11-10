@@ -12,6 +12,16 @@ abstract final class SwarmLayout {
     vertical: 6,
   );
 
+  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane. An
+  /// agent's words get about the 768 Codex gives its answers (anh Dee, 2026-11-10: "the center chat area is too small").
+  static const double chatColumn = 880;
+
+  /// The strip that leads back to the chat when a pane has taken its place: the pill's room, in from the bar's side.
+  static const EdgeInsets backPadding = EdgeInsets.symmetric(
+    horizontal: barSide,
+    vertical: 8,
+  );
+
   /// The corners of a task card and of the agents-only line.
   static const double cardRadius = 12;
 
@@ -44,6 +54,9 @@ abstract final class SwarmLayout {
   static const double chatCardTop = 12;
   static const double chatCardLineGap = 6;
 
+  /// The gap above the quiet line under a post's bubble (super_tabs/channel_talk.dart): "Juno is offline".
+  static const double postNoteTop = 6;
+
   /// The agents-only line under a project's channel, where a composer would be.
   static const EdgeInsets agentsOnlyMargin = EdgeInsets.fromLTRB(28, 6, 28, 18);
 
@@ -53,4 +66,16 @@ abstract final class SwarmLayout {
     vertical: 2,
   );
   static const EdgeInsets nameInset = EdgeInsets.symmetric(horizontal: 4);
+
+  /// The most of the room its buttons leave that an agent's name takes: a long name is cut with an ellipsis, and where the agent
+  /// runs keeps the rest.
+  static const double nameShare = 2 / 3;
+
+  /// An agent's Info: its rows' inset from the pane's edges, the gap around each row, and the width of the labels' column.
+  static const EdgeInsets infoPadding = EdgeInsets.symmetric(
+    horizontal: barSide,
+    vertical: 12,
+  );
+  static const EdgeInsets infoRowPadding = EdgeInsets.symmetric(vertical: 6);
+  static const double infoLabelWidth = 88;
 }

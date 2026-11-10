@@ -336,6 +336,9 @@ export class TerminalAgentReconciler {
           // by its ticks: match it here, or the pass takes it for a new process (ProcessIdentity.startTicks).
           ?? probe.agents.find((agent) => agent.engine === current.engine
             && sameProcessIdentity(agent.processIdentity, current.processIdentity))
+          // A row an older build gave Hermes' gateway is the Hermes the gateway runs under: re-recorded, not replaced.
+          ?? probe.agents.find((agent) => agent.engine === current.engine
+            && !!agent.formerProcesses?.some((former) => sameProcessIdentity(former, current.processIdentity)))
           ?? unboundRouteObservation(current, probe.agents)
         if (observed) matchedProcesses.add(processIdentityKey(observed.engine, observed.processIdentity))
 

@@ -1,15 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' as ui;
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -46,21 +46,6 @@ void main() {
   final picture = GlobalKey();
   var brightness = Brightness.dark;
 
-  Future<void> shot(WidgetTester tester, String platform) async {
-    final folder = Platform.environment['BUDDY_DELETE_SHOTS'];
-    if (folder == null) return;
-    await tester.runAsync(() async {
-      final boundary =
-          picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-      final image = await boundary.toImage(pixelRatio: 1.5);
-      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      await Directory(folder).create(recursive: true);
-      await File('$folder/$platform-buddy-delete-${brightness.name}.png')
-          .writeAsBytes(bytes!.buffer.asUint8List());
-      image.dispose();
-    });
-  }
-
   late SuperTabController c;
 
   Future<void> show(
@@ -80,7 +65,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -158,7 +142,7 @@ void main() {
     expect(find.text('Delete message'), findsOneWidget);
     expect(find.byType(AppMenuDivider), findsOneWidget);
     final rule = tester.getTopLeft(find.byType(AppMenuDivider)).dy;
-    expect(rule, greaterThan(tester.getTopLeft(find.text('Remind me')).dy));
+    expect(rule, greaterThan(tester.getTopLeft(find.text('Mark unread')).dy));
     expect(rule, lessThan(tester.getTopLeft(find.text('Edit message')).dy));
     expect(
       tester.getTopLeft(find.text('Edit message')).dy,
@@ -166,49 +150,9 @@ void main() {
     );
   });
 
-  for (final appearance in Brightness.values) {
-    testWidgets(
-      'your Buddy proposal offers Delete without Edit (${appearance.name})',
-      (tester) async {
-        brightness = appearance;
-        grid.AppTheme.brightness.value = appearance;
-        addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-        final server = ConversationServer.chat()..append('Please fix the menu');
-        server.messages.single['source'] = {
-          'kind': 'buddy-proposal',
-          'personId': 'owner',
-        };
-        await show(tester, server);
-        await openMore(tester, 'message-1');
-        expect(find.text('Delete message'), findsOneWidget);
-        expect(find.text('Edit message'), findsNothing);
-        await shot(tester, 'desktop');
-      },
-    );
-  }
-
-  for (final entry in <String, Map<String, dynamic>>{
-    'another person': {'kind': 'person', 'id': 'huy', 'name': 'Huy'},
-    'an agent': {'kind': 'agent', 'id': 'owner', 'name': 'Buddy'},
-  }.entries) {
-    testWidgets('${entry.key} cannot delete an owner Buddy proposal', (
-      tester,
-    ) async {
-      final server = ConversationServer.chat()..append('Please fix the menu');
-      server.messages.single
-        ..['author'] = entry.value
-        ..['source'] = {'kind': 'buddy-proposal', 'personId': 'owner'};
-      await show(tester, server);
-      await openMore(tester, 'message-1');
-      expect(find.text('Delete message'), findsNothing);
-      expect(find.text('Edit message'), findsNothing);
-    });
-  }
-
   for (final source in [
-    {'kind': 'buddy-proposal', 'personId': 'huy'},
-    {'kind': 'buddy-proposal'},
     {'kind': 'task-line', 'personId': 'owner'},
+    {'kind': 'system'},
   ]) {
     testWidgets('a source that does not authorize owner deletion: $source', (
       tester,
@@ -417,7 +361,7 @@ void main() {
     expect(
       find.descendant(
         of: row('message-1'),
-        matching: find.byTooltip('Add reaction'),
+        matching: find.byTooltip('Copy message'),
       ),
       findsNothing,
     );
@@ -473,6 +417,82 @@ void main() {
     expect(root.deletedAt, isNotNull);
     expect(root.deleted, isTrue);
     expect(root.text, 'This message was deleted.');
+  });
+
+  // What the web build reads with: full reads only now and then once quiet.
+  const web = SuperTabReading(quietPoll: Duration(seconds: 15));
+
+  test('an edit made elsewhere shows within one quiet poll', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Shipped');
+      final paths = <String>[];
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) {
+          if (method == 'GET') paths.add(path);
+          return server.request(method, path, body: body);
+        },
+        save: server.save,
+        reading: web,
+      )..start();
+      // Quiet: the polls between full reads ask only for new messages.
+      async.elapse(const Duration(seconds: 61));
+      expect(c.messages('lead').single.editedAt, isNull);
+      server.editMessage('message-1', 'Shipped, and merged');
+      paths.clear();
+      async.elapse(const Duration(seconds: 3));
+      expect(paths.where((p) => p.contains('/changes')), isEmpty);
+      // The counter's move sent the poll to read the page shown again: that
+      // is how the edit arrived.
+      expect(paths.where((p) => p.contains('messages?before=')), hasLength(1));
+      expect(c.messages('lead').single.text, 'Shipped, and merged');
+      // Nothing moved since: the next poll reads only what is new.
+      paths.clear();
+      async.elapse(const Duration(seconds: 3));
+      expect(paths.where((p) => p.contains('messages?before=')), isEmpty);
+      c.dispose();
+    });
+  });
+
+  test('an edit and a new message in the same quiet poll both show', () {
+    fakeAsync((async) {
+      final server = ConversationServer()..append('Shipped');
+      var failPage = false;
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) {
+          final page =
+              path.endsWith('/messages') || path.contains('messages?before=');
+          if (failPage && method == 'GET' && page) {
+            failPage = false;
+            return Future.error(
+              const SuperTabFailure('UNAVAILABLE', 'Try again.'),
+            );
+          }
+          return server.request(method, path, body: body);
+        },
+        save: server.save,
+        reading: web,
+      )..start();
+      async.elapse(const Duration(seconds: 61));
+      server.editMessage('message-1', 'Shipped, and merged');
+      server.append('And the docs');
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').map((m) => m.text), [
+        'Shipped, and merged',
+        'And the docs',
+      ]);
+      // A refresh that fails leaves the change to the next poll.
+      server.editMessage('message-1', 'Shipped, merged and released');
+      failPage = true;
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').first.text, 'Shipped, and merged');
+      async.elapse(const Duration(seconds: 3));
+      expect(c.messages('lead').first.text, 'Shipped, merged and released');
+      c.dispose();
+    });
   });
 
   // A voice message plays only, and its words are never handed over (anh

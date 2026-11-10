@@ -116,7 +116,8 @@ describe('the lean bundle a release carries', () => {
   it.each([
     ['its side of the core', 'Only a stopped Product Manager of a Swarm project is reopened.'],
     ['its skills', 'A Swarm skill needs a role and session key'],
-    ['its GitHub App', 'The Harness GitHub App token is not in the form GitHub gives.'],
+    // The commit hook a session started with the App runs (lib/swarmGitHub.ts, kept for those sessions until 2026-12-10).
+    ['its GitHub App', 'git interpret-trailers --in-place --if-exists addIfDifferent'],
     ['its retention', 'Super Tab retention'],
     ['its replacements', 'Invalid agent replacement.'],
     ['its shared APIs', 'This computer could not open a local endpoint for the API.'],
@@ -258,6 +259,19 @@ describe('the lean bundle a release carries', () => {
     expect(check(broken).stderr).toContain('carries no lean bundle')
     // Eight checks, most importing every process's module in a Node of its own, the core's among them.
   }, 300_000)
+
+  // The shell guard is gone (anh Dee, 2026-11-09); an agent a release before started still runs its hook before each tool, as
+  // `node cli.js __swarm-shell-guard`, and Codex fails a tool call whose hook fails. The shipped cli.js allows the call, until
+  // 2026-12-10.
+  it('answers an older agent\'s shell guard hook from the shipped cli.js: the call is allowed, and nothing is said', () => {
+    // As the installed CLI's folder says: cli.js is an ES module.
+    writeFileSync(join(scratch, 'build', 'package.json'), '{"type":"module"}\n')
+    for (const call of [{ tool_name: 'Bash', tool_input: { command: 'sudo npm ci' } }, { tool_name: 'Write', tool_input: { file_path: '/tmp/x', content: 'y'.repeat(300_000) } }]) {
+      const run = spawnSync(process.execPath, [join(scratch, 'build', 'cli.js'), '__swarm-shell-guard'], { input: JSON.stringify(call),
+        env: { PATH: process.env.PATH, HOME: join(scratch, 'home'), ADAPTER_DATA_DIR: join(scratch, 'data') }, encoding: 'utf8', timeout: 30_000, windowsHide: true })
+      expect({ status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({ status: 0, stdout: '', stderr: '' })
+    }
+  })
 
   it('starts as written out: its master answers the probe a re-executing master asks', () => {
     const run = spawnSync(process.execPath, [entry, '__harnessd-probe'], {

@@ -5,10 +5,8 @@ import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/join_dialog.dart';
 import 'package:harness/super_tabs/join_link.dart';
 import 'package:harness/super_tabs/model.dart';
-import 'package:harness/super_tabs/project_add_people.dart';
 import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/switch_pm.dart';
-import 'package:harness/super_tabs/work_details.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -110,22 +108,11 @@ void main() {
   SuperTabProject project(SuperTabController c) =>
       c.snapshot!.projectById('lead')!;
 
-  testWidgets('Add people offers Check again', (t) async {
-    await pendingIn(
-      t,
-      (context, c) => showProjectAddPeople(context, c, project(c)),
-    );
-  });
-
   testWidgets('Sharing offers Check again', (t) async {
     await pendingIn(
       t,
       (context, c) => showProjectAction(context, c, project(c), 'sharing'),
     );
-  });
-
-  testWidgets('Work details offers Check again', (t) async {
-    await pendingIn(t, (context, c) => showSuperTabWork(context, c, 'offline'));
   });
 
   testWidgets('Switch Product Manager offers Check again', (t) async {

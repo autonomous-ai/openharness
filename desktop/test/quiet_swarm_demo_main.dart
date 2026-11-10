@@ -56,8 +56,6 @@ ConversationServer _swarm(String id, String name) {
     ..['id'] = id
     ..['name'] = name
     ..['ownerId'] = 'ken15'
-    ..['swarmBuddy'] = true
-    ..['mentionsWaiting'] = id == 'autonomous-ai' ? 3 : 0
     ..['people'] = [
       for (final person in _people)
         {
@@ -157,16 +155,7 @@ class _DemoApi extends ApiClient {
       return _ok({
         'tabs': [
           for (final id in servers.keys)
-            {
-              'id': id,
-              'name': servers[id]!.state['name'],
-              'ownerId': 'ken15',
-              // Something in hardware needs the reader: its tab is bold.
-              if (id == 'hardware') ...{
-                'mentionsWaiting': 2,
-                'mentionsDigest': 'demo',
-              },
-            },
+            {'id': id, 'name': servers[id]!.state['name'], 'ownerId': 'ken15'},
         ],
         'next': null,
       });

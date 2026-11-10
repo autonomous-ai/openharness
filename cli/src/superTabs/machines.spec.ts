@@ -1,27 +1,23 @@
 import { AGENT_FOLDER_MARK, agentFolderFor } from './agentFolder.js'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { availableParallelism, homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { availableParallelism, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, READINGS_RETRY_MS, refusedOn, servedOn, sharedWith, swarmUnconfirmedFile, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
-import { createSwarmAgents } from './inCore/agents.js'
-import { createConfidentialPurge, purgeRecord } from './inCore/teamPurge.js'
-import { PM_HOMES } from './teamDaemon.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { recordCleanupClose } from './cleanupCloses.js'
 import { SwarmReads } from './swarmReads.js'
 import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
-import type { PrivacyObservation } from '../team/privacy.js'
 
-function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
-  let now = 1000, stamp = 's0', team = false
+function fixture(env: NodeJS.ProcessEnv = {}) {
+  let now = 1000, stamp = 's0'
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
     stopped: vi.fn(async id => id === 'stopped'),
@@ -55,11 +51,9 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   })
   const wire = async (core: unknown, method: string, path: string, body?: unknown): Promise<unknown> =>
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
-  const claudeProfiles = vi.fn((): unknown[] => [])
-  const codexProfiles = vi.fn((): unknown[] => [])
-  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, now: () => now }
+  const deps = { backend: wire, open, capabilities, start, prepare, log, env, modelsStamp, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
-  return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  return { deps, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
 
@@ -270,101 +264,23 @@ describe('contributed machine executor', () => {
     expect(f.prepare).toHaveBeenCalledTimes(2)
     expect(f.start).toHaveBeenCalledTimes(2)
   })
-  it('starts another person\'s work with the app for whom it is, and fails a start whose token cannot be had', async () => {
+  // The Harness GitHub App is gone: a start is never handed an account to work for, and no token is asked of the server.
+  it('starts a queued start with no GitHub App account, even after a prepare that names one', async () => {
     const f = fixture()
     f.prepare.mockResolvedValueOnce({ requester: 'olive@example.com' } as never)
     await f.machine.tick()
-    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
-    f.prepare.mockRejectedValueOnce(new Error('This machine could not get a Harness GitHub App token for this project'))
-    f.advance()
-    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null })
+  })
+  it('asks the server for no GitHub token, and starts the start', async () => {
+    const f = fixture()
+    const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
+      log: f.log, env: {}, now: () => 1000 } as never)
+    Object.assign(f.pool, { githubApp: true })
+    f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
+      : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
+    await machine.tick()
+    expect(f.backend.mock.calls.some(c => String(c[2]).endsWith('/github-token'))).toBe(false)
     expect(f.start).toHaveBeenCalledTimes(1)
-    const failed = f.backend.mock.calls.find(c => JSON.stringify(c[3] ?? {}).includes('could not get a Harness GitHub App token'))!
-    expect(failed[3]).toMatchObject({ command: { type: 'agent.startFailed', startId: 'start' } })
-  })
-  // Diego's Mac, 2026-10-30: one backend timeout on the GitHub App token call failed the start on its first try. Only an
-  // answer the backend decided fails it now; a timeout or a 5xx is tried again on the next pass, for as long as a refused start.
-  describe('a start whose GitHub App token call does not get an answer', () => {
-    const TOKEN_ANSWER = { github: true, token: `ghs_${'f'.repeat(36)}`, repository: 'example/project', requestedBy: { email: 'olive@example.com' } }
-    afterEach(() => { vi.unstubAllGlobals() })
-    /** A team account's host preparing with the real prepareSwarmStart, its token call answered by [answers] in turn; the
-     *  token's revocation goes to [revoked], never to GitHub. */
-    function teamHost(...answers: Array<() => unknown>) {
-      const revoked = vi.fn(async (_url: string, _init: { headers: Record<string, string> }) => ({ status: 204 }))
-      vi.stubGlobal('fetch', revoked)
-      const f = fixture()
-      const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
-        log: f.log, env: {}, privacy: () => null, team: () => true, now: () => now } as never)
-      let now = 1000
-      Object.assign(f.pool, { githubApp: true })
-      const token = vi.fn(async () => (answers.length > 1 ? answers.shift()! : answers[0]!)())
-      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes')
-        ? hostForm([], { pools: [f.pool] }) : path.endsWith('/github-token') ? token() : { revision: 1 })
-      const failures = () => f.backend.mock.calls.filter(c => c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
-        .map(c => c[3] as { operationId: string; command: { type: string; error?: string } }).filter(body => body.command.type === 'agent.startFailed')
-      return { f, machine, token, failures, revoked, pass: async (ms = 0) => { now += ms; await machine.tick() } }
-    }
-    const timeout = () => { throw new SuperTabHostError('BACKEND_TIMEOUT', 'The Harness server did not answer in time.', 504) }
-
-    it('is tried again on the next pass after one timeout, and starts then', async () => {
-      const h = teamHost(timeout, () => TOKEN_ANSWER)
-      await h.pass()
-      expect([h.failures(), h.f.start.mock.calls.length]).toEqual([[], 0])
-      expect(h.f.log.mock.calls.flat().join('\n')).toContain('The Harness server did not answer in time.')
-      await h.pass(16_000)
-      expect(h.token).toHaveBeenCalledTimes(2)
-      expect(h.failures()).toEqual([])
-      expect((h.f.start.mock.calls as unknown[][])[0]![0]).toEqual({ tabId: 'tab', startId: 'start', signedIn: null, github: { requester: 'olive@example.com' } })
-      // The read-only token is revoked once the start is prepared, as on a first try.
-      expect(h.revoked.mock.calls.map(([url, init]) => [url, init.headers.Authorization])).toEqual([['https://api.github.com/installation/token', `Bearer ${TOKEN_ANSWER.token}`]])
-    })
-
-    it('is tried again after a 5xx or a failure to reach the server, as after a timeout', async () => {
-      for (const failure of [() => { throw new SuperTabHostError('BACKEND_UNAVAILABLE', 'Bad gateway.', 502) }, () => { throw new Error('fetch failed') }]) {
-        const h = teamHost(failure, () => TOKEN_ANSWER)
-        await h.pass()
-        await h.pass(16_000)
-        expect([h.failures(), h.f.start.mock.calls.length]).toEqual([[], 1])
-      }
-    })
-
-    it('fails at once when the backend refuses it or the server has no GitHub App', async () => {
-      for (const refusal of [new SuperTabHostError('FORBIDDEN', 'This start is not this machine\'s.', 403),
-        new SuperTabHostError('GITHUB_APP_NOT_CONFIGURED', 'This server has no GitHub App.', 503),
-        // Security review of #2390: GitHub refused the server's app, which the backend decided; it waited a minute.
-        new SuperTabHostError('GITHUB_APP_MISCONFIGURED', 'GitHub refused the Harness GitHub App\'s credentials.', 503)]) {
-        const h = teamHost(() => { throw refusal })
-        await h.pass()
-        expect(h.failures()).toEqual([{ operationId: 'prepare-failed-start', command: { type: 'agent.startFailed', startId: 'start',
-          error: `This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner's own GitHub login either: ${refusal.message}` } }])
-        expect(h.f.start).not.toHaveBeenCalled()
-      }
-    })
-
-    it('fails after the same minute as a refused start when it keeps timing out, naming the timeout', async () => {
-      const h = teamHost(timeout)
-      await h.pass()
-      await h.pass(30_000)
-      expect(h.failures()).toEqual([])
-      await h.pass(30_000)
-      expect(h.failures()).toEqual([{ operationId: 'prepare-failed-start', command: { type: 'agent.startFailed', startId: 'start',
-        error: 'This machine could not get a Harness GitHub App token for this project, so it was not prepared with its owner\'s own GitHub login either: The Harness server did not answer in time. (BACKEND_TIMEOUT)' } }])
-      expect(h.f.start).not.toHaveBeenCalled()
-    })
-  })
-  it('readies a start with the backend, as a team account when this daemon runs team work only', async () => {
-    for (const team of [false, true]) {
-      const f = fixture()
-      const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
-        log: f.log, env: {}, privacy: () => null, team: () => team, now: () => 1000 } as never)
-      Object.assign(f.pool, { githubApp: true })
-      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
-        : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
-      await machine.tick()
-      const asked = f.backend.mock.calls.find(c => String(c[2]).endsWith('/github-token'))!
-      expect(asked[3]).toEqual(team ? { always: true } : {})
-      expect(f.start).toHaveBeenCalledTimes(team ? 0 : 1)
-    }
   })
   it('publishes only scoped measurements and executes through the owner start endpoint', async () => {
     const f = fixture()
@@ -416,7 +332,7 @@ describe('contributed machine executor', () => {
     Object.assign(f.pool, { capabilitiesWanted: true })
     await f.machine.tick()
     const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
-    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'memberSetUp', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart', 'buddySessions', 'swarmBuddy', 'windowsBuddy', 'regularAgent', 'leadSwitch', 'buddyModel', 'buddyEngine', 'turnInbox'] })
     // A backend from before them does not ask, and would refuse the field.
     const older = fixture()
     await older.machine.tick()
@@ -690,8 +606,8 @@ describe('contributed machine executor', () => {
       })
     })
 
-    it('drops only the readiness field for a backend from before it, for ten minutes, keeping privacy', async () => {
-      const f = fixture({}, () => ({ mode: 'dedicated' }))
+    it('drops only the readiness field for a backend from before it, for ten minutes', async () => {
+      const f = fixture()
       withEngines(f)
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
@@ -701,7 +617,6 @@ describe('contributed machine executor', () => {
       await f.machine.tick()
       expect(readings(f)).toHaveLength(2)
       expect(readings(f)[1]).not.toHaveProperty('readiness')
-      expect(readings(f)[1]).toMatchObject({ privacy: { mode: 'dedicated' } })
       f.advance(); await f.machine.tick()
       expect(readings(f)).toHaveLength(3)
       f.step(10 * 60_000); await f.machine.tick()
@@ -1117,25 +1032,9 @@ describe('contributed machine executor', () => {
         const REASON = 'This project already has Mine as its Product Manager.'
         const refusedStart = { ok: false, error: REASON, refused: REASON, startId: 'start', machineId: 'host', creationId: 'creation', harnessId: 'launched' }
 
-        it('removes a Team account\'s engine home for it, through the Swarm\'s own close', async () => {
-          const home = mkdtempSync(join(tmpdir(), 'refused-start-'))
-          onTestFinished(() => rmSync(home, { recursive: true, force: true }))
-          const own = join(home, PM_HOMES, 'super-start', 'codex')
-          mkdirSync(own, { recursive: true })
-          const purge = async (request: Record<string, unknown>) => request.mode === 'inspect' ? { reviewId: 'review' } : { ok: true }
-          const ended = createConfidentialPurge({ confidential: () => true, home, record: purgeRecord(join(home, 'purges.json')), purge,
-            session: agentId => ({ agentId, sessionId: 'session', registeredAt: 1, engine: 'codex', cwd: null, codexHome: own }) })
-          const { f, fail } = failedLater(() => ({ error: REASON }))
-          f.core.agents.closeMember = createSwarmAgents({ byAgent: () => null, stoppedIds: () => ['launched'], closeAgent: async () => ({ closed: true }), purgeEnded: ended,
-            members: { leads: () => new Set(), harnesses: () => new Set() } } as never).closeMember as never
-          f.start.mockResolvedValue(refusedStart as never)
-          await f.machine.tick()
-          fail(); f.advance(); await f.machine.tick(); await settle(); await vi.waitFor(() => expect(existsSync(dirname(own))).toBe(false))
-        })
-
-        it('tries again when the purge fails, and stops once it has gone', async () => {
+        it('tries again when its close fails, and stops once it has gone', async () => {
           const { f, closeMember, fail } = failedLater(() => ({ error: REASON }))
-          closeMember.mockResolvedValueOnce({ error: 'PURGE_FAILED', detail: 'Something still names the session' })
+          closeMember.mockResolvedValueOnce({ error: 'AGENT_BUSY' })
           f.start.mockResolvedValue(refusedStart as never)
           await f.machine.tick()
           fail(); f.advance(); await f.machine.tick(); await settle()
@@ -1326,8 +1225,8 @@ describe('contributed machine executor', () => {
     })
   })
 
-  it('drops readiness alone for a backend that takes progress, and both, keeping privacy, for one that takes neither', async () => {
-    const f = fixture({}, () => ({ mode: 'dedicated' }))
+  it('drops readiness alone for a backend that takes progress, and both for one that takes neither', async () => {
+    const f = fixture()
     const usage = f.request.getMockImplementation()!
     f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe' ? { engines: [{ engine: 'codex', installed: true, signedIn: true }] } : usage(type, ...rest as []))
     let refuses = ['readiness']
@@ -1339,13 +1238,13 @@ describe('contributed machine executor', () => {
     })
     const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
     const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
-    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress', 'privacy'].filter(key => key in post)
+    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress'].filter(key => key in post)
     await machine.tick()
-    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy']])
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress'], ['harnessProgress']])
     refuses = ['readiness', 'harnessProgress']
     const older = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
     f.backend.mockClear(); await older.tick()
-    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy'], ['privacy']])
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress'], ['harnessProgress'], []])
   })
 
   it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {
@@ -1533,99 +1432,26 @@ describe('contributed machine executor', () => {
     expect(read[0]!.name).toHaveLength(200)
   })
 
-  // The Harness Team account (cli/src/team/): its daemon reports its privacy check with the reading, and refuses new
-  // work while it fails, besides routing (Task 3) not sending it any.
-  describe('Harness Team privacy', () => {
-    const passed: PrivacyObservation = { mode: 'account', passed: true, checkedAt: 900 }
-    const exposed: PrivacyObservation = { mode: 'account', passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: 900 }
+  describe('a reading the backend refuses', () => {
     const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
 
-    it('sends the check with the reading, and nothing from the owner\'s own daemon', async () => {
-      const team = fixture({}, () => passed)
-      await team.machine.tick()
-      expect(posts(team)[0]).toMatchObject({ privacy: passed })
-      expect(team.start).toHaveBeenCalledOnce()
-      const owner = fixture()
-      await owner.machine.tick()
-      expect(posts(owner)[0]).not.toHaveProperty('privacy')
-      const dedicated = fixture({}, () => ({ mode: 'dedicated' }))
-      await dedicated.machine.tick()
-      expect(posts(dedicated)[0]).toMatchObject({ privacy: { mode: 'dedicated' } })
-      expect(dedicated.start).toHaveBeenCalledOnce()
-    })
-
-    it('refuses a new start while the team account is not private, and never starts it anywhere else', async () => {
-      const f = fixture({}, () => exposed)
-      await f.machine.tick()
-      expect(f.start).not.toHaveBeenCalled()
-      const refusal = f.backend.mock.calls.find(c => String(c[2]).endsWith('/starts/tab/start'))![3] as { operationId: string; command: Record<string, unknown> }
-      expect(refusal.operationId).toBe('privacy-failed-start')
-      expect(refusal.command).toMatchObject({ type: 'agent.startFailed', startId: 'start' })
-      expect(String(refusal.command.error)).toContain('not private (gitconfig)')
-      // One already dispatched is reconciled as before: refusing it could orphan what it launched.
-      f.pool.starts[0]!.dispatched = true
-      f.advance(); await f.machine.tick()
-      expect(f.start).toHaveBeenCalledOnce()
-    })
-
-    it('sends a changed result at once, without waiting for the next beat', async () => {
-      let current: PrivacyObservation = passed
-      const f = fixture({}, () => current)
-      await f.machine.tick()
-      f.step(6_000); await f.machine.tick()
-      expect(posts(f)).toHaveLength(1)
-      current = exposed
-      f.step(6_000); await f.machine.tick()
-      expect(posts(f)).toHaveLength(2)
-      expect(posts(f)[1]).toMatchObject({ privacy: { passed: false, item: 'gitconfig' } })
-    })
-
-    it('reports a check that throws as unchecked, and refuses on it', async () => {
-      const f = fixture({}, () => { throw new Error('config unreadable') })
-      await f.machine.tick()
-      expect(posts(f)[0]).toMatchObject({ privacy: { mode: 'account', passed: false, item: 'unchecked' } })
-      expect(f.start).not.toHaveBeenCalled()
-    })
-
-    it('drops only the privacy field for a backend from before it, for ten minutes, keeping the local-model fields', async () => {
-      const f = fixture({}, () => passed)
-      f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
-        tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
-      const original = f.backend.getMockImplementation()!
-      f.backend.mockImplementation(async (core, method, path, body) => {
-        if (method === 'POST' && (body as Record<string, unknown>)?.privacy) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: privacy', 400)
-        return original(core, method, path, body)
-      })
-      await f.machine.tick()
-      expect(posts(f)).toHaveLength(2)
-      expect(posts(f)[1]).not.toHaveProperty('privacy')
-      expect(posts(f)[1]).toHaveProperty('toolProbeErrors')
-      f.advance(); await f.machine.tick()
-      expect(posts(f)).toHaveLength(3)
-      expect(posts(f)[2]).not.toHaveProperty('privacy')
-      f.step(10 * 60_000); await f.machine.tick()
-      expect(posts(f).at(-2)).toHaveProperty('privacy')
-      expect(posts(f).at(-1)).not.toHaveProperty('privacy')
-    })
-
-    it('falls back to the oldest reading when the backend refuses the other new fields too', async () => {
-      const f = fixture({}, () => passed)
+    it('falls back to the oldest reading when the backend refuses its newer fields', async () => {
+      const f = fixture()
       f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
         tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
         const sent = body as Record<string, unknown>
-        if (method === 'POST' && (sent?.privacy || sent?.toolProbeErrors)) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
+        if (method === 'POST' && sent?.toolProbeErrors) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
         return original(core, method, path, body)
       })
       await f.machine.tick()
-      expect(posts(f)).toHaveLength(3)
-      expect(posts(f)[2]).not.toHaveProperty('privacy')
-      expect(posts(f)[2]).not.toHaveProperty('toolProbeErrors')
+      expect(posts(f).at(-2)).toHaveProperty('toolProbeErrors')
+      expect(posts(f).at(-1)).not.toHaveProperty('toolProbeErrors')
     })
 
     it('does not retry a refusal that is not about the fields', async () => {
-      const f = fixture({}, () => passed)
+      const f = fixture()
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
         if (method === 'POST' && String(path).includes('/machines/')) throw new SuperTabHostError('FORBIDDEN', 'no', 403)
@@ -2260,69 +2086,19 @@ describe('removed machine cleanup', () => {
     writeFileSync(file, JSON.stringify({ ...saved, worktrees: [...saved.worktrees, row] }))
   }
 
-  // Task #4353: a Team-written start saved Claude trust for its worktree in the person's own settings, so it did not stall at
-  // the trust question. That trust goes with the worktree, and nothing else in the file does: the person's own answer for
-  // the repository stays.
-  describe('the trust a Team-written start saved', () => {
-    const trustFile = (m: ReturnType<typeof machine>) => join(m.home, '.claude.json')
-    const saveTrust = (m: ReturnType<typeof machine>, folders: string[]) => writeFileSync(trustFile(m), JSON.stringify({ userID: 'u',
-      projects: Object.fromEntries(folders.map(folder => [folder, { hasTrustDialogAccepted: true, allowedTools: [] }])) }, null, 2))
-    const trusted = (m: ReturnType<typeof machine>) => Object.entries(JSON.parse(readFileSync(trustFile(m), 'utf8')).projects as Record<string, { hasTrustDialogAccepted?: boolean }>)
-      .filter(([, entry]) => entry.hasTrustDialogAccepted === true).map(([folder]) => folder).sort()
-    const markTeamWritten = (m: ReturnType<typeof machine>) => {
-      const file = swarmWorktreesFile(m.data, 'host'), saved = JSON.parse(readFileSync(file, 'utf8'))
-      writeFileSync(file, JSON.stringify({ ...saved, worktrees: saved.worktrees.map((w: { startId: string }) => w.startId === 'recorded' ? { ...w, teamWritten: true } : w) }))
-    }
-    const removable = (m: ReturnType<typeof machine>) => {
-      m.setLive([])
-      rmSync(join(m.recorded, 'unpushed.txt'))
-      git(m.clone, 'config', 'branch.super-tab/recorded.harness', 'placeholder')
-    }
-
-    it('is cleared when its stopped worker\'s worktree goes, and kept while the worktree stays', async () => {
-      const m = machine()
-      markTeamWritten(m)
-      saveTrust(m, [m.recorded, m.clone])
-      const host = m.open()
-      // Its session still runs there: the worktree stays, and so does its trust.
-      await host.removeStoppedWorktree('tab', 'h-recorded')
-      expect(trusted(m)).toEqual([m.clone, m.recorded].sort())
-      removable(m)
-      await host.removeStoppedWorktree('tab', 'h-recorded')
-      expect(existsSync(m.recorded)).toBe(false)
-      expect(trusted(m)).toEqual([m.clone])
-      const saved = JSON.parse(readFileSync(trustFile(m), 'utf8'))
-      expect(saved.userID).toBe('u')
-      expect(saved.projects[m.recorded]).toEqual({ allowedTools: [] })
-    })
-
-    it('is cleared when its worktree folder is already gone', async () => {
-      const m = machine()
-      markTeamWritten(m)
-      saveTrust(m, [m.recorded, m.clone])
-      m.setLive([])
-      rmSync(m.recorded, { recursive: true, force: true })
-      await m.open().removeStoppedWorktree('tab', 'h-recorded')
-      expect(trusted(m)).toEqual([m.clone])
-    })
-
-    it('is cleared when the machine leaves the Swarm, for a recorded worktree and one known from its start', async () => {
-      const m = machine()
-      markTeamWritten(m)
-      Object.assign(m.starts[0].request, { projectSettings: 'off' })
-      saveTrust(m, [m.recorded, m.earlier, m.unproven, m.own])
-      await m.open().clean('tab', 'removal')
-      expect(trusted(m)).toEqual([m.own, m.unproven].sort())
-    })
-
-    it('leaves a normal start\'s trust as it was', async () => {
-      const m = machine()
-      saveTrust(m, [m.recorded])
-      removable(m)
-      await m.open().removeStoppedWorktree('tab', 'h-recorded')
-      expect(existsSync(m.recorded)).toBe(false)
-      expect(trusted(m)).toEqual([m.recorded])
-    })
+  // Backend #3872: the Team-written guard went with Team accounts. A worktree's removal never touches the person's folder trust,
+  // whatever its record or its start says.
+  it('leaves the person\'s folder trust as it was when a worktree goes', async () => {
+    const m = machine()
+    const trustFile = join(m.home, '.claude.json')
+    const folders = [m.recorded, m.clone]
+    writeFileSync(trustFile, JSON.stringify({ userID: 'u', projects: Object.fromEntries(folders.map(folder => [folder, { hasTrustDialogAccepted: true }])) }))
+    const file = swarmWorktreesFile(m.data, 'host'), saved = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...saved, worktrees: saved.worktrees.map((w: { startId: string }) => w.startId === 'recorded' ? { ...w, teamWritten: true } : w) }))
+    m.setLive([])
+    rmSync(m.recorded, { recursive: true, force: true })
+    await m.open().removeStoppedWorktree('tab', 'h-recorded')
+    expect(JSON.parse(readFileSync(trustFile, 'utf8')).projects[m.recorded]).toEqual({ hasTrustDialogAccepted: true })
   })
 
   // Diego, 10-30: a worktree folder deleted by hand kept its record for good, so every later stop tried it again.
@@ -2764,70 +2540,9 @@ describe('removed machine cleanup', () => {
     expect(backend.mock.calls.some(c => JSON.stringify(c[3] ?? '').includes('agent.startSettled'))).toBe(true)
   })
 
-  // Task #4698: a helper starts from its Member's ready setup on this computer, found by the Swarm's own worktree record.
-  it('readies a helper from its Member\'s setup here, and says when that setup is not on this computer', async () => {
-    for (const memberHere of [true, false]) {
-      const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
-      if (memberHere) {
-        mkdirSync(join(root, 'super-tabs'), { recursive: true })
-        writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
-          { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
-      }
-      const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
-      const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
-        harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
-      const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
-      const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
-      const start = vi.fn(async (input: Record<string, unknown>) => {
-        await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
-        return { ok: true, harnessId: 'h-new' }
-      })
-      const readySetup = vi.fn(async () => ({ copied: ['node_modules', 'build'] }))
-      const log = vi.fn()
-      await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup,
-        capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
-      if (memberHere) {
-        expect(readySetup).toHaveBeenCalledWith('/worktrees/project/member', '/worktrees/project/new')
-        expect(log).toHaveBeenCalledWith('Readied a helper from its Member\'s setup: 2 folders copied')
-      } else {
-        expect(readySetup).not.toHaveBeenCalled()
-        expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_SETUP_NOT_HERE')
-      }
-    }
-  })
-
-  // Security review 2 of #3579: the copy writes only into the helper's own new worktree, never a person's or the Member's folder.
-  it('copies into no folder but a helper\'s own new worktree', async () => {
-    for (const [request, cwd] of [
-      [{ worktree: false, cwd: '/clone' }, '/clone'],
-      [{ cwd: '/clone' }, '/somewhere'],
-      [{ worktree: true, cwd: '/clone' }, '/clone'],
-      [{ worktree: true, cwd: '/clone' }, '/worktrees/project/member'],
-      [{ worktree: true, cwd: '/clone' }, '/worktrees/project/member/inner'],
-    ] as const) {
-      const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
-      mkdirSync(join(root, 'super-tabs'), { recursive: true })
-      writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
-        { tabId: 'tab', startId: 'member-start', harnessId: 'member-harness', source: '/clone', path: '/worktrees/project/member' }] }))
-      const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', cwd, 'agent') : undefined) } })
-      const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
-        harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { ...request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
-      const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
-      const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
-      const start = vi.fn(async (input: Record<string, unknown>) => {
-        await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new')
-        return { ok: true, harnessId: 'h-new' }
-      })
-      const readySetup = vi.fn(async () => ({ copied: [] }))
-      const log = vi.fn()
-      await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup,
-        capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
-      expect(readySetup).not.toHaveBeenCalled()
-      expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_FOLDER_NOT_OWN')
-    }
-  })
-
-  it('says so when readying a helper fails, and never fails its start', async () => {
+  // Backend S14 (#3877): no Member sets its project up for its helpers. A helper's start is run as any other, with no step
+  // that copies a Member's folders into it.
+  it('starts a helper as any other, with no step to ready it from its Member', async () => {
     const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
     mkdirSync(join(root, 'super-tabs'), { recursive: true })
     writeFileSync(swarmWorktreesFile(root, 'host'), JSON.stringify({ version: 1, worktrees: [
@@ -2837,33 +2552,15 @@ describe('removed machine cleanup', () => {
       harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', helperOf: { agentId: 'member', harnessId: 'member-harness' } } }], paused: false }
     const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
     const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
-    let readied: unknown = 'not called'
-    const start = vi.fn(async (input: Record<string, unknown>) => {
-      readied = await (input.beforeJoin as (harnessId: string) => Promise<void>)('h-new').then(() => 'resolved', () => 'rejected')
-      return { ok: true, harnessId: 'h-new' }
-    })
-    const log = vi.fn()
-    await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0, log, readySetup: vi.fn(async () => { throw new Error('/secret/path') }),
-      capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
-    expect(readied).toBe('resolved')
-    expect(log).toHaveBeenCalledWith('Started a helper without its Member\'s setup: HELPER_SETUP_FAILED')
-  })
-
-  it('gives no readying step to a start that is not a helper\'s', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'swarm-helper-')); roots.push(root)
-    const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(() => undefined) } })
-    const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
-      harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone', member: { projectId: 'project-1' } } }], paused: false }
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
-    const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
     const start = vi.fn(async (_input: Record<string, unknown>) => ({ ok: true, harnessId: 'h-new' }))
     await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,
       capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
+    expect(start).toHaveBeenCalledOnce()
     expect(start.mock.calls[0]![0]).not.toHaveProperty('beforeJoin')
   })
 
-  // Task #4353: its removal clears the trust a Team-written start saved, so the record says which start it was.
-  it('marks the worktree of a Team-written start', async () => {
+  // Backend #3872: no start is Team-written now. One that carries `projectSettings: 'off'` is recorded as any other.
+  it('records the worktree of a start as any other, whatever projectSettings it carries', async () => {
     const root = mkdtempSync(join(tmpdir(), 'swarm-record-')); roots.push(root)
     const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
     const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
@@ -2874,7 +2571,7 @@ describe('removed machine cleanup', () => {
     await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,
       capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
     expect(JSON.parse(readFileSync(swarmWorktreesFile(root, 'host'), 'utf8')).worktrees).toEqual([
-      { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new', teamWritten: true }])
+      { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new' }])
   })
 
   // Scholes, 2026-10-30: work is assigned only after the settle, so the settle carries the model the start saw.
@@ -3022,17 +2719,15 @@ describe('one call for all of a machine\'s readings (DB 2.5)', () => {
   })
 
   it('sends each Swarm\'s reading on its own to a backend without that call, and asks again ten minutes later', async () => {
-    for (const refusal of [missing, new SuperTabHostError('TEAM_SESSION_LIMITED', 'This session cannot do that.', 403)]) {
-      const f = twoSwarms()
-      f.readings.mockRejectedValueOnce(refusal)
-      await f.machine.tick()
-      expect(sentTo(f).map(([tab]) => tab)).toEqual(['tab', 'second-tab'])
-      expect(f.start).toHaveBeenCalledTimes(2)
-      f.advance(); await f.machine.tick()
-      expect(f.readings, refusal.code).toHaveBeenCalledOnce()
-      f.step(READINGS_RETRY_MS); await f.machine.tick()
-      expect(f.readings).toHaveBeenCalledTimes(2)
-    }
+    const f = twoSwarms()
+    f.readings.mockRejectedValueOnce(missing)
+    await f.machine.tick()
+    expect(sentTo(f).map(([tab]) => tab)).toEqual(['tab', 'second-tab'])
+    expect(f.start).toHaveBeenCalledTimes(2)
+    f.advance(); await f.machine.tick()
+    expect(f.readings).toHaveBeenCalledOnce()
+    f.step(READINGS_RETRY_MS); await f.machine.tick()
+    expect(f.readings).toHaveBeenCalledTimes(2)
   })
 
   it('sends one Swarm\'s reading again alone, in its older form, when the backend refuses a field for that Swarm', async () => {
@@ -3065,92 +2760,39 @@ describe('one call for all of a machine\'s readings (DB 2.5)', () => {
 })
 
 // The accounts a Product Manager could move to (spec 2026-11-02-pm-switch-engine-account, section 5): ids and labels, never a path.
+// F9: offering another account to the Swarm went with Desktop's accounts page, so each engine's default account is the one reported.
 describe('the profiles a machine reports', () => {
   const posted = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
-  const id = (n: string) => n.repeat(16).slice(0, 16)
   const both = () => {
     const f = fixture()
     Object.assign(f.pool.machine, { engines: ['claude', 'codex'] })
     Object.assign(f.pool, { capabilitiesWanted: true })
-    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/Users/me', label: 'me@corp', reportLabel: 'Claude', offered: true },
-      { id: id('a'), path: '/Users/me/.claude-work', label: 'Work', reportLabel: 'Work', offered: true },
-      { id: id('b'), path: '/Users/me/.claude-other', label: 'Other', reportLabel: '.claude-other', offered: false }])
-    f.codexProfiles.mockReturnValue([{ path: '/Users/me/.codex-two', label: 'two', offered: true }, { path: '/Users/me/.codex-found', label: 'found', offered: false }])
-    f.request.mockImplementation(async (type: string, payload?: unknown): Promise<Record<string, unknown>> => {
+    f.request.mockImplementation(async (type: string): Promise<Record<string, unknown>> => {
       if (type !== 'usage_read') return {}
-      const profile = (payload as { profile?: { engine: string } } | undefined)?.profile
       const claude = { provider: 'claude', outcome: 'answered', httpStatus: 200, body: { five_hour: { utilization: 30, resets_at: '2026-11-02T10:00:00Z' }, seven_day: { utilization: 10 } } }
       const codex = { provider: 'codex', outcome: 'answered', httpStatus: 200, body: { rate_limit: { primary_window: { used_percent: 25, reset_at: 1793613600 } } } }
-      return { providers: profile ? [profile.engine === 'claude' ? claude : codex] : [claude, codex] }
+      return { providers: [claude, codex] }
     })
     return f
   }
 
-  it('lists profiles with ids and report labels, no paths', async () => {
+  it('reports each engine\'s default account with its allowance, by id and label, and no other account', async () => {
     const f = both()
     await f.machine.tick()
     const profiles = posted(f).at(-1)!.profiles as Array<Record<string, unknown>>
     expect(profiles).toEqual([
       { engine: 'claude', id: expect.stringMatching(/^[0-9a-f]{16}$/), label: 'Default', leftPercent: 70, resetsAt: '2026-11-02T10:00:00.000Z' },
-      { engine: 'claude', id: id('a'), label: 'Work', leftPercent: 70, resetsAt: '2026-11-02T10:00:00.000Z' },
       { engine: 'codex', id: expect.stringMatching(/^[0-9a-f]{16}$/), label: 'Default', leftPercent: 75, resetsAt: expect.any(String) },
-      { engine: 'codex', id: expect.stringMatching(/^[0-9a-f]{16}$/), label: '.codex-two', leftPercent: 75, resetsAt: expect.any(String) },
     ])
-    expect(new Set(profiles.map(p => p.id)).size).toBe(4)
-    expect(JSON.stringify(profiles)).not.toMatch(/Users|@/)
+    // Only the machine's own reading: no account of its own is read.
+    expect(f.request.mock.calls.filter(c => c[0] === 'usage_read' && (c[1] as { profile?: unknown } | undefined)?.profile)).toEqual([])
   })
 
-  it('reports and reads only the accounts the owner offered, never a discovered one', async () => {
-    const f = both()
-    await f.machine.tick()
-    const profiles = posted(f).at(-1)!.profiles as Array<{ label: string }>
-    expect(profiles.map(p => p.label)).not.toContain('.claude-other')
-    expect(profiles.map(p => p.label)).not.toContain('.codex-found')
-    const read = f.request.mock.calls.filter(c => c[0] === 'usage_read').map(c => JSON.stringify(c[1]))
-    expect(read.join()).not.toContain(id('b'))
-  })
-
-  it('a Team daemon reports its default accounts only', async () => {
-    const f = both()
-    f.setTeam(true)
-    await f.machine.tick()
-    const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
-    expect(profiles.map(p => [p.engine, p.label])).toEqual([['claude', 'Default'], ['codex', 'Default']])
-    expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile)).toEqual([])
-  })
-
-  it("reports the default Codex home once, as Default", async () => {
-    const f = both()
-    const home = join(process.env.CODEX_HOME || join(homedir(), '.codex'))
-    f.codexProfiles.mockReturnValue([{ path: (() => { try { return realpathSync(home) } catch { return home } })(), label: 'x', offered: true }, { path: '/Users/me/.codex-two', label: 'two', offered: true }])
-    await f.machine.tick()
-    const codex = (posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>).filter(p => p.engine === 'codex')
-    expect(codex.map(p => p.label)).toEqual(['Default', '.codex-two'])
-  })
-
-  it('leaves out an engine this machine does not offer, an entry the backend would refuse, and what is over the caps', async () => {
+  it('leaves out an engine this machine does not offer', async () => {
     const f = both()
     Object.assign(f.pool.machine, { engines: ['claude'] })
-    f.claudeProfiles.mockReturnValue([{ id: id('d'), default: true, path: '/h', label: 'x', reportLabel: 'x', offered: true },
-      ...Array.from({ length: 12 }, (_, i) => ({ id: id(i.toString(16)), path: `/h/${i}`, label: `p${i}`, reportLabel: i === 0 ? 'a@b' : i === 1 ? '' : `p${i}`, offered: true }))])
     await f.machine.tick()
-    const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
-    expect(profiles.every(p => p.engine === 'claude')).toBe(true)
-    expect(profiles).toHaveLength(8)
-    expect(profiles.map(p => p.label)).not.toContain('a@b')
-    expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile).length).toBeLessThanOrEqual(8)
-  })
-
-  it('reads each profile at most once in 3 minutes', async () => {
-    const f = both()
-    const profileReads = () => f.request.mock.calls.filter(c => c[0] === 'usage_read' && (c[1] as { profile?: unknown } | undefined)?.profile).length
-    await f.machine.tick(); f.advance(); await f.machine.tick()
-    const first = profileReads()
-    expect(first).toBe(2)
-    f.step(180_000); await f.machine.tick()
-    expect(profileReads()).toBe(first + 2)
-    f.advance(); await f.machine.tick()
-    expect(profileReads()).toBe(first + 2)
+    expect((posted(f).at(-1)!.profiles as Array<{ engine: string }>).map(p => p.engine)).toEqual(['claude'])
   })
 
   it('drops the profiles after the backend refuses the field, and offers them again ten minutes later', async () => {
@@ -3178,7 +2820,7 @@ describe('a launched start whose engine stops on a screen', () => {
   const RESTRICTED = screens('codex-0165-open-restricted'), TRUST = screens('codex-0165-trust-fresh-home')
   const waiting = { error: 'START_PENDING', startId: 'start', creationId: 'creation', harnessId: 'launched',
     detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
-  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex', projectSettings: 'off' }, result: Record<string, unknown> = waiting) {
+  function launched(text: string, hold: string | null, request: Record<string, unknown> = { engine: 'codex' }, result: Record<string, unknown> = waiting) {
     const f = fixture()
     f.pool.starts = [{ id: 'start', dispatched: true, request } as never]
     f.start.mockResolvedValue(result as never)
@@ -3192,15 +2834,6 @@ describe('a launched start whose engine stops on a screen', () => {
   /** Two passes, 16 s apart: a screen fails a start only when two reads in a row show it the same (security review 1 of #3063). */
   const twice = async (f: ReturnType<typeof fixture>) => { await f.machine.tick(); f.advance(); await f.machine.tick() }
 
-  it.each(['0165', '0166'])('opens a Team-written Codex %s start\'s untrusted checkout restricted, with Enter on that exact screen alone', async version => {
-    const restricted = screens(`codex-${version}-open-restricted`)
-    const { f, screen, inputIfScreen, failures } = launched(restricted, 'trust_open')
-    await f.machine.tick()
-    expect(screen).toHaveBeenCalledWith('launched', 0)
-    expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Enter'], restricted)
-    expect(failures()).toEqual([])
-  })
-
   it('fails it at once on the trust question, naming it, and types nothing', async () => {
     const { f, inputIfScreen, failures } = launched(TRUST, 'trust_open')
     await twice(f)
@@ -3210,12 +2843,12 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   it('also when its own check already read the screen as needing a person', async () => {
-    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' }, { ...waiting, needsPerson: true })
+    const { f, failures } = launched(TRUST, 'trust_open', { engine: 'codex' }, { ...waiting, needsPerson: true })
     await twice(f)
     expect(failures()[0]?.error).toContain('folder trust question')
   })
 
-  it('fails, never answers, the restricted screen of a start that is not Team-written', async () => {
+  it('fails, never answers, Codex\'s restricted screen on a start', async () => {
     const { f, inputIfScreen, failures } = launched(RESTRICTED, 'trust_open', { engine: 'codex' })
     await twice(f)
     expect(inputIfScreen).not.toHaveBeenCalled()
@@ -3223,13 +2856,10 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   // On 2026-11-04 another program's two hooks stopped every Codex start on DESKTOP-0TFH0OJ at this screen. Esc goes on with
-  // those hooks off: nothing is trusted on the person's behalf, and it applies to any Swarm Codex start, Team-written or not.
-  it.each([
-    ['a Team-written start', { engine: 'codex', projectSettings: 'off' }],
-    ['any other Swarm start', { engine: 'codex' }],
-  ])("skips Codex's review of another program's hooks on %s, with Esc alone", async (_name, request) => {
+  // those hooks off: nothing is trusted on the person's behalf.
+  it("skips Codex's review of another program's hooks on a Swarm start, with Esc alone", async () => {
     const REVIEW = screens('codex-0163-hooks-review')
-    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open', request)
+    const { f, inputIfScreen, failures } = launched(REVIEW, 'menu_open')
     await twice(f)
     expect(inputIfScreen).toHaveBeenCalledWith('launched', ['Escape'], REVIEW)
     expect(failures()).toEqual([])
@@ -3276,15 +2906,14 @@ describe('a launched start whose engine stops on a screen', () => {
   })
 
   it('leaves it waiting while its creation is still preparing, with no agent to read', async () => {
-    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex', projectSettings: 'off' },
+    const { f, screen, failures } = launched(TRUST, 'trust_open', { engine: 'codex' },
       { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending', detail: 'Preparing.' })
     await f.machine.tick()
     expect(screen).not.toHaveBeenCalled()
     expect(failures()).toEqual([])
   })
 
-  // Security review 1 of #3063: one read of a screen still drawing, or of a Codex that words its restricted screen otherwise,
-  // failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
+  // Security review 1 of #3063: one read of a screen still drawing failed a start that would have gone on, and two failures in a row suspend its engine on that machine.
   it('fails it only once two passes in a row read the same waiting screen', async () => {
     const { f, failures } = launched(TRUST, 'trust_open')
     await f.machine.tick()

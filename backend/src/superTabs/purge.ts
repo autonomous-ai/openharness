@@ -17,12 +17,12 @@ export const PURGE_RETRY_MS = 6 * 60 * 60 * 1000
 
 /** The records of one Swarm, each by its Swarm id (every one has an index led by it, schema.prisma). Attachments are
  *  removed apart, with their files. */
-export const PURGED_BY_TAB_ID = ['superTabMessage', 'superTabMention', 'superTabReaction', 'superTabActivity', 'superTabChatSetting', 'superTabReminder', 'superTabReadMark',
-  'superTabThreadMark', 'superTabThread', 'superTabOpenProposal', 'superTabDecision', 'superTabOperation', 'superTabDelivery', 'superTabReceipt',
+export const PURGED_BY_TAB_ID = ['superTabMessage', 'superTabReaction', 'superTabChatSetting', 'superTabReadMark',
+  'superTabThreadMark', 'superTabThread', 'superTabOpenProposal', 'superTabOperation', 'superTabGithubComment', 'superTabDelivery', 'superTabReceipt',
   'superTabRun', 'superTabAttempt', 'superTabRouteDecision', 'superTabModelEvidence', 'superTabModelRecent', 'superTabStopReceipt',
   'superTabRoleText', 'superTabInstructions', 'superTabInstructionsRevision', 'superTabProjectRules', 'superTabPmNote', 'superTabConfiguration', 'superTabTerminalRequest',
   'gitHubRepositoryApproval', 'gitHubApprovalRefusal', 'swarmHead', 'swarmMember', 'swarmGroup', 'swarmAgent', 'swarmMachine', 'swarmStart',
-  'swarmProgress'] as const
+  'swarmProgress', 'swarmShipping'] as const
 
 /** Removes one stored object; one already gone counts as removed. */
 export interface FileRemover { delete(objectKey: string): Promise<void> }
@@ -76,6 +76,14 @@ export async function purgeSwarm(db: PrismaClient, tabId: string, files: PurgeFi
   const row = await db.superTab.findUnique({ where: { id: tabId }, select: { deletedAt: true, purgeAt: true } })
   // Restored, or not yet due: nothing of it goes.
   if (!row?.deletedAt || !row.purgeAt || row.purgeAt.getTime() + PURGE_MARGIN_MS > now) return 'skipped'
+  return purgeRecords(db, tabId, row.purgeAt, files, page)
+}
+
+/** Removes deleted Swarm [tabId]: its stored files with their records, every other record of it, and its row last, only while
+ *  it is still the deletion due at [purgeAt]. `waiting` when files remain for a later pass. Also the wipe of every Swarm from
+ *  before Swarm v4 (migration/wipeJob.ts), which none restores. */
+export async function purgeRecords(db: PrismaClient, tabId: string, purgeAt: Date, files: PurgeFiles | null,
+  page: number = PURGE_SWEEP.files): Promise<'purged' | 'waiting'> {
   if (!await purgeAttachments(db, tabId, files, page)) return 'waiting'
   for (const model of PURGED_BY_TAB_ID) {
     await (db[model] as unknown as { deleteMany(args: { where: { tabId: string } }): Promise<unknown> }).deleteMany({ where: { tabId } })
@@ -85,7 +93,7 @@ export async function purgeSwarm(db: PrismaClient, tabId: string, files: PurgeFi
   // Harness shares made for this Swarm (its members' read-only views of agents' terminals).
   await db.harnessShare.deleteMany({ where: { superTabId: tabId } })
   // Last, and only while it is still the deletion this pass read: a later pass finds nothing left of it.
-  await db.superTab.deleteMany({ where: { id: tabId, purgeAt: row.purgeAt } })
+  await db.superTab.deleteMany({ where: { id: tabId, purgeAt } })
   return 'purged'
 }
 

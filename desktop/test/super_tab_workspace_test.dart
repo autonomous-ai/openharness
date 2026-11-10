@@ -282,35 +282,15 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await f.app.handleMachineEventForTest('m', {
-        'type': 'commander_question',
-        'agentId': 'native-b',
-        'payload': {
-          'requestId': 'q-fixture',
-          'questions': [
-            {
-              'key': 'confirm',
-              'q': 'Use this approach?',
-              'options': ['Yes', 'No'],
-              'multi': false,
-            },
-          ],
-        },
-      });
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('b needs you').first);
+      // Opening one member's terminal, b's, keeps every member's beside it.
+      tester
+          .widget<SuperTabView>(find.byType(SuperTabView))
+          .onOpenTerminal(c.snapshot!.agent('b')!);
       await tester.pumpAndSettle();
       expect(
         f.app.activeSwarm.panes.map((p) => p.agentId),
         unorderedEquals(['native-a', 'native-b', 'native-c', 'native-d']),
       );
-      await f.app.handleMachineEventForTest('m', {
-        'type': 'commander_question_close',
-        'agentId': 'native-b',
-        'payload': {'requestId': 'q-fixture'},
-      });
-      await tester.pumpAndSettle();
-      expect(f.app.questionFor('m', 'native-b'), isNull);
       tester
           .widget<SuperTabView>(find.byType(SuperTabView))
           .onOpenGroupTerminals!();
@@ -474,11 +454,16 @@ void main() {
         );
         expect(f.app.stateOf('m')!.agents.single.isStopped, scenario.viewer);
         if (!scenario.viewer) {
+          // Terminal recording is gone (backend 1.4.51): the resumed pane
+          // is the person's own, typed into directly.
+          expect(f.app.activeSwarm.panes.single.watchOnly, isFalse);
           expect(
-            calls.indexWhere((call) => call.$1 == 'agent_resume'),
-            lessThan(
-              calls.indexWhere((call) => call.$2['action'] == 'prepareNative'),
+            calls.where(
+              (call) =>
+                  (call.$2['path'] as String?)?.endsWith('/native') == true ||
+                  call.$2['action'] == 'prepareNative',
             ),
+            isEmpty,
           );
           await f.app.requestClosePane(f.app.activeSwarm.panes.single.id);
           await tester.pumpAndSettle();
@@ -546,15 +531,10 @@ void main() {
       c.selectTerminal('lead', 'a');
       await tester.pumpAndSettle();
       expect(find.text('Terminal native-a'), findsOneWidget);
-      final firstContext = f.app.activeSwarm.panes.single.inputContext;
-      expect(firstContext, isNotNull);
-      expect(
-        f.connection.calls
-            .where((call) => call.$2['action'] == 'prepareNative')
-            .single
-            .$2['contextId'],
-        firstContext,
-      );
+      // The owner types into their agent's terminal with no recording
+      // context: the backend answers none since 1.4.51.
+      expect(f.app.activeSwarm.panes.single.watchOnly, isFalse);
+      expect(f.app.activeSwarm.panes.single.inputContext, isNull);
       c.select('offline');
       await tester.pumpAndSettle();
       expect(find.text('Terminal native-a'), findsNothing);
@@ -562,7 +542,7 @@ void main() {
       c.selectTerminal('offline', 'b');
       await tester.pumpAndSettle();
       expect(find.text('Terminal native-b'), findsOneWidget);
-      expect(f.app.activeSwarm.panes.single.inputContext, isNot(firstContext));
+      expect(f.app.activeSwarm.panes.single.watchOnly, isFalse);
       c.select('lead');
       await tester.pumpAndSettle();
       expect(find.text('Terminal native-a'), findsOneWidget);
@@ -583,12 +563,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.terminalAgent('lead')?.id, 'a');
       expect(f.app.activeSwarm.panes.single.agentId, 'native-a');
-      final scopes = f.connection.calls
-          .where(
-            (call) => (call.$2['path'] as String?)?.endsWith('/native') == true,
-          )
-          .map((call) => (call.$2['body'] as Map)['conversationId']);
-      expect(scopes, containsAll(['lead', 'offline']));
+      expect(
+        f.connection.calls.where(
+          (call) =>
+              (call.$2['path'] as String?)?.endsWith('/native') == true ||
+              call.$2['action'] == 'prepareNative',
+        ),
+        isEmpty,
+      );
       c.select('offline');
       await tester.pumpAndSettle();
       expect(find.text('Terminal native-b'), findsOneWidget);
@@ -606,76 +588,6 @@ void main() {
         isEmpty,
       );
       expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      await tester.pump();
-    },
-  );
-
-  testWidgets(
-    'a host recording failure leaves the conversation usable and does not stop its harness',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      final state = f.connection.server.state;
-      state['agents'] = [
-        {
-          'id': 'a',
-          'name': 'Lead',
-          'machineId': 'm',
-          'harnessId': 'native-a',
-          'contributorId': 'owner',
-          'configuration': {'engine': 'codex'},
-        },
-      ];
-      (state['conversations'] as List)[0]
-        ..['agentIds'] = ['a']
-        ..['leadId'] = 'a';
-      f.app.machineStates['m']!.agents = [
-        Agent.fromJson({'id': 'native-a', 'name': 'Lead', 'engine': 'codex'}),
-      ];
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: ListenableBuilder(
-              listenable: f.app,
-              builder: (_, _) => SuperTabWorkspace(
-                app: f.app,
-                canvas: const Text('Native terminal'),
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      c.selectTerminal('lead', 'a');
-      await tester.pumpAndSettle();
-      expect(find.text('Native terminal'), findsOneWidget);
-      f.connection.failNative = true;
-      await tester.pump(const Duration(seconds: 21));
-      await tester.pumpAndSettle();
-      expect(c.terminalAgent('lead')?.id, 'a');
-      expect(f.app.activeSwarm.panes.single.agentId, 'native-a');
-      expect(
-        tester.widget<SuperPane>(find.byType(SuperPane)).failures[(
-          'm',
-          'native-a',
-        )],
-        contains('Terminal sharing paused'),
-      );
-      expect(f.app.activeSwarm.panes.single.watchOnly, isTrue);
-      await tester.tap(find.byTooltip('Chat'));
-      await tester.pumpAndSettle();
-      // A project's channel: only agents post there (Swarm v4).
-      expect(find.byKey(const ValueKey('super-agents-only')), findsOneWidget);
-      expect(
-        f.connection.calls.where((call) => call.$1 == 'agent_close'),
-        isEmpty,
-      );
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();

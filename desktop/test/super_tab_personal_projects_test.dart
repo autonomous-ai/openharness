@@ -147,33 +147,6 @@ _desk(SuperTabLaunchFixture f) {
   return panes;
 }
 
-/// Huy's desk (task #2376): tabs Harness Monitor (its web view, then its
-/// assistant) and code (two agents), every agent in a folder with no remote.
-({TerminalPane a1, TerminalPane a2, TerminalPane mon}) _huyDesk(
-  SuperTabLaunchFixture f,
-) {
-  f.app.machineStates['m']!.agents = [
-    _agent('a1', cwd: '/Users/huy/code'),
-    _agent('a2', cwd: '/Users/huy/code'),
-    _agent('mon', cwd: '/Users/huy'),
-  ];
-  final panes = (
-    a1: _pane('m', 'a1'),
-    a2: _pane('m', 'a2'),
-    mon: _pane('m', 'mon'),
-  );
-  final view = TerminalPane(
-    id: _paneIds++,
-    machineId: 'm',
-    ownerAgentId: 'mon',
-    kind: PaneKind.web,
-    url: 'http://127.0.0.1:1/',
-  );
-  _tab(f.app, 'desk-monitor', [view, panes.mon], name: 'Harness Monitor');
-  _tab(f.app, 'desk-code', [panes.a1, panes.a2], name: 'code');
-  return panes;
-}
-
 void main() {
   setUpAll(() => loadCaptureFonts(_shots));
 
@@ -365,10 +338,6 @@ void main() {
       expect(id, isNot(contains('acme')));
       expect(id, personalProjectOperation('github.com/acme/api'));
       expect(id, isNot(personalProjectOperation('github.com/other/api')));
-      expect(
-        personalProjectOperation(personalTabKey('desk-code')),
-        allOf(startsWith('personal-tab-'), isNot(contains('desk-code'))),
-      );
     });
 
     test('two repos of one name have long names that tell them apart', () {
@@ -379,21 +348,20 @@ void main() {
   });
 
   group('the person\'s panes, by repo', () {
-    test('every pane joins its repo whatever tab it is in, in tab order', () {
-      final f = SuperTabLaunchFixture();
-      final p = _desk(f);
-      final panes = personalPanes(f.app);
-      expect([for (final e in panes) e.pane], [p.api, p.folder, p.web, p.api2]);
-      expect(
-        [for (final e in panes) e.repo],
-        [
-          'github.com/acme/api',
-          personalTabKey('one'),
-          'github.com/acme/web',
-          'github.com/acme/api',
-        ],
-      );
-    });
+    test(
+      'every pane in a repo joins it whatever tab it is in, in tab order',
+      () {
+        final f = SuperTabLaunchFixture();
+        final p = _desk(f);
+        final panes = personalPanes(f.app);
+        // The folder has no repo: it is in no project.
+        expect([for (final e in panes) e.pane], [p.api, p.web, p.api2]);
+        expect(
+          [for (final e in panes) e.repo],
+          ['github.com/acme/api', 'github.com/acme/web', 'github.com/acme/api'],
+        );
+      },
+    );
 
     test('a pane twice in the tabs counts once, where it is first', () {
       final f = SuperTabLaunchFixture();
@@ -419,7 +387,9 @@ void main() {
         _machine(f.app, 'team', sessionKind: 'team').agents = [
           _agent('t1', remote: 'git@github.com:acme/team.git'),
         ];
-        f.app.machineStates['m']!.agents = [_agent('n1')];
+        f.app.machineStates['m']!.agents = [
+          _agent('n1', remote: 'git@github.com:acme/api.git'),
+        ];
         _tab(f.app, 'mixed', [
           _pane('kims', 'k1'),
           _pane('team', 't1'),
@@ -431,7 +401,9 @@ void main() {
 
     test('a Swarm tab\'s panes are not the person\'s tabs', () {
       final f = SuperTabLaunchFixture();
-      f.app.machineStates['m']!.agents = [_agent('n1')];
+      f.app.machineStates['m']!.agents = [
+        _agent('n1', remote: 'git@github.com:acme/api.git'),
+      ];
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
       f.app.activeSwarm.panes.add(_pane('m', 'n1'));
       expect(personalPanes(f.app), isEmpty);
@@ -439,7 +411,7 @@ void main() {
   });
 
   group('Personal\'s projects', () {
-    test('each repo, and each tab\'s panes with no repo, is made once as a private project', () async {
+    test('each repo is made once as a private project, and a pane with no repo makes none', () async {
       final f = SuperTabLaunchFixture();
       _desk(f);
       final c = await _personal(f);
@@ -449,25 +421,21 @@ void main() {
         [for (final p in creates) p['operationId']],
         [
           personalProjectOperation('github.com/acme/api'),
-          personalProjectOperation(personalTabKey('one')),
           personalProjectOperation('github.com/acme/web'),
         ],
       );
-      expect(
-        [for (final p in creates) p['command']['name']],
-        ['api', kTabProjectName, 'web'],
-      );
+      expect([for (final p in creates) p['command']['name']], ['api', 'web']);
       expect(
         creates.every((p) => p['command']['visibility'] == 'private'),
         isTrue,
       );
       final names = [for (final p in c.snapshot!.projects) p.name];
-      expect(names, containsAll(['api', 'one', 'web']));
-      expect(names, isNot(contains('scratch')));
+      expect(names, containsAll(['api', 'web']));
+      expect(names, isNot(contains('one')));
 
       // Again: nothing.
       await PersonalProjects.of(f.app).sync(c);
-      expect(_commands(f), hasLength(3));
+      expect(_commands(f), hasLength(2));
 
       // The app restarted on the same computer: what it kept, no request.
       final restarted = SuperTabLaunchFixture();
@@ -774,6 +742,39 @@ void main() {
       expect(project['name'], 'Backend');
     });
 
+    test('an agent of Your Team works in its own pane\'s repo: where its tasks are read', () async {
+      final f = SuperTabLaunchFixture();
+      _desk(f);
+      final c = await _personal(f);
+      (f.connection.server.state['agents'] ??= <dynamic>[]).addAll([
+        for (final (machine, harness) in [('laptop', 'n1'), ('m', 'n2')])
+          {
+            'id': 'agent-$harness',
+            'projectId': 'lead',
+            'name': harness,
+            'displayName': harness,
+            'machineId': machine,
+            'harnessId': harness,
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+            'kind': 'regular',
+            'myAgent': true,
+          },
+      ]);
+      await c.refresh();
+      final projects = PersonalProjects.of(f.app);
+      SuperTabAgent agent(String id) => c.snapshot!.agent(id)!;
+      expect(
+        projects.agentRepository(c, agent('agent-n1')),
+        'github.com/acme/api',
+      );
+      // Notes, in a folder: no repo, no tasks.
+      expect(projects.agentRepository(c, agent('agent-n2')), isNull);
+      // Never outside the person's own Personal Swarm.
+      c.accessRevoked = true;
+      expect(projects.agentRepository(c, agent('agent-n1')), isNull);
+    });
+
     test('a pane whose repo changes moves to that repo\'s project', () async {
       final f = SuperTabLaunchFixture();
       final p = _desk(f);
@@ -783,7 +784,7 @@ void main() {
           .firstWhere((p) => p.name == name)
           .leadConversationId;
       final projects = PersonalProjects.of(f.app);
-      expect(projects.panesFor(c, lead('one')), [p.folder]);
+      expect(projects.panesFor(c, lead('web')), [p.web]);
 
       // The folder becomes a checkout of the web app.
       f.app.machineStates['m']!.agents = [
@@ -792,7 +793,6 @@ void main() {
               ? _agent('n2', remote: 'git@github.com:acme/web.git')
               : a,
       ];
-      expect(projects.panesFor(c, lead('one')), isEmpty);
       expect(projects.panesFor(c, lead('web')), [p.folder, p.web]);
     });
 
@@ -811,85 +811,51 @@ void main() {
       f.app.swarms.removeWhere((s) => s.id == 'one');
       expect(PersonalProjects.of(f.app).panesFor(c, api), [p.api2]);
       await PersonalProjects.of(f.app).sync(c);
-      expect(_commands(f), hasLength(3));
+      expect(_commands(f), hasLength(2));
     });
   });
 
-  group('panes with no repo, per tab (task #2376)', () {
-    test('Huy\'s two tabs are two projects named after them, each with its own panes', () async {
-      final f = SuperTabLaunchFixture();
-      final p = _huyDesk(f);
-      final c = await _personal(f);
-      await PersonalProjects.of(f.app).sync(c);
-      expect(
-        [for (final post in _commands(f)) post['command']['name']],
-        [kTabProjectName, kTabProjectName],
-      );
-      // Made under one name on every computer, then named after its tab.
-      expect(
-        [
-          for (final post in _commands(f, 'project.rename'))
-            post['command']['name'],
-        ],
-        ['Harness Monitor', 'code'],
-      );
-      String lead(String name) => c.snapshot!.projects
-          .firstWhere((p) => p.name == name)
-          .leadConversationId;
-      final projects = PersonalProjects.of(f.app);
-      expect(projects.panesFor(c, lead('Harness Monitor')), [p.mon]);
-      expect(projects.panesFor(c, lead('code')), [p.a1, p.a2]);
-      expect([
-        for (final p in c.snapshot!.projects) p.name,
-      ], isNot(contains('scratch')));
-    });
-
-    test('panes with a repo still join the repo\'s project, whatever tab', () {
+  group('panes with no repo, and repos through an SSH alias', () {
+    test('panes with a repo join the repo\'s project, whatever tab; a folder joins none', () {
       final f = SuperTabLaunchFixture();
       final p = _desk(f);
       final keys = {for (final e in personalPanes(f.app)) e.pane: e.repo};
       expect(keys[p.api], 'github.com/acme/api');
       expect(keys[p.api2], 'github.com/acme/api');
       expect(keys[p.web], 'github.com/acme/web');
-      expect(keys[p.folder], personalTabKey('one'));
+      expect(keys, isNot(contains(p.folder)));
     });
 
-    test(
-      'a pane on an SSH alias clone joins its repo, not its tab (task #2476)',
-      () async {
-        final f = SuperTabLaunchFixture();
-        f.app.machineStates['m']!.agents = [
-          _agent('a1', remote: 'gh-work/acme/api', cwd: '/w/api'),
-          _agent('f1', cwd: '/w/notes'),
-        ];
-        _machine(f.app, 'laptop').agents = [
-          _agent('a2', remote: 'gh-work/acme/api', cwd: '/x/api'),
-        ];
-        _tab(f.app, 'one', [_pane('m', 'a1'), _pane('m', 'f1')]);
-        _tab(f.app, 'two', [_pane('laptop', 'a2')]);
-        expect(
-          [for (final e in personalPanes(f.app)) e.repo],
-          ['gh-work/acme/api', personalTabKey('one'), 'gh-work/acme/api'],
-        );
-        final c = await _personal(f);
-        await PersonalProjects.of(f.app).sync(c);
-        expect(
-          [for (final p in _commands(f)) p['command']['name']],
-          ['api', kTabProjectName],
-        );
-        final api = c.snapshot!.projects
-            .firstWhere((p) => p.name == 'api')
-            .leadConversationId;
-        // Both panes, in two tabs on two computers, are the one project's.
-        expect(
-          [
-            for (final p in PersonalProjects.of(f.app).panesFor(c, api))
-              p.agentId,
-          ],
-          ['a1', 'a2'],
-        );
-      },
-    );
+    test('a pane on an SSH alias clone joins its repo (task #2476)', () async {
+      final f = SuperTabLaunchFixture();
+      f.app.machineStates['m']!.agents = [
+        _agent('a1', remote: 'gh-work/acme/api', cwd: '/w/api'),
+        _agent('f1', cwd: '/w/notes'),
+      ];
+      _machine(f.app, 'laptop').agents = [
+        _agent('a2', remote: 'gh-work/acme/api', cwd: '/x/api'),
+      ];
+      _tab(f.app, 'one', [_pane('m', 'a1'), _pane('m', 'f1')]);
+      _tab(f.app, 'two', [_pane('laptop', 'a2')]);
+      expect(
+        [for (final e in personalPanes(f.app)) e.repo],
+        ['gh-work/acme/api', 'gh-work/acme/api'],
+      );
+      final c = await _personal(f);
+      await PersonalProjects.of(f.app).sync(c);
+      expect([for (final p in _commands(f)) p['command']['name']], ['api']);
+      final api = c.snapshot!.projects
+          .firstWhere((p) => p.name == 'api')
+          .leadConversationId;
+      // Both panes, in two tabs on two computers, are the one project's.
+      expect(
+        [
+          for (final p in PersonalProjects.of(f.app).panesFor(c, api))
+            p.agentId,
+        ],
+        ['a1', 'a2'],
+      );
+    });
 
     test('the repo an alias stands for is the one project on every computer (task #2476)', () async {
       final f = SuperTabLaunchFixture();
@@ -950,186 +916,6 @@ void main() {
         isNull,
       );
     });
-
-    test('a renamed tab keeps its project and its name', () async {
-      final f = SuperTabLaunchFixture();
-      final p = _huyDesk(f);
-      final c = await _personal(f);
-      await PersonalProjects.of(f.app).sync(c);
-      final code = c.snapshot!.projects.firstWhere((p) => p.name == 'code');
-      f.app.swarms.firstWhere((s) => s.id == 'desk-code')
-        ..name = 'backend'
-        ..nameIsCustom = true;
-      await PersonalProjects.of(f.app).sync(c);
-      expect(_commands(f), hasLength(2));
-      expect(PersonalProjects.of(f.app).panesFor(c, code.leadConversationId), [
-        p.a1,
-        p.a2,
-      ]);
-      expect(c.snapshot!.projectById(code.id)?.name, 'code');
-    });
-
-    test(
-      'another computer of the person\'s finds the same tab projects',
-      () async {
-        final f = SuperTabLaunchFixture();
-        _huyDesk(f);
-        final c = await _personal(f);
-        await PersonalProjects.of(f.app).sync(c);
-        final laptop = SuperTabLaunchFixture();
-        laptop.connection.server.state
-          ..clear()
-          ..addAll(f.connection.server.state);
-        _huyDesk(laptop);
-        final lc = await _personal(laptop);
-        await PersonalProjects.of(laptop.app).sync(lc);
-        expect(
-          [for (final post in _commands(laptop)) post['operationId']],
-          [for (final post in _commands(f)) post['operationId']],
-        );
-        expect(
-          PersonalProjects.of(laptop.app).knownForTest('owner', tabId),
-          PersonalProjects.of(f.app).knownForTest('owner', tabId),
-        );
-      },
-    );
-
-    // Security review 1 of #2753 (Linnet): every computer sends one request for a
-    // tab's project, so a tab renamed before another computer asks must not
-    // change that request, which the server refuses for another name.
-    test('a tab renamed before another computer asks still finds its project there', () async {
-      final f = SuperTabLaunchFixture();
-      f.connection.server.refuseReusedOperations = true;
-      final p = _huyDesk(f);
-      final c = await _personal(f);
-      await PersonalProjects.of(f.app).sync(c);
-      final code = c.snapshot!.projects.firstWhere((p) => p.name == 'code');
-
-      // The laptop, with nothing kept, after the tab was renamed.
-      final laptop = SuperTabLaunchFixture();
-      laptop.connection.server
-        ..refuseReusedOperations = true
-        ..receipts.addAll(f.connection.server.receipts)
-        ..receiptCommands.addAll(f.connection.server.receiptCommands);
-      laptop.connection.server.state
-        ..clear()
-        ..addAll(f.connection.server.state);
-      final lp = _huyDesk(laptop);
-      laptop.app.swarms.firstWhere((s) => s.id == 'desk-code')
-        ..name = 'backend'
-        ..nameIsCustom = true;
-      final lc = await _personal(laptop);
-      await PersonalProjects.of(laptop.app).sync(lc);
-      expect(
-        PersonalProjects.of(laptop.app).panesFor(lc, code.leadConversationId),
-        [lp.a1, lp.a2],
-      );
-      expect(p.a1.agentId, lp.a1.agentId);
-      // The project keeps the name it was made with.
-      expect(lc.snapshot!.projectById(code.id)?.name, 'code');
-    });
-
-    // AGENTS.md standard 6 (Linnet, review round 3): a refused create or rename
-    // says so in the log, with its code and nothing of the tab.
-    test(
-      'a refused create or rename is logged by its code, without the tab',
-      () async {
-        final lines = <String>[];
-        final previous = appLog;
-        appLog = _Recorder(lines);
-        addTearDown(() => appLog = previous);
-        final f = SuperTabLaunchFixture();
-        _huyDesk(f);
-        for (final tab in f.app.swarms.where((s) => s.id.startsWith('desk-'))) {
-          tab.name = 'SECRET_${tab.id}';
-        }
-        final c = await _personal(f);
-        var now = DateTime(2026, 11, 3, 9);
-        Future<void> sync() => withClock(
-          Clock(() => now),
-          () => PersonalProjects.of(f.app).sync(c),
-        );
-        f.connection.server
-          ..refuse = {'code': 'SERVICE_UNAVAILABLE', 'message': 'Busy.'}
-          ..refuseStatus = 503;
-        await sync();
-        expect(
-          lines.where((l) => l.contains('SERVICE_UNAVAILABLE')),
-          isNotEmpty,
-        );
-        f.connection.server.refuse = null;
-        f.connection.server.unknownCommand = (command) =>
-            command['type'] == 'project.rename';
-        now = now.add(const Duration(seconds: 11));
-        await sync();
-        expect(lines.where((l) => l.contains('VALIDATION_ERROR')), isNotEmpty);
-        for (final line in lines) {
-          expect(line, isNot(contains('SECRET_')), reason: line);
-          expect(line, isNot(contains('desk-')), reason: line);
-        }
-      },
-    );
-
-    // AGENTS.md standard 6 (River, 11-03): a failed rename waits, as a failed
-    // create does, instead of being asked again on every sync.
-    test(
-      'a refused rename of a tab\'s project waits before it is asked again',
-      () async {
-        final f = SuperTabLaunchFixture();
-        _huyDesk(f);
-        final c = await _personal(f);
-        var now = DateTime(2026, 11, 3, 9);
-        Future<void> sync() => withClock(
-          Clock(() => now),
-          () => PersonalProjects.of(f.app).sync(c),
-        );
-        f.connection.server.unknownCommand = (command) =>
-            command['type'] == 'project.rename';
-        await sync();
-        expect(_commands(f, 'project.rename'), hasLength(2));
-        await sync();
-        expect(
-          _commands(f, 'project.rename'),
-          hasLength(2),
-          reason: 'waits before asking again',
-        );
-        f.connection.server.unknownCommand = null;
-        now = now.add(const Duration(seconds: 11));
-        await sync();
-        expect(_commands(f, 'project.rename'), hasLength(4));
-        final names = [for (final p in c.snapshot!.projects) p.name];
-        expect(names, containsAll(['code', 'Harness Monitor']));
-      },
-    );
-
-    test('a tab with no usable name still gets a project, under a name the server takes', () async {
-      final f = SuperTabLaunchFixture();
-      final p = _huyDesk(f);
-      f.app.swarms.firstWhere((s) => s.id == 'desk-code').name = '   ';
-      f.app.swarms.firstWhere((s) => s.id == 'desk-monitor').name = 'M' * 300;
-      final c = await _personal(f);
-      await PersonalProjects.of(f.app).sync(c);
-      final names = [for (final p in c.snapshot!.projects) p.name];
-      expect(names, contains('Tab'));
-      expect(names, contains('M' * 160));
-      final tab = c.snapshot!.projects.firstWhere((p) => p.name == 'Tab');
-      expect(
-        PersonalProjects.of(f.app)
-            .panesFor(f.app.superTabs.peek(tabId)!, tab.leadConversationId),
-        [p.a1, p.a2],
-      );
-    });
-
-    test('nothing is sent of a tab but its project\'s name', () async {
-      final f = SuperTabLaunchFixture();
-      _huyDesk(f);
-      final c = await _personal(f);
-      await PersonalProjects.of(f.app).sync(c);
-      final sent = f.connection.server.posts.toString();
-      for (final leak in ['desk-code', 'desk-monitor', '/Users/huy', 'a1']) {
-        expect(sent, isNot(contains(leak)), reason: leak);
-      }
-    });
   });
 
   group('the empty chat of a project with panes (task #2376)', () {
@@ -1170,10 +956,10 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1280, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final f = SuperTabLaunchFixture();
-      final p = _huyDesk(f);
+      final p = _desk(f);
       final c = await _personal(f);
       await PersonalProjects.of(f.app).sync(c);
-      final code = c.snapshot!.projects.firstWhere((p) => p.name == 'code');
+      final code = c.snapshot!.projects.firstWhere((p) => p.name == 'api');
       c.select(code.leadConversationId);
       await show(tester, f);
       expect(find.text('2 panes in this project'), findsOneWidget);
@@ -1185,7 +971,7 @@ void main() {
       }
       expect(c.groupTerminalsOpen(code.leadConversationId), isTrue);
       final swarm = f.app.swarms.firstWhere((s) => s.superTabId == tabId);
-      expect(swarm.panes, [p.a1, p.a2]);
+      expect(swarm.panes, [p.api, p.api2]);
       await close(tester, f, c);
     });
 
@@ -1193,12 +979,12 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1280, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final f = SuperTabLaunchFixture();
-      _huyDesk(f);
+      _desk(f);
       final c = await _personal(f);
       await PersonalProjects.of(f.app).sync(c);
       c.select(
         c.snapshot!.projects
-            .firstWhere((p) => p.name == 'Harness Monitor')
+            .firstWhere((p) => p.name == 'web')
             .leadConversationId,
       );
       await show(tester, f);
@@ -1212,7 +998,7 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1280, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final f = SuperTabLaunchFixture();
-      _huyDesk(f);
+      _desk(f);
       final c = await _personal(f);
       await PersonalProjects.of(f.app).sync(c);
       // The Personal Swarm's first project holds none of the person's panes.
@@ -1229,7 +1015,7 @@ void main() {
     });
   });
 
-  // Huy, 11-05 (task #3042): every pane of a repo or tab closed, its project
+  // Huy, 11-05 (task #3042): every pane of a repo closed, its project
   // leaves the list; its chat stays; a pane of it opening brings it back.
   group('a project with no panes leaves the list', () {
     SuperTabProject named(SuperTabController c, String name) =>
@@ -1260,7 +1046,6 @@ void main() {
       two.panes.remove(p.api2);
       expect(projects.hidden(c, api.id), isTrue);
       expect(projects.hidden(c, web.id), isFalse);
-      expect(projects.hidden(c, named(c, 'one').id), isFalse);
 
       // Its chat is kept: nothing was deleted or archived on the server.
       expect(removals(f), isEmpty);
@@ -1296,23 +1081,6 @@ void main() {
         ..agentLoadStatus = AgentLoadStatus.loading;
       expect(projects.hiddenIn(c), isEmpty);
     });
-
-    test(
-      'a tab\'s project hides once its panes with no repo are closed',
-      () async {
-        final f = SuperTabLaunchFixture();
-        final p = _huyDesk(f);
-        final c = await _personal(f);
-        final projects = PersonalProjects.of(f.app);
-        await projects.sync(c);
-        final code = named(c, 'code');
-        f.app.swarms.firstWhere((s) => s.id == 'desk-code').panes
-          ..remove(p.a1)
-          ..remove(p.a2);
-        expect(projects.hidden(c, code.id), isTrue);
-        expect(projects.hidden(c, named(c, 'Harness Monitor').id), isFalse);
-      },
-    );
 
     test('nothing hides while a machine with one of the panes has not listed '
         'its agents yet', () async {

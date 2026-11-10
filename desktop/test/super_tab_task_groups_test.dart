@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 
@@ -76,12 +75,8 @@ Future<SuperTabController> pumpGrouped(
       home: Scaffold(
         body: ListenableBuilder(
           listenable: c,
-          builder: (context, _) => ProjectSidebar(
-            controller: c,
-            onSelect: c.select,
-            attention: SuperTabAttention.of(c),
-            onPage: (_) {},
-          ),
+          builder: (context, _) =>
+              ProjectSidebar(controller: c, onSelect: c.select, onPage: (_) {}),
         ),
       ),
     ),
@@ -141,21 +136,6 @@ void main() {
     );
     expect(row('lead'), findsOneWidget);
     expect(row('alpha-chat'), findsOneWidget);
-    await closeGrouped(tester, c);
-  });
-
-  // Task #2927: the tasks that need the reader are on their cards and in
-  // Activity; the project's number is its own chat's tags.
-  testWidgets('a project\'s badge leaves out the tasks that need the reader', (
-    tester,
-  ) async {
-    final c = await pumpGrouped(tester, groupedServer());
-    // `mine` waits on the reader by name; nothing in alpha does.
-    expect(find.byKey(const ValueKey('super-mentions-lead')), findsNothing);
-    expect(
-      find.byKey(const ValueKey('super-mentions-alpha-chat')),
-      findsNothing,
-    );
     await closeGrouped(tester, c);
   });
 

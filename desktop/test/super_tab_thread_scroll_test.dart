@@ -32,7 +32,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -291,8 +290,8 @@ void main() {
     c.openThread('message-1');
     await c.loadThread();
     // Just tall enough for all of it, Also send's line under the box included
-    // (#2662) and the box's inner padding (#2779).
-    await tester.binding.setSurfaceSize(const Size(500, 596));
+    // (#2662), the box's inner padding (#2779) and its 26 px line (11-10).
+    await tester.binding.setSurfaceSize(const Size(500, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(

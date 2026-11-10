@@ -129,13 +129,13 @@ function pod(options: { cache?: SwarmCache | null } = {}) {
   return { store, reads: new SwarmReads(store), cache }
 }
 
-/** The rich fixture Swarm in parts, with a conversation private to `peer`: their Buddy chat. */
+/** The rich fixture Swarm in parts, with a conversation private to `peer`: their 1:1 chat with an agent. */
 async function privateScene(extra: (s: ReturnType<typeof richSwarm>) => void = () => {}) {
   const s = richSwarm(Date.now())
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peerActor.userId)!.generation
-    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peerActor.userId, generation }] } })
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'agent-chat', audience: { people: [{ id: peerActor.userId, generation }] } })
   })
   extra(s)
   const tabId = `tab-${randomUUID()}`
@@ -299,8 +299,6 @@ describe('composing a read from what the cache holds', () => {
 })
 
 describe('a change poll\'s shared light read (DB 2.3)', () => {
-  const tag = (tabId: string, conversationId: string, personId: string) => db.superTabMention.create({ data: { id: `${tabId}-${conversationId}-${personId}`,
-    tabId, conversationId, messageId: `${conversationId}-msg`, personId, projectId: 'lead', authorAgentId: 'lead-agent', createdAt: new Date() } })
   /** The change feed and the newest change at this stamp, held as a poll would hold them, so what is counted after is the
    *  light base and what each reader adds to it. */
   const warm = async (cache: SwarmCache, tabId: string) => {
@@ -313,11 +311,7 @@ describe('a change poll\'s shared light read (DB 2.3)', () => {
     const machineId = `host-${randomUUID()}`
     await db.machine.create({ data: { machineId, userId: people.owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     let agentId = ''
-    const { tabId, web, done, secretGroup } = await privateScene(s => { agentId = s.add('reader-harness', s.web, false, ownerActor, machineId, ownerActor.userId) })
-    // Each person has their own waiting tags, so no two readers name the same conversations.
-    await tag(tabId, done, people.owner.sub)
-    await tag(tabId, secretGroup, people.owner.sub)
-    await tag(tabId, done, people.peer.sub)
+    const { tabId, web } = await privateScene(s => { agentId = s.add('reader-harness', s.web, false, ownerActor, machineId, ownerActor.userId) })
     const { reads, store, cache } = pod()
     const cursors = [(await reads.firstLoad(people.owner, tabId)).cursor, (await reads.firstLoad(people.peer, tabId)).cursor,
       (await reads.firstLoad(people.owner, tabId, agentId)).cursor]
@@ -335,20 +329,6 @@ describe('a change poll\'s shared light read (DB 2.3)', () => {
     expect(after.byCollection.SwarmProgress ?? 0).toBe(0)
   })
 
-  it('a second reader tagged in the same dormant conversation reads no part at the same stamp', async () => {
-    const { tabId, done, secretGroup } = await privateScene()
-    await db.swarmGroup.update({ where: { id: `${tabId}:${done}` }, data: { dormant: true } })
-    // The owner is also tagged elsewhere, so the two readers do not name the same conversations.
-    await tag(tabId, done, people.owner.sub)
-    await tag(tabId, secretGroup, people.owner.sub)
-    await tag(tabId, done, people.peer.sub)
-    const { reads } = pod()
-    const cursors = [(await reads.firstLoad(people.owner, tabId)).cursor, (await reads.firstLoad(people.peer, tabId)).cursor]
-    await reads.changes(people.owner, tabId, cursors[0]!)
-    const second = await partReads(() => reads.changes(people.peer, tabId, cursors[1]!))
-    expect(second.reads).toBe(0)
-    expect((second.value as { derived: { mentionsWaiting: number } }).derived.mentionsWaiting).toBe(1)
-  })
 })
 
 describe('named light conversations', () => {
