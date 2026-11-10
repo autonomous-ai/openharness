@@ -78,4 +78,15 @@ describe('opaque terminal binary relay codec', () => {
     expect(TERMINAL_BINARY_CLIENT_UP_KINDS.has(TerminalBinaryKind.keyframe)).toBe(false)
     expect(TERMINAL_BINARY_CLIENT_UP_KINDS.has(TerminalBinaryKind.sync)).toBe(false)
   })
+
+  // Agent browser streams: VNC bytes up, the viewer's keys, pointer and clipboard down, both as kind 8.
+  it('relays binary kind 8 both ways, and takes it from a client', () => {
+    expect(TerminalBinaryKind.browser).toBe(8)
+    for (const direction of [TerminalHopDirection.up, TerminalHopDirection.down]) {
+      const frame = opaque(TerminalBinaryKind.browser)
+      const packet = encodeTerminalHop(direction, '00112233-4455-6677-8899-aabbccddeeff', frame)!
+      expect(decodeTerminalHop(packet)).toMatchObject({ direction, kind: TerminalBinaryKind.browser, clientFrame: frame })
+    }
+    expect(TERMINAL_BINARY_CLIENT_UP_KINDS.has(TerminalBinaryKind.browser)).toBe(true)
+  })
 })

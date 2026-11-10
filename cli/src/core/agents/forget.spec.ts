@@ -37,7 +37,7 @@ function setup() {
     stopHeartbeat: vi.fn(),
     input: { forget: vi.fn() },
     deviceInput: { forget: vi.fn() },
-    detachDsh: vi.fn(),
+    ended: vi.fn(),
     mirror: { forget: vi.fn() },
     clients: { send: vi.fn(), sendCommander: vi.fn() },
     dataDir: '/data',
@@ -137,7 +137,7 @@ describe('forgetting a session', () => {
     expect(deps.registry.unbindSession).toHaveBeenCalledWith('s1')
     expect(deps.registry.removeAgent).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
-    expect(deps.detachDsh).not.toHaveBeenCalled()
+    expect(deps.ended).not.toHaveBeenCalled()
     expectLetGo(deps, 's1', 'a1')
     expect(deps.clients.send).not.toHaveBeenCalled()
     expect(deps.clients.sendCommander).not.toHaveBeenCalled()
@@ -150,7 +150,7 @@ describe('forgetting a session', () => {
     forgetSession('s1')
     expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }))
     expect(deps.registry.removeAgent).toHaveBeenCalledWith('a1')
-    expect(deps.detachDsh).toHaveBeenCalledWith('a1')
+    expect(deps.ended).toHaveBeenCalledWith('a1')
     expectLetGo(deps, 's1', 'a1')
     expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
     expect(deps.clients.sendCommander).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1' } })
@@ -187,7 +187,7 @@ describe('forgetting a session', () => {
     named.forgetSession('s9', { agentId: 'a9' })
     expect(named.deps.registry.remove).toHaveBeenCalledWith('s9')
     expect(named.deps.stoppedAgents.save).not.toHaveBeenCalled()
-    expect(named.deps.detachDsh).toHaveBeenCalledWith('a9')
+    expect(named.deps.ended).toHaveBeenCalledWith('a9')
     expect(named.deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a9', retained: false } })
     expect(named.deps.input.forget).toHaveBeenCalledWith('a9')
     // With no agent id at all, the session id is all there is to announce.

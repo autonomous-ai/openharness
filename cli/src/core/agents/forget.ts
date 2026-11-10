@@ -50,7 +50,8 @@ export interface ForgetDeps {
   stopHeartbeat: (sessionId: string) => void
   input: Pick<SessionInputController, 'forget'>
   deviceInput: Pick<AutonomousDeviceInput, 'forget'>
-  detachDsh: (agentId: string) => void
+  /** The agent no longer runs here: its DSH viewer and its browser let go (core/main.ts `agentEnded`). */
+  ended: (agentId: string) => void
   mirror: Pick<TurnRecaps, 'forget'>
   /** The app (`send`) and the dial (`sendCommander`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
@@ -60,7 +61,7 @@ export interface ForgetDeps {
 export function createForgetSession({
   registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, prompts, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, input,
-  deviceInput, detachDsh, mirror, clients, dataDir, onRemoved, owners, shortTurns,
+  deviceInput, ended, mirror, clients, dataDir, onRemoved, owners, shortTurns,
 }: ForgetDeps) {
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
   const forgetSession = (
@@ -122,7 +123,7 @@ export function createForgetSession({
     stopHeartbeat(sessionId)
     input.forget(announceId)
     deviceInput.forget(announceId)
-    if (!opts.keepAgent) { detachDsh(announceId); onRemoved?.(announceId); prompts.delete(announceId) }
+    if (!opts.keepAgent) { ended(announceId); onRemoved?.(announceId); prompts.delete(announceId) }
     mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return
     clients.send({ type: 'agent_deleted', payload: { agentId: announceId, retained: !!doomed } }) // web tab

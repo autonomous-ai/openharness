@@ -10,9 +10,10 @@
  * forged, each one makes every window on that computer re-read from this backend, device_keys_changed),
  * and `lib/adapterWs.ts` again for `devlog_append_result`, the answer to a machine's own log append; and the Swarm pushes
  * (`lib/swarmHostPushes.ts` swarm_host_changed, `lib/swarmClientPushes.ts` swarm_changed — forged, a host or a window reads
- * early, or believes the server pushes and waits for its safety net).
+ * early, or believes the server pushes and waits for its safety net); and `agent_browser_transport_error` from the relay
+ * (`lib/adapterWs.ts`, refused browser bytes; forged, the machine closes every browser stream it relays).
  */
-export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'devlog_append_result', 'swarm_host_changed', 'swarm_changed'])
+export const BACKEND_ONLY_DOWN_TYPES = new Set(['machine_meta', 'machine_revoked', 'desk_changed', 'zoo_changed', 'machines_changed', 'device_keys_changed', 'connectors_changed', 'devlog_append_result', 'swarm_host_changed', 'swarm_changed', 'agent_browser_transport_error'])
 
 /** A type no client may send down: the backend's own `__` control frames and the named ones above. */
 export function isBackendOnlyDownType(type: unknown): boolean {

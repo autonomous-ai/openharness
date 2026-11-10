@@ -63,6 +63,7 @@ class _Folders extends AppNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     launches.add((machine: machineId, engine: engine, folder: folder!));
     return null;

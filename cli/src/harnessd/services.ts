@@ -438,6 +438,11 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
   // never pays.
   devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
+  // The agent browser (services/agentBrowserProcess.ts): its Podman calls, one `podman events` stream, an image build that
+  // prints for minutes and a setup that waits on a password dialog. Chrome itself runs in Podman's containers, outside
+  // this budget. Started only once a browser is wanted here (core/agentBrowserLink.ts): a computer that never ticked
+  // Browser never pays for it.
+  agentBrowser: { services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7 },
 }
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */

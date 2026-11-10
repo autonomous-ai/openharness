@@ -489,6 +489,12 @@ describe('ServiceSupervisor', () => {
     expect(named.onDemand).toBeUndefined()
   })
 
+  // A core from before it never asks, so the master starts it with that core, as it ran every service before.
+  it('runs the agent browser only once a browser is wanted here, asked for by a core of protocol 7', () => {
+    const [browser] = serviceSpecs({}, SERVICE_HOSTS).filter((spec) => spec.name === 'agentBrowser')
+    expect(browser).toMatchObject({ services: ['agentBrowser'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 7 })
+  })
+
   it('runs the viewers and the Store only once something needs them, asked for by a core of protocol 5, and from the start when named', () => {
     const [viewers] = serviceSpecs({}, SERVICE_HOSTS).filter((spec) => spec.name === 'viewers')
     expect(viewers).toMatchObject({ services: ['viewers', 'store'], onDemand: true, askedSince: 5 })
@@ -512,12 +518,18 @@ describe('ServiceSupervisor', () => {
     expect(children).toHaveLength(0)
     // Models, the devices and the gateway it asks for itself (protocol 4); the engines' workers are new to it.
     four.unasked(4)
-    expect(children.map((child) => child.spec.name)).toEqual(['viewers'])
-    // A core of this protocol asks for each itself.
+    expect(children.map((child) => child.spec.name)).toEqual(['viewers', 'agentBrowser'])
+    // A core of protocol 5 asks for the viewers, not the agent browser, which came at 7.
     children.length = 0
     const five = make(onDemand)
     five.start()
     five.unasked(5)
+    expect(children.map((child) => child.spec.name)).toEqual(['agentBrowser'])
+    // A core of this protocol asks for each itself.
+    children.length = 0
+    const seven = make(onDemand)
+    seven.start()
+    seven.unasked(7)
     expect(children).toHaveLength(0)
   })
 

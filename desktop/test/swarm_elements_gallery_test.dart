@@ -6,6 +6,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/browser/browser_panel.dart';
+import 'package:harness/browser/browser_pill.dart';
+import 'package:harness/browser/browser_settings.dart';
+import 'package:harness/browser/browser_settings_page.dart';
+import 'package:harness/browser/browser_setup_dialog.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
@@ -172,8 +181,11 @@ Future<List<SuperTabController>> _show(
   final c = swarmV4Server().controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
+  // Faye's Browser settings, as her computer keeps them.
+  final browserApp = _BrowserSettingsApp();
+  addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 3224);
+  tester.view.physicalSize = const Size(760, 4353);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -188,6 +200,7 @@ Future<List<SuperTabController>> _show(
           // The task board reads its project from a Swarm.
           swarm: c,
           instructions: computer.link,
+          browserApp: browserApp,
         ),
       ),
     ),
@@ -377,8 +390,12 @@ class _Gallery extends StatelessWidget {
     required this.faces,
     required this.swarm,
     required this.instructions,
+    required this.browserApp,
   });
   final Brightness brightness;
+
+  /// Where Browser settings reads Faye's.
+  final AppNotifier browserApp;
   final List<String> faces;
 
   static const leftPane = ValueKey('gallery-left-pane');
@@ -700,6 +717,71 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
+              title(
+                'Browser in New agent: off, on, this computer to set up, another computer to set up',
+              ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  BrowserPill(on: false, onPressed: () {}),
+                  gap(),
+                  BrowserPill(on: true, onPressed: () {}),
+                  gap(),
+                  BrowserPill(on: true, needsSetup: true, onPressed: () {}),
+                  gap(),
+                  BrowserPill(
+                    on: false,
+                    unavailable: 'Set up Browser on Ken Mac first',
+                    onPressed: () {},
+                  ),
+                ],
+              ),
+              title('Set up Browser'),
+              const SizedBox(
+                width: 500,
+                child: BrowserSetupPrompt(ownMachine: false),
+              ),
+              title('Browser settings: a proxy with a saved password'),
+              SizedBox(
+                width: 420,
+                height: 420,
+                child: BrowserSettingsPage(
+                  app: browserApp,
+                  machineId: 'm',
+                  agentId: 'faye',
+                  onBack: () {},
+                ),
+              ),
+              title(
+                'Browser in an agent\'s bar, closed and open; its panel setting up, and failed',
+              ),
+              Row(
+                children: [
+                  SizedBox(child: BrowserButton(open: false, onPressed: () {})),
+                  gap(),
+                  SizedBox(child: BrowserButton(open: true, onPressed: () {})),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final agent in ['faye-setup', 'faye-failed']) ...[
+                    SizedBox(
+                      width: 340,
+                      height: 230,
+                      child: BrowserPanel(
+                        app: browserApp,
+                        machineId: 'm',
+                        agentId: agent,
+                        thisComputer: true,
+                        onClose: () {},
+                      ),
+                    ),
+                    gap(),
+                  ],
+                ],
+              ),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
               // is not there.
               title('Empty: a row'),
@@ -755,6 +837,57 @@ class _Gallery extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Faye's computer as Browser settings and her Browser panels ask it: a SOCKS5 proxy whose password it keeps.
+class _BrowserSettingsApp extends AppNotifier {
+  _BrowserSettingsApp()
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      ) {
+    // Her computer, with one browser building and one whose Podman is down.
+    const machine = Machine(
+      machineId: 'm',
+      authMode: MachineAuthMode.remote,
+      name: 'Ken Mac',
+    );
+    machines = [machine];
+    machineStates['m'] = MachineState(machine)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = const [
+        Agent(
+          id: 'faye-setup',
+          name: 'Faye',
+          engine: 'claude',
+          browser: AgentBrowser(state: 'setup', step: 'building'),
+        ),
+        Agent(
+          id: 'faye-failed',
+          name: 'Faye',
+          engine: 'claude',
+          browser: AgentBrowser(state: 'failed', error: 'podman_down'),
+        ),
+      ];
+  }
+
+  @override
+  Future<BrowserSettings> agentBrowserSettings(
+    String machineId,
+    String agentId,
+  ) async => const BrowserSettings(
+    proxy: BrowserProxy(
+      scheme: 'socks5',
+      host: 'proxy.example',
+      port: 1080,
+      username: 'faye',
+      passwordSet: true,
+    ),
+    languages: 'vi-VN, en-US',
+  );
 }
 
 /// What GitHub said to a person's agent on pull request [number], as their chat with it draws it ([SuperTabGitHubRow]): its

@@ -50,6 +50,8 @@ export interface ResumeAgentServiceDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
   attachDsh(session: RegisteredSession): void
+  /** Its browser starts again, for an agent created with Browser (core/api.ts `AgentBrowserPort.attached`). */
+  attachBrowser?(session: RegisteredSession): void
   /** Follows a session: its history read, then its tail (core/transcripts/attach.ts). */
   attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
@@ -72,7 +74,7 @@ function preparationFailed(agent: string, error: unknown) {
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, createBackend, noBackendCode = 'TMUX_UNAVAILABLE', backendFor, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, adoptSwarmSkill,
-    refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks } = deps
+    refreshGridWebSearch, clearDeleted, attachDsh, attachBrowser, attachSession, relaunchMarks } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -418,6 +420,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           return { ok: true, session: ready, resumed: true }
         }
         if (pending.dsh) attachDsh(pending)
+        if (pending.browser) attachBrowser?.(pending)
         const waited = await waitForResume(pending, current)
         if (waited.ok) keepLaunchArgs(waited.session)
         return waited

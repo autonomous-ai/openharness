@@ -433,7 +433,7 @@ async function stopFixture() {
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
     runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
     stopHeartbeat: vi.fn(), input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
-    detachDsh: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
+    ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
     dataDir: process.env.ADAPTER_DATA_DIR!,
   })
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))

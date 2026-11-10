@@ -115,6 +115,7 @@ class _FirstApp extends AppNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+    bool browser = false,
   }) async {
     launches.add((
       engine: engine,

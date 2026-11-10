@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { HARNESSD_PROTOCOL, isCoreMessage, isMasterMessage, isUpdaterMessage } from './protocol.js'
 
 describe('the spawn channel protocol', () => {
-  it('is protocol 6: the core asks its master to stop, and the master asks a process to leave', () => {
-    expect(HARNESSD_PROTOCOL).toBe(6)
+  it('is protocol 7: the core asks for the agent browser\'s process', () => {
+    expect(HARNESSD_PROTOCOL).toBe(7)
   })
 
   it.each([
