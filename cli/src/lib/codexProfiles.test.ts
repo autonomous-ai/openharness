@@ -97,7 +97,7 @@ describe('codexProfiles', () => {
     const folder = join(home, '.codex-linked')
     mkdirSync(folder)
     linkCodexProfile(folder)
-    // A link is a folder this machine knows (New Harness makes them): it is not an offer to the Swarm.
+    // A link is a folder this machine knows (New Harness makes them).
     expect(listCodexProfiles([], emptyDiscovery)).toEqual([{ path: folder, label: '.codex-linked' }])
   })
 

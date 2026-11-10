@@ -944,7 +944,7 @@ describe('the models service', () => {
         expect(vi.mocked(apiTargetAnswer).mock.calls.at(-1)!.slice(1)).toEqual(['a', 'm'])
       })
 
-      it('codex_profiles_list: the folders this machine offers, with the ones the asker has seen; a failed scan is said', async () => {
+      it('codex_profiles_list: the folders this machine lists, with the ones the asker has seen; a failed scan is said', async () => {
         const { ask } = setup()
         const { core } = setup()
         const id = (path: string) => profileId(core.daemon.machineId(), 'codex', path)
@@ -985,7 +985,7 @@ describe('the models service', () => {
         }
       })
 
-      it('claude_profiles_list: the folders this machine offers under its own machine id; a failed scan is said', async () => {
+      it('claude_profiles_list: the folders this machine lists under its own machine id; a failed scan is said', async () => {
         const { ask, core } = setup()
         expect(await ask('claude_profiles_list', { observedPaths: ['/home/me/.claude-work', 7] })).toEqual({ profiles: [{ id: 'p', path: '/home/me/.claude-work', label: 'Claude' }] })
         expect(listClaudeProfiles).toHaveBeenLastCalledWith(['/home/me/.claude-work'], { machineId: core.daemon.machineId() })

@@ -13,8 +13,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { cliSignedIn, type EngineStatusRun } from '../lib/engineAccount.js'
 import { buddyAccountFile, buddyOwnerOf, signedInAccount } from '../lib/buddyGuard.js'
 import { handoffBaseName } from '../lib/agentHandoff.js'
-import { profileId as profileIdOf } from '../lib/claudeProfiles.js'
-import { defaultCodexHome } from '../lib/codexProfiles.js'
+import { namesDefaultAccount, profileId as profileIdOf } from '../lib/claudeProfiles.js'
 import { oneShotParentEnv } from '../lib/loginShellEnv.js'
 import { permissionModeApproves, permissionModeFlags } from '../lib/engineLaunch.js'
 import { parseSwarmSkill, wireRole } from '../lib/swarmSkills.js'
@@ -143,13 +142,13 @@ export class LeadSwitchRequests {
   private async carryOut(row: SwitchRow, run: Run, request: NonNullable<SwitchRow['agent']['switchRequest']>): Promise<Run['outcome']> {
     const engine = String(request.engine), profileId = String(request.profileId ?? 'default')
     if (engine !== 'claude' && engine !== 'codex') return { ok: false, error: NO_ENGINE }
-    // The default account of the machine the PM moves to, by its literal name or its hex id: for a move to another machine the
-    // Swarm names that machine's default (backend commands.ts defaultProfileId). Here the default Codex home also goes by the id
-    // of its path, as profileHome took it: a Swarm may hold that id from an older report.
-    const target = run.crossMachine ? String(request.targetMachineId) : this.machineId
-    const defaults = ['default', profileIdOf(target, engine, 'default'),
-      ...engine === 'codex' && !run.crossMachine ? [profileIdOf(target, engine, defaultCodexHome())] : []]
-    if (!defaults.includes(profileId)) return { ok: false, error: DEFAULT_ONLY }
+    // The default account of the machine the PM moves to. Here, by any of its names (profileHome's rule); for a move to another
+    // machine, the Swarm names that machine's default by its hex id (backend commands.ts defaultProfileId), as this host cannot
+    // know the path of the other machine's Codex home.
+    const isDefault = run.crossMachine
+      ? profileId === 'default' || profileId === profileIdOf(String(request.targetMachineId), engine, 'default')
+      : namesDefaultAccount(engine, profileId, this.machineId)
+    if (!isDefault) return { ok: false, error: DEFAULT_ONLY }
     const old = this.core.agents.byAgent(run.harnessId)
     // The PM comes back as a Swarm PM, from what it was started as: with no saved role or no conversation to rebuild its prompt
     // from, it would come back role-less, with no Swarm skill and the machine owner's own GitHub login.

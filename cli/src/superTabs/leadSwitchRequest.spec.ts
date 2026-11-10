@@ -401,11 +401,14 @@ describe('whether the default account holds a sign-in', () => {
   // Review of #3831: a host gives no sign-in check of its own, so a switch asks the engine through this one.
   it('is what a switch asks by default, of the default account', async () => {
     const t = setup()
+    // The daemon's own environment, whatever this test runs under: no key of Claude's, its own CLAUDE_CONFIG_DIR.
+    for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) vi.stubEnv(name, '')
+    vi.stubEnv('CLAUDE_CONFIG_DIR', t.home)
     const no = cli(false)
     const switches = new LeadSwitchRequests(fakeCore({ dataDir: t.dataDir, account: { backend: vi.fn(async () => ({ status: 200, body: { success: true, data: { result: {} } } })) },
       agents: { byAgent: vi.fn(() => ({ ...PM }) as never) } }), 'm1', { now: () => NOW, run: no.run })
     await switches.serve(row())
-    expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', undefined]])
+    expect(no.calls.map(call => [call.engine, call.env.CLAUDE_CONFIG_DIR])).toEqual([['claude', t.home]])
     expect(vi.mocked(switches['core'].account.backend).mock.calls.at(-1)![2]).toMatchObject({ command: { type: 'agent.switchResult', ok: false, error: 'that account is signed out' } })
   })
 })

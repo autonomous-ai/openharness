@@ -169,6 +169,17 @@ export function listClaudeProfiles(
 }
 
 /**
+ * Whether [id] names [engine]'s default account on this machine: the literal 'default', which an older backend sends, its
+ * reported id, or for Codex the id of the default home's path, which a native Codex launch once reported.
+ */
+export function namesDefaultAccount(
+  engine: 'claude' | 'codex', id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
+): boolean {
+  return id === 'default' || id === profileId(machineId, engine, 'default')
+    || (engine === 'codex' && id === profileId(machineId, engine, defaultCodexHome(options.home, options.environment)))
+}
+
+/**
  * The folder a reported profile id stands for: 'default' for the engine's default account (the literal 'default', which an
  * older backend sends, or its reported id), a path for a profile this machine still has, null for an unknown or gone one.
  */
@@ -176,12 +187,10 @@ export function profileHome(
   engine: string, id: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
 ): string | 'default' | null {
   if (engine !== 'claude' && engine !== 'codex') return null
-  if (id === 'default' || id === profileId(machineId, engine, 'default')) return 'default'
+  if (namesDefaultAccount(engine, id, machineId, options)) return 'default'
   if (engine === 'claude') return listClaudeProfiles([], { ...options, machineId }).find((p) => p.id === id)?.path ?? null
   const discovery = options.home ? { home: options.home, environment: (options.environment ?? {}) as Record<string, string> } : undefined
-  const found = listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id)?.path ?? null
-  // The default Codex home is the default account, whichever of its two ids was asked.
-  return found === defaultCodexHome(options.home, options.environment) ? 'default' : found
+  return listCodexProfiles([], discovery).find((p) => profileId(machineId, 'codex', p.path) === id)?.path ?? null
 }
 
 /**
