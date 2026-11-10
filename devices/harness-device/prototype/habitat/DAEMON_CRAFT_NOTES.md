@@ -1,6 +1,6 @@
 # Daemon craft research supplied by the user
 
-Received September 27, 2026; the supplied research is dated September 26. Preserved below as reference material for the [creature experiment](CREATURE_REFERENCES.md). The original `daemons/README.md` and `daemons/tools/generate.mjs` references belong to the daemon project; they are not relative paths within this device experiment.
+Received September 27, 2026; the supplied research is dated September 26. Preserved below as reference material for the creature experiment (removed from the firmware on 2026-11-10; see git history). The original `daemons/README.md` and `daemons/tools/generate.mjs` references belong to the daemon project; they are not relative paths within this device experiment.
 
 **Provenance:** the material below was supplied by the user. Its source-specific historical dates, competitor implementation details, biological timing figures and terminal-portability claims have not all been independently verified in this documentation update. Preserve its own uncertainty labels. The device application notes in `CREATURE_REFERENCES.md` describe what we are taking from it; this is not a blanket adoption of its status-line constraints or product mechanics.
 

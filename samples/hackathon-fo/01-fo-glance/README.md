@@ -91,8 +91,7 @@ Add a `DEVICE_HABITAT_FO` build flag, following the existing `DEVICE_HABITAT_ORA
 1. `devices/harness-device/firmware/main/CMakeLists.txt`: find `if(DEVICE_HABITAT_ORANGE)` and add an identical
    block for `DEVICE_HABITAT_FO` (`target_compile_definitions(${COMPONENT_LIB} PRIVATE DEVICE_HABITAT_FO=1)`).
 2. `devices/harness-device/firmware/main/ui/habitat/theme.h`: under `#ifdef DEVICE_HABITAT_FO`, set Fo colors for
-   - the `HT_THEME_FOCUS_CANVAS` background (the Focus face; a regular build has only the Focus face, flag
-     `HABITAT_FOCUS_ONLY`),
+   - the `HT_THEME_FOCUS_CANVAS` background (the Focus face; the dial's only face),
    - `HT_THEME_ACCENT` (the accent color; in the main exercise it fills the glance ring),
    - `HT_THEME_VOICE` (the mic bar while you speak),
    - and add `HT_THEME_WORKING` for the "Coalescing… 0:34" line while the agent works. Its default stays `0x00ff2f`.

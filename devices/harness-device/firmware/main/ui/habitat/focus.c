@@ -9,17 +9,17 @@
 #include <string.h>
 
 /*
- * THE FOCUS FACE — the agent screen, laid out like the octopus's (owner, 2026-10-01).
+ * THE FOCUS FACE — the agent screen (owner, 2026-10-01).
  *
- * The session's name curves along the top edge in the octopus's own arc, in Inter Medium 26 laid out
+ * The session's name curves along the top edge, in Inter Medium 26 laid out
  * glyph by glyph along it (ht_arc_title_face, ht_arc_inter_prop; the lower-arc status and the Listening
  * sweep wear the same face on the lower curve, ht_arc_inter_lower);
- * the engine's mark stands where the octopus does, 56 px (focus_marks.c) — for an engine with a pet
+ * the engine's mark stands in the middle of the glass, 56 px (focus_marks.c) — for an engine with a pet
  * (Claude, Codex: pets.c) it is the animated pet instead, centred in the same box. Under it the recap
  * is set in the "Kindle dark" layout (owner, 2026-10-02, K3: mockup/kindle_options.py), now in Inter, SF Compact's
  * open look-alike (owner, 2026-10-03), soft white Inter 30 (inter_30, focus_faces.c), back in a card (owner, 2026-10-07,
  * mockup/recap_box.py A, recap_pad.py P1): the LVGL firmware's card at 80 %, rimmed, 384 px wide, as tall as its lines, each line centred
- * on x 233 in a 364 px column at x 51, 43 px apart, up to four lines — as many as the octopus reads — and a longer recap
+ * on x 233 in a 364 px column at x 51, 43 px apart, up to four lines, and a longer recap
  * ends in "…". The block is centred vertically in a fixed area (y 176..376), so the mark never moves
  * with its length. A question takes the recap's place and look. With no recap, the working line or a
  * resting line ("Let's build it", …) is centred on the glass. The mark stands halfway between the
@@ -132,9 +132,9 @@ static const char *relaxing_line(const ht_character_face_t *f)
 /*
  * THE ENGINE'S OWN MARK.
  *
- * Order matches ENGINES in scripts/gen_habitat_fonts.py, which is what assigns the codepoints; the
- * two lists are one list in two files and must be changed together. `engine` is twelve bytes on the
- * wire (cable_client.c) and was stored and drawn nowhere until this face.
+ * Order matches the engine marks in gen_lvgl_assets.py (ht_icon_engine20) and gen_focus_marks.py
+ * (ht_icon_engine56); the lists are one list in several files and must be changed together. `engine`
+ * is twelve bytes on the wire (cable_client.c).
  *
  * An unknown engine gets no badge rather than a wrong one — a mark that means "some engine" teaches
  * a person to stop reading it.
@@ -143,25 +143,6 @@ static const char *const ENGINES[] = {
     "claude", "codex", "cursor", "opencode", "grok", "copilot", "amp",
     "devin", "kilo", "pi", "hermes", "muse", "agy", "commandcode",
 };
-
-/*
- * And the colour it is drawn in — one per engine, in the order above.
- *
- * A badge is a single text cell, and ht_run_t.colors is per CELL, so a mark gets exactly one colour;
- * a two-tone logo (the Codex ring, the Antigravity gradient) is flattened to its dominant hue and
- * that is a real limit, not a choice. What IS a choice is which colour, and the old firmware's answer
- * is the one kept here: it recoloured Claude alone, to 0xcc7c5e, and let every other vendored asset
- * keep its own — which for ten of these fourteen meant white. Measured off those assets, only Codex,
- * Kilo, Muse and Antigravity ever carried a hue at all. Painting all fourteen in the accent, as the
- * first draft of this face did, made every engine look like the same lilac smudge and told a person
- * nothing; 0 here means "no colour of its own", and the mark is drawn in the row's ink.
- */
-static const uint32_t ENGINE_INK[] = {
-    0xcc7c5e, 0x7090f0, 0, 0, 0, 0, 0,
-    0, 0xf0f070, 0, 0, 0x2d9bf0, 0x3080f0, 0,
-};
-_Static_assert(sizeof ENGINE_INK / sizeof ENGINE_INK[0] == sizeof ENGINES / sizeof ENGINES[0],
-               "one ink per engine");
 
 int ht_focus_engine_index(const char *engine)
 {
@@ -556,22 +537,6 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
     return 0;
 }
 
-bool ht_focus_engine_mark(const char *engine, char out[4], uint32_t *ink)
-{
-    if (!engine || !*engine) return false;
-    for (unsigned i = 0; i < sizeof ENGINES / sizeof ENGINES[0]; i++) {
-        if (strcmp(engine, ENGINES[i])) continue;
-        uint32_t cp = HT_ENGINE_FIRST + i;
-        *ink = ENGINE_INK[i];
-        out[0] = (char)(0xe0 | (cp >> 12));
-        out[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
-        out[2] = (char)(0x80 | (cp & 0x3f));
-        out[3] = 0;
-        return true;
-    }
-    return false;
-}
-
 /*
  * THE VOICE SCREEN: the waveform, or the three sparkles, and nothing else.
  *
@@ -580,7 +545,7 @@ bool ht_focus_engine_mark(const char *engine, char out[4], uint32_t *ink)
  * whole job is to show that it is hearing you. So this branch emits the face's eight runs with the
  * other six empty, which is what keeps ht_damage() on its cheap path; see the note at the top.
  *
- * Nine bars from six heights, indexed by the 0..4 level that already reaches every skin through
+ * Nine bars from six heights, indexed by the 0..4 level that reaches the face through
  * pose.level. The shape is a hill: loud makes it taller, not wider.
  */
 /*
@@ -715,7 +680,7 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
 /*
  * The microphone level, in one run.
  *
- * Nine cells, indexed by the 0..4 level that already reaches every skin through pose.level (fed from
+ * Nine cells, indexed by the 0..4 level that reaches the face through pose.level (fed from
  * audio_client_input_level()). Deliberately NOT a background-filled bar whose width tracks the
  * level: a run whose `w` changes every frame trips the reshape path in ht_damage() and forfeits
  * banded damage for the entire scene. A fixed-width string changes only its cells.
@@ -807,7 +772,7 @@ static void status_fitted(char *out, size_t cap, const ht_character_face_t *f, c
 }
 
 /*
- * The recap as the face reads it: cut to the octopus's ninety codepoints, then a glyph at a time until
+ * The recap as the face reads it: cut to ninety codepoints, then a glyph at a time until
  * it fits four lines with its "…" — measured, since ninety short words can still need five.
  */
 static void recap_cut(char *out, size_t cap, const char *recap, const ht_font_t *font, int width)
@@ -912,7 +877,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     if (f->engine && !strcmp(f->engine, "codex") && empty) size = 2;
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
-    // The name on the top curve, the octopus's arc; a tap there opens the pane list.
+    // The name on the top curve; a tap there opens the pane list.
     int title_run = s->count;
     ht_arc_title_face(s, ht_rgb(FOCUS_FG), f->recipient && *f->recipient ? f->recipient : "\xe2\x80\xa6",
                       &ht_arc_inter_prop);
@@ -920,7 +885,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     static const ht_arc_face_t chat_face = {.prop = &ht_lv_inter_20, .mid = 12};
     if (f->chat && *f->chat) ht_arc_inner_face(s, ht_rgb(HT_THEME_SECONDARY), f->chat, &chat_face);
 
-    // The engine's mark, where the octopus stands. An unknown engine leaves the place empty.
+    // The engine's mark, in the middle of the glass. An unknown engine leaves the place empty.
     int engine = ht_focus_engine_index(f->engine);
     int mark_x = (HT_WIDTH - MARK_SIZE) / 2;
     const ht_pet_t *pet = pet_for(f);
@@ -1051,15 +1016,6 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         for (unsigned k = 0; k < relax->shapes->count; k++) scene_shape(s, relax, 4, k, f->clock_ms);
 }
 
-void ht_focus_portrait(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,
-                       ht_character_size_t size, int y)
-{
-    (void)frame;
-    (void)size;
-    const char *name = f->recipient ? f->recipient : "";
-    ht_center(s, y, &ht_mono_28, ink, name);
-}
-
 bool ht_focus_motion_tick(ht_character_motion_t *m, uint32_t now, ht_character_mood_t mood,
                           bool quiet, bool visible, bool down, int x, unsigned level,
                           uint32_t activity)
@@ -1068,7 +1024,7 @@ bool ht_focus_motion_tick(ht_character_motion_t *m, uint32_t now, ht_character_m
      * Fifteen frames, and only the voice screen spends them.
      *
      * Nothing on the home face moves but the pet, which runs on clock_ms, not on these
-     * frames — a skin whose subject is the work should not fidget. These are
+     * frames — a face whose subject is the work should not fidget. These are
      * the recording meter and the sending sweep, both of which the old firmware animated, and the
      * duration is picked so each lands on the cadence it had there.
      *
