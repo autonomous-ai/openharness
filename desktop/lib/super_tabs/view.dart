@@ -408,6 +408,10 @@ class _SuperTabViewState extends State<SuperTabView>
   final _anchors = <String, ({String messageId, double top})>{};
   // Each list's dividing row: see [_splitAt].
   final _split = <String, SuperTabMessage>{};
+
+  /// Where a list's groups are counted from when the list divides inside a group ([_moveSplitToView]): that group's first
+  /// row. Otherwise they are counted from the dividing row.
+  final _groupFrom = <String, SuperTabMessage>{};
   // Each list's rebuilds around a new dividing row ([_restartAtEnd]): its
   // rows' slivers are keyed by it, so a restart lays out no old row.
   final _restarts = <String, int>{};
@@ -642,6 +646,7 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       _scroll.clear();
       _split.clear();
+      _groupFrom.clear();
       _restarts.clear();
       _latest.clear();
       _following.clear();
@@ -1258,6 +1263,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (own.isEmpty) return;
     final first = own[(own.length - _restartRows).clamp(0, own.length - 1)];
     _split[id] = first;
+    _groupFrom.remove(id);
     c.keepFrom(id, first);
     _restarts[id] = (_restarts[id] ?? 0) + 1;
     _anchors.remove(id);
@@ -5206,6 +5212,7 @@ class _SuperTabViewState extends State<SuperTabView>
         : messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
     if (at >= 0) return at;
     _split[id] = messages.first;
+    _groupFrom.remove(id);
     c.keepFrom(id, messages.first);
     return 0;
   }
@@ -5218,7 +5225,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// first row of the group at the top edge of the view, its place
   /// unchanged, so the controller may cut the rows above (it never cuts below
   /// it). From a group's first row the groups below stay as they were; only
-  /// rows above the view can regroup.
+  /// rows above the view can regroup. When that row is above the rows laid out
+  /// (a group taller than the room above the view), the list divides at the row
+  /// at the top edge, which always is, and its groups are still counted from the
+  /// group's first row ([_groupFrom]), where the cut stops: before, the dividing
+  /// row never moved there, and nothing was ever cut.
   void _moveSplitToView(String id, SuperTabChatScroll scroll) {
     final split = _split[id];
     if (_feeds.containsKey(id)) {
@@ -5232,18 +5243,26 @@ class _SuperTabViewState extends State<SuperTabView>
     if (at < 0 || messages.length - at <= _rowsBelowSplit || top == null) {
       return;
     }
-    final joined = _joined(messages, split);
-    var index = messages.indexWhere((m) => m.id == top);
+    final joined = _joined(messages, _groupFrom[id] ?? split);
+    final topAt = messages.indexWhere((m) => m.id == top);
+    var index = topAt;
     while (index > at && joined.contains(messages[index].id)) {
       index--;
     }
     if (index <= at) return;
     final first = messages[index];
-    final offset = _offsetInList(_built[first.id]);
+    final groupLaidOut = _offsetInList(_built[first.id]);
+    final divide = groupLaidOut == null ? messages[topAt] : first;
+    final offset = groupLaidOut ?? _offsetInList(_built[top]);
     if (offset == null) return;
     // Its row starts the newer rows now: the rows are measured from it.
     scroll.moveContent(-offset);
-    _split[id] = first;
+    _split[id] = divide;
+    if (divide == first) {
+      _groupFrom.remove(id);
+    } else {
+      _groupFrom[id] = first;
+    }
     c.keepFrom(id, first);
   }
 
@@ -5263,10 +5282,15 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     if (index <= at) return;
     final first = rows[index];
-    final offset = _offsetInList(_built[first.id]);
+    // As [_moveSplitToView]: at the row at the top when the group's first row is above the rows laid out. Groups and the cut
+    // keep to the first own row from the group's first row on.
+    final groupLaidOut = _offsetInList(_built[first.id]);
+    final offset = groupLaidOut ?? _offsetInList(_built[top]);
     if (offset == null) return;
     scroll.moveContent(-offset);
-    _feedAnchor[id] = first;
+    _feedAnchor[id] = groupLaidOut == null
+        ? rows.firstWhere((m) => m.id == top)
+        : first;
     final feed = _feeds[id];
     final own = rows
         .skip(index)
@@ -5274,6 +5298,7 @@ class _SuperTabViewState extends State<SuperTabView>
         .firstOrNull;
     if (own != null) {
       _split[id] = own;
+      _groupFrom.remove(id);
       c.keepFrom(id, own);
     }
   }
@@ -5531,14 +5556,17 @@ class _SuperTabViewState extends State<SuperTabView>
     // Rows on their way group by the same rule, so a quick line keeps the
     // shape it will have once confirmed; one Not sent keeps its name and
     // actions.
-    final grouped = _joined(ownWithOutgoing, _split[c.selectedId])
-      ..removeWhere(
-        (id) => switch (pendingById[id]?.state) {
-          SuperTabOutgoingState.refused ||
-          SuperTabOutgoingState.unconfirmed => true,
-          _ => false,
-        },
-      );
+    final grouped =
+        _joined(
+          ownWithOutgoing,
+          _groupFrom[c.selectedId] ?? _split[c.selectedId],
+        )..removeWhere(
+          (id) => switch (pendingById[id]?.state) {
+            SuperTabOutgoingState.refused ||
+            SuperTabOutgoingState.unconfirmed => true,
+            _ => false,
+          },
+        );
     // Find matches the rows as they are drawn now.
     final search = _findIn == c.selectedId ? (_find?..refresh()) : null;
     Widget row(int index) {
