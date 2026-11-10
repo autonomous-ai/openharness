@@ -64,7 +64,7 @@ import 'identity.dart' show SuperTabAvatar, superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
-import 'backlog.dart'
+import 'task_priority.dart'
     show
         SuperTabTaskPriority,
         superTabCarriesPriority,

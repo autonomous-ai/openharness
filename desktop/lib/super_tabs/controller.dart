@@ -13,7 +13,7 @@ import '../measurement/speed_marks.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
-import 'backlog.dart' show SuperTabTaskPriority;
+import 'task_priority.dart' show SuperTabTaskPriority;
 import 'message_link.dart';
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
@@ -2838,20 +2838,6 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
-  /// Moves [taskId] right after [after] in its project's shared Next up, or to
-  /// its top when [after] is null, for everyone (backend taskQueue.ts). Null
-  /// once the server took it; otherwise why it did not.
-  Future<String?> queueTask(String taskId, {required String? after}) async {
-    final done = await command({
-      'type': 'work.queue',
-      'conversationId': taskId,
-      'after': after,
-    });
-    return done != null
-        ? null
-        : operationError ?? 'Another change is on its way. Try again.';
-  }
-
   /// Sets task [taskId]'s priority for everyone (backend `work.priority`,
   /// task #3117): null once done, else why it was refused. Only a person or
   /// the project's PM may; an older server refuses the command as unknown.
@@ -2863,20 +2849,6 @@ class SuperTabController extends ChangeNotifier {
       'type': 'work.priority',
       'conversationId': taskId,
       'priority': priority.badge,
-    });
-    return done != null
-        ? null
-        : operationError ?? 'Another change is on its way. Try again.';
-  }
-
-  /// Pauses [taskId], or resumes it (#3819, a project on the Board): the server lets its project's owner, the Swarm's
-  /// owner and its decider do it. Null when done, else the server's sentence.
-  Future<String?> setTaskPaused(String taskId, {required bool paused}) async {
-    // One command both ways: `work.resume` resumes lost work (#3819).
-    final done = await command({
-      'type': 'work.pause',
-      'conversationId': taskId,
-      'paused': paused,
     });
     return done != null
         ? null

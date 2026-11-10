@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
-import 'backlog.dart';
+import 'task_priority.dart';
 
 /// A small rounded label: a count, a project, a badge or a pull request.
 class SuperTabChip extends StatelessWidget {

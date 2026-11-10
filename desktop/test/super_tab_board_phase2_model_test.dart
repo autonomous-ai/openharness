@@ -1,8 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/model.dart';
 
-import 'support/super_tab_fixture.dart';
-
 /// Task #3820 (Phase 2 of the Board, spec docs/plans/2026-11-06-buddy-board-final-spec.md): the fields the backend's
 /// #3817, #3818 and #3819 add, read by Desktop. With none of them, every getter reads as today.
 
@@ -49,27 +47,6 @@ void main() {
       expect(p.canSteer('dee'), isTrue);
       expect(p.canSteer('tuan'), isFalse);
       expect(p.canSteer('tuan', swarmOwner: true), isTrue);
-    });
-  });
-
-  group('a task', () {
-    test('paused carries who, when and why; absent reads as not paused', () {
-      final at = DateTime.utc(2026, 11, 6, 9);
-      final paused = SuperTabConversation.fromJson({
-        ...conversationFixture('t', 'Task'),
-        'paused': {
-          'by': 'dee',
-          'at': at.millisecondsSinceEpoch,
-          'reason': 'Waiting for the release',
-        },
-      });
-      expect(paused.paused?.by, 'dee');
-      expect(paused.paused?.at, at.toLocal());
-      expect(paused.paused?.reason, 'Waiting for the release');
-      expect(
-        SuperTabConversation.fromJson(conversationFixture('t', 'Task')).paused,
-        isNull,
-      );
     });
   });
 }

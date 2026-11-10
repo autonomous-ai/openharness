@@ -7,8 +7,7 @@ import 'package:harness_mobile/swarm/swarm_task_status.dart';
 
 import 'swarm_fixture.dart';
 
-/// The line under each task row, as the desktop's (#957, #2125, the mockup
-/// Ken approved): whether the task is moving, waiting on purpose and for
+/// The line under each task row (#957, #2125, the mockup Ken approved): whether the task is moving, waiting on purpose and for
 /// what, or stuck, and what the PM did about it.
 void main() {
   final now = DateTime.utc(2026, 10, 29, 12);

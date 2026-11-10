@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/backlog.dart';
+import 'package:harness/super_tabs/task_priority.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'support/super_tab_tasks.dart';
 import 'support/super_tab_fixture.dart';
 
 Finder _key(String key) => find.byKey(ValueKey(key));
@@ -17,24 +15,21 @@ Finder _in(Finder of, String text) =>
 List<Map<String, dynamic>> _groups(ConversationServer server) =>
     (server.state['conversations'] as List).cast<Map<String, dynamic>>();
 
-Map<String, dynamic> _group(ConversationServer server, String id) =>
-    _groups(server).firstWhere((g) => g['id'] == id);
+/// A task of project `lead`, numbered [number].
+Map<String, dynamic> _task(String id, String title, int number) => {
+  ...conversationFixture(id, title),
+  'projectId': 'lead',
+  'number': number,
+};
 
-/// The mockup's project with a hotfix asked after the P2 work: `hotfix` (#30,
-/// P0) is the newest task in Next up, and `crash` (#8, P0) the oldest in
-/// Working.
+/// Project openharness with one task, `preview` (#11), which the server says is P2.
 ConversationServer _server() {
-  final server = tasksServer();
-  _groups(server).addAll([
-    taskFixture('third', 'Rename the round dial', 14),
-    {...taskFixture('hotfix', 'Sign-in loops forever', 30), 'priority': 'P0'},
-    {
-      ...taskFixture('crash', 'Settings crash on open', 8, status: 'working'),
-      'priority': 'P0',
-    },
-  ]);
-  // A task the server says is P2 reads as one with no field.
-  _group(server, 'preview')['priority'] = 'P2';
+  final server = ConversationServer();
+  server.state['projects'] = [projectFixture('lead', 'openharness', 'lead')];
+  _groups(server).add({
+    ..._task('preview', 'Remove the old preview route', 11),
+    'priority': 'P2',
+  });
   return server;
 }
 
@@ -78,8 +73,8 @@ Iterable<Map> _commands(ConversationServer server, String type) => [
     if ((post['command'] as Map?)?['type'] == type) post['command'] as Map,
 ];
 
-/// Task priorities P0–P3 on Desktop (task #3117): a badge on every card, the
-/// Backlog's rows and the task header; P0 first wherever work is ordered.
+/// Task priorities P0–P3 on Desktop (task #3117): the task header's badge and
+/// its menu.
 void main() {
   test('each priority says what it means, and a task reads its effective '
       'one: the field, else the title marker, else P2', () {
@@ -188,8 +183,7 @@ void main() {
       tester,
     ) async {
       final server = _server();
-      _groups(server)
-          .add(taskFixture('legacy', 'Round dial crashes (urgent)', 31));
+      _groups(server).add(_task('legacy', 'Round dial crashes (urgent)', 31));
       await _view(tester, server, 'legacy');
       expect(_in(button, 'P0'), findsOneWidget);
       expect(_in(header, 'Round dial crashes'), findsOneWidget);
@@ -205,7 +199,7 @@ void main() {
     testWidgets('the project chat and a step show no priority', (tester) async {
       final server = _server();
       _groups(server).add({
-        ...taskFixture('review-step', 'Review', 32),
+        ..._task('review-step', 'Review', 32),
         'reviewOf': 'preview',
         'step': 'Review',
       });

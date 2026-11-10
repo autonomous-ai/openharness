@@ -811,7 +811,7 @@ int _compareProjects(SuperTabProject a, SuperTabProject b) {
 }
 
 /// The chats in the order the sidebar lists them, for Option+Shift+Down and
-/// Up (Slack's next unread): each project's chat from A to Z. Tasks are in each project's Tasks view, not here
+/// Up (Slack's next unread): each project's chat from A to Z. Tasks are on each project's task board, not here
 /// (task #2569). The round dial swipes projects in this A to Z order too (cli
 /// superTabs/cards.ts `leadsOf`), less the Personal projects this list hides
 /// (task #3042).

@@ -1765,38 +1765,6 @@ class ConversationServer {
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
-      } else if (command['type'] == 'work.queue') {
-        // As backend taskQueue.ts places it: right after `after` among the
-        // project's open tasks, by rank or else number; null for the top.
-        final groups = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>();
-        final task = groups.firstWhere(
-          (g) => g['id'] == command['conversationId'],
-        );
-        num key(Map<String, dynamic> g) =>
-            (g['queueRank'] ?? g['number'] ?? 0) as num;
-        final siblings =
-            groups
-                .where(
-                  (g) =>
-                      g['projectId'] == task['projectId'] &&
-                      g['archived'] != true &&
-                      g['number'] != null &&
-                      g['id'] != task['id'],
-                )
-                .toList()
-              ..sort((a, b) => key(a).compareTo(key(b)));
-        final after = command['after'];
-        if (after == null) {
-          task['queueRank'] = siblings.isEmpty ? 1 : key(siblings.first) - 1;
-        } else {
-          final i = siblings.indexWhere((g) => g['id'] == after);
-          final next = i + 1 < siblings.length ? siblings[i + 1] : null;
-          task['queueRank'] = next == null
-              ? key(siblings[i]) + 1
-              : (key(siblings[i]) + key(next)) / 2;
-        }
-        revision++;
       } else if (command['type'] == 'work.priority') {
         // As backend taskPriority.ts sets it: the task's one field.
         (state['conversations'] as List)
@@ -1816,71 +1784,6 @@ class ConversationServer {
             ? granted.add(command['personId'])
             : granted.remove(command['personId']);
         project['canChat'] = granted.toList();
-        revision++;
-      } else if (command['type'] == 'proposal.create') {
-        // As #3817 makes it: a card of its own, in Proposals until the PM decides. Its schema (proposalCards.ts
-        // proposalFields) takes one to five non-empty pieces of evidence, as this checks.
-        final evidence = command['evidence'];
-        if (evidence is! List ||
-            evidence.isEmpty ||
-            evidence.length > 5 ||
-            evidence.any((e) => e is! String || e.trim().isEmpty)) {
-          throw const SuperTabFailure(
-            'VALIDATION_ERROR',
-            'evidence: Array must contain at least 1 element(s)',
-            statusCode: 400,
-          );
-        }
-        final id = 'proposal-${(state['conversations'] as List).length}';
-        (state['conversations'] as List).add({
-          ...conversationFixture(id, command['title'] as String),
-          'projectId': command['projectId'],
-          'agentIds': <String>[],
-          'priority': command['priority'],
-          'proposal': {
-            'version': 1,
-            'text': command['text'],
-            'goal': command['goal'],
-            'why': command['why'],
-            'doneWhen': command['doneWhen'],
-            'evidence': command['evidence'],
-            'createdAt': DateTime.now().millisecondsSinceEpoch,
-            'senders': [
-              {'personId': Zone.current[_reader] as String? ?? 'owner'},
-            ],
-            'questions': <dynamic>[],
-          },
-        });
-        output['conversationId'] = id;
-        revision++;
-      } else if (command['type'] == 'proposal.answer') {
-        // As #3817 records it: the question's answer, by the person asked.
-        final card = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .firstWhere((g) => g['id'] == command['conversationId']);
-        final question = ((card['proposal'] as Map)['questions'] as List)
-            .cast<Map>()
-            .firstWhere((q) => q['id'] == command['questionId']);
-        question['answer'] = {
-          'text': command['text'],
-          'at': DateTime.now().millisecondsSinceEpoch,
-          'by': Zone.current[_reader] as String? ?? 'owner',
-        };
-        revision++;
-      } else if (command['type'] == 'work.pause') {
-        // As #3819 keeps it: the task's `paused` while paused, absent otherwise.
-        final task = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .firstWhere((g) => g['id'] == command['conversationId']);
-        if (command['paused'] == true) {
-          task['paused'] = {
-            'by': Zone.current[_reader] as String? ?? 'owner',
-            'at': DateTime.now().millisecondsSinceEpoch,
-            'reason': ?command['reason'],
-          };
-        } else {
-          task.remove('paused');
-        }
         revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
