@@ -1633,6 +1633,35 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     controller.forget('s1')
   })
 
+  // Seen once in seven Codex Stop runs (2026-11-10): a message sent within a second of Stop was typed while the
+  // Ctrl-C was still on its way, then the cancel's bookkeeping, done after the key, settled it as cancelled and
+  // dropped its submit check, so it was received and never typed into a turn.
+  it.each(['cancel', 'cancelConfirmed'] as const)('types a message sent while %s is still pressing Ctrl-C after the key, and keeps it', async (how) => {
+    vi.useFakeTimers()
+    let pressed!: (ok: boolean) => void
+    const keys: string[] = [], typed: string[] = [], said: string[] = []
+    const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+      getSession: () => session('codex'), validateRuntime: async () => true,
+      inject: async (_id, text) => { typed.push(text); return true },
+      sendKey: (_id, key) => { keys.push(key); return key === 'C-c' ? new Promise<boolean>(resolve => { pressed = resolve }) : Promise.resolve(true) },
+      capture: async () => codexComposer(''), onError: vi.fn() })
+    controller.setTurnOpen('s1', true)
+    const cancelled = how === 'cancel' ? (controller.cancel('s1'), Promise.resolve(true)) : controller.cancelConfirmed('s1')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(keys).toEqual(['C-c'])
+    controller.submit('s1', 'after stop', undefined, undefined, (outcome) => { said.push(outcome) })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(typed).toEqual([])
+    pressed(true)
+    expect(await cancelled).toBe(true)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(typed).toEqual(['after stop'])
+    expect(said).toEqual([])
+    controller.onTurnStarted('s1', 'after stop')
+    expect(said).toEqual(['started'])
+    controller.forget('s1')
+  })
+
   it('reports the original legacy cancellation error for a vanished process', async () => {
     const onError = vi.fn()
     const sendKey = vi.fn(async () => true)
