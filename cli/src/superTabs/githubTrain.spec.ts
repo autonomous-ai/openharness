@@ -39,6 +39,8 @@ function fakeRepo(now: () => number) {
     /** Runs before each merge into a train's branch: a test pushes onto the branch here. */
     beforeMerge: null as ((branch: string) => void) | null,
     sent: [] as Array<{ method: string; path: string; body: Json }>,
+    /** Every read asked, its query too. */
+    asked: [] as string[],
     next: 900,
     edits: 0,
   }
@@ -58,6 +60,7 @@ function fakeRepo(now: () => number) {
     const url = new URL(`https://api.github.com${path}`), p = url.pathname.slice(REPO.length), number = Number(/^\/(?:issues|pulls)\/(\d+)/.exec(p)?.[1])
     const commit = /^\/commits\/([0-9a-f]+)\//.exec(p)?.[1] ?? '', compared = /^\/compare\/(.+)\.\.\.(.+)$/.exec(p)
     const per = Number(url.searchParams.get('per_page') ?? 30), page = Number(url.searchParams.get('page') ?? 1)
+    state.asked.push(path.slice(REPO.length))
     const body = p === '' ? { default_branch: 'main', ...state.settings }
       // A page of the list, the most recently updated first, as GitHub pages it.
       : p === '/pulls' ? [...state.pulls.values()].filter(pull => pull.state === url.searchParams.get('state')).sort((a, b) => b.updated - a.updated).slice((page - 1) * per, page * per)
@@ -563,6 +566,21 @@ describe('a red train', () => {
 })
 
 describe('what the train never does', () => {
+  // The merger passes every 30 seconds for as long as the daemon runs: at rest the train adds one read to a pass, answered
+  // 304 while nothing closed (120 passes of githubLoops.spec.ts: 3,489 reads before the train, 3,611 with it).
+  it('asks GitHub for the closed pull requests once a pass, and for nothing else of its own, while none is ready', async () => {
+    const f = setup()
+    f.add(4)
+    f.state.comments.set(4, [])
+    await f.settle()
+    const before = f.state.asked.length
+    await f.tick()
+    const asked = f.state.asked.slice(before)
+    expect(asked.filter(path => path.includes('state=closed'))).toHaveLength(1)
+    expect(asked.filter(path => /^\/(?:git|compare)\//.test(path))).toEqual([])
+    expect(f.writes()).toEqual([])
+  })
+
   it('writes no ref outside harness-train/, and never moves one it made', async () => {
     const f = setup()
     for (const number of [4, 5, 6]) f.add(number)
