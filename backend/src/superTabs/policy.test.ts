@@ -201,7 +201,9 @@ describe('the seed asks two reads wherever the merge train did', () => {
       'devices/harness-device/firmware/main/cable_client.c', 'devices/harness-pro/firmware/main/pair_ble.c',
       // Aster's security review of #3250: the vLLM server's API-key check, the companions' secret-redaction guard, and the
       // team handoff with its machine-key proof.
-      'store/agents/vllm/guard.py', 'companions/src/shared/guard.ts', 'cli/src/team/handoff.ts']) {
+      'store/agents/vllm/guard.py', 'companions/src/shared/guard.ts', 'cli/src/team/handoff.ts',
+      // #3806: an old Team account's boot job stops here, so no work starts under the Team account's login.
+      'cli/src/team/bootGuard.ts']) {
       expect(requiredReads(SEED_RULES, [file]), file).toBe(2)
     }
   })
