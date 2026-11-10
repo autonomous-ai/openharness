@@ -77,7 +77,8 @@ const SELF = 'Harness'
  *  request, kind and head, as lampOS's train bot keys what it told (`<PR> <kind> <head>`, train-bot.sh), never by its words:
  *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
  *  head can change and change order. A restart finds a note said by these first words. */
-const NOTES = { unsigned: 'the READ-OK from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ', blocked: 'GitHub\'s rules for ' } as const
+const NOTES = { unsigned: 'the READ-OK from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ', blocked: 'GitHub\'s rules for ',
+  stacked: 'it carries open ' } as const
 type NoteKind = keyof typeof NOTES
 /** How long after a head is first seen its checks may count as passed, and then only when two looks in a row read them the same:
  *  lampOS's merge-when-green.sh waits for "the same in two looks 30 s apart, from 3 min on". A head just pushed has no checks
@@ -290,8 +291,9 @@ export class GitHubMerge {
   private async mergeReady(project: LedProject): Promise<void> {
     const { repo } = project
     const base = String((await this.reads.one(repo, `/repos/${repo}`)).default_branch ?? '')
-    const pulls = (await this.reads.current(repo, openPullsPath(repo), PULL_PAGES))
-      .filter(pull => pull.draft !== true && object(pull.base).ref === base)
+    // Every open pull request, drafts too, for what one may carry of another's (carriedPull); the ones that may merge.
+    const listed = await this.reads.current(repo, openPullsPath(repo), PULL_PAGES)
+    const pulls = listed.filter(pull => pull.draft !== true && object(pull.base).ref === base)
     // The team, read of the PM's Swarm (a changes read on the backend), only when a pull request could merge.
     if (!pulls.length) { this.forgetHeads(repo, new Set()); return }
     const team = teamOf(await this.deps.crew(project), project.pm)
@@ -334,6 +336,12 @@ export class GitHubMerge {
       if (state === 'dirty') { await this.tellOnce(repo, number, head, author, 'dirty', `${base}: rebase it on ${base} and push.`, comments); continue }
       if (state === 'blocked') { await this.tellOnce(repo, number, head, author, 'blocked', `${base} block the merge. Ask your person.`, comments); continue }
       if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
+      const carried = await this.carriedPull(repo, number, head, listed)
+      if (carried) {
+        await this.tellOnce(repo, number, head, author, 'stacked', `#${carried.number}'s commits (its head ${carried.head.slice(0, 7)}), so merging it would `
+          + `merge them too. It waits until #${carried.number} merges; then update it from ${base}.`, comments)
+        continue
+      }
       const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: head })
       if (merged.status !== 200) {
         // A head that moved (409) or a merge GitHub refused (405) is read again next pass.
@@ -347,6 +355,22 @@ export class GitHubMerge {
       this.reads.forget(repo)
     }
     this.forgetHeads(repo, open)
+  }
+
+  /** Another open pull request (a draft too) whose head is among [number]'s commits, or null: merging [number] would merge that one's
+   *  commits with it, unread or held. lampOS's train bot leaves such a pull request out until the one under it is merged
+   *  (train-bot.sh unstacked: #3014 and #3391 carried #3064's commit under their own). Read only when it could merge now. */
+  private async carriedPull(repo: string, number: number, head: string, open: Json[]): Promise<{ number: number; head: string } | null> {
+    const others = new Map(open.filter(pull => Number(pull.number) !== number).map(pull => [String(object(pull.head).sha ?? ''), Number(pull.number)]))
+    // Its own head is no other's: two pull requests of one head are the same commits, not one carried by the other.
+    others.delete('')
+    others.delete(head)
+    if (!others.size) return null
+    for (const commit of await this.reads.current(repo, `/repos/${repo}/pulls/${number}/commits?per_page=${PAGE}`, 3)) {
+      const under = others.get(String(commit.sha ?? ''))
+      if (under !== undefined) return { number: under, head: String(commit.sha) }
+    }
+    return null
   }
 
   /** Lets go of [repo]'s heads no longer open, as `<repo>#<number>@<head>`. */

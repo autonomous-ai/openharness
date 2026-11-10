@@ -71,6 +71,7 @@ function liveGitHub(clock: { now: number }) {
       : p === `/repos/${REPO}/pulls` ? page([...pulls.values()].filter(r => r.state === 'open'), url)
       : /\/issues\/\d+\/comments$/.test(p) ? page((comments.get(n(-2)) ?? []).filter(c => String(c.updated_at) >= since), url)
       : /\/pulls\/\d+\/reviews$/.test(p) ? []
+      : /\/pulls\/\d+\/commits$/.test(p) ? [{ sha: (pulls.get(n(-2))?.head as Json | undefined)?.sha }]
       : p === `/repos/${REPO}/labels` ? page(labels, url)
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: runs.get(String(p.split('/').at(-2))) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: [] }
