@@ -110,7 +110,7 @@ interface RunHookOpts {
   cursorHome?: string
   hermesHome?: string
   /** Fake Hermes SQLite source; null means the session row has not appeared. */
-  hermesSource?: 'cli' | 'tui' | 'subagent' | null
+  hermesSource?: 'cli' | 'tui' | 'subagent' | null | { source: string; created_source: string | null }
   /** How long Hermes' store takes to answer, in the shipped hook's seconds: a loaded machine. Stretched
    *  as the hook stretches its own step limits under HARNESS_HOOK_DEADLINE_MS (notify.mjs STEP_SCALE),
    *  so the delay keeps the same share of the sqlite3 limit whatever the budget. */
@@ -213,7 +213,8 @@ fs.readFileSync = (path, ...args) => {
         symlinkSync(target, join(binDir, 'grok'))
       }
       if (opts.hermesSource !== undefined) {
-        const rows = opts.hermesSource === null ? '[]' : JSON.stringify([{ source: opts.hermesSource }])
+        const rows = opts.hermesSource === null ? '[]'
+          : JSON.stringify([typeof opts.hermesSource === 'object' ? opts.hermesSource : { source: opts.hermesSource }])
         const stepScale = Number(env.HARNESS_HOOK_DEADLINE_MS) / 4500
         const delay = opts.hermesDelaySeconds ? `sleep ${opts.hermesDelaySeconds * stepScale}\n` : ''
         writeFileSync(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`, { mode: 0o755 })
@@ -970,6 +971,28 @@ describe('hook notify terminal scope', () => {
         input: { hook_event_name: 'on_session_start', session_id: `20260810_12000${name === 'child' ? '1' : '2'}_a1b2c3` },
       })
       expect(() => readFileSync(join(dataDir, 'registry.json'), 'utf8')).toThrow()
+    }
+  })
+
+  it('offline Hermes fallback binds a Hermes 0.23 local session only when its CLI or TUI created it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-local-'))
+    tmpDirs.push(dir)
+    const common = {
+      port: 9, tmuxPane: '%82', engine: 'hermes' as const, processEngine: 'hermes' as const, processExecutable: 'python3',
+      processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes', hermesHome: join(dir, 'hermes'),
+    }
+    const local = (n: number) => `local-${String(n).padStart(2, '0').repeat(32)}`
+    const cases = [
+      ['cli', { source: 'local', created_source: 'cli' }, true], ['tui', { source: 'local', created_source: 'tui' }, true],
+      ['acp', { source: 'local', created_source: 'acp' }, false], ['unknown', { source: 'local', created_source: 'unknown' }, false],
+      ['child', { source: 'subagent', created_source: null }, false],
+    ] as const
+    for (const [index, [name, row, binds]] of cases.entries()) {
+      const dataDir = join(dir, `${name}-data`)
+      await runHook({ ...common, dataDir, hermesSource: row, input: { hook_event_name: 'on_session_start', session_id: local(index + 1) } })
+      if (binds) {
+        expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: local(index + 1), engine: 'hermes' }])
+      } else expect(() => readFileSync(join(dataDir, 'registry.json'), 'utf8')).toThrow()
     }
   })
 

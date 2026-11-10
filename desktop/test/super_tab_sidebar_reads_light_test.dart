@@ -132,23 +132,6 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets(
-    'a mention of the reader in a task leaves its project regular: the tag '
-    'is the row\'s needs-you number and in Activity',
-    (tester) async {
-      final server = humansSwarm();
-      addNumberedWorkgroups(server, 1);
-      final controller = await show(tester, server);
-      server.tag('tag-1', conversationId: 'g1');
-      await news(tester, controller);
-      expect(
-        titleStyle(tester, project, 'Pilot').fontWeight,
-        isNot(grid.AppFont.semibold),
-      );
-      await close(tester, controller);
-    },
-  );
-
   // Review of #2790 (Sedge, Plover): a wait made a row bold, for every
   // viewer, and opening the task did not clear it, while a screen reader
   // heard "Unread messages". A wait is no unread message: Activity says it,

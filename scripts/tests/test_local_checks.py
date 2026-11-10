@@ -186,12 +186,15 @@ class LocalMappingTests(unittest.TestCase):
                 self.commit()
                 self.assertEqual(self.select().get("local_checks"), expected)
 
-    def test_dependency_changes_require_every_cli_check(self):
-        self.write("cli/package-lock.json")
-        self.commit()
-        self.assertEqual(self.select().get("local_checks"), ["cli-core", "cli-harnessd", "cli-local-models",
-                         "cli-orchestrator", "cli-portability", "cli-pty", "cli-remote-viewers", "cli-resume",
-                         "cli-serial", "cli-sharing", "cli-shell"])
+    def test_dependency_and_shared_test_setup_changes_require_every_cli_check(self):
+        for path in ("cli/package-lock.json", "cli/src/__fixtures__/vitestRun.ts"):
+            with self.subTest(path=path):
+                self.git("reset", "--hard", self.base)
+                self.write(path)
+                self.commit()
+                self.assertEqual(self.select().get("local_checks"), ["cli-core", "cli-harnessd", "cli-local-models",
+                                 "cli-orchestrator", "cli-portability", "cli-pty", "cli-remote-viewers", "cli-resume",
+                                 "cli-serial", "cli-sharing", "cli-shell"])
 
     def test_deletes_and_renames_cannot_drop_the_old_area_even_when_sparse(self):
         self.write("cli/src/core/old.ts")

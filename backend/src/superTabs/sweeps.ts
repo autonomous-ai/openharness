@@ -11,7 +11,6 @@ import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
 import { expireEvidence } from './evidence/store.js'
 import { sweepThreadMarks } from './readMarks.js'
 import { sweepChatSettings } from './chatSettings.js'
-import { sweepActivity, sweepReminders } from './retiredRows.js'
 import { purgeAgentTombstones } from './agentTombstones.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
@@ -154,16 +153,7 @@ export async function threadMarks(db: PrismaClient, now: number) {
   }
 }
 
-/** The sweep of Activity Swarm v4 no longer writes (retiredRows.ts), and the chat settings' (chatSettings.ts), each failure said
- *  and kept to itself, as thread marks. */
-export async function activityRows(db: PrismaClient, now: number) {
-  try {
-    return { expired: await sweepActivity(db, now) }
-  } catch (error) {
-    logger.warn('[swarm-sweeps] activity failed', { error: error instanceof Error ? error.message : String(error) })
-    return { failed: true as const }
-  }
-}
+/** The sweep of chat settings (chatSettings.ts), its failure said and kept to itself, as thread marks. */
 export async function chatSettings(db: PrismaClient, now: number) {
   try {
     return await sweepChatSettings(db, now)
@@ -173,21 +163,11 @@ export async function chatSettings(db: PrismaClient, now: number) {
   }
 }
 
-/** The sweep of reminders Swarm v4 no longer writes (retiredRows.ts), its failure said and kept to itself, as Activity's. */
-export async function reminderRows(db: PrismaClient, now: number) {
-  try {
-    return { expired: await sweepReminders(db, now) }
-  } catch (error) {
-    logger.warn('[swarm-sweeps] reminders failed', { error: error instanceof Error ? error.message : String(error) })
-    return { failed: true as const }
-  }
-}
-
 /** One pass of every sweep (spec, Archive). Each part it changes is a guarded write, so a command in between wins. */
 export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
   return { slept: await sleepQuietGroups(db, now), startsExpired: await expireStarts(db, now), invitationsExpired: await expireInvitations(db, now),
     tombstonesCompacted: await compactTombstones(db, now), agentTombstones: await purgeAgentTombstones(db, now), evidenceExpired: await expireEvidence(db, now), threadMarks: await threadMarks(db, now),
-    activity: await activityRows(db, now), chatSettings: await chatSettings(db, now), reminders: await reminderRows(db, now) }
+    chatSettings: await chatSettings(db, now) }
 }
 
 /** Runs the sweeps every hour in the singleton worker. */

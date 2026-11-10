@@ -5,7 +5,8 @@
  * read from the store before the list is asked for (measured: schema 22 on disk, 17 in the CLI's code).
  *
  * `sessions.source` says who started one: `cli` (the REPL, and one-shots), `tui` (the terminal UI and
- * the desktop app), `acp` (an editor). Everything else is a gateway, cron, a tool or a sub-agent.
+ * the desktop app), `acp` (an editor). Everything else is a gateway, cron, a tool or a sub-agent. Hermes
+ * 0.23's unified runtime writes `local` for each of them and the starter in `created_source`.
  * `parent_session_id` means three things: a delegation child (`_delegate_from` in `model_config`,
  * hidden), a `/branch` (listed on its own), and a compression continuation: the parent ended with
  * `end_reason = 'compression'` and the conversation carries on under the child's id. A chain is one
@@ -110,12 +111,16 @@ export function hermesListSql(sessions: ReadonlySet<string>, messages: ReadonlyS
   const lastMessage = messages.has('session_id') && messages.has('timestamp')
     ? '(SELECT max(m.timestamp) FROM messages m WHERE m.session_id = s.id)'
     : 'NULL'
-  const skip = "CASE WHEN s.source IS NULL OR s.source NOT IN ('cli', 'tui', 'acp') THEN 'source'"
+  // Hermes 0.23's unified runtime keeps every local surface's session as `source='local'` and names the one that
+  // created it in `created_source`, as Hermes's own listings read it (`hermes_state_common.py` `_source_match_clause`);
+  // its placeholder 'unknown' matches no surface until the creator is stamped.
+  const who = sessions.has('created_source') ? "CASE WHEN s.source = 'local' THEN s.created_source ELSE s.source END" : 's.source'
+  const skip = `CASE WHEN ${who} IS NULL OR ${who} NOT IN ('cli', 'tui', 'acp') THEN 'source'`
     + (sessions.has('archived') ? " WHEN COALESCE(s.archived, 0) <> 0 THEN 'archived'" : '')
     + (config ? ` WHEN ${marker('_delegate_from')} IS NOT NULL THEN 'delegated'` : '')
     + " ELSE '' END"
   const columns = [
-    's.id AS id', 's.source AS source', `${col('parent_session_id')} AS parent`, `${col('started_at')} AS started`,
+    's.id AS id', `${who} AS source`, `${col('parent_session_id')} AS parent`, `${col('started_at')} AS started`,
     `${col('ended_at')} AS ended`, `${col('end_reason')} AS end_reason`, `${col('cwd')} AS cwd`,
     `${marker('cwd')} AS config_cwd`, `${col('git_repo_root')} AS repo`, `${col('title')} AS title`,
     `${col('display_name')} AS display_name`, `${marker('_branched_from')} AS branched`,
