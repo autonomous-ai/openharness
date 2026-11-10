@@ -7,7 +7,7 @@ import { storedAssignment } from './storedWork.test-support.js'
 
 const NOW = 1_000_000
 const requirements = { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 50, tools: ['git'], devices: [], quotaRequired: false }
-const observation = { generation: 'o', receivedAt: NOW, resources: { cpuPercent: 1, memoryTotalBytes: 1, memoryUsedBytes: 1, diskFreeBytes: 1, diskTotalBytes: 1,
+const observation = { generation: 'o', receivedAt: NOW, resources: { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 1, diskTotalBytes: 1,
   projectDiskFreeBytes: 1, deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] }
 
 it('accepts a machine\'s cores, and a report without them from an older daemon', () => {

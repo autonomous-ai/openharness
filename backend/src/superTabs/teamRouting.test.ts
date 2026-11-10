@@ -15,7 +15,7 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
-const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
+const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 type Reading = NonNullable<ContributedMachine['observation']>
 /** A reading as the store keeps it. */
@@ -257,20 +257,27 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     expect(refusal(() => start(g, other))).toBeNull()
   })
 
-  it('keeps an owner\'s own At most N, from a new client or an older one', () => {
+  // The lead, 2026-11-10: the owner deleted capacity settings, so a count an owner saved before, At most N from a new client or a
+  // plain number from an older one, holds no start back. Free memory still does.
+  it('takes agents as memory allows, whatever count its owner saved before', () => {
     const f = swarm(), group = f.group()
     Object.assign(f.machine('owner-mac'), { maxAgents: 16, agents: 'atMost' })
     measured(f, 'owner-mac', 128, 60)
     fill(f, 'owner-mac', 16)
-    const full = refusal(() => start(f, group))
-    expect(full?.code).toBe('MACHINE_FULL')
-    expect(full?.message).toBe('Owner Mac is set to run at most 16 agents and runs 16. Its owner can change that in its settings, or try again when one finishes.')
-    // An older client's At most 3 on a 128 GiB Mac (suggestion 16, maximum 64) is the owner's.
+    expect(refusal(() => start(f, group))).toBeNull()
     const g = swarm(), other = g.group()
     Object.assign(g.machine('owner-mac'), { maxAgents: 3 })
     measured(g, 'owner-mac', 128, 60)
     fill(g, 'owner-mac', 3)
-    expect(refusal(() => start(g, other))?.code).toBe('MACHINE_FULL')
+    expect(refusal(() => start(g, other))).toBeNull()
+  })
+
+  // Review of #3865: with no saved count left to bound it, a start that asks for no memory is held to an agent's.
+  it('holds a start that asks for no memory to an agent\'s', () => {
+    const f = swarm(), group = f.group()
+    measured(f, 'owner-mac', 128, 1)
+    const none = refusal(() => f.run({ type: 'agent.start', request: { ...f.request(group, 'owner-mac'), requirements: { ...twoGiB, memoryBytes: 0 } } }, owner, f.pooled('owner-mac')))
+    expect(none?.message).toBe('Owner Mac is out of free memory: 1 GB free, and an agent needs 2 GB. Try again when an agent there finishes, or pick another machine.')
   })
 
   it('a start refused for memory says so plainly', () => {
@@ -290,8 +297,9 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     fill(f, 'owner-mac', 16)
     // 16 running and 21 GiB free: ten more of 2 GiB, not the zero a count of 16 left.
     expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(10)
+    // A count its owner saved before is no limit.
     Object.assign(f.machine('owner-mac'), { agents: 'atMost', maxAgents: 18 })
-    expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(2)
+    expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(10)
   })
 
   // Review of #3001: the reading shows no memory for starts not launched yet.
@@ -310,16 +318,13 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     expect(third?.details).toEqual({ reason: 'memory' })
   })
 
-  it('keeps an owner\'s At most when an older client saves the machine again with the same count', () => {
+  it('stores the Agents setting a client sends, for it to read back, and none when it sends none', () => {
     const f = swarm()
     const save = (extra: Record<string, unknown>) => f.run({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm',
       engines: ['codex'], maxAgents: 16, ...extra } as Command, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', machineName: 'Owner Mac' } } as never)
     save({ agents: 'atMost' })
+    expect(f.machine('owner-mac')).toMatchObject({ agents: 'atMost', maxAgents: 16 })
     save({})
-    expect(f.machine('owner-mac').agents).toBe('atMost')
-    // A new count from an older client is its own: the setting is read from the number again.
-    f.run({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 6 } as Command,
-      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', machineName: 'Owner Mac' } } as never)
     expect(f.machine('owner-mac').agents).toBeUndefined()
   })
 })
