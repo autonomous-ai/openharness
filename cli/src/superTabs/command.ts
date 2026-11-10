@@ -1,3 +1,4 @@
+import { claimAsked } from './githubClaim.js'
 import { verdictAsked } from './githubVerdict.js'
 import { identifier, object } from './wire.js'
 import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/daemon.js'
@@ -26,7 +27,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-]'
+const USAGE = 'harness super-tab [--tab ID] [--agent ID] [--port N --machine ID] status [--project NAME] [--archived [PAGE]] | messages GROUP [--thread ROOT] [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | post GROUP TEXT|- OPERATION_ID [--to AGENT]... [--answers MESSAGE_ID | --reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | answer GROUP MESSAGE_ID TEXT|- OPERATION_ID [--to AGENT]... | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | read ok|hold OWNER/REPO#N SHA [TEXT|-] | take OWNER/REPO#N'
 /** A Buddy's guard refuses a post read from stdin (#2358): there its words would skip the secret check. A Buddy that followed
  *  the stdin form here was refused and tried again (#2360 took it out of a Buddy's help), so a Buddy's usage line never offers it. */
 const BUDDY_USAGE = USAGE.replaceAll('TEXT|- OPERATION_ID', 'TEXT OPERATION_ID').replace('[TEXT|-]', '[TEXT]')
@@ -236,6 +237,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     }
     const asked = verdictAsked({ repository: second?.slice(0, second.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(second ?? '')?.[1]),
       verdict: first === 'ok' ? 'READ-OK' : 'HOLD', sha: third, text })
+    if (!asked) throw usageError()
+    Object.assign(payload, { ...asked })
+  } else if (action === 'take' && positional.length === 2) {
+    // A builder's claim on a task (githubClaim.ts): the daemon makes it, by the comments' own order.
+    const asked = claimAsked({ repository: first?.slice(0, first.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(first ?? '')?.[1]) })
     if (!asked) throw usageError()
     Object.assign(payload, { ...asked })
   } else if (action !== 'status' || positional.length !== 1) {

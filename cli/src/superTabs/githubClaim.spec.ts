@@ -37,6 +37,11 @@ function setup() {
       issue.labels = (issue.labels as Json[]).filter(label => label.name !== decodeURIComponent(labels[2]!))
       return { status: 200, etag: null, body: issue.labels, resetAt: null }
     }
+    const own = /^\/repos\/acme\/app\/issues\/comments\/(\d+)$/.exec(path)
+    if (own && method === 'DELETE') {
+      for (const [number, list] of repo.comments) repo.comments.set(number, list.filter(comment => comment.id !== Number(own[1])))
+      return { status: 204, etag: null, body: null, resetAt: null }
+    }
     if (said && method === 'POST') {
       const made = { id: repo.next++, html_url: `https://github.com/acme/app/issues/${said[1]}#issuecomment-${repo.next - 1}`, body: String((body as Json).body),
         created_at: new Date(NOW).toISOString(), user: { login: 'pips-person' } }
@@ -58,8 +63,9 @@ describe('a task\'s claim, made by command', () => {
     const t = setup()
     expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true })
     expect(t.labelsOf(34)).toEqual(['builder:pip', 'size:s', 'status:taken'])
-    expect(t.sent.map(s => `${s.method} ${s.path}`)).toEqual(['POST /repos/acme/app/issues/34/labels', 'POST /repos/acme/app/issues/34/comments'])
-    expect(t.sent[1]!.body).toEqual({ body: 'Pip, 14:05: taken by Pip' })
+    // The comment is the claim: it goes first, and the labels follow once it is the first claim there.
+    expect(t.sent.map(s => `${s.method} ${s.path}`)).toEqual(['POST /repos/acme/app/issues/34/comments', 'POST /repos/acme/app/issues/34/labels'])
+    expect(t.sent[0]!.body).toEqual({ body: 'Pip, 14:05: taken by Pip' })
     expect(t.record).toHaveBeenCalledExactlyOnceWith('acme/app', '9001')
   })
 
@@ -97,7 +103,9 @@ describe('a task\'s claim, made by command', () => {
     expect(t.sent).toEqual([])
   })
 
-  it('gives way when another builder took the task at the same moment: its own label comes off, and it says who has it', async () => {
+  // lampOS: "read the comments again: if the first 'taken' comment is not your own, release the issue". Two builders once each
+  // handed a task to the other and both stepped back; by the comments' own order exactly one holds it.
+  it('gives way when another builder\'s claim is there first: its own comment comes off, no label is put on, and it says who has it', async () => {
     const t = setup()
     t.repo.issues.set(35, { number: 35, state: 'open', labels: [], html_url: 'https://github.com/acme/app/issues/35' })
     // Atlas's claim lands between Pip's look and Pip's label.
@@ -108,9 +116,11 @@ describe('a task\'s claim, made by command', () => {
       t.repo.comments.set(35, [{ id: 1, body: 'Atlas, 14:05: taken by Atlas', created_at: new Date(NOW - 1000).toISOString(), user: { login: 'atlas-person' } }])
       return Array.prototype.push.call(this, entry)
     })
-    expect(await refusal(t.take(35))).toEqual({ code: 'TASK_TAKEN', message: 'acme/app#35 was taken by atlas at the same moment. It is theirs: take another.' })
+    expect(await refusal(t.take(35))).toEqual({ code: 'TASK_TAKEN', message: 'acme/app#35 was taken by Atlas at the same moment. It is theirs: take another.' })
     first.mockRestore()
     expect(t.labelsOf(35)).toEqual(['builder:atlas', 'status:taken'])
+    expect(t.repo.comments.get(35)!.map(comment => comment.body)).toEqual(['Atlas, 14:05: taken by Atlas'])
+    expect(t.sent.map(s => `${s.method} ${s.path}`)).toEqual(['POST /repos/acme/app/issues/35/comments', 'DELETE /repos/acme/app/issues/comments/9001'])
     expect(t.record).not.toHaveBeenCalled()
   })
 
