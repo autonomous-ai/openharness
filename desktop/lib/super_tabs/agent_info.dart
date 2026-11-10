@@ -222,9 +222,13 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
             child: ListenableBuilder(
               listenable: _changes,
               builder: (context, _) => SelectionArea(
-                child: ListView(
+                // At most eight short rows: one scrolling column, nothing to lay out lazily.
+                child: SingleChildScrollView(
                   padding: SwarmLayout.infoPadding,
-                  children: _rows(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: _rows(),
+                  ),
                 ),
               ),
             ),
