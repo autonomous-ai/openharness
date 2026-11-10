@@ -56,6 +56,10 @@
       "type": "string",
       "description": "Workspace-relative path of the primary thing to view."
     },
+    "preview": {
+      "type": "string",
+      "description": "A page the agent serves itself on this computer, http://127.0.0.1:PORT/ or http://localhost:PORT/ (its dev server). Once something listens there the viewer pane shows it in place of the package's viewer, on this computer and on the owner's others; absent or unreachable, the package's viewer stays."
+    },
     "updatedAt": {
       "type": "string",
       "format": "date-time"

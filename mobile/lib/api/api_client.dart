@@ -626,29 +626,6 @@ class ApiClient implements PushTokenApi {
     }
     appLog.debug('api', 'chat file to storage → $status');
   }
-
-  // -- Swarm avatars (backend only: the computer a Swarm call goes through carries text) --
-
-  /// Uploads [png] as an avatar picture of the Swarm [tabId] and answers the
-  /// upload's id — `POST /api/super-tabs/:tabId/avatars` (backend
-  /// superTabs/profile.ts); a `member.avatar` command then makes it the
-  /// person's.
-  Future<String> uploadSwarmAvatar(String tabId, Uint8List png) async {
-    final body = multipartFileBody(
-      field: 'file',
-      filename: 'avatar.png',
-      fileContentType: 'image/png',
-      file: png,
-      boundary: 'harness-${DateTime.now().microsecondsSinceEpoch}',
-    );
-    final res = await _dio.post(
-      '/api/super-tabs/${Uri.encodeComponent(tabId)}/avatars',
-      data: body.bytes,
-      options: Options(contentType: body.contentType),
-    );
-    final data = unwrapApiResponse(res) as Map<String, dynamic>;
-    return (data['avatar'] as Map<String, dynamic>)['id'] as String;
-  }
 }
 
 /// What the backend says of a file past [swarmAttachmentMaxBytes].

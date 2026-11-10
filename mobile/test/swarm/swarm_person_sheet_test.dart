@@ -11,8 +11,9 @@ import 'swarm_fixture.dart';
 
 const other = 'person-tony';
 
-/// The ways to a profile: who one is at the top of You opens one's own, and a
-/// person's face in a chat opens theirs — one's own with Edit.
+/// Who a person is: their face in a chat opens a sheet of their name, email
+/// and role, one's own too. Nothing edits it, and a status an older server
+/// still sends is drawn nowhere.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
 
@@ -93,18 +94,17 @@ void main() {
   Finder inside(String value, Finder finder) =>
       find.descendant(of: key(value), matching: finder);
 
-  testWidgets('You starts with you, and a tap on you opens your profile, '
-      'status and all', (tester) async {
+  testWidgets('You starts with you, and a tap on you opens nothing', (
+    tester,
+  ) async {
     await pump(tester, const SwarmYouPage());
     expect(inside('swarm-you-me', find.text('🦊')), findsOneWidget);
-    expect(
-      tester.getSize(key('swarm-you-me')).height,
-      greaterThanOrEqualTo(44),
-    );
+    expect(inside('swarm-you-me', find.text('🎯')), findsNothing);
     await tester.tap(key('swarm-you-me'));
     await frames(tester);
-    expect(find.text('Your profile'), findsOneWidget);
-    expect(find.text('🎯 Focusing'), findsWidgets, reason: 'set in there');
+    expect(find.text('Your profile'), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.text('You'), findsWidgets, reason: 'still on You');
   });
 
   testWidgets("a person's face in a chat opens who they are", (tester) async {
@@ -118,17 +118,22 @@ void main() {
     await tester.tap(face);
     await frames(tester);
     expect(inside('swarm-person', find.text('person-tony')), findsOneWidget);
-    expect(inside('swarm-person', find.text('🍽️ At lunch')), findsOneWidget);
     expect(
       inside('swarm-person', find.text('person-tony@example.com')),
       findsOneWidget,
     );
+    expect(inside('swarm-person', find.text('Collaborator')), findsOneWidget);
+    expect(
+      inside('swarm-person', find.textContaining('At lunch')),
+      findsNothing,
+    );
+    expect(inside('swarm-person', find.text('🍽️')), findsNothing);
     expect(key('swarm-person-edit'), findsNothing);
   });
 
   testWidgets('who they are is dimmed as every sheet is and inset 16 across '
-      'and 24 below, with the name a heading of 17, its status a body of 17 '
-      'and its email and role captions of 13', (tester) async {
+      'and 24 below, with the name a heading of 17 and its email and role '
+      'captions of 13', (tester) async {
     await pump(
       tester,
       const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
@@ -161,24 +166,33 @@ void main() {
         tester.widget<Text>(inside('swarm-person', find.text(text))).style!;
     expect(styleOf('person-tony').fontSize, 17);
     expect(styleOf('person-tony').fontWeight, FontWeight.w600);
-    expect(styleOf('🍽️ At lunch').fontSize, 17);
     for (final line in ['person-tony@example.com', 'Collaborator']) {
       expect(styleOf(line).fontSize, 13, reason: line);
     }
   });
 
-  testWidgets('your own face opens yours, with Edit profile', (tester) async {
+  testWidgets('your own face opens yours, with nothing to edit', (
+    tester,
+  ) async {
     await pump(
       tester,
       const SwarmConversationPage(swarmId: tab, conversationId: 'g1'),
     );
     await tester.tap(key('swarm-author-msg-2'));
     await frames(tester);
-    expect(inside('swarm-person', find.text('🎯 Focusing')), findsOneWidget);
-    await tester.tap(key('swarm-person-edit'));
+    expect(inside('swarm-person', find.text('person-me')), findsOneWidget);
+    expect(inside('swarm-person', find.text('Owner')), findsOneWidget);
+    expect(
+      inside('swarm-person', find.textContaining('Focusing')),
+      findsNothing,
+    );
+    expect(find.text('Edit profile'), findsNothing);
+    expect(key('swarm-person-edit'), findsNothing);
+    // Leaves with a tap beside it, back on the chat.
+    await tester.tapAt(const Offset(20, 20));
     await frames(tester);
-    expect(find.text('Your profile'), findsOneWidget);
     expect(key('swarm-person'), findsNothing);
+    expect(find.text('Ship it today?'), findsOneWidget);
   });
 }
 

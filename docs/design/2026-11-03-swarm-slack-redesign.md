@@ -113,12 +113,12 @@ Each decision lists what was chosen, the alternatives, the reasoning, the cost, 
 
 ### D6. One Activity feed
 
-- **Chips:** All · Needs you · Mentions · Threads · Reactions.
+- **Chips:** All · Needs you · Mentions · Threads. Reactions went with reactions (anh Dee, 2026-11-09).
 - **Alternatives:** keep Invitations on Home; put Needs you on Home (B); one list with no chips; an Invitations chip.
 - **Why:** Slack calls Activity a "one-stop shop" that "minimizes pogo-sticking". A word is clearer than "@", and a screen reader can say it.
 - **Built** (`swarm/swarm_activity.dart`, `swarm/swarm_activity_page.dart`):
   - The Activity tab opens on All. A pushed Activity page (from a project) still opens on Needs you.
-  - All (`swarmActivityAll`) lists what still needs the person first, as Needs you does. Then tags, replies and reactions, newest first, those with no time last. Then the needs already handled. Each row appears once.
+  - All (`swarmActivityAll`) lists what still needs the person first, as Needs you does. Then tags and replies, newest first, those with no time last. Then the needs already handled. Each row appears once.
   - Invitations to other Swarms head All and Needs you, the tab's only; a pushed Activity page and Home list none. They wait on the person's answer, so they count in both chips and on the Activity tab's badge (`swarmActivityTabBadge`): with Home's top gone, the badge is how the person learns one came. Needs you does not say "Nothing needs you." while one shows. With nothing anywhere, All says "You're all caught up."
   - No Invitations chip (Tony, 2026-11-03): it would show 0 almost always, push Mentions further off a narrow phone, and an invitation is something that needs the person, which is what Needs you is for.
   - Home's "While you were away · N need you" does not count invitations: it covers the Swarms Home shows.

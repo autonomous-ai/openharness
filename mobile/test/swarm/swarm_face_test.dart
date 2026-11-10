@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -59,8 +58,7 @@ final photo = SuperTabUploadedAvatar.of(
 )!;
 
 /// The one face a person or an agent wears on the phone: their picture, the
-/// built-in one they picked, or their initial when they have neither — and a
-/// person's status emoji while it lasts.
+/// built-in one they picked, or their initial when they have neither.
 void main() {
   testWidgets('a built-in picture shows instead of the initial', (
     tester,
@@ -181,65 +179,5 @@ void main() {
       );
       expect(fill(), person, reason: 'a person, $brightness');
     }
-  });
-
-  testWidgets('a status shows its emoji and is read with the name', (
-    tester,
-  ) async {
-    final handle = tester.ensureSemantics();
-    await show(
-      tester,
-      SwarmAvatar(
-        id: 'person-1',
-        name: 'tony',
-        status: SuperTabPersonStatus(
-          text: 'Focusing',
-          emoji: '🎯',
-          until: clock.now().add(const Duration(hours: 1)),
-        ),
-      ),
-    );
-    expect(find.text('🎯'), findsOneWidget);
-    expect(find.bySemanticsLabel('tony, 🎯 Focusing'), findsOneWidget);
-    handle.dispose();
-  });
-
-  testWidgets('a status disappears by itself when its time passes', (
-    tester,
-  ) async {
-    await show(
-      tester,
-      SwarmChatAvatar(
-        name: 'tony',
-        id: 'person-1',
-        agent: false,
-        status: SuperTabPersonStatus(
-          text: 'At lunch',
-          emoji: '🍽️',
-          until: clock.now().add(const Duration(minutes: 30)),
-        ),
-      ),
-    );
-    expect(find.text('🍽️'), findsOneWidget);
-    await tester.pump(const Duration(minutes: 29));
-    expect(find.text('🍽️'), findsOneWidget);
-    await tester.pump(const Duration(minutes: 1, seconds: 1));
-    expect(find.text('🍽️'), findsNothing);
-  });
-
-  testWidgets('a status that has already ended shows nothing', (tester) async {
-    await show(
-      tester,
-      SwarmAvatar(
-        id: 'person-1',
-        name: 'tony',
-        status: SuperTabPersonStatus(
-          text: 'Away',
-          emoji: '🚶',
-          until: clock.now().subtract(const Duration(minutes: 1)),
-        ),
-      ),
-    );
-    expect(find.text('🚶'), findsNothing);
   });
 }

@@ -67,11 +67,6 @@ class SuperTabPerson {
       generation = row['generation'] as String?,
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']),
-      timeZone = switch (row['timeZone']) {
-        final String zone when zone.trim().isNotEmpty => zone,
-        _ => null,
-      },
       chosenUsername = row['username'] as String?,
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
@@ -87,8 +82,6 @@ class SuperTabPerson {
       generation = person.generation,
       joinedVia = person.joinedVia,
       avatar = person.avatar,
-      status = person.status,
-      timeZone = person.timeZone,
       chosenUsername = person.chosenUsername,
       name = person.name;
   final String id, email, role;
@@ -110,15 +103,6 @@ class SuperTabPerson {
   /// still types [username].
   String get shownName => name ?? username;
   final SuperTabAvatarPicture? avatar;
-  final SuperTabPersonStatus? status;
-
-  /// Their time zone's IANA name, as their own app told the Swarm
-  /// (local_time_zone.dart); null until it has, and from an older server.
-  final String? timeZone;
-
-  /// Their status while it lasts.
-  SuperTabPersonStatus? statusAt(DateTime now) =>
-      status?.shownAt(now) == true ? status : null;
 
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.
@@ -1989,6 +1973,9 @@ class SuperTabMessage {
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      recipientIds = List.unmodifiable(
+        (row['recipientIds'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -2043,6 +2030,14 @@ class SuperTabMessage {
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;
+
+  /// The agents it was sent to (backend `recipientIds`): the ones its words name, with `--to`, or `@Name`. Empty for a post
+  /// that names nobody, and from a backend that does not send them.
+  final List<String> recipientIds;
+
+  /// An agent's post that is to other agents: Swarm v4's channel draws it on its own row, as talk ("Pip to Juno"). It reads the
+  /// message alone, so a roster that changes regroups no row.
+  bool get namesAgents => fromAgent && recipientIds.isNotEmpty;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

@@ -227,7 +227,6 @@ void main() {
                   key: ValueKey(message.id),
                   message: message,
                   name: 'River',
-                  look: (picture: null, status: null),
                   role: 'PM',
                   mentions: SwarmMentions(const []),
                   grouped: false,

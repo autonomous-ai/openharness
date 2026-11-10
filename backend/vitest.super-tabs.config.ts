@@ -84,6 +84,7 @@ export default defineConfig({ test: {
     'integration/superTabReviewSteps.test.ts',
     'integration/superTabProposals.test.ts',
     'integration/superTabCanChat.test.ts',
+    'integration/superTabChatPush.test.ts',
     'integration/superTabRequestReads.test.ts',
     'integration/superTabVoiceMessages.test.ts',
     'integration/superTabThumbnails.test.ts',

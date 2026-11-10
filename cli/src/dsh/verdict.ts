@@ -12,6 +12,7 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
+import { viewerTarget } from '../lib/viewerWire.js'
 
 export type DshPhaseState = 'done' | 'active' | 'pending' | 'failed'
 
@@ -29,6 +30,9 @@ export interface DshVerdict {
   errors: number
   warnings: number
   artifact: string | null
+  /** A page the agent serves on this computer (`http://127.0.0.1:PORT/…`, its own dev server): the viewer shows it
+   *  instead of the package's, so an app with a build, routes and storage is seen as a browser sees it. */
+  preview: string | null
   /** In order, at most 12; empty when the harness names none. */
   phases: DshPhase[]
   updatedAt: string | null
@@ -66,6 +70,12 @@ function cleanRelative(value: unknown): string | null {
   return value
 }
 
+/** A loopback HTTP page with a port, as the viewer forwards it (lib/viewerWire.ts `viewerTarget`); anything else is none. */
+function cleanPreview(value: unknown): string | null {
+  const url = viewerTarget(value)
+  return url ? url.href : null
+}
+
 /** Reduce a verdict file to the wire shape; null when it is not a spec-1 verdict. */
 export function parseVerdict(text: string): DshVerdict | null {
   let value: unknown
@@ -93,7 +103,8 @@ export function parseVerdict(text: string): DshVerdict | null {
     ? raw.updatedAt
     : null
   return {
-    ready: raw.ready, summary, errors, warnings, artifact: cleanRelative(raw.artifact), phases: parsePhases(raw.phases), updatedAt,
+    ready: raw.ready, summary, errors, warnings, artifact: cleanRelative(raw.artifact), preview: cleanPreview(raw.preview),
+    phases: parsePhases(raw.phases), updatedAt,
   }
 }
 
