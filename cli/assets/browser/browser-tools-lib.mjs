@@ -67,3 +67,15 @@ export function withTimeout(work, ms, what) {
   const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} timed out`)), ms) })
   return Promise.race([work, late]).finally(() => clearTimeout(timer))
 }
+
+/**
+ * The URL, when the tools may open it: http, https or about:blank. Anything else is refused, file:// above all: the
+ * proxy secret is a file in the container, and a page that tells the agent to open it would put the password in the
+ * agent's context. Chrome's policy blocks file:// too (policy.json).
+ */
+export function navigable(url) {
+  let parsed = null
+  try { parsed = new URL(url) } catch { /* refused below */ }
+  if (parsed?.protocol === 'http:' || parsed?.protocol === 'https:' || parsed?.href === 'about:blank') return url
+  throw new Error('Only http and https URLs open in the Browser')
+}

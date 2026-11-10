@@ -1,1 +1,1 @@
-{ "CommandLineFlagSecurityWarningsEnabled": false }
+{ "CommandLineFlagSecurityWarningsEnabled": false, "URLBlocklist": ["file://*"] }

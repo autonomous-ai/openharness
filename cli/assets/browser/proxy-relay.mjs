@@ -37,6 +37,8 @@ const MAX_CONNECT_RESPONSE_BYTES = 64 * 1024
 const answer = (status, text) => `HTTP/1.1 ${status}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nproxy relay: ${text}`
 const unusable = (up) => up ? 'the proxy cannot be used' : 'the site cannot be reached'
 const REFUSED = 'that destination is not allowed'
+const REFUSALS_LOGGED = 50
+const REFUSAL_COUNT_MS = 60_000
 
 /** The host's names in Podman and Docker: refused by name, whatever they resolve to. */
 const HOST_NAMES = new Set(['host.containers.internal', 'host.docker.internal', 'gateway.containers.internal', 'gateway.docker.internal'])
@@ -62,6 +64,28 @@ export function refusedBy(routes) {
   return (address) => {
     const family = net.isIP(address) === 6 ? 'ipv6' : 'ipv4'
     return lists.find(([, list]) => list.check(address, family))?.[0] ?? null
+  }
+}
+
+/**
+ * Logs a refusal by its category: each of the first 50, then one line a minute with how many more. A page that loops
+ * fetches to loopback is refused every time, and a line each would fill the container's /tmp.
+ */
+export function refusalLog(write = (line) => console.error(line)) {
+  let logged = 0
+  let more = 0
+  let timer = null
+  return (category) => {
+    if (logged < REFUSALS_LOGGED) {
+      logged += 1
+      return write(`proxy relay: refused a ${category} destination`)
+    }
+    more += 1
+    timer ??= setTimeout(() => {
+      write(`proxy relay: refused ${more} more destinations`)
+      more = 0
+      timer = null
+    }, REFUSAL_COUNT_MS).unref()
   }
 }
 
@@ -107,7 +131,7 @@ async function dial(up, target) {
 
 /**
  * With no proxy: a socket straight to `target`, unless the host is refused. Every address the name resolves to is
- * checked, and the socket goes to the one checked, never to the name again. A refusal is logged by category only.
+ * checked, and the socket goes to the one checked, never to the name again. A refusal names its category only.
  */
 async function dialDirect(refused, target) {
   const name = target.host.toLowerCase().replace(/\.$/, '')
@@ -118,10 +142,7 @@ async function dialDirect(refused, target) {
     category = found.map(({ address: one }) => refused(one)).find(Boolean) ?? null
     address = found[0].address
   }
-  if (category) {
-    console.error(`proxy relay: refused a ${category} destination`)
-    throw Object.assign(new Error('refused'), { refused: category })
-  }
+  if (category) throw Object.assign(new Error('refused'), { refused: category })
   const socket = net.connect({ host: address, port: target.port })
   socket.on('error', () => socket.destroy())
   socket.setTimeout(CONNECT_TIMEOUT_MS, () => socket.destroy(new Error('the site did not answer')))
@@ -208,6 +229,7 @@ function forward(up, refused, url, method, headers) {
  */
 export function createRelay(up, routes = []) {
   const refused = refusedBy(routes)
+  const logRefusal = refusalLog()
   const server = http.createServer((req, res) => {
     let url = null
     try { url = new URL(req.url ?? '') } catch { /* answered below */ }
@@ -228,8 +250,10 @@ export function createRelay(up, routes = []) {
     })
     upReq.on('error', (error) => {
       if (res.headersSent) res.destroy()
-      else if (error.refused) res.writeHead(403, { 'content-type': 'text/plain' }).end(`proxy relay: ${REFUSED}`)
-      else res.writeHead(502, { 'content-type': 'text/plain' }).end(`proxy relay: ${unusable(up)}`)
+      else if (error.refused) {
+        logRefusal(error.refused)
+        res.writeHead(403, { 'content-type': 'text/plain' }).end(`proxy relay: ${REFUSED}`)
+      } else res.writeHead(502, { 'content-type': 'text/plain' }).end(`proxy relay: ${unusable(up)}`)
     })
     req.on('error', () => upReq.destroy())
     res.on('error', () => upReq.destroy())
@@ -248,7 +272,10 @@ export function createRelay(up, routes = []) {
       client.pipe(upstream)
       upstream.on('close', () => client.destroy())
       client.on('close', () => upstream.destroy())
-    }, (error) => client.end(error.refused ? answer('403 Forbidden', REFUSED) : answer('502 Bad Gateway', unusable(up))))
+    }, (error) => {
+      if (error.refused) logRefusal(error.refused)
+      client.end(error.refused ? answer('403 Forbidden', REFUSED) : answer('502 Bad Gateway', unusable(up)))
+    })
   })
   return server
 }

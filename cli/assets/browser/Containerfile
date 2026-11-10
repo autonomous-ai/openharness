@@ -31,8 +31,8 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN mkdir -p /opt/harness-browser && cd /opt/harness-browser && npm init -y >/dev/null \
  && npm install --no-audit --no-fund --save-exact playwright-core@1.58.2 && rm -rf /root/.npm
 
-# The root filesystem is read-only at run time, so the policy that hides Chrome's warning about its command-line flags
-# is baked in.
+# The root filesystem is read-only at run time, so Chrome's policy is baked in: it hides the warning about the
+# command-line flags, and blocks every file:// URL, so no page and no tool opens a file of the container's.
 COPY policy.json /etc/opt/chrome/policies/managed/harness.json
 
 # The profile is a named volume mounted here. Mode 1777, so rootless Podman's user mapping can still write it.

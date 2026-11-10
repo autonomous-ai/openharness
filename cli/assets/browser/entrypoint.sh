@@ -17,11 +17,23 @@ if ! touch "$PROFILE/.harness-probe" 2>/dev/null; then echo "profile not writabl
 # A lock left by an earlier container makes Chrome refuse the profile.
 rm -f "$PROFILE/.harness-probe" "$PROFILE/SingletonLock" "$PROFILE/SingletonSocket" "$PROFILE/SingletonCookie"
 
+# Every log is appended to (>>), so one cut back from here gets its writer's next line at its new end, not past a hole.
+# Each keeps its last 512 KB once past 1 MB, checked every 10 s, so no noisy process fills the 256 MB /tmp.
+cut_logs() {
+  local log
+  for log in "$@"; do
+    [ -f "$log" ] && [ "$(wc -c < "$log")" -gt 1048576 ] || continue
+    tail -c 524288 "$log" > "$log.cut" && cat "$log.cut" > "$log"
+    rm -f "$log.cut"
+  done
+}
+( while sleep 10; do cut_logs /tmp/*.log; done & )
+
 # The proxy relay first, always: every request the browser makes goes through it, and it refuses the host's own
 # addresses (on a Podman machine gvproxy maps one to the Mac's loopback). With a proxy it listens only once its probe
 # through the proxy passed (at most 15 s), so no port then means exit 4. It stays this script's child: a relay that
 # dies ends the container, and pages never fall back to going around it.
-node /opt/harness-browser/proxy-relay.mjs > /tmp/proxy-relay.log 2>&1 &
+node /opt/harness-browser/proxy-relay.mjs >> /tmp/proxy-relay.log 2>&1 &
 RELAY=$!
 for _ in $(seq 1 100); do
   (exec 3<> /dev/tcp/127.0.0.1/3128) 2> /dev/null && break
@@ -34,7 +46,7 @@ if ! (exec 3<> /dev/tcp/127.0.0.1/3128) 2> /dev/null; then
 fi
 
 # No VNC password: nothing outside the container can reach port 5900, only `podman exec … socat`.
-Xvnc :1 -geometry "$SCREEN" -depth 24 -localhost -rfbport 5900 -SecurityTypes None -AlwaysShared > /tmp/xvnc.log 2>&1 &
+Xvnc :1 -geometry "$SCREEN" -depth 24 -localhost -rfbport 5900 -SecurityTypes None -AlwaysShared >> /tmp/xvnc.log 2>&1 &
 XVNC=$!
 for _ in $(seq 1 50); do [ -e /tmp/.X11-unix/X1 ] && break; sleep 0.1; done
 
@@ -43,8 +55,8 @@ for _ in $(seq 1 50); do [ -e /tmp/.X11-unix/X1 ] && break; sleep 0.1; done
 # browser maps its window, so that window gets X focus: in the spike keys reached nothing until it had it.
 export XDG_RUNTIME_DIR=/tmp/xdg
 mkdir -p -m 700 "$XDG_RUNTIME_DIR"
-( pulseaudio --daemonize=yes --exit-idle-time=-1 -n --load=module-native-protocol-unix --load="module-null-sink sink_name=speakers" > /tmp/pulse.log 2>&1 & )
-( openbox --startup "touch /tmp/openbox-ready" > /tmp/openbox.log 2>&1 & )
+( pulseaudio --daemonize=yes --exit-idle-time=-1 -n --load=module-native-protocol-unix --load="module-null-sink sink_name=speakers" >> /tmp/pulse.log 2>&1 & )
+( openbox --startup "touch /tmp/openbox-ready" >> /tmp/openbox.log 2>&1 & )
 for _ in $(seq 1 50); do [ -e /tmp/openbox-ready ] && break; sleep 0.1; done
 
 # Never headless and never the automation switch: navigator.webdriver stays false. The browser's own sandbox cannot run in an
@@ -57,11 +69,11 @@ google-chrome-stable --remote-debugging-address=127.0.0.1 --remote-debugging-por
   --disable-breakpad --disable-crash-reporter --metrics-recording-only --disable-features=TranslateUI \
   --disable-extensions --disk-cache-size=524288000 --lang="$PRIMARY_LANG" --accept-lang="$ACCEPT_LANG" \
   --proxy-server=http://127.0.0.1:3128 "--proxy-bypass-list=<-loopback>" --force-webrtc-ip-handling-policy=disable_non_proxied_udp \
-  about:blank > /tmp/chrome.log 2>&1 &
+  about:blank >> /tmp/chrome.log 2>&1 &
 BROWSER=$!
 
 # Detached, like openbox: it waits for CDP itself, and its end must not end the browser.
-if [ -n "${DEVICE:-}" ]; then ( node /opt/harness-browser/device-inject.mjs > /tmp/device.log 2>&1 & ); fi
+if [ -n "${DEVICE:-}" ]; then ( node /opt/harness-browser/device-inject.mjs >> /tmp/device.log 2>&1 & ); fi
 
 # Bash as PID 1 ignores SIGTERM unless trapped: without this, `podman stop` waits its 10 s and kills Chrome before it
 # writes the profile, which can lose the login. Closed over CDP first, as a person closes it: a Chrome ended by SIGTERM

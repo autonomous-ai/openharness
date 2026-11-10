@@ -1,6 +1,15 @@
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { request, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+// @ts-expect-error — the tool server's helpers are plain ESM, run by Node inside the browser's container.
+import { navigable } from '../../../assets/browser/browser-tools-lib.mjs'
+// @ts-expect-error — the relay is plain ESM, run by Node inside the browser's container.
+import { createRelay, refusalLog } from '../../../assets/browser/proxy-relay.mjs'
 import { browserTools } from '../../lib/browserToolsAsset.js'
 import { browserAssetsHash, browserContextFiles, PLAYWRIGHT_CORE_VERSION } from './assets.js'
 
@@ -9,7 +18,11 @@ const onDisk = (name: string) => readFileSync(new URL(name, folder), 'utf8')
 // `*.d.mts` files type the scripts for the CLI's own imports; the image never needs them.
 const assetNames = () => readdirSync(folder).filter(name => !name.endsWith('.d.mts')).sort()
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
 
 describe('browser assets', () => {
   it('embedded copies equal the files', () => {
@@ -103,7 +116,7 @@ describe('browser assets', () => {
   it('entrypoint always starts the proxy relay first, as its own child, and waits for its port', () => {
     const file = onDisk('entrypoint.sh')
     // Every request the browser makes goes through it, proxy or not: it refuses the host's own addresses.
-    expect(file).toMatch(/^node \/opt\/harness-browser\/proxy-relay\.mjs > \/tmp\/proxy-relay\.log 2>&1 &$/m)
+    expect(file).toMatch(/^node \/opt\/harness-browser\/proxy-relay\.mjs >> \/tmp\/proxy-relay\.log 2>&1 &$/m)
     expect(file.split('proxy-relay.mjs').length).toBe(2)
     const started = file.indexOf('node /opt/harness-browser/proxy-relay.mjs')
     expect(started).toBeLessThan(file.indexOf('Xvnc :1'))
@@ -147,6 +160,88 @@ describe('browser assets', () => {
     const at = file.indexOf(block)
     expect(at).toBeGreaterThan(file.indexOf('http://127.0.0.1:9222/json/version'))
     expect(file.indexOf('touch /tmp/harness-ready')).toBeGreaterThan(at + block.length)
+  })
+
+  it('the tools open only http and https URLs, and about:blank: never a file, so never the proxy secret', () => {
+    for (const url of ['https://mail.google.com/', 'http://example.com/a?b=1', 'HTTPS://Example.com', 'about:blank']) expect(navigable(url), url).toBe(url)
+    for (const url of [
+      'file:///run/secrets/harness-proxy', 'FILE:///etc/passwd', ' file:///run/secrets/harness-proxy', 'view-source:file:///run/secrets/harness-proxy',
+      'chrome://settings', 'javascript:fetch(1)', 'data:text/html,x', 'filesystem:http://a/x', 'about:config', 'example.com', '',
+    ]) expect(() => navigable(url), url).toThrow('Only http and https URLs open in the Browser')
+    const navigate = /async browser_navigate\(\{ url \}\) \{\n([\s\S]*?)\n {2}\},/.exec(onDisk('browser-tools.mjs'))?.[1] ?? ''
+    expect(navigate).toMatch(/p\.goto\(navigable\(url\),/)
+    // No tool picks a file for a page: no upload, no set-input-files, no file chooser.
+    for (const banned of ['setInputFiles', 'filechooser', 'FileChooser']) expect(onDisk('browser-tools.mjs'), banned).not.toContain(banned)
+  })
+
+  it('Chrome\'s policy blocks every file URL, for the person and the agent alike', () => {
+    expect(JSON.parse(onDisk('policy.json')).URLBlocklist).toEqual(['file://*'])
+  })
+
+  it('the relay logs its first 50 refusals, then one line a minute with how many more', () => {
+    vi.useFakeTimers()
+    const lines: string[] = []
+    const log = refusalLog((line: string) => lines.push(line))
+    for (let n = 0; n < 1000; n += 1) log(n % 2 ? 'loopback' : 'gvproxy')
+    expect(lines).toHaveLength(50)
+    expect(lines[0]).toBe('proxy relay: refused a gvproxy destination')
+    expect(lines[1]).toBe('proxy relay: refused a loopback destination')
+    vi.advanceTimersByTime(60_000)
+    expect(lines.slice(50)).toEqual(['proxy relay: refused 950 more destinations'])
+    vi.advanceTimersByTime(600_000)
+    expect(lines).toHaveLength(51)
+    log('loopback')
+    log('loopback')
+    vi.advanceTimersByTime(60_000)
+    expect(lines.slice(51)).toEqual(['proxy relay: refused 2 more destinations'])
+  })
+
+  it('a page looping fetches to loopback gets 403 each time, and the relay logs only the first 50', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const server: Server = createRelay(null, [])
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
+    const { port } = server.address() as AddressInfo
+    try {
+      for (let n = 0; n < 80; n += 1) {
+        const status = await new Promise<number | undefined>((done, fail) => {
+          request({ host: '127.0.0.1', port, path: 'http://127.0.0.1:9/', headers: { connection: 'close' } }, (res) => { res.resume(); done(res.statusCode) })
+            .on('error', fail).end()
+        })
+        expect(status).toBe(403)
+      }
+    } finally {
+      server.close()
+    }
+    expect(errors).toHaveBeenCalledTimes(50)
+  })
+
+  it('entrypoint appends every log, and keeps each to its last 512 KB once past 1 MB, every 10 s', () => {
+    const file = onDisk('entrypoint.sh')
+    // Appended (O_APPEND), so a log cut back from outside gets its writer's next line at its new end, not past a hole.
+    const logs = [...file.matchAll(/>+ \/tmp\/[\w-]+\.log/g)].map(match => match[0])
+    expect(logs.length).toBeGreaterThanOrEqual(6)
+    for (const log of logs) expect(log).toMatch(/^>> /)
+    // Detached, like openbox: `wait -n` never sees it.
+    expect(file).toMatch(/^\( while sleep 10; do cut_logs \/tmp\/\*\.log; done & \)$/m)
+    expect(file.indexOf('( while sleep 10;')).toBeLessThan(file.indexOf('node /opt/harness-browser/proxy-relay.mjs'))
+    const cut = /^cut_logs\(\) \{\n[\s\S]*?\n\}$/m.exec(file)?.[0] ?? ''
+    const dir = mkdtempSync(join(tmpdir(), 'cut-logs-'))
+    try {
+      const big = join(dir, 'chrome.log')
+      const small = join(dir, 'xvnc.log')
+      const content = Buffer.alloc(2 * 1024 * 1024, 'a')
+      content.write('the end\n', content.length - 8)
+      writeFileSync(big, content)
+      writeFileSync(small, 'started\n')
+      execFileSync('bash', ['-c', `${cut}\ncut_logs "$@"`, 'bash', big, small, join(dir, 'missing.log')])
+      const kept = readFileSync(big)
+      expect(kept.length).toBe(512 * 1024)
+      expect(kept.subarray(-8).toString()).toBe('the end\n')
+      expect(readFileSync(small, 'utf8')).toBe('started\n')
+      expect(readdirSync(dir).sort()).toEqual(['chrome.log', 'xvnc.log'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('browser-tools.json names exactly the eleven tools', () => {

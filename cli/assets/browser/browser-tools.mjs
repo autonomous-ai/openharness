@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { chromium } from 'playwright-core'
-import { connectWithRetry, roleSnapshot, withTimeout } from './browser-tools-lib.mjs'
+import { connectWithRetry, navigable, roleSnapshot, withTimeout } from './browser-tools-lib.mjs'
 import { CHALLENGE_ELEMENTS, detectChallenge, frameKind, withChallenge } from './challenge.mjs'
 import { humanInput, modeOf } from './human-input.mjs'
 
@@ -77,7 +77,7 @@ const where = async p => `${p.url()} · ${await p.title()}`
 const run = {
   async browser_navigate({ url }) {
     const p = await page()
-    await p.goto(url, { timeout: NAVIGATE_MS, waitUntil: 'domcontentloaded' })
+    await p.goto(navigable(url), { timeout: NAVIGATE_MS, waitUntil: 'domcontentloaded' })
     return text(await where(p))
   },
   async browser_back() {
