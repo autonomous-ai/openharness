@@ -4296,7 +4296,7 @@
    "types": "thinking_delta,text_delta"
   },
   "openclaw history: plain": {
-   "sha": "635e8dac93745cbebf10",
+   "sha": "5966b773578a04f006b5",
    "types": "user_message,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,done,|,|,|"
   },
   "openclaw live: tool @5/10": {
@@ -4304,7 +4304,7 @@
    "types": "thinking_delta,tool_start,tool_end,text_delta"
   },
   "openclaw history: tool": {
-   "sha": "fc3ae07f8f4419cd96ed",
+   "sha": "5b5aa8dd9dc1cb7eb3f9",
    "types": "user_message,thinking_delta,tool_start,tool_end,text_delta,done,|,user_message,thinking_delta,tool_start,tool_end,text_delta,done,|,|,|"
   },
   "openclaw live: multi-tool @6/11": {
@@ -4312,7 +4312,7 @@
    "types": "tool_end,tool_end,text_delta"
   },
   "openclaw history: multi-tool": {
-   "sha": "d841ed8e84e491df587a",
+   "sha": "dc6f15ee490cd8543336",
    "types": "user_message,thinking_delta,tool_start,tool_start,tool_end,tool_end,text_delta,done,|,user_message,thinking_delta,tool_start,tool_start,tool_end,tool_end,text_delta,done,|,|,|"
   },
   "openclaw live: fail @4/7": {
@@ -4320,7 +4320,7 @@
    "types": "text_delta"
   },
   "openclaw history: fail": {
-   "sha": "81f8edb286513170d9e3",
+   "sha": "d2fd7b92bb7a3620e1b3",
    "types": "user_message,text_delta,done,|,user_message,text_delta,done,|,|,|"
   },
   "openclaw live: abort @3/6": {
@@ -4328,7 +4328,7 @@
    "types": "thinking_delta,tool_start"
   },
   "openclaw history: abort": {
-   "sha": "fd1d130a7c5fef900586",
+   "sha": "c4d0c76ba1fcb71251ae",
    "types": "user_message,thinking_delta,tool_start,done,|,user_message,thinking_delta,tool_start,done,|,|,|"
   },
   "openclaw live: model-switch @11/21": {
@@ -4336,7 +4336,7 @@
    "types": "text_delta,turn_started,thinking_delta,text_delta,turn_ended"
   },
   "openclaw history: model-switch": {
-   "sha": "bf36cef5316206c1cb5d",
+   "sha": "cf134e06565f8bcc7e8d",
    "types": "user_message,thinking_delta,text_delta,user_message,text_delta,user_message,thinking_delta,text_delta,done,|,user_message,text_delta,user_message,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,|,|,|"
   },
   "openclaw live: reset @7/13": {
@@ -4344,7 +4344,7 @@
    "types": "turn_started,thinking_delta,text_delta,turn_ended"
   },
   "openclaw history: reset": {
-   "sha": "1b19ee7849b5e4e6bd65",
+   "sha": "201e88bd8d06a943a2dd",
    "types": "user_message,thinking_delta,text_delta,user_message,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,user_message,thinking_delta,text_delta,done,|,|,|"
   },
   "openclaw live: rewind @8/16": {
@@ -4352,7 +4352,7 @@
    "types": "turn_started,thinking_delta,text_delta,turn_ended"
   },
   "openclaw history: rewind": {
-   "sha": "0c908c67e5017bf171be",
+   "sha": "4976410beda0e63b5e60",
    "types": "user_message,thinking_delta,text_delta,user_message,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,user_message,thinking_delta,text_delta,done,|,|,|"
   },
   "openclaw live: approval @7/14": {
@@ -4360,7 +4360,7 @@
    "types": "thinking_delta,text_delta,turn_started,thinking_delta,text_delta,turn_ended"
   },
   "openclaw history: approval": {
-   "sha": "96241e910b8359b93672",
+   "sha": "e4cb1ea20896c3bd45b3",
    "types": "user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,user_message,thinking_delta,text_delta,done,|,user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,user_message,thinking_delta,text_delta,done,|,|,|"
   },
   "openclaw live: main-heartbeat @9/18": {
@@ -4368,7 +4368,7 @@
    "types": ""
   },
   "openclaw history: main-heartbeat": {
-   "sha": "40ee59090b1846dc0f66",
+   "sha": "5389eb799146b11117e1",
    "types": "user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,done,|,done,|,user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,|,|,|"
   },
   "openclaw live: two-panes-main @12/24": {
@@ -4376,7 +4376,7 @@
    "types": "turn_started,thinking_delta,text_delta,turn_ended"
   },
   "openclaw history: two-panes-main": {
-   "sha": "ad6b783ca021b809897d",
+   "sha": "c3e9edf445b20ef81151",
    "types": "user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,user_message,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,done,|,user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,|,|,|"
   }
  }

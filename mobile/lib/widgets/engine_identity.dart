@@ -50,17 +50,17 @@ const _engines = <String, EngineIdentity>{
     color: Colors.white,
     asset: 'assets/engine-icons/pi.png',
   ),
-  'hermes': EngineIdentity(
-    id: 'hermes',
-    label: 'Hermes',
-    color: Color(0xff9b8cff),
-    asset: 'assets/engine-icons/hermes.png',
-  ),
   'openclaw': EngineIdentity(
     id: 'openclaw',
     label: 'OpenClaw',
     color: Color(0xffff4d4d),
     asset: 'assets/engine-icons/openclaw.png',
+  ),
+  'hermes': EngineIdentity(
+    id: 'hermes',
+    label: 'Hermes',
+    color: Color(0xff9b8cff),
+    asset: 'assets/engine-icons/hermes.png',
   ),
   'commandcode': EngineIdentity(
     id: 'commandcode',
