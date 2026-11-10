@@ -340,14 +340,10 @@ List<SwarmChoice> swarmChoices(AppNotifier app) {
         (
           id: id,
           name: name.trim().isEmpty ? 'Swarm' : name,
-          waiting: swarmWaiting(app, id),
+          waiting: app.superTabs.waitingTags(id),
         ),
   ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 }
-
-/// What a Swarm's tab badge counts: its tags.
-int swarmWaiting(AppNotifier app, String id) =>
-    app.superTabs.waitingTags(id);
 
 /// The Swarm tab showing [c]'s Swarm moves to Personal when that Swarm is
 /// taken away, once the person has picked Personal here (read from this
@@ -443,7 +439,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
       final choices = swarmChoices(app);
       final personalWaiting = personalId == null || isPersonal
           ? 0
-          : swarmWaiting(app, personalId);
+          : app.superTabs.waitingTags(personalId);
       Widget? badge(int count) => count > 0 ? SuperTabCountBadge(count) : null;
       return LayoutBuilder(
         builder: (context, box) {

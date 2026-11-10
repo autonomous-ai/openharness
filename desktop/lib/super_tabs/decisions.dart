@@ -129,37 +129,6 @@ class SuperTabDecisions extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
-  /// The open ones asked in [projectId]'s conversations, for its Buddy chat.
-  /// The open decisions asked in [projectId]; for the empty id, the
-  /// reader's one Buddy chat for the whole Swarm, every project's (spec
-  /// 2026-10-31-one-buddy-per-swarm; security review 1 of #2437).
-  List<SuperTabDecision> openIn(String projectId) => [
-    for (final d in open)
-      if (projectId == SuperTabController.kSwarmBuddyKey ||
-          d.projectId == projectId)
-        d,
-  ];
-
-  /// Those of [openIn] the reader has not set aside with Not now or Hide.
-  List<SuperTabDecision> shownIn(String projectId) {
-    final aside = controller.decisionsAside;
-    return [
-      for (final d in openIn(projectId))
-        if (!aside.contains(d.id)) d,
-    ];
-  }
-
-  /// Not now and Hide: folded in the Buddy chat until the reader shows them
-  /// again; a decision asked later still shows.
-  void setAside(Iterable<SuperTabDecision> decisions) =>
-      controller.setDecisionsAside(decisions.map((d) => d.id), aside: true);
-
-  /// Show: every open decision of [projectId] in its Buddy chat again.
-  void showAgain(String projectId) => controller.setDecisionsAside(
-    openIn(projectId).map((d) => d.id),
-    aside: false,
-  );
-
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
@@ -241,10 +210,9 @@ class SuperTabDecisions extends ChangeNotifier {
       answered = nextAnswered;
       loaded = true;
       _openComplete = openComplete;
-      // The lists are the newest of each (the backend caps them): what is
-      // set aside is forgotten only once it is known answered or gone.
+      // The lists are the newest of each (the backend caps them): a failure
+      // is forgotten only once it is known answered or gone.
       final gone = _gone();
-      controller.forgetDecisionsAside(gone);
       _failed.removeWhere((id, _) => gone(id));
       error = null;
       _failedAt = null;

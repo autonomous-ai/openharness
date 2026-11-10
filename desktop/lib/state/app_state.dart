@@ -1611,6 +1611,7 @@ class AppNotifier extends ChangeNotifier {
       _deviceReads.clear();
       // Names and membership belong to the account that discovered them.
       _superTabNames = {};
+      if (profile?.id case final account?) _forgetJoinSeen(account);
     }
     _currentUser = profile;
     final id = profile?.id;
@@ -1618,6 +1619,17 @@ class AppNotifier extends ChangeNotifier {
     experimentalFeatures.bind(
       id,
       transport: id == null ? null : _experimentTransport,
+    );
+  }
+
+  /// The Swarms the join's Bring agent was offered for were kept per account
+  /// until v3's Buddy went (2026-11-10); nothing reads them now. Goes on
+  /// 2026-12-10, when clients that wrote it are past 30 days.
+  void _forgetJoinSeen(String account) {
+    unawaited(
+      localStore?.delete('swarm_join_seen.$account').catchError((Object error) {
+        appLog.info('super-tabs', 'join record not removed: $error');
+      }),
     );
   }
 

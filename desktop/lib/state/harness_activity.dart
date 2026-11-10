@@ -94,16 +94,14 @@ HarnessActivity? harnessActivity(
   return HarnessActivity.idle;
 }
 
-/// The tags waiting for this account in a Swarm tab, for the tab's badge.
+/// The tags waiting for this account in a Swarm tab: what the tab's badge
+/// counts.
 int tabMentionsWaiting(AppNotifier app, Swarm tab) =>
     tab.superTabId == null ? 0 : app.superTabs.waitingTags(tab.superTabId!);
 
 /// What a Swarm tab's tag count says: "Tagged in 2 messages".
 String tabMentionsLabel(int count) =>
     'Tagged in $count ${count == 1 ? 'message' : 'messages'}';
-
-/// What a Swarm tab's badge counts: its tags.
-int tabWaiting(AppNotifier app, Swarm tab) => tabMentionsWaiting(app, tab);
 
 /// What a Swarm tab's badge says, or null when it counts nothing: "Tagged in 1 message".
 String? tabWaitingLabel(AppNotifier app, Swarm tab) {

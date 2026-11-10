@@ -290,6 +290,50 @@ void main() {
     });
   });
 
+  // Desktop no longer starts Buddy sessions (S2 of the v1-v3 removal), but a
+  // thread one answered before stays in the Buddy chat the round dial opens:
+  // the box offers only what the server takes there (backend routeBuddySession).
+  group('a Buddy thread a session answered', () {
+    testBox('while the session runs: no Also send, and @ offers no agent', (
+      tester,
+    ) async {
+      final server = buddyChat();
+      ((server.state['conversations'] as List)[1] as Map)['buddySessions'] = [
+        {'thread': 'message-1', 'startId': 'start', 'at': 1},
+      ];
+      await panel(tester, server, 'offline', width: 800);
+      expect(alsoSend, findsNothing);
+      await tester.enterText(
+        find.byKey(const ValueKey('super-thread-composer')),
+        '@',
+      );
+      await tester.pump();
+      expect(find.text('Wren'), findsNothing);
+    });
+
+    testBox('once it ended: kept to read, saying why', (tester) async {
+      final server = buddyChat();
+      server.messages.last['buddySession'] = true;
+      await panel(tester, server, 'offline', width: 800);
+      final field = tester.widget<TextField>(
+        find.byKey(const ValueKey('super-thread-composer')),
+      );
+      expect(field.enabled, isFalse);
+      expect(field.decoration?.hintText, "This thread's session ended.");
+    });
+
+    testBox('a thread with no session takes a reply as any other', (
+      tester,
+    ) async {
+      await panel(tester, buddyChat(), 'offline', width: 800);
+      final field = tester.widget<TextField>(
+        find.byKey(const ValueKey('super-thread-composer')),
+      );
+      expect(field.enabled, isTrue);
+      expect(alsoSend, findsOneWidget);
+    });
+  });
+
   group('at any width and text size', () {
     for (final (width, scale) in [
       (SuperTabPaneLayout.threadWidth, 1.0),

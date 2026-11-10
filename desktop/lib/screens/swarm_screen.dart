@@ -2319,7 +2319,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           app.questionFor(p.machineId, p.agentId!) != null,
                     )
                     .length +
-                tabWaiting(app, swarm),
+                tabMentionsWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
                 activity,
@@ -9323,7 +9323,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           final swarm = shown[index];
                           final selected = app.activeSwarmId == swarm.id;
                           final activity = activities[index];
-                          final tags = tabWaiting(app, swarm);
+                          final tags = tabMentionsWaiting(app, swarm);
                           // A status cell animates only while its tab is in view.
                           Widget tabStatus(
                             Widget Function(bool visible) mark,
