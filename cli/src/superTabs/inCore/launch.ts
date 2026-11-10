@@ -1,6 +1,6 @@
 /**
  * The Swarm's part of an agent's start (core/api.ts `SwarmLaunch`): which roles and skill modes a start may ask for, the
- * role's skill written into the project folder, and the Harness GitHub App's git and gh for another person's project
+ * team's basics it starts with, and the Harness GitHub App's git and gh for another person's project
  * work. The core is handed it while the Swarm is on, and refuses a start with a Swarm role while it is off.
  */
 import { env } from '../../config/env.js'
@@ -14,8 +14,8 @@ export const SWARM_LAUNCH: SwarmLaunch = {
   mode: isSwarmSkillMode,
   // Every launch and relaunch carries this release's basics; the first notes when, so the Swarm's host tells only the
   // agents launched before then that they changed (lib/swarmSkills.ts noteSwarmBasics).
-  prepare: (workspace, saved) => {
-    const prepared = prepareSwarmSkill(workspace, saved)
+  prepare: (saved) => {
+    const prepared = prepareSwarmSkill(saved)
     noteSwarmBasics(env.ADAPTER_DATA_DIR, Date.now())
     return prepared
   },

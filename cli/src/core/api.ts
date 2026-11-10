@@ -1300,7 +1300,7 @@ type SwarmSkill = NonNullable<RegisteredSession['swarmSkill']>
 export interface SwarmLaunch {
   role(value: unknown): value is SwarmSkill['role']
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
-  prepare(cwd: string, skill: SwarmSkill): { instructions: string }
+  prepare(skill: SwarmSkill): { instructions: string }
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]

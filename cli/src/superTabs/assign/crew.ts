@@ -36,7 +36,7 @@ export const DEEP = 2
  *  one only when it is well behind (anh Dee, 2026-11-09: "do you assign agents to their area of expertise?"). */
 export const FOCUS = 0.5
 /** And in an area it does not work on, once its person named some: it takes other work only when its own has none. */
-export const AWAY = 1.5
+const AWAY = 1.5
 
 /** One of the project's agents that builds, as the PM's read of the Swarm names it, with the areas its instructions say it
  *  works on in this project ([worksOnOf]; empty for anything, absent when unread or unsaid). */
@@ -241,12 +241,12 @@ export function readProblem(input: { now: number; issues: Json[]; closed: Json[]
 
 /**
  * The team that builds a project, from its PM's read of the Swarm: its person's and their teammates' agents that may work
- * in it (a private project's own only), never the PM itself, a Buddy, one stopping or one whose machine is down, each with
+ * in it (a private project's own only), never the PM itself, one stopping or one whose machine is down, each with
  * the machine it runs on. Swarm v4 agents run Claude Code or Codex.
  */
 export function crewOf(state: Json, project: { pmAgentId: string; projectId: string }): Crew {
   const agents = Array.isArray(state.agents) ? state.agents.map(object) : []
-  const team = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId && !a.buddyOf
+  const team = agents.filter(a => a.regular === true && typeof a.id === 'string' && a.id !== project.pmAgentId
     && typeof a.machineId === 'string' && (a.privateProjectId === undefined || a.privateProjectId === null || a.privateProjectId === project.projectId)
     && ['claude', 'codex'].includes(String(object(a.configuration).engine)))
   const away: AwayBuilder[] = team.filter(a => a.workDecision === 'stop' || a.downSince).map(a => {
