@@ -986,11 +986,11 @@ class _ProjectMenu extends StatelessWidget {
     return MenuTheme(
       data: MenuThemeData(
         submenuIcon: MenuTheme.of(context).submenuIcon,
-        // Home C sits near the top of the phone. Nine rows at their 48-point
+        // Home C sits near the top of the phone. Eight rows at their 48-point
         // layout height, panel padding, and a small edge fit without scrolling.
         style: AppMenu.style(
           maxHeight:
-              9 * (minTouchTarget + AppSpace.xs) +
+              8 * (minTouchTarget + AppSpace.xs) +
               AppMenu.panelPadding.vertical +
               AppSpace.xs,
         ),
