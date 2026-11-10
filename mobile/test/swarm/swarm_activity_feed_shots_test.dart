@@ -144,15 +144,12 @@ void main() {
         });
       }
 
-      for (final filter in ['threads', 'reactions']) {
-        final pill = find.byKey(ValueKey('swarm-activity-filter-$filter'));
-        await tester.ensureVisible(pill);
-        await tester.pumpAndSettle();
-        await tester.tap(pill);
-        await tester.pumpAndSettle();
-        await capture(filter == 'threads' ? 'replies' : filter);
-      }
-      expect(find.text('River reacted 👍 to your message'), findsOneWidget);
+      final pill = find.byKey(const ValueKey('swarm-activity-filter-threads'));
+      await tester.ensureVisible(pill);
+      await tester.pumpAndSettle();
+      await tester.tap(pill);
+      await tester.pumpAndSettle();
+      await capture('replies');
 
       await tester.pumpWidget(const SizedBox());
       host.dispose();

@@ -14,8 +14,8 @@ import 'package:harness_mobile/shared/theme/color_palette.dart';
 
 import 'edge_fixture.dart';
 
-/// Profile's screenshots for review (#2655): the sheet with two Swarms, and a refusal under a username, in both
-/// phone themes. Set ACCOUNT_PROFILE_SHOTS to a folder to write them.
+/// Profile's screenshots for review (#2655): the sheet, in both phone themes. Set ACCOUNT_PROFILE_SHOTS to a folder to
+/// write them.
 final shots = Platform.environment['ACCOUNT_PROFILE_SHOTS'];
 void main() {
   setUpAll(() async {
@@ -61,13 +61,9 @@ void main() {
       app.api = EdgeApi(app, AuthSession());
       app.currentUser = const CurrentUserProfile(id: 'u', name: 'Ada Lovelace', email: 'ada@example.com');
       final boundary = GlobalKey();
-      AccountProfileSwarm swarm(String name, String username, {String? refuse}) => AccountProfileSwarm(
-        name: name, username: username, personName: 'Ada Lovelace',
-        setUsername: (_) async => refuse, setName: (_) async => null);
-      final swarms = [swarm('Pilot', 'ada', refuse: 'That username is taken in this Swarm.'), swarm('Scout', 'ada-l')];
       await tester.pumpWidget(RepaintBoundary(key: boundary, child: phoneApp(
         Builder(builder: (context) => Scaffold(body: Center(child: TextButton(
-          onPressed: () => showAccountProfile(context, app, swarms: swarms), child: const Text('open'))))),
+          onPressed: () => showAccountProfile(context, app), child: const Text('open'))))),
         brightness: brightness)));
       await tester.tap(find.text('open'));
       await frames(tester);
@@ -81,11 +77,6 @@ void main() {
       FocusManager.instance.primaryFocus?.unfocus();
       await frames(tester);
       await shot('open');
-      await tester.enterText(find.byKey(const ValueKey('account-profile-username-0')), 'ada2');
-      FocusManager.instance.primaryFocus?.unfocus();
-      await tester.tap(find.text('Save'));
-      await frames(tester);
-      await shot('refused');
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 3));
       app.dispose();

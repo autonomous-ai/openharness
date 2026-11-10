@@ -11,7 +11,7 @@ import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_devices_page.dart';
 import 'package:harness_mobile/swarm/swarm_models_page.dart';
-import 'package:harness_mobile/swarm/swarm_profile_sheet.dart';
+import 'package:harness_mobile/swarm/swarm_person_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
@@ -35,11 +35,11 @@ class _AskedNotices extends SilentSystemNotices {
 }
 
 /// You, as Tony's prototype C4 draws it (2026-10-30): who the person is in
-/// the Swarm Home shows, which opens their profile; Your models and Your
-/// devices with what is ready; and Notifications, Theme and Settings.
+/// the Swarm Home shows; Your models and Your devices with what is ready; and
+/// Notifications, Theme and Settings.
 void main() {
-  /// The Swarms [swarms], each with the person as tony@example.com, [status]
-  /// and [name] set when given, its models on, and [models] served by the person's
+  /// The Swarms [swarms], each with the person as tony@example.com, [name]
+  /// set when given, and [status], which an older server still sends, its models on, and [models] served by the person's
   /// machine Studio, read just now; and [others], more machines read just
   /// now, as given.
   FakeSwarm backend({
@@ -186,7 +186,7 @@ void main() {
   ];
 
   testWidgets('who you are: your face, your name and your Swarm, and a tap '
-      'there opens your profile', (tester) async {
+      'there opens nothing', (tester) async {
     await pump(tester, backend());
 
     expect(
@@ -198,22 +198,30 @@ void main() {
     expect(inside('swarm-you-me', find.byType(SwarmAvatar)), findsOneWidget);
     expect(
       inside('swarm-you-me', find.byIcon(LucideIcons.chevronRight300)),
-      findsOneWidget,
-      reason: 'it says it opens',
+      findsNothing,
+      reason: 'there is nothing to open',
     );
     expect(
-      tester.getSemantics(key('swarm-you-me')),
-      isSemantics(isButton: true, hasTapAction: true),
+      inside('swarm-you-me', find.byType(InkWell)),
+      findsNothing,
+      reason: 'it is no button',
     );
 
     await tester.tap(key('swarm-you-me'));
     await tester.pumpAndSettle();
 
-    expect(find.byType(SwarmProfileSheet), findsOneWidget);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byType(SwarmPersonSheet), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
+      'You',
+      reason: 'still on You',
+    );
   });
 
-  testWidgets('nothing under the header opens the profile again: no Profile, '
-      'no Username, no status line, no Change', (tester) async {
+  testWidgets('nothing under the header sets a name, a username or a status: '
+      'no Profile, no Username, no status line, no Change', (tester) async {
+    // An older server still sends the status Minh set: none of it is drawn.
     await pump(
       tester,
       backend(
@@ -230,6 +238,7 @@ void main() {
     expect(find.byIcon(LucideIcons.atSign300), findsNothing);
     expect(find.text('Change'), findsNothing);
     expect(find.text('🎯 Focusing'), findsNothing);
+    expect(find.text('🎯'), findsNothing, reason: 'nor a badge on the face');
   });
 
   testWidgets('under the header: Your models and Your devices, then '
@@ -303,8 +312,8 @@ void main() {
     expect(appearance.value.themeMode, AppThemeMode.light);
   });
 
-  testWidgets('a long name and Swarm stay on one line each, the chevron and '
-      'Theme on screen, on a small phone at large text', (tester) async {
+  testWidgets('a long name and Swarm stay on one line each, Theme on screen, '
+      'on a small phone at large text', (tester) async {
     const name = 'Maximilian Alexander Featherstonehaugh-Wolfeschlegel';
     const swarm = 'The Autonomous Research and Design Laboratory';
     await pump(
@@ -319,14 +328,6 @@ void main() {
     expect(tester.takeException(), isNull);
     final header = tester.getRect(key('swarm-you-me'));
     expect(header.right, lessThanOrEqualTo(320));
-    expect(
-      tester
-          .getRect(
-            inside('swarm-you-me', find.byIcon(LucideIcons.chevronRight300)),
-          )
-          .right,
-      lessThanOrEqualTo(header.right),
-    );
     for (final line in [name, swarm]) {
       expect(
         tester.widget<Text>(inside('swarm-you-me', find.text(line))).maxLines,
@@ -337,25 +338,15 @@ void main() {
     expect(tester.getRect(key('swarm-you-theme')).right, lessThanOrEqualTo(320));
   });
 
-  testWidgets('a status set is the profile\'s, not a line on You', (
-    tester,
-  ) async {
+  testWidgets('a status an older server still sends is drawn nowhere: not a '
+      'line on You, not a badge on a face', (tester) async {
     await pump(
       tester,
       backend(status: {'text': 'In a meeting', 'emoji': '📅'}),
     );
     expect(find.text('📅 In a meeting'), findsNothing);
     expect(find.text('Active'), findsNothing);
-
-    await tester.tap(key('swarm-you-me'));
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(
-        of: find.byType(SwarmProfileSheet),
-        matching: find.text('📅 In a meeting'),
-      ),
-      findsOneWidget,
-    );
+    expect(find.text('📅'), findsNothing);
   });
 
   testWidgets('Your models counts what every Swarm can use now, and opens '
@@ -580,10 +571,6 @@ void main() {
       inside('swarm-you-me', find.byIcon(LucideIcons.chevronRight300)),
       findsNothing,
     );
-
-    await tester.tap(key('swarm-you-me'));
-    await tester.pumpAndSettle();
-    expect(find.byType(SwarmProfileSheet), findsNothing);
   });
 
   testWidgets('every row takes a thumb', (tester) async {

@@ -10,11 +10,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart'
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_face.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
-import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
 import 'package:harness_mobile/swarm/swarm_thread_line.dart';
 import 'package:harness_mobile/swarm/swarm_you_page.dart';
 
@@ -283,53 +280,21 @@ void main() {
     });
   });
 
-  group('You and the Name editor', () {
+  group('You shows the name a person set, and nothing sets one', () {
     late FakeSwarm swarm;
-    late Map<String, dynamic> mine;
     late SwarmHost host;
-
-    /// What the next command answers instead of the server's rules, once.
-    FutureOr<Object?> Function()? answer;
-
-    // The backend's rules (backend/src/superTabs/personNames.ts), in short.
-    Object? setName(Map<String, dynamic> command) {
-      final input = command['name'] as String?;
-      if (input == null) {
-        mine = {...mine}..remove('name');
-        return {'ok': true};
-      }
-      final name = input.replaceAll(RegExp(r'\s+'), ' ').trim();
-      if (name.isEmpty || name.runes.length > 40) {
-        throw const SuperTabFailure(
-          'INVALID_NAME',
-          'Use 1 to 40 characters, with no hidden ones.',
-          statusCode: 400,
-        );
-      }
-      if (name.toLowerCase() == 'dee') {
-        throw const SuperTabFailure(
-          'NAME_TAKEN',
-          'Someone here already goes by that name.',
-          statusCode: 409,
-        );
-      }
-      mine = {...mine, 'name': name};
-      return {'ok': true};
-    }
 
     Future<void> pump(WidgetTester tester, {String? name}) async {
       tester.view.physicalSize = const Size(1170, 2532);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
-      answer = null;
       swarm = FakeSwarm();
-      mine = {
+      final mine = {
         ...person(me),
         'email': 'tony@example.com',
         'username': 'tony',
         'name': ?name,
       };
-      var version = 1;
       swarm.routes['/api/super-tabs/list'] = (_) => {
         'tabs': [
           {'id': tab, 'name': 'Autonomous', 'ownerId': me},
@@ -338,29 +303,17 @@ void main() {
       };
       swarm.routes['/api/super-tabs/$tab/parts'] = (_) => {
         ...firstLoad(),
-        'members': [part(me, version, mine), part('dee', 1, dee)],
+        'members': [part(me, 1, mine), part('dee', 1, dee)],
       };
-      swarm.routes['/api/super-tabs/$tab/changes'] = (_) => {
-        ...changes(cursor: 'c${++version}'),
-        'members': [part(me, version, mine)],
-      };
+      swarm.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          changes(cursor: 'c2');
       swarm.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
         'decisions': <Object>[],
       };
       swarm.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
         'mentions': <Object>[],
       };
-      swarm.routes['/api/super-tabs/$tab/commands'] = (body) {
-        final command = body!['command'] as Map<String, dynamic>;
-        if (answer case final once?) {
-          answer = null;
-          return once();
-        }
-        return switch (command['type']) {
-          'member.name' => setName(command),
-          _ => {'ok': true},
-        };
-      };
+      swarm.routes['/api/super-tabs/$tab/commands'] = (_) => {'ok': true};
       final account = ValueNotifier<String?>(me);
       host = SwarmHost(
         accountId: () => account.value,
@@ -385,53 +338,22 @@ void main() {
     Finder key(String value) => find.byKey(ValueKey(value));
     Finder inside(String k, Finder matching) =>
         find.descendant(of: key(k), matching: matching);
-    TextField field(WidgetTester tester) =>
-        tester.widget<TextField>(key('swarm-name-field'));
-    bool saveOn(WidgetTester tester) =>
-        tester.widget<SwarmButton>(key('swarm-name-save')).onPressed != null;
-    String? shownError() => key('swarm-name-error').evaluate().isEmpty
-        ? null
-        : (key('swarm-name-error').evaluate().single.widget as Text).data;
-    SuperTabPerson? stored() =>
-        host.session!.inbox.reader(tab)!.snapshot!.person(me);
-    List<Map<String, dynamic>> named() => [
-      for (final c in swarm.commands)
-        if (c['type'] == 'member.name') c,
-    ];
 
-    Future<void> settle(WidgetTester tester) async {
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-    }
-
-    Future<void> openProfile(WidgetTester tester) async {
-      await tester.tap(key('swarm-you-me'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-name-field'), findsOneWidget);
-    }
-
-    Future<void> type(WidgetTester tester, String text) async {
-      await tester.enterText(key('swarm-name-field'), text);
-      await tester.pump();
-    }
-
-    Future<void> save(WidgetTester tester) async {
-      await tester.ensureVisible(key('swarm-name-save'));
-      await tester.tap(key('swarm-name-save'));
-      await settle(tester);
-    }
-
-    testWidgets('with a name: You heads with it, once, and the handle is the '
-        "profile's", (tester) async {
+    testWidgets('with a name: You heads with it, once, and no field offers to '
+        'change it', (tester) async {
       await pump(tester, name: 'Minh Nguyen');
       expect(inside('swarm-you-me', find.text('Minh Nguyen')), findsOne);
       expect(find.text('Minh Nguyen'), findsOne, reason: 'no row repeats it');
       expect(find.text('tony'), findsNothing);
-      await openProfile(tester);
+      await tester.tap(key('swarm-you-me'));
+      await tester.pumpAndSettle();
+      expect(find.byType(TextField), findsNothing);
+      expect(key('swarm-name-field'), findsNothing);
+      expect(key('swarm-username-field'), findsNothing);
       expect(
-        tester.widget<TextField>(key('swarm-username-field')).controller!.text,
-        'tony',
+        swarm.commands.where((c) => '${c['type']}'.startsWith('member.')),
+        isEmpty,
+        reason: 'nothing is sent',
       );
     });
 
@@ -441,84 +363,6 @@ void main() {
       await pump(tester);
       expect(inside('swarm-you-me', find.text('tony')), findsOne);
       expect(find.text('tony'), findsOne, reason: 'no row repeats it');
-    });
-
-    testWidgets('the Name field sits above Username, and a name saves '
-        'trimmed and shows at once', (tester) async {
-      await pump(tester);
-      await openProfile(tester);
-      expect(field(tester).controller!.text, '');
-      expect(
-        tester.getTopLeft(key('swarm-name-field')).dy,
-        lessThan(tester.getTopLeft(key('swarm-username-field')).dy),
-      );
-      expect(find.text('Leave empty to show your username.'), findsOne);
-      // Nothing changed, nothing to save.
-      expect(saveOn(tester), isFalse);
-
-      await type(tester, '  Minh Nguyen ');
-      expect(saveOn(tester), isTrue);
-      await save(tester);
-
-      expect(named(), [
-        {'type': 'member.name', 'name': 'Minh Nguyen'},
-      ]);
-      expect(shownError(), isNull);
-      expect(field(tester).controller!.text, 'Minh Nguyen');
-      expect(stored()!.name, 'Minh Nguyen');
-      await tester.tap(key('swarm-profile-close'));
-      await tester.pumpAndSettle();
-      expect(inside('swarm-you-me', find.text('Minh Nguyen')), findsOne);
-    });
-
-    testWidgets('an emptied field clears it with null, and the username '
-        'shows again', (tester) async {
-      await pump(tester, name: 'Minh Nguyen');
-      await openProfile(tester);
-      expect(field(tester).controller!.text, 'Minh Nguyen');
-
-      await type(tester, '   ');
-      expect(saveOn(tester), isTrue);
-      await save(tester);
-
-      expect(named(), [
-        {'type': 'member.name', 'name': null},
-      ]);
-      expect(shownError(), isNull);
-      expect(stored()!.name, isNull);
-      await tester.tap(key('swarm-profile-close'));
-      await tester.pumpAndSettle();
-      expect(inside('swarm-you-me', find.text('tony')), findsOne);
-    });
-
-    testWidgets('a name the server refuses says why under its field, and '
-        'nothing changes', (tester) async {
-      await pump(tester, name: 'Minh Nguyen');
-      await openProfile(tester);
-      await type(tester, 'Dee');
-      await save(tester);
-
-      expect(shownError(), 'Someone here already goes by that name.');
-      expect(key('swarm-profile-error'), findsNothing);
-      expect(key('swarm-username-error'), findsNothing);
-      expect(field(tester).controller!.text, 'Dee');
-      expect(stored()!.name, 'Minh Nguyen');
-      // Typing again clears it.
-      await type(tester, 'Minh');
-      expect(shownError(), isNull);
-    });
-
-    testWidgets('a call lost on the way says so and never stays Saving', (
-      tester,
-    ) async {
-      await pump(tester);
-      await openProfile(tester);
-      answer = () => throw TimeoutException('no answer');
-      await type(tester, 'Minh');
-      await save(tester);
-      expect(shownError(), 'Could not reach this Swarm. Try again.');
-      expect(find.text('Saving…'), findsNothing);
-      expect(saveOn(tester), isTrue);
     });
   });
 }

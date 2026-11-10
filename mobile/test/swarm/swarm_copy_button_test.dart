@@ -53,7 +53,6 @@ void main() {
               'createdAt': DateTime.utc(2026, 11, 2).toIso8601String(),
             }),
             name: 'River',
-            look: (picture: null, status: null),
             role: 'PM',
             mentions: SwarmMentions(const []),
             grouped: false,
