@@ -43,10 +43,3 @@ export const SWARM_CHANNEL = 'swarm-needs-you'
 /** The Android channel of a quiet push (task #3248), which the app makes with no sound: Android's channel, not the message,
  *  decides whether a notification sounds. */
 export const SWARM_QUIET_CHANNEL = 'swarm-quiet'
-
-/** `promise`, or a rejection with `timeout` after `ms`. */
-export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined
-  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), ms) })
-  return Promise.race([promise, late]).finally(() => clearTimeout(timer))
-}
