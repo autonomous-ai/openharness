@@ -29,6 +29,7 @@ import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_READ_MS
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
 import { githubRepository } from '../github/repository.js'
+import { commentAuthors, recordComment, sameRepository, type CommentKind } from './githubComments.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
@@ -3314,6 +3315,35 @@ export class SuperTabStore {
       if (actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && isBuddy(a))) fail('NOT_FOUND', 'This project is unavailable.', 404)
       return { repositoryUrl: project.repository?.repositoryUrl ?? null }
     })
+  }
+
+  /** Records that agent [asAgentId] wrote a GitHub comment it just posted (githubComments.ts). Only the agent the caller's own
+   *  machine runs may say so (the actor check every agent call has), and only on the repository of a project it may read, as
+   *  it reads the Swarm now (not the read cache). */
+  async recordGithubComment(user: AuthUser, tabId: string, asAgentId: string, comment: { repository: string; kind: CommentKind; commentId: string }) {
+    const project = await transaction(this.db, async tx => {
+      const { state } = await this.load(tx, user, tabId)
+      const actor = await this.actor(tx, user, state, asAgentId)
+      return projectsOf(state).find(p => sameRepository(p, comment.repository) && canReadProject(state, actor, p))
+    })
+    if (!project) fail('REPOSITORY_NOT_PROJECT', 'This agent works on no project of that repository.', 422)
+    return recordComment(this.db, { tabId, projectId: project.id, agentId: asAgentId, ...comment, now: this.now() })
+  }
+
+  /** The agents that wrote the comments [ids] (`kind:id`) on [repository], recorded for a project of it the reader may read
+   *  (githubComments.ts); a reader who may read none hears what a project that does not exist says. */
+  async githubCommentAuthors(user: AuthUser, tabId: string, repository: string, ids: readonly string[], asAgentId?: string) {
+    const { state } = await this.readLoad(user, tabId)
+    const actor = await this.actor(this.db, user, state, asAgentId)
+    const readable = new Set(projectsOf(state).filter(p => sameRepository(p, repository) && canReadProject(state, actor, p)).map(p => p.id))
+    if (!readable.size) fail('NOT_FOUND', 'This project is unavailable.', 404)
+    const authors: Record<string, { agentId: string; name: string | null }> = {}
+    for (const [id, { agentId, projectId }] of await commentAuthors(this.db, tabId, repository, ids)) {
+      if (!readable.has(projectId)) continue
+      const agent = state.agents.find(a => a.id === agentId)
+      authors[id] = { agentId, name: agent ? agent.displayName ?? agent.name : null }
+    }
+    return { authors }
   }
 
   /** A project's name as [userId] may see it now, for the page GitHub sends them back to after approving its repository

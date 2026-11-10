@@ -274,14 +274,17 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
   const currentSsid = async (): Promise<string | null> =>
     activeSsid(await exec(NMCLI, ['-t', '-e', 'yes', '-f', 'ACTIVE,SSID', 'device', 'wifi'], { timeout: NMCLI_TIMEOUT_MS }).catch(() => ''))
 
+  const updateStatus = (): Promise<Payload> =>
+    exec(PYTHON, [LIVE_UPDATE, 'status'], { timeout: STATUS_TIMEOUT_MS }).then((out) => {
+      const parsed: unknown = JSON.parse(out)
+      if (!record(parsed)) throw new Error('live_update.py status did not answer an object')
+      return updateOf(parsed)
+    }).catch((error: unknown): Payload => ({ available: false, error: short(error) }))
+
   const status = async (): Promise<Payload> => {
     if (!harnessOs()) return { harnessOs: false }
     const [update, ssid, hotspot, cmdline] = await Promise.all([
-      exec(PYTHON, [LIVE_UPDATE, 'status'], { timeout: STATUS_TIMEOUT_MS }).then((out) => {
-        const parsed: unknown = JSON.parse(out)
-        if (!record(parsed)) throw new Error('live_update.py status did not answer an object')
-        return updateOf(parsed)
-      }).catch((error: unknown): Payload => ({ available: false, error: short(error) })),
+      updateStatus(),
       currentSsid(),
       // The open Wi-Fi it hosts while locked or not set up: where a phone finds it after a restart.
       exec(PYTHON, [SETUP, 'name'], { timeout: NMCLI_TIMEOUT_MS }).then((out) => out.trim() || null).catch(() => null),
@@ -321,8 +324,14 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
     return { started: true }
   }
 
-  const update = (payload: Payload): Payload => {
-    if (updateStartedAt !== null && now() - updateStartedAt < UPDATE_BUSY_MS) return { error: 'BUSY' }
+  const update = async (payload: Payload): Promise<Payload> => {
+    if (updateStartedAt !== null && now() - updateStartedAt < UPDATE_BUSY_MS) {
+      // The one started is done and only waits for the restart (the phone's Restart to finish):
+      // `harness update --reboot` then only restarts (live_update.py update_from_terminal). Anything
+      // else inside the window may still be updating.
+      const done = payload.reboot === true && (await updateStatus()).restartRequired === true
+      if (!done) return { error: 'BUSY' }
+    }
     // From a phone the person agreed to the restart there: a system update restarts the computer at once.
     const args = payload.reboot === true ? ['update', '--reboot'] : ['update']
     console.log(`[os-device] harness ${args.join(' ')}`)
@@ -475,7 +484,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
       if (typeof action !== 'string' || !ACTIONS.includes(action)) return { error: 'BAD_REQUEST' }
       if (!harnessOs()) return { error: 'UNSUPPORTED_OS' }
       try {
-        if (action === 'update') return update(payload)
+        if (action === 'update') return await update(payload)
         if (action === 'check_update') return checkUpdate()
         if (action === 'computer_use') return setTools(payload)
         if (action === 'wifi_scan') return await scan()
