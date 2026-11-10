@@ -73,6 +73,7 @@ describe('the core API services stand on', () => {
     expect(DELIVERIES_OFF.onEnd(() => {})()).toBeUndefined()
     expect(await DELIVERIES_OFF.answerOf({ sessionId: 'session', prompt: 'a'.repeat(32), turnId: 1 })).toBeNull()
     expect(await DELIVERIES_OFF.leaseDeliveries('test', {})).toBe(false)
+    expect(await DELIVERIES_OFF.holdOf('a', 'd1')).toBeNull()
   })
 
   // The Swarm's host posts its agents' answers into their people's chats as their turns end; no other process hears every end.
