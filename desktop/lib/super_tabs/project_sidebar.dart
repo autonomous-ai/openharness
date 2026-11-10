@@ -863,14 +863,64 @@ class ProjectSidebar extends StatelessWidget {
         attachTooltip: 'Attach agent',
         attachKey: const ValueKey('project-sidebar-agents-attach'),
       ),
-      if (controller.agentsGroupOpen) ...[
-        for (final (agent, chat) in reading.myAgents)
-          _agentRow(snapshot, agent, chat),
-        for (final pane in reading.panes) _paneRow(pane),
-      ],
+      if (controller.agentsGroupOpen) ..._teamRows(snapshot, reading),
       const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }
+
+  /// How many of Your Team's rows show before "N more" (tester Q1, 2026-11-10: with forty agents a person scrolled past
+  /// every one to reach a project).
+  static const teamShown = 8;
+
+  /// Your Team's rows: all of them up to [teamShown] or when the reader opened the rest, else the [teamShown] that matter
+  /// most (something new first, then on a task, then the rest; a pane not in the Swarm yet last), each where it stands in
+  /// the list, plus the open one, and "N more".
+  List<Widget> _teamRows(SuperTabSnapshot snapshot, _SidebarReading reading) {
+    final rows = <({Widget row, int rank, bool open})>[
+      for (final (agent, chat) in reading.myAgents)
+        (
+          row: _agentRow(snapshot, agent, chat),
+          rank: chat != null && controller.unreadShown(chat)
+              ? 0
+              : agentStates?.of(agent)?.startsWith('on #') == true
+              ? 1
+              : 2,
+          open: _chatLit(chat),
+        ),
+      for (final pane in reading.panes)
+        (row: _paneRow(pane), rank: 3, open: false),
+    ];
+    if (rows.length <= teamShown) return [for (final r in rows) r.row];
+    if (controller.agentsAllShown) {
+      return [
+        for (final r in rows) r.row,
+        _moreRow('Show fewer', AppIcons.chevronUp),
+      ];
+    }
+    final order = [for (var i = 0; i < rows.length; i++) i]
+      ..sort((a, b) {
+        final byRank = rows[a].rank.compareTo(rows[b].rank);
+        return byRank != 0 ? byRank : a.compareTo(b);
+      });
+    final shown = {
+      ...order.take(teamShown),
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i].open) i,
+    };
+    return [
+      for (var i = 0; i < rows.length; i++)
+        if (shown.contains(i)) rows[i].row,
+      _moreRow('${rows.length - shown.length} more', AppIcons.chevronDown),
+    ];
+  }
+
+  /// "N more" under Your Team's first rows, and "Show fewer" once they are all open.
+  Widget _moreRow(String name, IconData icon) => _iconRow(
+    key: 'super-team-more',
+    icon: icon,
+    name: name,
+    onTap: controller.toggleAllAgents,
+  );
 
   /// A pane of the person's own in their Personal Swarm, an agent of theirs that has not joined it: its face as it will be,
   /// its name and its computer.

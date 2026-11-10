@@ -249,6 +249,7 @@ class SuperTabController extends ChangeNotifier {
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       buddiesGroupOpen = initial['buddiesGroupOpen'] as bool? ?? true;
       agentsGroupOpen = initial['agentsGroupOpen'] as bool? ?? true;
+      agentsAllShown = initial['agentsAllShown'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       yourMachinesGroupOpen =
           initial['yourMachinesGroupOpen'] as bool? ?? false;
@@ -1143,6 +1144,9 @@ class SuperTabController extends ChangeNotifier {
   /// Whether the left pane's sections are open (Swarm v4, anh Dee 2026-11-09): Your Team and Projects open until the reader
   /// folds them, Your Machines and Top Teams folded until the reader opens them.
   bool agentsGroupOpen = true, projectsGroupOpen = true;
+
+  /// Your Team shows every agent, not only its first few (project_sidebar.dart `teamShown`); the reader's choice is kept.
+  bool agentsAllShown = false;
   bool yourMachinesGroupOpen = false, topTeamsGroupOpen = false;
 
   /// Whether its person opened or folded Your Machines: until they have, it is open while a computer is off and folded else.
@@ -1220,6 +1224,12 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleAgentsGroup() {
     agentsGroupOpen = !agentsGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleAllAgents() {
+    agentsAllShown = !agentsAllShown;
     _saveSoon();
     _changed();
   }
@@ -2783,6 +2793,7 @@ class SuperTabController extends ChangeNotifier {
     'machinesGroupOpen': machinesGroupOpen,
     'buddiesGroupOpen': buddiesGroupOpen,
     'agentsGroupOpen': agentsGroupOpen,
+    'agentsAllShown': agentsAllShown,
     'projectsGroupOpen': projectsGroupOpen,
     'yourMachinesGroupOpen': yourMachinesGroupOpen,
     'yourMachinesGroupChosen': yourMachinesGroupChosen,

@@ -452,6 +452,16 @@ class _Gallery extends StatelessWidget {
                           detail: 'Mac Studio',
                           onTap: () {},
                         ),
+                        // Past the first eight: the rest, a click away.
+                        SuperTabQuietRow(
+                          leading: Icon(
+                            AppIcons.chevronDown,
+                            size: AppIcons.inlineSize,
+                            color: grid.SidebarInk.inkMuted,
+                          ),
+                          name: '32 more',
+                          onTap: () {},
+                        ),
                         // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',
