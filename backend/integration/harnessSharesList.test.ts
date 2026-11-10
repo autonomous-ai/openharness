@@ -11,7 +11,6 @@ import { DRIVERS } from './bench/bench.js'
 import { machineId, seedAccounts } from './bench/fixtures.js'
 import { plan } from './bench/plan.js'
 import { seedSwarm, AGENT_CONFIGURATION, type Swarm } from './bench/seed.js'
-import { storeBuddy } from './storedBuddies.test-support.js'
 
 // The harness shares list (routes/harnessShares.ts) against a Swarm-sized database. Prod 2026-10-28: CLI daemons' list calls
 // took half the backend's busy time in spike minutes (p95 13.4 s), each share loading its whole Swarm to check it. Every
@@ -349,30 +348,6 @@ describe('the harness shares list as permissions change', () => {
     await shared('V', 'lead', false, ['grant-host', host], owner)
     expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
   })
-
-  it('lists a member\'s Buddy to that member alone, never to another, as each share alone does', async () => {
-    // A Buddy is in its owner's private chat (buddies.ts), so its session is confidential: only its machine's person watches it.
-    // Nothing adds one since Swarm v4 (buddyConversion.ts): this is one a v3 release stored, on A's Mac.
-    const { tab, sees, shareWithBoth } = await swarmWithShares()
-    await store.execute(a, tab, { operationId: randomUUID(), command: { type: 'machine.contribute', machineId: 'a-mac', name: 'A Mac', cwd: '/swarm',
-      scope: 'swarm', engines: ['claude'], maxAgents: 2 } })
-    const { harnessId } = await storeBuddy(database.db, tab, { personId: a.sub, machineId: 'a-mac', configuration: { ...AGENT_CONFIGURATION, engine: 'claude' } })
-    await shareWithBoth('B', 'a-mac', harnessId, a)
-    expect([await sees(a), await sees(b)]).toEqual(['BXYZ', 'XYZ'])
-  })
-
-  /** Another Swarm of the owner whose Lead L runs on the owner's machine, with L's part written before the confidential mark
-   *  existed (projects.ts markConfidential): the list learns L is confidential only by reading that Swarm. */
-  async function otherSwarmWithUnmarkedLead(n: number) {
-    const other = (await store.create(owner, randomUUID(), `Other ${n}`)).id
-    const harnessId = `perm-${n}-L`
-    const lead = (await store.execute(owner, other, { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead',
-      machineId: 'own-host', harnessId, name: 'Lead', configuration: AGENT_CONFIGURATION, lead: true } })).result.agentId as string
-    const part = await database.db.swarmAgent.findFirstOrThrow({ where: { tabId: other, key: lead } })
-    const { confidential: _mark, ...unmarked } = part.data as Record<string, unknown>
-    await database.db.swarmAgent.update({ where: { id: part.id }, data: { data: unmarked as object } })
-    return { other, harnessId }
-  }
 
   it('hides a Lead of another Swarm whose part was never marked, read from that Swarm', async () => {
     const { n, sees, shareWithBoth } = await swarmWithShares()

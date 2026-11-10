@@ -127,9 +127,9 @@ describe('the first Accept', () => {
     expect(memberStarts(f)).toHaveLength(1)
   })
 
-  it('never uses another person\'s computer or a Buddy-only one, and says why when it has none', () => {
+  it('never uses another person\'s computer, and says why when it has none', () => {
     const f = swarm()
-    f.state.machines = [f.machine('owner-mac', 'owner'), f.machine('kai-buddy', 'kai', { buddyOnly: true })]
+    f.state.machines = [f.machine('owner-mac', 'owner')]
     const { first } = accepted(f)
     expect(memberStarts(f)).toHaveLength(0)
     expect(f.group(first).taskApproval?.state).toBe('approved')

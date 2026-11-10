@@ -384,22 +384,21 @@ describe('Models: temporary workers by engine, model and effort, never by agent 
   })
 })
 
-describe('Agents: the permanent agents, the PM and Buddies, by name like people (Dee, 2026-10-29)', () => {
-  /** The project's PM, a Buddy of Dee's, and a builder, in [state]. */
+describe('Agents: the PM, by name like people (Dee, 2026-10-29)', () => {
+  /** The project's PM and a builder, in [state]. */
   function agents(state: SuperTabState) {
     const agent = (id: string, extra: Partial<Agent> = {}): Agent => ({ id, projectId: 'lead', machineId: `mac-${id}`, harnessId: `h-${id}`,
       machineOwnerId: 'ken', contributorId: 'ken', membershipGeneration: 'g', name: id, displayName: id[0]!.toUpperCase() + id.slice(1),
       configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }, ...extra })
-    state.agents.push(agent('river'), agent('sparky', { buddyOf: { personId: 'dee', generation: 'g' } }), agent('builder'))
+    state.agents.push(agent('river'), agent('builder'))
     state.conversations.find(c => c.id === 'lead')!.leadId = 'river'
     return state
   }
   const of = (view: ReturnType<typeof board>, id: string) => view.agents.find(a => a.agentId === id)!
 
-  it('lists the PM and the Buddies, never a builder or reviewer', () => {
+  it('lists the PM, never a builder or reviewer', () => {
     const view = board(agents(swarm()), [])
-    expect(view.agents.map(a => [a.agentId, a.displayName, a.kind, a.personId, a.machineId])).toEqual([
-      ['river', 'River', 'pm', null, 'mac-river'], ['sparky', 'Sparky', 'buddy', 'dee', 'mac-sparky']])
+    expect(view.agents.map(a => [a.agentId, a.displayName, a.kind, a.machineId])).toEqual([['river', 'River', 'pm', 'mac-river']])
   })
 
   it('gives the PM 3 points per request of a group it led that shipped this week', () => {
@@ -413,7 +412,6 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     const fromProposal = group({ leadId: 'river', status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'],
       ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, runs: [run], proposal: { buddyId: 'sparky', messageId: 'm1' } } })
     const view = board(agents(swarm()), [fromProposal])
-    expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
     expect(of(view, 'river')).toMatchObject({ points: 3, shipped: 1 })
     expect(view.byModel.find(m => m.model === 'opus')!.shipped.count).toBe(1)
     // A person's points still need them to have asked.
@@ -431,18 +429,16 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     expect(of(view, 'river')).toMatchObject({ points: 6, shipped: 2 })
   })
 
-  it('keeps a removed Buddy and a replaced PM on the board for the weeks they earned in (full review of #2097)', () => {
+  it('keeps a replaced PM on the board for the weeks it earned in (full review of #2097)', () => {
     const state = agents(swarm())
-    state.agents = state.agents.filter(a => a.id !== 'sparky')
     state.agents.push({ ...state.agents.find(a => a.id === 'river')!, id: 'old-pm', displayName: 'Atlas' })
     const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, ...extra })
     const view = board(state, [
       shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
       shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'gone-pm' }) }),
-      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: null, proposal: { buddyId: 'sparky', messageId: 'm1' } }) }),
     ])
     expect(view.agents.map(a => [a.agentId, a.displayName, a.kind, a.points])).toEqual([
-      ['old-pm', 'Atlas', 'pm', 3], ['gone-pm', 'Former PM', 'pm', 3], ['sparky', 'Former Buddy', 'buddy', 3], ['river', 'River', 'pm', 0]])
+      ['old-pm', 'Atlas', 'pm', 3], ['gone-pm', 'Former PM', 'pm', 3], ['river', 'River', 'pm', 0]])
     // Last week they earned nothing, and only the current agents are listed.
     expect(board(state, [], LAST).agents.map(a => a.agentId)).toEqual(['river'])
   })
@@ -451,84 +447,15 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     const state = agents(swarm())
     // The same terminals, removed here and added again in a private project, under new names and owners.
     const river = state.agents.find(a => a.id === 'river')!
-    state.agents.push({ ...river, id: 'old-pm', projectId: 'secret', displayName: 'Hidden', machineId: 'mac-secret' },
-      { ...river, id: 'old-buddy', projectId: 'secret', displayName: 'Whisper', machineId: 'mac-secret', buddyOf: { personId: 'tony', generation: 'g' } })
+    state.agents.push({ ...river, id: 'old-pm', projectId: 'secret', displayName: 'Hidden', machineId: 'mac-secret' })
     const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, ...extra })
     const view = board(state, [
       shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
-      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: null, proposal: { buddyId: 'old-buddy', messageId: 'm1' } }) }),
     ])
-    const former = view.agents.filter(a => a.agentId.startsWith('old-')).map(a => [a.agentId, a.displayName, a.kind, a.personId, a.machineId])
-    expect(former).toEqual([['old-pm', 'Former PM', 'pm', null, ''], ['old-buddy', 'Former Buddy', 'buddy', null, '']])
-    // Nowhere in the board: the private registration's names and machine (its Buddy's owner is checked above).
-    expect(JSON.stringify(view)).not.toMatch(/Hidden|Whisper|mac-secret/)
-  })
-
-  it('gives a Buddy 3 points per group opened from its proposal that shipped this week', () => {
-    const fromProposal = { askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, proposal: { buddyId: 'sparky', messageId: 'm1' } }
-    const view = board(agents(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: fromProposal }), shipped('dee', WEEK, WEEK + HOUR)])
-    expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
-    expect(of(view, 'river')).toMatchObject({ points: 0, shipped: 0, rank: 2 })
-  })
-
-  describe('a person\'s one Swarm Buddy (Diego, 2026-11-02)', () => {
-    /** Dee's one Buddy: Swarm-wide, in no project, on her Mac; and a project session of it. */
-    function oneBuddy(state: SuperTabState) {
-      agents(state)
-      state.agents = state.agents.filter(a => a.id !== 'sparky')
-      const base = state.agents.find(a => a.id === 'river')!
-      const dee = { personId: 'dee', generation: 'g' }
-      state.agents.push({ ...base, id: 'main', name: 'main', displayName: 'Sparky', projectId: undefined, buddyOf: dee, buddyScope: 'swarm',
-        machineOwnerId: 'dee', contributorId: 'dee', machineId: 'mac-dee' },
-      { ...base, id: 'session', name: 'session', displayName: 'Session', projectId: 'lead', buddyOf: dee, buddyScope: undefined,
-        buddySession: { thread: 't', from: 1, projectId: 'lead' }, machineId: 'mac-dee' })
-      return state
-    }
-    const ledger = (buddyId: string) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, proposal: { buddyId, messageId: 'm1' } })
-    const buddies = (view: ReturnType<typeof board>) => view.agents.filter(a => a.kind === 'buddy')
-
-    it('lists it in every project its person reads, with its name and person, and never its sessions', () => {
-      const view = board(oneBuddy(swarm()), [], WEEK, NOW, [machine('dee', [], 'mac-dee')])
-      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([['main', 'Sparky', 'dee', 'mac-dee']])
-    })
-
-    it('credits a proposal its session recorded to the one Buddy, with its own, and shows no Former Buddy', () => {
-      const view = board(oneBuddy(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('session') }),
-        shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
-      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.shipped, a.points])).toEqual([['main', 'Sparky', 'dee', 2, 6]])
-    })
-
-    it('shows a session that ended before this change as Former Buddy, with no person', () => {
-      const view = board(oneBuddy(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger('ended-session') })])
-      expect(of(view, 'ended-session')).toMatchObject({ displayName: 'Former Buddy', personId: null, machineId: '', shipped: 1 })
-    })
-
-    it('shows only a Former Buddy, with no name, person or Mac, in a private project its person does not read', () => {
-      const state = oneBuddy(swarm())
-      state.projects![0] = { ...state.projects![0]!, visibility: 'private', members: [{ id: 'tony', generation: 'g' }] }
-      const view = board(state, [shipped('tony', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
-      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId, a.machineId])).toEqual([['main', 'Former Buddy', null, '']])
-      expect(JSON.stringify(view)).not.toMatch(/Sparky|mac-dee/)
-    })
-
-    it('shows a Buddy whose person left or was re-invited (another generation) as Former Buddy', () => {
-      const state = oneBuddy(swarm())
-      state.people.find(p => p.id === 'dee')!.generation = 'g2'
-      const view = board(state, [shipped('tony', WEEK, WEEK + HOUR, { ledger: ledger('main') })])
-      expect(buddies(view).map(a => [a.agentId, a.displayName, a.personId])).toEqual([['main', 'Former Buddy', null]])
-    })
-
-    it('names its Mac only when the reader sees that Mac', () => {
-      const view = board(oneBuddy(swarm()), [], WEEK, NOW, [])
-      expect(buddies(view).map(a => [a.displayName, a.machineId])).toEqual([['Sparky', '']])
-    })
-
-    it('does not list another project\'s old-style Buddy, nor one with the same name elsewhere', () => {
-      const state = oneBuddy(swarm())
-      const base = state.agents.find(a => a.id === 'river')!
-      state.agents.push({ ...base, id: 'web-buddy', name: 'web-buddy', displayName: 'Sparky', projectId: 'web', buddyOf: { personId: 'tony', generation: 'g' } })
-      expect(buddies(board(state, [])).map(a => a.agentId)).toEqual(['main'])
-    })
+    const former = view.agents.filter(a => a.agentId.startsWith('old-')).map(a => [a.agentId, a.displayName, a.kind, a.machineId])
+    expect(former).toEqual([['old-pm', 'Former PM', 'pm', '']])
+    // Nowhere in the board: the private registration's names and machine.
+    expect(JSON.stringify(view)).not.toMatch(/Hidden|mac-secret/)
   })
 })
 

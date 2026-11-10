@@ -19,7 +19,6 @@ import { roleVersion } from '../src/superTabs/projects.js'
 import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { INSTRUCTIONS_TEMPLATE } from '../src/superTabs/instructionsTemplate.js'
 import { rosterRows } from './hostRows.test-support.js'
-import { storeBuddy } from './storedBuddies.test-support.js'
 import { SEED_RULES } from '../src/superTabs/policy.js'
 import { plan, profiled, reads } from './plans.test-support.js'
 
@@ -38,13 +37,6 @@ const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.c
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const run = (tab: string, command: Command, user = owner, asAgentId?: string) =>
   store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
-/** [user]'s own Buddy, on a machine of theirs, as a v3 release stored it (nothing adds one since Swarm v4): it writes the server's
- *  notices in their private chat, where only they and it post (task #4558). */
-async function ownBuddy(tab: string, user: AuthUser) {
-  const machineId = `${user.email.split('@')[0]}-mac`
-  await db.machine.upsert({ where: { machineId }, update: {}, create: { machineId, userId: user.sub, apiKey: `fixture-${randomUUID()}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  await storeBuddy(db, tab, { personId: user.sub, machineId, configuration: config })
-}
 async function invite(tab: string) {
   const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
   await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
@@ -142,15 +134,13 @@ describe('project instructions storage', () => {
   })
 })
 
-// Task #3151: a save that drops a person's rule is refused, and goes through on that person's own message, read by the store,
-// which tells them in their Buddy chats.
+// Task #3151: a save that drops a person's rule is refused, and goes through on that person's own message, read by the store.
 describe('configured rule approvals through the store', () => {
   it('uses the saved decider and linked accounts, while refusing absent, agent and stale approvals', async () => {
     const { tab, lead } = await withLead()
     await invite(tab)
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
     await run(tab, { type: 'invite.accept', inviteId: String(invitation.result.inviteId) }, host)
-    for (const account of [owner, host, peer]) await ownBuddy(tab, account)
     await run(tab, { type: 'rules.set', projectId: 'lead', baseRevision: 0, rules: { ...structuredClone(SEED_RULES),
       instructionApprovals: { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub, host.sub] }] } }, summary: 'Explicit approval authority' })
     const text = '# Rules\n\n- Always test before merging (Ken, 2026-11-04).'
@@ -173,18 +163,6 @@ describe('configured rule approvals through the store', () => {
       expect(read.docsExamined).toBe(1)
       expect(read.returned).toBe(1)
     }
-    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'approved by peer' } } })
-    // Dee's approval tells the decider and both affected author accounts, through each person's two private Buddy chats, each
-    // line written by that person's own Buddy (task #4558).
-    expect(notices).toHaveLength(6)
-    for (const account of [owner, host, peer]) {
-      const visible = new Set((await store.read(account, tab)).state.conversations.map(c => c.id))
-      expect(notices.filter(n => visible.has(n.conversationId))).toHaveLength(2)
-    }
-    for (const notice of notices) {
-      expect(notice.text).toContain('Always test before merging')
-      expect(notice.text).not.toContain('as you approved')
-    }
     for (const [index, account] of [owner, host].entries()) {
       const revision = 4 + index * 2
       await run(tab, save(revision - 1, text))
@@ -195,10 +173,9 @@ describe('configured rule approvals through the store', () => {
 })
 
 describe('a person\'s rules in a save', () => {
-  it('refuses the PM\'s drop, then saves it on the person\'s own approval and tells them privately', async () => {
+  it('refuses the PM\'s drop, then saves it on the person\'s own approval, writing no line', async () => {
     const { tab, lead } = await withLead()
     await invite(tab)
-    await ownBuddy(tab, peer)
     const rule = 'A bug that reaches stable is promoted back within the hour (peer, 2026-11-04).'
     expect((await run(tab, save(1, `# Rules\n\n- ${rule}\n- Tests run first (owner, 4 Nov).`), peer)).result.revision).toBe(2)
     const asLead = (approvals?: string[]) => store.execute(host, tab, { operationId: randomUUID(), command: { ...save(2, '# Rules\n\n- Tests run first (owner, 4 Nov).',
@@ -216,19 +193,7 @@ describe('a person\'s rules in a save', () => {
     expect((await store.instructionRevision(owner, tab, 'lead', 2)).dropped.length).toBeGreaterThan(10)
     await db.superTabInstructionsRevision.updateMany({ where: { tabId: tab, projectId: 'lead', revision: 2 }, data: { dropped: null } })
     expect((await store.instructionRevision(owner, tab, 'lead', 2)).dropped).toEqual([])
-    const notices = await db.superTabMessage.findMany({ where: { tabId: tab, text: { contains: 'as you approved' } } })
-    expect(notices.length).toBe(2)
-    for (const notice of notices) {
-      expect(notice.conversationId).not.toBe('lead')
-      expect(notice.text).toContain('A bug that reaches stable')
-      expect(notice.recipientIds).toEqual([])
-    }
-    // Only the peer reads them.
-    const chats = new Set(notices.map(n => n.conversationId))
-    for (const chat of chats) {
-      expect((await store.messages(peer, tab, chat, {})).messages.some(m => m.text.includes('as you approved'))).toBe(true)
-      await expect(store.messages(owner, tab, chat, {})).rejects.toBeTruthy()
-    }
+    expect(await db.superTabMessage.count({ where: { tabId: tab, text: { contains: 'as you approved' } } })).toBe(0)
   })
 })
 
@@ -280,7 +245,7 @@ describe('role names and the coordinator\'s name in reads', () => {
 
 describe('reading the instructions', () => {
   const doc = (tab: string, projectId = 'lead', asAgentId?: string) => `/api/super-tabs/${tab}/projects/${projectId}/instructions${asAgentId ? `?asAgentId=${asAgentId}` : ''}`
-  it('serves the text, the live notes and the history to who reads the project; a Buddy the text alone', async () => {
+  it('serves the text, the live notes and the history to who reads the project', async () => {
     const { tab, lead } = await withLead()
     await invite(tab)
     await run(tab, save(1, 'Reviews run on Opus.', 'Reviews run on Opus'))
@@ -304,19 +269,6 @@ describe('reading the instructions', () => {
     const one = await get(peer, `${doc(tab)}/revisions/2`)
     expect(one.json().data).toMatchObject({ revision: 2, text: 'Reviews run on Opus.', writtenBy: { kind: 'person', id: owner.sub }, askedBy: owner.sub })
     expect((await get(peer, `${doc(tab)}/revisions/9`)).statusCode).toBe(404)
-
-    // A Buddy reads its member's project's document, as their helper: not the history, nor the coordinator's notes.
-    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: helper } })
-    const people = (await store.read(owner, tab)).state.people
-    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object,
-      buddyOf: { personId: owner.sub, generation: people.find(p => p.id === owner.sub)!.generation } } } })
-    const asBuddy = await get(host, doc(tab, 'lead', helper))
-    expect(asBuddy.statusCode, asBuddy.body).toBe(200)
-    expect(asBuddy.json().data).toMatchObject({ revision: 3, text: 'Reviews run on Opus.\nTests on the Mac.' })
-    expect(asBuddy.json().data).not.toHaveProperty('notes')
-    expect((await get(host, `${doc(tab, 'lead', helper).replace('?', '/revisions?')}`)).statusCode).toBe(404)
   })
 
   it('reads nothing of a project the reader cannot read, and the template for a project without a document yet', async () => {
@@ -331,119 +283,6 @@ describe('reading the instructions', () => {
     const data = head.data as { projects: Array<Record<string, unknown>> }
     await db.swarmHead.update({ where: { id: head.id }, data: { data: { ...data, projects: data.projects.map(({ instructionsRevision: _r, instructionsHash: _h, ...p }) => p) } as never } })
     expect((await get(owner, doc(tab))).json().data).toMatchObject({ revision: 0, hash: FIRST_INSTRUCTIONS.instructionsHash, text: INSTRUCTIONS_TEMPLATE, template: true, notes: [] })
-  })
-
-  it('reads nothing to a Buddy whose person lost the private project, as every other Buddy read (review of phase 2)', async () => {
-    const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
-    await invite(tab)
-    const secret = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId as string
-    await run(tab, { type: 'project.sharing', projectId: secret, visibility: 'private', memberIds: [peer.sub] })
-    const home = (await store.read(owner, tab)).state.projects!.find(p => p.id === secret)!.leadConversationId
-    const helper = (await run(tab, { type: 'agent.add', conversationId: home, machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: helper } })
-    const people = (await store.read(owner, tab)).state.people
-    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object,
-      buddyOf: { personId: peer.sub, generation: people.find(p => p.id === peer.sub)!.generation } } } })
-    const asBuddy = () => get(host, doc(tab, secret, helper))
-    const before = await asBuddy()
-    expect(before.statusCode, before.body).toBe(200)
-    // The owner takes peer off the project; the Buddy stays, and its reads go with its person's.
-    await run(tab, { type: 'project.sharing', projectId: secret, visibility: 'private', memberIds: [] })
-    expect((await store.read(owner, tab)).state.agents.some(a => a.id === helper)).toBe(true)
-    expect((await asBuddy()).statusCode).toBe(404)
-  })
-
-  // Task #3024 (Leo, 11-05): his Buddy, asked which of lamp's rules its PM skipped, could not read lamp's instructions. A Buddy
-  // reads the instructions of every project its person reads, a session of one project's included, as they would read them;
-  // nothing else widens.
-  describe('a Buddy reads the instructions of every project its person reads (task #3024)', () => {
-    /** peer's Buddy in [conversationId], at peer's membership; `swarm` makes it their one Buddy for the whole Swarm. */
-    async function peersBuddy(tab: string, conversationId: string, swarm = false) {
-      const helper = (await run(tab, { type: 'agent.add', conversationId, machineId: 'test-host', harnessId: randomUUID(),
-        name: 'Helper', configuration: config, lead: false })).result.agentId as string
-      const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: helper } })
-      const people = (await store.read(owner, tab)).state.people
-      await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object,
-        buddyOf: { personId: peer.sub, generation: people.find(p => p.id === peer.sub)!.generation }, ...(swarm ? { buddyScope: 'swarm' } : {}) } } })
-      return helper
-    }
-    /** A Swarm whose first project has a document, peer in it, and two more projects: Lamp, which peer reads, and Secret, which
-     *  peer does not. */
-    async function swarmOfThree() {
-      const { tab, lead } = await withLead()
-      await invite(tab)
-      await run(tab, save(1, 'Reviews run on Opus.', 'Reviews run on Opus'))
-      await run(tab, { type: 'note.add', projectId: 'lead', text: 'Not machine A.', askedBy: peer.sub }, host, lead)
-      const lamp = (await run(tab, { type: 'project.create', name: 'Lamp', visibility: 'private', brief: '' })).result.projectId as string
-      await run(tab, { type: 'project.sharing', projectId: lamp, visibility: 'private', memberIds: [peer.sub] })
-      await run(tab, save(1, 'Tag the builder\'s owner.', 'Tag owners', lamp))
-      const secret = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result.projectId as string
-      await run(tab, save(1, 'Only the owner reads this.', 'Owner only', secret))
-      const chatOf = async (projectId: string) => (await store.read(owner, tab)).state.projects!.find(p => p.id === projectId)!.leadConversationId
-      return { tab, lamp, secret, lampChat: await chatOf(lamp) }
-    }
-
-    it('reads, as a session of one project, another project its person reads: the text alone, as its person reads it', async () => {
-      const { tab, lamp, lampChat } = await swarmOfThree()
-      // A Buddy of Lamp's chat reads the first project's instructions too, as peer does.
-      const helper = await peersBuddy(tab, lampChat)
-      const asPeer = await get(peer, doc(tab, 'lead'))
-      const asBuddy = await get(host, doc(tab, 'lead', helper))
-      expect(asBuddy.statusCode, asBuddy.body).toBe(200)
-      expect(asBuddy.json().data).toMatchObject({ projectId: 'lead', revision: 2, text: asPeer.json().data.text, hash: asPeer.json().data.hash })
-      expect(asBuddy.json().data.text).toBe('Reviews run on Opus.')
-      // Never more than the document: not the coordinator's notes, nor the PM's built-in schedule.
-      expect(asBuddy.json().data).not.toHaveProperty('notes')
-      expect(asBuddy.json().data).not.toHaveProperty('builtIn')
-      // Its own project's, as before.
-      expect((await get(host, doc(tab, lamp, helper))).json().data).toMatchObject({ revision: 2, text: 'Tag the builder\'s owner.' })
-    })
-
-    it('reads, as its person\'s one Buddy, each project they read', async () => {
-      const { tab, lamp } = await swarmOfThree()
-      const helper = await peersBuddy(tab, 'lead', true)
-      for (const [projectId, text] of [['lead', 'Reviews run on Opus.'], [lamp, 'Tag the builder\'s owner.']] as const) {
-        const answer = await get(host, doc(tab, projectId, helper))
-        expect(answer.statusCode, answer.body).toBe(200)
-        expect(answer.json().data).toMatchObject({ projectId, revision: 2, text })
-        expect(answer.json().data).not.toHaveProperty('notes')
-      }
-    })
-
-    it('reads nothing of a project its person cannot read, in the words of one that does not exist', async () => {
-      const { tab, lamp, secret, lampChat } = await swarmOfThree()
-      for (const helper of [await peersBuddy(tab, lampChat), await peersBuddy(tab, 'lead', true)]) {
-        const [hidden, missing] = await Promise.all([secret, 'no-such-project'].map(projectId => get(host, doc(tab, projectId, helper))))
-        expect(hidden!.statusCode, hidden!.body).toBe(404)
-        expect(hidden!.json()).toMatchObject({ success: false, error: { code: 'NOT_FOUND' } })
-        expect(hidden!.body).toBe(missing!.body)
-      }
-      // Once peer leaves Lamp, a Buddy of another project reads none of Lamp's either.
-      const elsewhere = await peersBuddy(tab, 'lead')
-      expect((await get(host, doc(tab, lamp, elsewhere))).statusCode).toBe(200)
-      await run(tab, { type: 'project.sharing', projectId: lamp, visibility: 'private', memberIds: [] })
-      expect((await get(host, doc(tab, lamp, elsewhere))).statusCode).toBe(404)
-    })
-
-    it('still saves nothing, adds no note and reads no history, in its own project or another', async () => {
-      const { tab, lamp, lampChat } = await swarmOfThree()
-      for (const helper of [await peersBuddy(tab, lampChat), await peersBuddy(tab, 'lead', true)]) {
-        for (const projectId of ['lead', lamp]) {
-          await expect(run(tab, save(2, 'A Buddy\'s text.', 'Buddy', projectId), host, helper)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
-          await expect(run(tab, { type: 'instructions.save', projectId, baseRevision: 2, text: 'A Buddy\'s text.', summary: 'Buddy', askedBy: peer.sub }, host, helper))
-            .rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
-          await expect(run(tab, { type: 'note.add', projectId, text: 'A Buddy\'s note.', askedBy: peer.sub }, host, helper)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
-          for (const url of [`${doc(tab, projectId)}/revisions?asAgentId=${helper}`, `${doc(tab, projectId)}/revisions/1?asAgentId=${helper}`]) {
-            expect((await get(host, url)).statusCode).toBe(404)
-          }
-        }
-      }
-      // Nothing it sent was written: both documents are where they were.
-      for (const [projectId, text] of [['lead', 'Reviews run on Opus.'], [lamp, 'Tag the builder\'s owner.']] as const) {
-        expect((await get(peer, doc(tab, projectId))).json().data).toMatchObject({ revision: 2, text })
-      }
-    })
   })
 })
 

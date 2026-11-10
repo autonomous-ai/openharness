@@ -34,7 +34,7 @@ function swarm() {
   const pool = (machineId: string, contributorId: string, extra: Partial<ContributedMachine> = {}): ContributedMachine => ({
     machineId, name: machineId, contributorId, membershipGeneration: generation(contributorId), generation: 'g1', cwd: '/swarm', scope: 'swarm',
     engines: ['claude', 'codex'], maxAgents: 4, paused: false, observation: reading, ...extra })
-  state.machines = [pool('owner-mac', 'owner'), pool('mate-mac', 'mate'), pool('mate-buddy', 'mate', { buddyOnly: true, maxAgents: 1 })]
+  state.machines = [pool('owner-mac', 'owner'), pool('mate-mac', 'mate')]
   const add = (extra: Record<string, unknown>, actor: Actor = mate, context: Partial<CommandContext> = own(actor.kind === 'person' ? actor.userId : 'x')) =>
     run({ type: 'agent.new', engine: 'claude', machineId: 'mate-mac', ...extra } as Command, actor, context)
   return { run, add, get state() { return state } }
@@ -71,7 +71,7 @@ describe('+ New agent, Regular', () => {
     expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
   })
 
-  it('asks an agent\'s memory, not a Buddy\'s smaller one: it takes tasks (#3738)', () => {
+  it('asks an agent\'s memory: it takes tasks (#3738)', () => {
     const f = swarm()
     const made = f.add({ kind: 'regular', name: 'Ada' })
     expect(f.state.starts!.find(s => s.id === made.result.startId)!.request.requirements.memoryBytes).toBe(AGENT_MEMORY_BYTES)
@@ -91,12 +91,11 @@ describe('+ New agent, Regular', () => {
 })
 
 describe('+ New agent, on whose computer', () => {
-  it('runs only on the person\'s own listed computer, never another person\'s, a Buddy-only one or one not listed', () => {
+  it('runs only on the person\'s own listed computer, never another person\'s or one not listed', () => {
     const f = swarm()
     for (const kind of ['pm', 'regular']) {
       const extra = { kind, projectName: 'P', name: 'A' }
       expect(code(() => f.add({ ...extra, machineId: 'owner-mac' }, mate, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }))).toBe('AGENT_OWN_MACHINE')
-      expect(code(() => f.add({ ...extra, machineId: 'mate-buddy' }))).toBe('MACHINE_NOT_LISTED')
       expect(code(() => f.add({ ...extra, machineId: 'nowhere' }))).toBe('MACHINE_NOT_LISTED')
       expect(code(() => f.add(extra, { kind: 'agent', agentId: 'x', machineOwnerId: 'mate' }))).not.toBeNull()
     }
@@ -124,7 +123,7 @@ describe('a Regular agent\'s chat', () => {
     f.run(say(f.chat, 'Hello'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' })
   })
 
-  // Task #4252 (audit 29): it is a talk with its person, as a Buddy's is, where a short reply is the answer.
+  // Task #4252 (audit 29): it is a talk with its person, where a short reply is the answer.
   it('takes the agent\'s short reply to its person, which a task would refuse as only an acknowledgement', () => {
     const f = running()
     expect(code(() => f.run(say(f.chat, 'Thanks!'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' }))).toBeNull()

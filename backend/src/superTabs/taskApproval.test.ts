@@ -15,7 +15,6 @@ function fixture() {
   const candidate = f.add('candidate', f.web), other = f.add('other-candidate', f.web)
   let seq = 0
   const pm: Actor = { kind: 'agent', agentId: f.lead, machineOwnerId: `${owner.userId}-machine` }
-  const buddy: Actor = { kind: 'agent', agentId: f.buddy, machineOwnerId: `${owner.userId}-machine` }
   const run = (value: unknown, actor: Actor = peer, context: Partial<CommandContext> = {}) => {
     const effects = applyCommand(f.state, actor, commandSchema.parse(value), { now: NOW, operationId: `approval-${++seq}`, ...context })
     f.edit(s => Object.assign(s, effects.state))
@@ -25,7 +24,7 @@ function fixture() {
   const mode = (mode: string) => run({ type: 'member.approvalMode', mode })
   const create = () => run({ type: 'conversation.create', title: 'Offline drafts', task, priority: 'P2', requesterId: peer.userId,
     checks: [{ description: 'Restores drafts' }] }, pm).result.conversationId as string
-  return Object.assign(f, { runCommand: run, card, mode, create, pm, buddyActor: buddy, candidate, other })
+  return Object.assign(f, { runCommand: run, card, mode, create, pm, candidate, other })
 }
 
 describe('personal approval enforced before work', () => {
@@ -36,7 +35,7 @@ describe('personal approval enforced before work', () => {
     expect(f.state.people.find(p => p.id === peer.userId)?.approvalMode).toBe('review')
     expect(f.state.people.find(p => p.id === owner.userId)?.approvalMode).toBeUndefined()
     expect(commandSchema.safeParse({ type: 'member.approvalMode', mode: 'review', personId: owner.userId }).success).toBe(false)
-    for (const actor of [f.pm, f.buddyActor]) expect(() => f.runCommand({ type: 'member.approvalMode', mode: 'autoApprove' }, actor)).toThrow()
+    for (const actor of [f.pm]) expect(() => f.runCommand({ type: 'member.approvalMode', mode: 'autoApprove' }, actor)).toThrow()
   })
   it('stages a PM task, keeps it out of Next up, and blocks starts and registration until approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
@@ -83,7 +82,7 @@ describe('personal approval enforced before work', () => {
 
   it('refuses another person, PM or Buddy approval and old membership authority before receipt replay', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
-    for (const actor of [owner, outsider, f.pm, f.buddyActor]) for (const type of ['task.approve', 'task.reject'])
+    for (const actor of [owner, outsider, f.pm]) for (const type of ['task.approve', 'task.reject'])
       expect(() => f.runCommand({ type, conversationId: id, ...type === 'task.reject' ? { reason: 'No' } : {} }, actor)).toThrow()
     const command = commandSchema.parse({ type: 'task.approve', conversationId: id })
     authorizeCommandAccess(f.state, peer, command)
@@ -155,7 +154,7 @@ describe('personal approval enforced before work', () => {
   })
   it('refuses invalid suggestions and rechecks a changed agent atomically on approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
-    for (const agentId of [f.buddy, 'missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()
+    for (const agentId of ['missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()
     // A busy agent may be suggested: the task waits for it, and its assignment checks it is free (task #4252).
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.worker })
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })

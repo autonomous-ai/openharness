@@ -55,7 +55,7 @@ describe('personal Tasks summaries', () => {
     expect(feed.upserts.map(r => r.id)).toEqual(expect.arrayContaining([s.f.web, s.f.secretGroup]))
     expect(feed.upserts.find(r => r.id === s.f.web)).toMatchObject({ version: 7, at: NOW, projectId: 'lead', projectName: 'Pilot',
       title: 'Web', status: 'working', suggested: false, agent: { id: s.f.worker, name: expect.any(String) } })
-    expect(feed.upserts.some(r => r.id === s.f.done || r.id === s.f.buddyChat)).toBe(false)
+    expect(feed.upserts.some(r => r.id === s.f.done)).toBe(false)
     expect(personalTasksFor(s.stored.groups, s.view(outsider), outsider)!.upserts).toEqual([])
     const agent: Actor = { kind: 'agent', agentId: s.f.lead, machineOwnerId: `${owner.userId}-machine` }
     expect(personalTasksFor(s.stored.groups, s.view(agent), agent)).toBeUndefined()

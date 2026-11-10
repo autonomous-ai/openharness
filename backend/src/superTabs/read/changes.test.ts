@@ -13,11 +13,11 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 function scene(closed = false) {
   const s = richSwarm()
   s.contribute('mac', 'swarm')
-  // peer's Buddy chat, or with no kind their Chat with PM from before Buddies replaced it (projects.ts isClosedPmChat).
+  // peer's 1:1 chat with an agent, or with no kind their Chat with PM from before (projects.ts isClosedPmChat).
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peer.userId)!.generation
-    Object.assign(state.conversations.find(c => c.id === privateId)!, { ...closed ? {} : { kind: 'buddy' }, audience: { people: [{ id: peer.userId, generation }] } })
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { ...closed ? {} : { kind: 'agent-chat' }, audience: { people: [{ id: peer.userId, generation }] } })
   })
   return { s, privateId, parts: store.split(s.state, { tabId: 'tab', version: R, now: NOW }) }
 }
@@ -82,7 +82,7 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(keys(receive(parts, changed, owner).groups)).toEqual([s.web, s.secretGroup])
   })
 
-  it('sends a Buddy chat\'s change, removal and dormant stub only to its owner, never the Lead; a closed Chat with PM\'s to nobody', () => {
+  it('sends a 1:1 chat\'s change, removal and dormant stub only to its owner, never the Lead; a closed Chat with PM\'s to nobody', () => {
     const { s, privateId } = scene()
     for (const change of [(p: Part) => { (p.data as { title: string }).title = 'x' }, (p: Part) => { p.deleted = true }, (p: Part) => { p.dormant = true }]) {
       const { parts: fresh } = scene()
@@ -132,18 +132,6 @@ describe('changes since a cursor (design 4.4)', () => {
     const changed = [write(fresh, 'starts', `start-${s.web}`, p => { p.deleted = true }), write(fresh, 'starts', `start-${s.secretGroup}`, p => { p.deleted = true })]
     expect(keys(receive(fresh, changed, peer).starts)).toEqual([`start-${s.web}`])
     expect(keys(receive(fresh, changed, owner).starts)).toEqual([`start-${s.web}`, `start-${s.secretGroup}`])
-    // A Buddy reads no starts, not even a removal's id, though it reads their group (security review 2 of #2258).
-    s.edit(state => {
-      const generation = state.people.find(p => p.id === peer.userId)!.generation, worker = state.agents.find(a => a.id === s.worker)!
-      state.agents.push({ ...worker, id: 'buddy', harnessId: 'buddy-harness', contributorId: peer.userId, membershipGeneration: generation,
-        name: 'Buddy', buddyOf: { personId: peer.userId, generation } })
-    })
-    const withBuddy = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const removed = [write(withBuddy, 'starts', `start-${s.web}`, p => { p.deleted = true })]
-    const buddy: Actor = { kind: 'agent', agentId: 'buddy', machineOwnerId: `${owner.userId}-machine` }
-    expect(keys(receive(withBuddy, [write(withBuddy, 'groups', s.web, () => {})], buddy).groups)).toEqual([s.web])
-    expect(receive(withBuddy, removed, buddy).starts).toEqual([])
-    expect(keys(receive(withBuddy, removed, peer).starts)).toEqual([`start-${s.web}`])
   })
 
   it('sends changed project progress only to readers of the project', () => {
@@ -216,16 +204,6 @@ describe('a machine\'s reading, for a client that asks for lines', () => {
     const out = changesFor(readerView({ ...parts, machines: [] }, peer, LATER, {}), [gone], peer, { since: SINCE })
     expect(out.machines).toEqual([{ key: 'mac', version: R + 1, changedAt: LATER, deleted: true }])
     expect(out.machineReadings).toEqual([])
-  })
-
-  it('tells a Buddy nothing, and anyone nothing of a Buddy-only machine', () => {
-    const { parts, s } = scene()
-    s.edit(state => { state.agents.push({ ...state.agents[0]!, id: 'buddy', buddyOf: { personId: peer.userId, generation: 'g' } } as never) })
-    const withBuddy = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
-    const buddy: Actor = { kind: 'agent', agentId: 'buddy', machineOwnerId: `${owner.userId}-machine` }
-    expect(lightly(withBuddy, [reading(withBuddy)], buddy).machineReadings).toEqual([])
-    const hidden = reading(parts, p => { (p.data as { contribution: { buddyOnly?: true } }).contribution.buddyOnly = true })
-    expect(lightly(parts, [hidden], peer).machineReadings).toEqual([])
   })
 
   it('leaves the reply as it was for a client that did not ask', () => {

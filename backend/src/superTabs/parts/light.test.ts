@@ -34,11 +34,6 @@ const conversation: Required<Conversation> = {
   audience: { people: [] },
   brief: '',
   briefAt: 1,
-  buddyChats: ['other'],
-  buddyDefault: true,
-  buddyDownTold: true,
-  buddyName: 'Sparky',
-  buddySessions: [],
   cards: {},
   chatLimits: { asks: [] },
   checks: [],
@@ -69,7 +64,6 @@ const conversation: Required<Conversation> = {
   process: 'full',
   projectId: 'p',
   proposal: { senders: [], decision: { kind: 'accept', reason: 'r' }, mergedInto: 'g' },
-  proposals: [],
   pullRequestUrls: [],
   pulse: {} as never,
   queueRank: 1.5,
@@ -118,18 +112,18 @@ describe('the light conversation projection (parts/light.ts)', () => {
     s.join(outsider)
     const lead = s.add('lead-harness', 'lead', true)
     const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
-    const [web, hidden, closedChat, buddyChat] = [s.group('Web'), s.group('Secret work', secret), s.group('Peer and PM'), s.group('Peer\'s Buddy')]
+    const [web, hidden, closedChat, agentChat] = [s.group('Web'), s.group('Secret work', secret), s.group('Peer and PM'), s.group('Peer\'s agent')]
     s.edit(state => {
       const audience = { people: [{ id: peer.userId, generation: state.people.find(p => p.id === peer.userId)!.generation }] }
       state.conversations.find(c => c.id === closedChat)!.audience = audience
-      Object.assign(state.conversations.find(c => c.id === buddyChat)!, { kind: 'buddy', leadId: null, agentIds: [], audience })
+      Object.assign(state.conversations.find(c => c.id === agentChat)!, { kind: 'agent-chat', leadId: null, agentIds: [], audience })
     })
     const state = s.state
     const kept = GROUP_FIELDS.always.filter(field => !field.includes('.'))
     const light = (group: Conversation) => Object.fromEntries(kept.filter(field => field in group).map(field => [field, group[field as keyof Conversation]])) as unknown as Conversation
     const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: state.agents.find(a => a.id === lead)!.machineOwnerId }
     const readers: Actor[] = [owner, peer, outsider, leadActor]
-    const reads = readers.flatMap(actor => [web, hidden, closedChat, buddyChat].map(id => {
+    const reads = readers.flatMap(actor => [web, hidden, closedChat, agentChat].map(id => {
       const group = state.conversations.find(c => c.id === id)!
       expect(canReadGroup(state, actor, light(group)), `${actor.kind} ${id}`).toBe(canReadGroup(state, actor, group))
       return canReadGroup(state, actor, group)

@@ -61,8 +61,6 @@ describe('crew.add and crew.remove', () => {
     expect(() => f.run({ type: 'crew.add', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or the person who runs/)
     expect(() => f.run({ type: 'crew.remove', agentId: f.worker }, f.agentActor(other))).toThrow(/PM or the person who runs/)
     expect(() => f.run({ type: 'crew.add', agentId: f.pm })).toThrow(/already kept/)
-    f.target(other).buddyOf = { personId: 'owner', generation: f.state.people[0]!.generation }
-    expect(() => f.run({ type: 'crew.add', agentId: other })).toThrow(/Buddy/)
     expect(f.state.agents.some(a => a.crew)).toBe(false)
   })
 

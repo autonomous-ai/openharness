@@ -2112,11 +2112,9 @@ export class SuperTabStore {
     const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true } })
     const files = Array.isArray(row.attachments) ? (row.attachments as unknown as Attachment[]).map(a => a.id) : []
     // Raw `$in` filters: Prisma sends `in` as $expr, which no index bounds (hotFilters.test.ts). By _id, and by [tabId, messageId].
-    // A proposal can carry its owner's chat files without owning them (#3322 security review): expire only this row's
-    // uploads, and release only its forwarding claim. The original chat message must keep its file through the sweep.
+    // Only this row's own uploads expire: a file handed on from another message stays with that message through the sweep.
     if (files.length) await tx.$runCommandRaw({ update: 'SuperTabAttachment', updates: [
       { q: { _id: { $in: files }, tabId, usedBy: row.id }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true },
-      { q: { _id: { $in: files }, tabId, proposedBy: row.id }, u: { $unset: { proposedBy: '' } }, multi: true },
     ] })
     // Reactions were last written 2026-11-09 (reactions.ts): this line goes once the last such row is gone, 30 days on, from
     // 2026-12-09. Its Activity and tag rows, written until Swarm v4 (2026-11-10), hold no words and expire by themselves.

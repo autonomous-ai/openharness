@@ -12,7 +12,6 @@ import { swarmTransaction } from '../src/superTabs/cache.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { author, type SuperTabState } from '../src/superTabs/model.js'
-import { refuseBuddyRouting } from '../src/superTabs/buddies.js'
 import { canReadGroup } from '../src/superTabs/projects.js'
 import { recentDecisions, timedDecisionOf } from '../src/superTabs/routeDecisions.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
@@ -52,7 +51,7 @@ afterAll(async () => {
 
 /** A Swarm in parts: a Lead and a worker on the owner's machine, the Web group (active), a private project, the Docs project
  *  whose only worker is stored with no project of its own and whose only conversation is finished and quiet (dormant), a
- *  closed Chat with PM and a Buddy chat of the peer, and `quiet` finished public groups quiet for two days (dormant). */
+ *  closed Chat with PM and a 1:1 chat of the peer's, and `quiet` finished public groups quiet for two days (dormant). */
 async function world(quiet = 0) {
   const s = swarm(MIGRATED)
   s.join(peerActor)
@@ -71,12 +70,12 @@ async function world(quiet = 0) {
   const docsWorker = s.add('docs-worker', docsGroup, false, ownerActor, 'host', owner.sub)
   s.edit(state => { storedAssignment(state, docsGroup, docsWorker, MIGRATED) })
   const peerChat = s.group('Peer and PM')
-  const buddyChat = s.group('Peer\'s Buddy')
+  const ownChat = s.group('Peer\'s agent')
   const finished = Array.from({ length: quiet }, (_, i) => s.group(`Done ${i}`))
   s.edit(state => {
     const peerGeneration = state.people.find(p => p.id === peer.sub)!.generation
     state.conversations.find(c => c.id === peerChat)!.audience = { people: [{ id: peer.sub, generation: peerGeneration }] }
-    Object.assign(state.conversations.find(c => c.id === buddyChat)!, { kind: 'buddy', leadId: null, agentIds: [], audience: { people: [{ id: peer.sub, generation: peerGeneration }] } })
+    Object.assign(state.conversations.find(c => c.id === ownChat)!, { kind: 'agent-chat', leadId: null, agentIds: [], audience: { people: [{ id: peer.sub, generation: peerGeneration }] } })
     const done = (group: string, as: string) => { state.conversations.find(c => c.id === group)!.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: as, status: 'done' } }
     done(docsGroup, 'docs-done')
     finished.forEach((group, i) => done(group, `done-${i}`))
@@ -94,7 +93,7 @@ async function world(quiet = 0) {
   const { projectId: _project, ...legacy } = stored.data as Record<string, unknown>
   await db.swarmAgent.update({ where: { id: stored.id }, data: { data: legacy as never } })
   expect((await db.swarmGroup.findFirst({ where: { tabId, key: docsGroup } }))?.dormant, 'the Docs worker\'s only conversation is quiet').toBe(true)
-  return { tabId, lead, worker, docsWorker, secretWorker, secretLead, web, docsGroup, secretGroup, peerChat, buddyChat, finished }
+  return { tabId, lead, worker, docsWorker, secretWorker, secretLead, web, docsGroup, secretGroup, peerChat, ownChat, finished }
 }
 type World = Awaited<ReturnType<typeof world>>
 
@@ -118,7 +117,6 @@ function listedBefore(w: World, reader: AuthUser, asAgentId?: string) {
     const { state } = await store.load(tx, reader, w.tabId, { allGroups: true })
     const actor = await store.actor(tx, reader, state, asAgentId)
     author(state, actor)
-    refuseBuddyRouting(state, actor)
     const groups = state.conversations.filter(c => canReadGroup(state, actor, c)).map(c => c.id)
     return (await recentDecisions(tx, w.tabId, groups)).map(timedDecisionOf)
   })
@@ -144,15 +142,15 @@ describe('what the route-decision list gives each reader', () => {
   it('is what it gave before, for every kind of reader, over groups they may and may not read', async () => {
     const w = await world(5)
     // Newest last. Every kind of group, interleaved, with the secrets in the middle of the newest hundred.
-    const all = [w.web, w.secretGroup, w.docsGroup, w.peerChat, w.buddyChat, ...w.finished, 'no-such-group']
+    const all = [w.web, w.secretGroup, w.docsGroup, w.peerChat, w.ownChat, ...w.finished, 'no-such-group']
     await decide(w, Array.from({ length: 130 }, (_, i) => [all[i % all.length]!, 1] as [string, number]))
     const got = await sameAnswers(w)
     // The test must tell readers apart, or "same as before" proves little.
     const seen = Object.fromEntries(Object.entries(got).map(([name, answer]) => [name, new Set((answer.value ?? []).map(d => (d as { conversationId: string }).conversationId))]))
     expect(seen['the owner']!.has(w.secretGroup)).toBe(true)
     expect(seen['a member outside the private project']!.has(w.secretGroup)).toBe(false)
-    expect(seen['a collaborator']!.has(w.buddyChat)).toBe(true)
-    expect(seen['the owner']!.has(w.buddyChat)).toBe(false)
+    expect(seen['a collaborator']!.has(w.ownChat)).toBe(true)
+    expect(seen['the owner']!.has(w.ownChat)).toBe(false)
     expect(seen['the Lead']!.has('no-such-group')).toBe(false)
     // The Docs worker reads the Docs project through its finished group, which is not loaded unless asked for by agent.
     expect(seen['the Docs worker with no project of its own']!.has(w.docsGroup)).toBe(true)
@@ -221,21 +219,21 @@ describe('what the route-decision list gives each reader', () => {
     expect(ids(got['the Secret project\'s worker'])).toHaveLength(100)
   })
 
-  it('checks access on the light groups of quiet conversations too: a closed Chat with PM, a Buddy chat and a private project\'s group, all dormant', async () => {
+  it('checks access on the light groups of quiet conversations too: a closed Chat with PM, a 1:1 chat and a private project\'s group, all dormant', async () => {
     const w = await world(5)
     // The conversations a reader must be kept out of are quiet, so they come through the light read, not the Swarm's active groups.
-    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: w.tabId, key: { $in: [w.peerChat, w.buddyChat, w.secretGroup] } },
+    await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId: w.tabId, key: { $in: [w.peerChat, w.ownChat, w.secretGroup] } },
       u: { $set: { dormant: true, 'data.dormant': true } }, multi: true }] })
     // Oldest first: the hidden ones on both sides of 600 secret decisions, so some are in the newest 500 and some only a fallback finds.
-    await decide(w, [[w.web, 3], [w.peerChat, 5], [w.buddyChat, 5], [w.secretGroup, 600], [w.peerChat, 5], [w.buddyChat, 5], [w.web, 3]],
-      [w.peerChat, w.buddyChat])
+    await decide(w, [[w.web, 3], [w.peerChat, 5], [w.ownChat, 5], [w.secretGroup, 600], [w.peerChat, 5], [w.ownChat, 5], [w.web, 3]],
+      [w.peerChat, w.ownChat])
     const got = await sameAnswers(w)
     const seen = (name: string) => new Set((got[name]!.value as Array<{ conversationId: string }>).map(d => d.conversationId))
-    // The answers tell readers apart, or "same as before" proves little: the collaborator reads its Buddy chat and nobody the closed
+    // The answers tell readers apart, or "same as before" proves little: the collaborator reads its 1:1 chat and nobody the closed
     // Chat with PM, which differ only in the kind and the audience the light group keeps.
-    expect(seen('a collaborator').has(w.buddyChat)).toBe(true)
+    expect(seen('a collaborator').has(w.ownChat)).toBe(true)
     for (const name of ['a collaborator', 'the owner', 'a member outside the private project', 'a worker', 'the Lead']) expect(seen(name).has(w.peerChat), name).toBe(false)
-    for (const name of ['the owner', 'a member outside the private project', 'a worker', 'the Lead']) expect(seen(name).has(w.buddyChat), name).toBe(false)
+    for (const name of ['the owner', 'a member outside the private project', 'a worker', 'the Lead']) expect(seen(name).has(w.ownChat), name).toBe(false)
     expect(seen('a member outside the private project').has(w.secretGroup)).toBe(false)
     expect(seen('the owner').has(w.secretGroup)).toBe(true)
     expect(JSON.stringify(got['a member outside the private project'])).not.toContain('hidden-text-of-')
@@ -250,11 +248,11 @@ describe('what the route-decision list gives each reader', () => {
     expect(profile.SuperTabRouteDecision!.docsExamined, 'a hundred decisions are all there are: no wider window to read').toBe(100)
   })
 
-  it('names nothing of a conversation the reader may not read, whether it is private, another project\'s, a Buddy\'s or gone', async () => {
+  it('names nothing of a conversation the reader may not read, whether it is private, another project\'s, a 1:1 chat or gone', async () => {
     const w = await world(2)
-    await decide(w, [[w.secretGroup, 5], [w.buddyChat, 5], [w.peerChat, 5], ['gone-group', 5], [w.web, 5]], [w.secretGroup, w.buddyChat, w.peerChat, 'gone-group'])
+    await decide(w, [[w.secretGroup, 5], [w.ownChat, 5], [w.peerChat, 5], ['gone-group', 5], [w.web, 5]], [w.secretGroup, w.ownChat, w.peerChat, 'gone-group'])
     const as = async (reader: AuthUser, agent?: string) => JSON.stringify(await store.routeDecisions(reader, w.tabId, agent))
-    for (const hidden of [w.secretGroup, w.buddyChat, w.peerChat, 'gone-group']) {
+    for (const hidden of [w.secretGroup, w.ownChat, w.peerChat, 'gone-group']) {
       expect(await as(outsider), hidden).not.toContain(hidden)
       expect(await as(owner, w.worker), hidden).not.toContain(hidden)
     }

@@ -12,9 +12,6 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { EXPIRED_UPLOAD, MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { DELETED_TEXT } from '../src/superTabs/messageEdits.js'
-import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
-import { poolRows } from './hostRows.test-support.js'
-import { storeBuddy } from './storedBuddies.test-support.js'
 import { profiled } from './plans.test-support.js'
 
 // Edit and delete your own message (task #2746): only the author, a person, on their own post. A fresh loopback replica set.
@@ -44,7 +41,7 @@ afterAll(async () => {
 })
 
 /** A Swarm with a public project `web` (its PM on the owner's Mac) and a private one `secret` (owner and peer); peer and other
- *  are members, peer with a Mac whose host reports what runs there. */
+ *  are members. */
 async function swarm() {
   const files = new MemoryAttachmentStore()
   const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
@@ -60,20 +57,6 @@ async function swarm() {
   await execute({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: [owner.sub, peer.sub] })
   const pm = String((await execute({ type: 'agent.add', conversationId: web.conversationId, machineId: 'owner-mac', harnessId: randomUUID(), name: 'PM web',
     configuration: config, lead: true })).result.agentId)
-  await execute({ type: 'machine.contribute', machineId: 'peer-mac', name: 'Peer Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 8 }, peer)
-  const generation = (await poolRows(store, peer, 'peer-mac')).find(p => p.tabId === tab)!.machine.generation
-  const running: string[] = []
-  const report = () => store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
-    diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
-  quotas: [], tools: {}, runningHarnessIds: [...running], stoppedHarnessIds: [] })
-  await report()
-  /** peer's one Buddy, in their one Buddy chat as a v3 release stored it (nothing adds one since Swarm v4), running on their Mac. */
-  const buddy = async () => {
-    const stored = await storeBuddy(db, tab, { personId: peer.sub, machineId: 'peer-mac', configuration: config })
-    running.push(stored.harnessId)
-    await report()
-    return { chat: stored.chat, agentId: stored.agentId }
-  }
   const send = async (conversationId: string, text: string, user = peer, extra: Partial<Extract<Command, { type: 'message.send' }>> = {}, asAgentId?: string) =>
     String((await execute({ type: 'message.send', conversationId, text, replyTo: null, recipientIds: [], ...extra }, user, asAgentId)).result.messageId)
   const edit = (conversationId: string, messageId: string, text: string, user = peer, asAgentId?: string) =>
@@ -83,7 +66,7 @@ async function swarm() {
   const page = async (conversationId: string, user = owner, cursor: Record<string, unknown> = {}) =>
     (await store.messages(user, tab, conversationId, cursor)) as unknown as { messages: Array<Record<string, any>>; threads: Array<Record<string, any>>; reactionSeq: number }
   const group = async (conversationId: string) => (await store.read(owner, tab)).state.conversations.find(c => c.id === conversationId)!
-  return { store, files, tab, execute, web, secret, pm, buddy, send, edit, remove, page, group }
+  return { store, files, tab, execute, web, secret, pm, send, edit, remove, page, group }
 }
 
 const refused = (code: string) => expect.objectContaining({ code })
@@ -113,7 +96,7 @@ describe('message.edit', () => {
     expect((await f.edit(f.web.conversationId, id, 'The build is green now.')).result).toMatchObject({ changed: false })
   })
 
-  it('only the author: never another person, the owner, the owner\'s PM or the author\'s own Buddy', async () => {
+  it('only the author: never another person, the owner or the owner\'s PM', async () => {
     const f = await swarm()
     const id = await f.send(f.web.conversationId, 'Mine.')
     await expect(f.edit(f.web.conversationId, id, 'Owner rewrites it', owner)).rejects.toThrow(refused('FORBIDDEN'))
@@ -125,16 +108,7 @@ describe('message.edit', () => {
     const pmLine = await f.send(f.web.conversationId, 'PM line', owner, {}, f.pm)
     await expect(f.edit(f.web.conversationId, pmLine, 'PM edits', owner, f.pm)).rejects.toThrow(expect.objectContaining({ status: 403 }))
     await expect(f.edit(f.web.conversationId, pmLine, 'Owner edits the PM', owner)).rejects.toThrow(refused('FORBIDDEN'))
-    // peer's Buddy, in peer's own chat, on peer's own message: refused.
-    const buddy = await f.buddy()
-    const own = await f.send(buddy.chat, 'Look into the CPU spike')
-    await expect(f.edit(buddy.chat, own, 'Buddy rewrites it', peer, buddy.agentId)).rejects.toThrow(expect.objectContaining({ status: 403 }))
-    await expect(f.remove(buddy.chat, own, peer, buddy.agentId)).rejects.toThrow(expect.objectContaining({ status: 403 }))
     expect((await f.page(f.web.conversationId)).messages.find(m => m.id === id)?.text).toBe('Mine.')
-    expect((await f.page(buddy.chat, peer)).messages.find(m => m.id === own)?.text).toBe('Look into the CPU spike')
-    // The author still can, in their Buddy chat too.
-    await f.edit(buddy.chat, own, 'Look into the memory spike')
-    expect((await f.page(buddy.chat, peer)).messages.find(m => m.id === own)?.text).toBe('Look into the memory spike')
   })
 
   it('reads a message the actor cannot see as unavailable: another chat\'s id, a private chat, an agent-only notice', async () => {
@@ -148,80 +122,14 @@ describe('message.edit', () => {
   })
 })
 
-/** Makes peer's message [id] in the project chat their Buddy's proposal, as buddy.propose posted it until proposals went
- *  (2026-11-10): their words, with the goal and scope the Buddy wrote, and the files it carried. Such rows are still stored. */
-async function storeProposal(id: string, buddyId: string, goal: string, scope: string, files: string[] = []) {
-  const attachments = (await db.superTabAttachment.findMany({ where: { id: { in: files } } }))
-    .map(row => ({ id: row.id, name: row.name, mime: row.mime, size: row.size, url: `https://cdn.example.test/${row.objectKey}` }))
-  await db.superTabMessage.update({ where: { id }, data: { source: { kind: 'buddy-proposal', personId: peer.sub, buddyId, goal, scope, priority: 'normal' },
-    ...attachments.length ? { attachments } : {} } })
-}
-
 describe('message.delete', () => {
-  it.each([false, true])('lets only the owner delete their Buddy proposal, removing its content with replies: %s', async hasReplies => {
-    const f = await swarm()
-    const { agentId } = await f.buddy()
-    const line = 'Fix my login', scope = 'Private detail copied into the scope'
-    const id = await f.send(f.web.conversationId, line)
-    await storeProposal(id, agentId, line, scope)
-    const answer = hasReplies ? await f.send(f.web.conversationId, 'I can reproduce it.', other, { replyTo: id }) : undefined
-    for (const person of [owner, other]) await expect(f.remove(f.web.conversationId, id, person)).rejects.toThrow(refused('FORBIDDEN'))
-    await expect(f.remove(f.web.conversationId, id, owner, f.pm)).rejects.toThrow(expect.objectContaining({ status: 403 }))
-    await expect(f.remove(f.web.conversationId, id, peer, agentId)).rejects.toThrow(expect.objectContaining({ status: 403 }))
-    await expect(f.edit(f.web.conversationId, id, 'Rewritten')).rejects.toThrow(refused('FORBIDDEN'))
-    expect((await f.remove(f.web.conversationId, id)).result).toMatchObject({ changed: true, kept: hasReplies })
-    const row = await db.superTabMessage.findUnique({ where: { id } })
-    if (hasReplies) {
-      expect(row).toMatchObject({ text: DELETED_TEXT, deletedAt: expect.any(Date) })
-      expect(row?.source ?? null).toBeNull()
-      const thread = await f.page(f.web.conversationId, other, { thread: id })
-      expect(thread.messages.map(m => m.id)).toEqual([id, answer])
-      expect(JSON.stringify(thread)).not.toContain(line)
-      expect(JSON.stringify(thread)).not.toContain(scope)
-      await expect(f.remove(f.web.conversationId, id)).rejects.toThrow(refused('MESSAGE_DELETED'))
-    } else {
-      expect(row).toBeNull()
-      expect((await f.page(f.web.conversationId)).messages.some(m => m.id === id)).toBe(false)
-    }
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: id, status: { in: ['queued', 'claimed', 'gathered'] } } })).toBe(0)
-  })
-
-  it('never treats a non-proposal source or a mismatched source owner as permission to delete', async () => {
+  it('never takes a row with a source, a person\'s own included, as theirs to delete', async () => {
     const f = await swarm()
     const id = await f.send(f.web.conversationId, 'Own message')
-    for (const source of [{ kind: 'buddy-proposal', personId: other.sub }, { kind: 'task-request', personId: peer.sub }, { kind: 'buddy-proposal' }]) {
+    for (const source of [{ kind: 'buddy-proposal', personId: peer.sub }, { kind: 'task-request', personId: peer.sub }]) {
       await db.superTabMessage.update({ where: { id }, data: { source } })
       await expect(f.remove(f.web.conversationId, id)).rejects.toThrow(refused('FORBIDDEN'))
     }
-  })
-
-  it.each([false, true])('preserves files handed on from the owner chat when deleting a proposal, with replies: %s', async hasReplies => {
-    const f = await swarm()
-    const { chat, agentId } = await f.buddy()
-    const upload = async (name: string, asBuddy = false) => (await f.store.upload(peer, f.tab, chat,
-      { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
-    const handed = await upload('owner-note.txt'), owned = await upload('proposal-note.txt', true)
-    const ask = await f.send(chat, 'Send the notes to the PM', peer, { attachmentIds: [handed] })
-    // The Buddy's own upload went with the proposal; its owner's file stayed on their message and was handed on with it.
-    const id = await f.send(f.web.conversationId, 'Send the notes to the PM')
-    await storeProposal(id, agentId, 'Fix drafts', 'Desktop', [handed, owned])
-    await db.superTabAttachment.update({ where: { id: handed }, data: { proposedBy: id } })
-    await db.superTabAttachment.update({ where: { id: owned }, data: { usedBy: id } })
-    if (hasReplies) await f.send(f.web.conversationId, 'I can reproduce it.', other, { replyTo: id })
-    const entries = await profiled(db, () => f.remove(f.web.conversationId, id))
-    const kept = await db.superTabAttachment.findUniqueOrThrow({ where: { id: handed } })
-    expect(kept.usedBy).toBe(ask)
-    expect(kept.proposedBy ?? null).toBeNull()
-    expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: owned } })).usedBy).toBe(EXPIRED_UPLOAD)
-    expect((await f.page(chat, peer)).messages.find(m => m.id === ask)?.attachments).toEqual([expect.objectContaining({ id: handed })])
-    const updates = entries.filter(e => e.ns.endsWith('.SuperTabAttachment'))
-    expect(updates.length).toBeGreaterThan(0)
-    expect(updates.filter(e => /COLLSCAN/.test(String(e.planSummary)))).toEqual([])
-    await sweepUnsentAttachments(db, { store: f.files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' },
-      new Date(Date.now() + 48 * 3_600_000), { chunk: 100, chunks: 1, pauseMs: 0 })
-    expect(await db.superTabAttachment.findUnique({ where: { id: handed } })).toMatchObject({ usedBy: ask })
-    expect(await f.files.read(kept.objectKey)).toEqual(Buffer.from('owner-note.txt'))
-    expect(await db.superTabAttachment.findUnique({ where: { id: owned } })).toBeNull()
   })
 
   it('removes a message with no replies: its row, reactions, Activity, open deliveries and files', async () => {

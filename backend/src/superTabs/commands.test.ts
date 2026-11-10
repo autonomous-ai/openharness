@@ -3,7 +3,6 @@ import { opensStep, storedStep } from './steps.test-support.js'
 import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, assertUniqueMessageIds, commandSchema, LOOP_NOTICE_AT, swarmGridName, withoutCredentials, WORDS, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
-import { readsRawReason } from './startFailure.js'
 import { loseTasks, sweepLiveness } from './liveness.js'
 import { SWITCH_UNCLAIMED_MS } from './tidy.js'
 import { defaultProfileId, hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
@@ -19,7 +18,6 @@ import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fix
 import { groupView } from './read/views.js'
 import { weekStart } from './leaderboard/week.js'
 import { lentIn, weekSpan } from './leaderboard/rolling.js'
-import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -389,7 +387,7 @@ describe('Super Tab collaboration policy', () => {
         agentOnly: true, notice: 'other' })).toThrow()
     })
 
-    it('keeps recipients and posts inside the project and out of Buddy chats and the Leads conversation', () => {
+    it('keeps recipients and posts inside the project and out of the Leads conversation', () => {
       const f = fixture()
       f.add('lead', 'owner', 'lead', true)
       const build = f.group(), engineer = f.add('engineer', 'owner', build)
@@ -400,10 +398,6 @@ describe('Super Tab collaboration policy', () => {
       expect(() => send(f, as(outsider), build, [])).toThrow()
       const leads = storeOldLeads(f.state)
       expect(() => send(f, as(engineer), leads, [])).toThrow(expect.objectContaining({ code: 'LEADS_CONVERSATION_REMOVED' }))
-      const buddy = f.add('buddy', 'owner', build)
-      f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
-      const elsewhere = f.group()
-      expect(() => send(f, as(engineer), elsewhere, [buddy])).toThrow('Choose an agent in this conversation')
     })
 
     it('tells the Lead once when two agents have exchanged 20 messages in a row', () => {
@@ -532,7 +526,7 @@ describe('Super Tab collaboration policy', () => {
       expect(f.state.conversations.find(c => c.id === build)!.agentIds).not.toContain(stopping)
     })
 
-    it('keeps private and Buddy chats closed to posts', () => {
+    it('keeps a private chat closed to posts', () => {
       const f = fixture()
       f.add('lead', 'owner', 'lead', true)
       const build = f.group(), engineer = f.add('engineer', 'owner', build)
@@ -541,13 +535,10 @@ describe('Super Tab collaboration policy', () => {
         Object.assign(f.state.conversations.find(c => c.id === id)!, patch)
         return id
       }
-      const codes: string[] = []
-      for (const chat of [closed({ audience: { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] } }), closed({ kind: 'buddy' })]) {
-        try { send(f, as(engineer), chat, []) } catch (error) { codes.push((error as { code: string }).code) }
-        expect(f.state.conversations.find(c => c.id === chat)!.agentIds).not.toContain(engineer)
-      }
-      // A private chat it cannot read is not found, so it never learns the chat exists; a Buddy chat is refused.
-      expect(codes).toEqual(['NOT_FOUND', 'FORBIDDEN'])
+      const chat = closed({ audience: { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] } })
+      // A private chat it cannot read is not found, so it never learns the chat exists.
+      expect(() => send(f, as(engineer), chat, [])).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+      expect(f.state.conversations.find(c => c.id === chat)!.agentIds).not.toContain(engineer)
     })
   })
 
@@ -1290,9 +1281,8 @@ describe('a route that names no pick', () => {
 
   it('is recorded with its id and no chat row, as the coordinator\'s route, whichever candidates it lists', () => {
     const f = routed(), group = f.group()
-    const buddy = f.add('buddy')
-    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
-    const decision = pickless({ candidates: [candidate('c0', { kind: 'member', agentId: buddy }), candidate('c1', { model: 'sonnet' })] })
+    const member = f.add('member')
+    const decision = pickless({ candidates: [candidate('c0', { kind: 'member', agentId: member }), candidate('c1', { model: 'sonnet' })] })
     const effects = f.run({ type: 'route.record', conversationId: group, decision } as Command, f.leadActor, { now: 2000 })
     expect(effects.result.routeDecisionId).toEqual(expect.any(String))
     expect(effects.routeDecisions).toEqual([{ op: 'create', id: effects.result.routeDecisionId, conversationId: group,
@@ -1742,14 +1732,11 @@ it('requires the exact stop request for host acknowledgement and prevents promot
 // Swarm autonomous-harness, 2026-10-29: a Builder started by hand never got a task, and its Lead could not stop it ("this
 // worker has no finished assignment to release"); only a person by hand could. Keeping one needs no finished work either
 // (project instructions, phase 4: 'keeps or stops any agent on request').
-it('lets the Lead stop a worker that never had an assignment, and never a Buddy', () => {
+it('lets the Lead stop a worker that never had an assignment', () => {
   const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group(), worker = f.add('worker', 'owner', group)
   const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
   f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, owner)
   expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ workDecision: 'stop', releaseId: expect.any(String) })
-  const buddy = f.add('buddy', 'owner', group)
-  f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
-  expect(() => f.run({ type: 'agent.release', agentId: buddy, decision: 'stop' }, owner)).toThrow('never released')
 })
 
 it('allows the contributor to keep a completed worker and refuses another project’s Lead', () => {
@@ -1925,7 +1912,7 @@ describe('any agent of the project', () => {
       expect(chat().agentIds).not.toContain(reviewer)
     })
 
-    it('refuses another project\'s agent, a Buddy and a stopping one there, and adds no agent by hand', () => {
+    it('refuses another project\'s agent and a stopping one there, and adds no agent by hand', () => {
       const { f, task, engineer, chat, assigned } = working()
       // Of this project, with no task or step in it: added to a task it is not assigned.
       const idle = f.add('idle', 'owner', task)
@@ -1939,11 +1926,6 @@ describe('any agent of the project', () => {
       const otherTask = f.run({ type: 'conversation.create', projectId: other.projectId as string, title: 'Elsewhere', brief: 'Build it.', checks: [] }).result.conversationId as string
       const outsider = f.add('outsider', 'owner', otherTask)
       storedAssignment(f.state, otherTask, outsider, 1000)
-      // A Buddy assigned work (which no Buddy is) still only proposes.
-      const buddy = f.add('buddy', 'owner', f.group())
-      const buddyTask = f.state.conversations.find(c => c.agentIds.includes(buddy))!
-      storedAssignment(f.state, buddyTask.id, buddy, 1000)
-      f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
       // A stopping agent with its task still open.
       const stopping = f.add('stopping', 'owner', f.group())
       const stoppingTask = f.state.conversations.find(c => c.agentIds.includes(stopping))!.id
@@ -1954,10 +1936,10 @@ describe('any agent of the project', () => {
       const archive = assigned('archived')
       archive.task.archived = true
       const before = structuredClone(f.state)
-      // Another project's agent does not read this chat at all; a Buddy posts only in its own chat (buddies.ts).
+      // Another project's agent does not read this chat at all.
       // Swarm v4: any other agent of this project posts in its channel, task or not (joinsChannel).
       void [idle, ended, lost, stopped, archive]
-      const refusals: Array<[string, string]> = [[outsider, 'NOT_FOUND'], [buddy, 'BUDDY_FORBIDDEN'], [stopping, 'FORBIDDEN']]
+      const refusals: Array<[string, string]> = [[outsider, 'NOT_FOUND'], [stopping, 'FORBIDDEN']]
       for (const [agentId, code] of refusals) {
         expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
         expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId),
@@ -2126,15 +2108,12 @@ describe('any agent of the project', () => {
     expect(f.state).toEqual(before)
   })
 
-  it('refuses agents of another project and Buddies, writing nothing', () => {
+  it('refuses agents of another project, writing nothing', () => {
     const { f } = project(), group = f.group()
     f.invite()
     // Private, so the peer, who reads this project, does not read that one.
     const other = f.run({ type: 'project.create', name: 'Other', visibility: 'private', brief: '' }).result
     const outsider: Actor = { kind: 'agent', agentId: f.add('outsider', 'owner', other.conversationId as string), machineOwnerId: 'host-owner' }
-    const buddyId = f.add('buddy')
-    f.state.agents.find(a => a.id === buddyId)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
-    const buddy: Actor = { kind: 'agent', agentId: buddyId, machineOwnerId: 'host-owner' }
     storedAssignment(f.state, group, f.worker, 1000)
     const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
@@ -2149,7 +2128,6 @@ describe('any agent of the project', () => {
       // The outsider reads none of this project, and its own project's chat is not the peer's to read.
       expect(() => f.run(command, outsider, context), command.type).toThrow(expect.objectContaining({
         code: command.type === 'person.tell' ? 'INVALID_PERSON' : command.type === 'agent.input' ? 'AGENT_UNAVAILABLE' : 'NOT_FOUND' }))
-      expect(() => f.run(command, buddy, context), command.type).toThrow(expect.objectContaining({ code: 'BUDDY_FORBIDDEN' }))
     }
     expect(JSON.stringify(f.state)).toBe(before)
   })
@@ -2161,7 +2139,6 @@ describe('any agent of the project', () => {
     expect(f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, E).messages.map(m => m.source?.kind)).toEqual(['crew-need'])
     // Only the person and their own agent post in their private chat (anh Dee, 11-07, task #4558): the PM tags them in the project chat.
     expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Your fix is merged.' }, pm)).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT' }))
-    expect(f.state.conversations.filter(c => c.kind === 'swarm-buddy' || c.kind === 'buddy')).toEqual([])
     expect(() => f.run({ type: 'person.tell', personId: 'peer', text: 'Hello.' })).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 
@@ -2869,39 +2846,6 @@ describe('a failed start\'s reason', () => {
     expect(read(peer)).toBe('Studio stopped reporting while preparing it')
     f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
     expect(read(owner)).toBe('Its machine was removed from the Swarm.')
-  })
-
-  // The reported dead end: a Buddy's owner read only "its machine could not prepare or launch it", while the chat told them
-  // the starter and the PM could read why. A Buddy chat is private to its owner, so the reason belongs there whole.
-  it('writes a Buddy start\'s reason whole in its owner\'s chat, never the group line', () => {
-    const f = fixture(); f.invite()
-    const generation = f.state.people[0]!.generation
-    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
-      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
-      audience: { people: [{ id: 'owner', generation }] } }
-    f.state.conversations.push(chat as never)
-    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: generation,
-      machineOwnerId: 'owner', request: { conversationId: chat.id, machineId: 'mac', name: "nsonha777's Buddy",
-        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: null }] as never
-    const [notice] = f.run({ type: 'agent.startFailed', startId: 's1', error: RAW }, owner).messages
-    expect(notice!.conversationId).toBe(chat.id)
-    expect(notice!.text).toBe(`Could not start nsonha777's Buddy: ${RAW}`)
-    expect(notice!.text).not.toContain('Whoever started it')
-  })
-
-  it('lets a Buddy chat\'s owner read the raw reason even when an agent made the start on another machine', () => {
-    const f = fixture(); f.invite()
-    const generation = f.state.people[0]!.generation
-    const chat = { id: 'buddy-chat', kind: 'buddy', number: 1, title: "owner's Buddy", leadId: null, agentIds: [],
-      archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
-      audience: { people: [{ id: 'owner', generation }] } }
-    f.state.conversations.push(chat as never)
-    f.state.starts = [{ id: 's1', actorKey: 'agent:someone', contributorId: 'owner', membershipGeneration: generation,
-      machineOwnerId: 'someone-else', request: { conversationId: chat.id, machineId: 'host-mac', name: "nsonha777's Buddy",
-        buddyOf: { personId: 'owner', generation } }, harnessId: null, dispatched: true, error: RAW }] as never
-    expect(visibleState(f.state, owner).starts![0]!.error).toBe(RAW)
-    // A Swarm member who is not that chat's owner still reads only what the reason means.
-    expect(readsRawReason(peer, f.state.starts![0]!, chat as never)).toBe(false)
   })
 })
 
@@ -4731,22 +4675,19 @@ describe('lead.switch', () => {
   })
 
   // Security review of #4558: the account a moved PM lands on would be the destination machine's owner's. No person moves a PM
-  // onto another member's computer at all (Swarm v3, #4120), Buddy or not, so no member's account runs it without their knowing.
-  it('refuses moving the PM onto another member\'s computer, whether or not they have a Buddy', () => {
-    for (const buddy of [false, true]) {
-      const s = setup()
-      const destination = structuredClone(s.f.state.machines![0]!)
-      Object.assign(destination, { machineId: 'destination', name: 'Peer Mac', generation: 'g2', contributorId: 'peer',
-        membershipGeneration: s.f.state.people.find(p => p.id === 'peer')!.generation })
-      destination.observation!.generation = 'g2'
-      destination.observation!.capabilities = ['leadSwitch', 'leadStart']
-      s.f.state.machines!.push(destination)
-      if (buddy) giveOwnBuddy(s.f.state, 'peer')
-      for (const profileId of [WORK, 'default']) {
-        expect(code(() => s.f.run({ ...s.request, profileId, machineId: 'destination', model: 'gpt-5.1' }))).toBe('NOT_YOUR_COMPUTER')
-      }
-      expect(s.agent().switchRequest).toBeUndefined()
+  // onto another member's computer at all (Swarm v3, #4120), so no member's account runs it without their knowing.
+  it('refuses moving the PM onto another member\'s computer', () => {
+    const s = setup()
+    const destination = structuredClone(s.f.state.machines![0]!)
+    Object.assign(destination, { machineId: 'destination', name: 'Peer Mac', generation: 'g2', contributorId: 'peer',
+      membershipGeneration: s.f.state.people.find(p => p.id === 'peer')!.generation })
+    destination.observation!.generation = 'g2'
+    destination.observation!.capabilities = ['leadSwitch', 'leadStart']
+    s.f.state.machines!.push(destination)
+    for (const profileId of [WORK, 'default']) {
+      expect(code(() => s.f.run({ ...s.request, profileId, machineId: 'destination', model: 'gpt-5.1' }))).toBe('NOT_YOUR_COMPUTER')
     }
+    expect(s.agent().switchRequest).toBeUndefined()
   })
 
   it('keeps the source lead and posts one safe line when the destination candidate fails', () => {
@@ -5104,16 +5045,13 @@ describe('agent.rename (renaming a harness renames its agent, task #2912)', () =
     expect(shownTo(f, owner, agentId)).toBe('Studio')
   })
 
-  it('refuses a teammate who is neither, the Swarm owner, an agent and a Buddy, writing nothing', () => {
+  it('refuses a teammate who is neither, the Swarm owner and an agent, writing nothing', () => {
     const f = fixture(), agentId = peerContributorAgent(f), other = f.add('other', 'owner')
-    const buddyId = f.add('buddy', 'owner')
-    f.state.agents.find(a => a.id === buddyId)!.buddyOf = { personId: 'owner', projectId: 'lead', generation: 'g' } as never
     const before = JSON.stringify(f.state)
     for (const [actor, code] of [
       [owner, 'FORBIDDEN'],
       [{ kind: 'agent', agentId: other, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
       [{ kind: 'agent', agentId, machineOwnerId: 'host-owner' }, 'FORBIDDEN'],
-      [{ kind: 'agent', agentId: buddyId, machineOwnerId: 'host-owner' }, 'BUDDY_FORBIDDEN'],
     ] as Array<[Actor, string]>) {
       expect(() => f.run(rename(agentId, 'Stolen'), actor), JSON.stringify(actor)).toThrow(expect.objectContaining({ code }))
     }

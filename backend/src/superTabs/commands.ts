@@ -58,7 +58,7 @@ import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, 
 import { defaultAccountOnly, SWITCH_CAPABILITY } from './pmAccount.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
 import { isProjectChat, inMainChat, requireChatContent, requireChatPost, recordChatAsk, recordChatPost, requireChatAnswer, recordChatAnswer } from './chatLimits.js'
-import { allowedDrops, approvedDropNotice, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
+import { allowedDrops, droppedLines, MAX_APPROVALS, MAX_DROPPED_LINES, refuseOverBudget, refuseRepeats, type ApprovalRow, type DroppedLine } from './ruleGuard.js'
 import { appendRouting, coordinatorNameOf, routingSummary, FIRST_INSTRUCTIONS, FIRST_SUMMARY, instructionsHash, instructionsTextSchema, legacyRoleName, liveNotes, MAX_NOTES, noteTextSchema, roleNameSchema, summarySchema, type PmNote } from './instructions.js'
 import { repeatedRules } from './instructionsDiff.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'

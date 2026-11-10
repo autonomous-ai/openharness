@@ -690,8 +690,8 @@ type Random = ReturnType<typeof seeded>
 const STATUSES: WorkStatus[] = ['planned', 'working', 'needs_human', 'blocked', 'review', 'done', 'stopped', 'cancelled', 'reconciling', 'lost']
 /** A Swarm of up to 2,000 conversations, 50 agents and 20 projects (exactly that when [full]): no projects at all or the legacy
  *  single one, private projects, Leads without a conversation, an agent leading two projects, lost assignments, audience
- *  conversations, agents already marked, and the odd conversation whose project lookup refuses (a removed Leads one, a Swarm
- *  Buddy chat). Most are small, so 200 of them compare quickly against the quadratic legacy code. */
+ *  conversations, agents already marked, and the odd conversation whose project lookup refuses (a removed Leads one). Most are
+ *  small, so 200 of them compare quickly against the quadratic legacy code. */
 function generatedSwarm(random: Random, full = false): SuperTabState {
   const agentCount = full ? 50 : 1 + random.below(50), projectCount = full ? 20 : random.below(21)
   const conversationCount = full ? 2_000 : Math.floor(random.next() ** 2 * 2_000)
@@ -715,7 +715,7 @@ function generatedSwarm(random: Random, full = false): SuperTabState {
     ...(random.chance(0.5) ? { workDecision: random.pick(['awaiting', 'keep', 'stop'] as const) } : {}),
   }))
   const conversations = conversationIds.map((id): Conversation => {
-    const kind = random.chance(0.01) ? 'leads' as const : random.chance(0.01) ? 'swarm-buddy' as const : random.chance(0.02) ? 'buddy' as const : undefined
+    const kind = random.chance(0.01) ? 'leads' as const : undefined
     return {
       id, title: id, archived: false, brief: '', checks: [], lastMessageSequence: 0,
       ...(kind ? { kind } : {}),

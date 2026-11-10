@@ -269,12 +269,6 @@ describe('a machine\'s reading as a report stores it (DB 2.5)', () => {
     expect(kept.quotas.map(q => q.engine)).toEqual(['claude'])
   })
 
-  it('keeps nowhere the idle Buddies an older host still reports, so they decide nothing', () => {
-    const older = stored({ idleBuddyHarnessIds: ['a'] }, NOW + 15_000)
-    expect(older).not.toHaveProperty('idleBuddyHarnessIds')
-    expect(readingOnly(stored({}), older)).toBe(true)
-  })
-
   it('names a start preparing only when this machine launched it and it neither runs nor failed', () => {
     const start = (extra: Record<string, unknown>) => ({ id: 's', request: { machineId: 'host' }, dispatched: true, ...extra }) as unknown as AgentStart
     expect(preparableStart(start({}), 'host')).toBe(true)
