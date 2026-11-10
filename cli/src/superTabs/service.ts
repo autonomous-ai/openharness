@@ -401,8 +401,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const read = await swarm()
           if (!isBuddyIn(read.state, agentId)) return { ok: true, value: statusView(answerOf(read), agentId) }
           pullRequests ??= options.pullRequests ?? createPullRequestsStatusReader()
-          const deps: BuddyStatusDeps = { pullRequests: pullRequests!,
-            decisions: () => backend(core, 'GET', `${path}/decisions?state=open&${identity}`) }
+          const deps: BuddyStatusDeps = { pullRequests: pullRequests! }
           const project = typeof payload.project === 'string' ? payload.project : undefined
           if (payload.archived === true) {
             // A person's one Buddy names the project whose archive it reads (status --project NAME --archived).

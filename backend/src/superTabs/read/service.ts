@@ -6,7 +6,6 @@ import { personalTasksFor, personalTasksPage, type PersonalTasks } from './perso
 import { startsOfRule } from '../cachePatch.js'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
-import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
 import { logger } from '../../utils/logger.js'
 import { lowerReadMark, readMarkRows, readThreadMarks, writeReadMark, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
@@ -294,9 +293,8 @@ export class SwarmReads {
 
   /**
    * One conversation from its own row by key and the parts its read check reads: the head, members and agents (cachedReads.ts
-   * readAccess), and for an agent its machine's account (onTeamAccount) and, when it is stored with no project, its active
-   * conversations (agentProjectId). Never the whole Swarm: its cached base and machines were refreshed from the Swarm's group,
-   * machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
+   * readAccess), and for an agent stored with no project its active conversations (agentProjectId). Never the whole Swarm: its
+   * cached base and machines were refreshed from the Swarm's group, machine and progress feeds on every pod at every stamp a read met, ~1.33 GB in two minutes of these reads on prod (task
    * #2875). canReadGroup reads no Lead conversation here (ledProject): a group with an audience is a closed Chat with PM, or
    * a Buddy chat an agent reads only as its Buddy. It answers as readGroup does (integration/superTabOneGroup.test.ts compares
    * every reader of every group). A task naming required machines goes to readGroup: which machines its reader sees depends
@@ -313,13 +311,11 @@ export class SwarmReads {
       if (found && !found.dormant && found.data!.number == null && !isLeads(found.data!)
         && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [], progress: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
       const target = asAgentId ? access.agents.find(a => a.key === asAgentId && !a.deleted)?.data : undefined
-      const [context, machines] = target ? await Promise.all([
-        target.projectId ? Promise.resolve([]) : parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }),
-        parts.loadMachineAccounts(tx, tabId, [target.machineId])]) : [[], []]
+      const context = target && !target.projectId ? await parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }) : []
       // The conversation itself whole; another only as the light row the checks read, once.
       const held = new Set(found ? [found.key] : [])
       const groups = [...found ? [found] : [], ...context.filter(g => !held.has(g.key) && !!held.add(g.key))]
-      const state = parts.reassemble({ ...access, groups, machines, starts: [], progress: [] }, { share: true })
+      const state = parts.reassemble({ ...access, groups, machines: [], starts: [], progress: [] }, { share: true })
       const actor = await this.store.actor(tx, user, state, asAgentId)
       author(state, actor)
       const unavailable = (): never => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
@@ -358,9 +354,8 @@ export class SwarmReads {
   }
 
   /** Moves the person's read mark in a conversation they can read forward, never past its newest message (readMarks.ts). Only a
-   *  person reading as themselves has marks: an agent, or a Team session, is refused before anything is written. */
+   *  person reading as themselves has marks: an agent is refused before anything is written. */
   async markRead(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group } = await this.readGroup(user, tabId, conversationId)
     const next = Math.min(sequence, group.data!.lastMessageSequence)
     return { sequence: await writeReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: next, now: this.now() }) }
@@ -371,7 +366,6 @@ export class SwarmReads {
    *  person reading as themselves, and every chat they cannot read is the same refusal. A reply only in a thread keeps its thread's
    *  mark. */
   async markUnread(user: AuthUser, tabId: string, conversationId: string, sequence: number): Promise<{ sequence: number }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const { group } = await this.readGroup(user, tabId, conversationId)
     const target = Math.min(sequence - 1, group.data!.lastMessageSequence)
     return { sequence: await lowerReadMark(this.db, { tabId, personId: user.sub, conversationId, sequence: target, now: this.now() }) }
@@ -389,7 +383,6 @@ export class SwarmReads {
 
   /** The newest message sequence of a conversation whose thread `threadId` the person reads (markThreadRead's checks). */
   private async readableThread(user: AuthUser, tabId: string, conversationId: string, threadId: string): Promise<number> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const unavailable = () => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     const newest = (await this.readableChat(user, tabId, conversationId)).conversation.lastMessageSequence
     const [found] = await readBy(this.db, 'SuperTabMessage', 'id', [{ $match: { _id: threadId, tabId, conversationId } },
@@ -407,7 +400,6 @@ export class SwarmReads {
   /** Stores the person's notification setting for a conversation they can read (chatSettings.ts), checked as a read mark is:
    *  every miss is the same refusal, and only a person reading as themselves has settings. */
   async setChatNotify(user: AuthUser, tabId: string, conversationId: string, notify: NotifyLevel): Promise<{ notify: NotifyLevel }> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.group(user, tabId, conversationId)
     return { notify: await writeChatSetting(this.db, { tabId, personId: user.sub, conversationId, notify, now: this.now() }) }
   }
@@ -438,7 +430,6 @@ export class SwarmReads {
   /** One project's leaderboard for a week (leaderboard/stats.ts), for the people who read the project. It sums only the
    *  groups the reader may read, dormant ones of the kept weeks included, and never a private conversation. */
   async leaderboard(user: AuthUser, tabId: string, projectId: string, week?: number, period?: PeriodName, allProjects = false): Promise<Leaderboard> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const now = this.now(), start = readableWeek(week, now)
     const began = performance.now()
     const result = await this.read(user, tabId, async (tx, cached) => {
@@ -471,7 +462,6 @@ export class SwarmReads {
   }
 
   async list(user: AuthUser, after?: string): Promise<SwarmList> {
-    if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     // People at the owner's domain join Swarms with auto-join on by themselves, before the first page is read (autoJoin.ts).
     if (!after) await this.store.autoJoin(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })

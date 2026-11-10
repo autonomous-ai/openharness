@@ -51,7 +51,7 @@ export class HostFeed {
   }
 
   /** A read sent after this call. One already out may have been sent before what the caller must see, such as a takeover
-   *  before a resume's answer (cli limitResume.ts, #1757 re-check), so it is waited out, never joined. */
+   *  (#1757 re-check), so it is waited out, never joined. */
   async fresh(): Promise<HostRead> {
     await this.running?.catch(() => {})
     return this.refresh()

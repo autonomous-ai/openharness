@@ -308,11 +308,9 @@ describe('one group read by id (task #2875)', () => {
       const byKey = groupRows.filter(r => /^IXSCAN \{ tabId: 1, deleted: 1, key: 1/.test(r.planSummary ?? ''))
       expect(byKey, describeRows(groupRows)).toHaveLength(1)
       expect(byKey[0]!.docsExamined).toBe(1)
-      // An agent's machine: its account fields, one document. This suite names no index, as a server before its first listing,
-      // and Mongo may plan it on `_id` or the held index alike; a server that listed them names `_id` (superTabCommandReads).
+      // No machine: an agent's read checked its machine's account only for a Harness Team account, which is gone.
       const machineRows = rows.filter(r => r.ns.endsWith('.SwarmMachine') && r.op !== 'getmore')
-      expect(machineRows.map(r => [/^IXSCAN \{ (_id: 1 \}|tabId: 1, deleted: 1, key: 1)/.test(r.planSummary ?? ''), r.docsExamined]), describeRows(machineRows))
-        .toEqual(asAgentId ? [[true, 1]] : [])
+      expect(machineRows, describeRows(machineRows)).toEqual([])
     }
   }, 120_000)
 
