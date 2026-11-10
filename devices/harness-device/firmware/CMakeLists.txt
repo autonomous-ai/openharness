@@ -70,5 +70,9 @@ endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
+# Build only the common components, main and main's direct and transitive dependencies (BOARD_REQUIRES),
+# rather than every component IDF ships. MINIMAL_BUILD is a build property, not a variable: it has to be
+# set through idf_build_set_property, after project.cmake is included and before project().
+idf_build_set_property(MINIMAL_BUILD ON)
 
 project(interns_commander)

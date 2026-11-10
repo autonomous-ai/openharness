@@ -5,9 +5,6 @@
 #define ht_can_display ht48_can_display
 #define ht_center ht48_center
 #define ht_damage ht48_damage
-#define ht_octopus_face ht48_octopus_face
-#define ht_octopus_motion_tick ht48_octopus_motion_tick
-#define ht_octopus_short_recap ht48_octopus_short_recap
 #define ht_raster ht48_raster
 #define ht_recap_lines ht48_recap_lines
 #define ht_rgb ht48_rgb
