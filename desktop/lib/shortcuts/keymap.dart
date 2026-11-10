@@ -220,10 +220,13 @@ class KeymapConfig {
       final command = row['command'];
       // Retired actions must not invalidate the user's other custom shortcuts.
       // `team.open` was Swarm's Tab conversation, now Show Agent Messages.
+      // `swarm.quick_switcher` was Switch conversation (Cmd-K in a Swarm); a
+      // keybindings file that still binds it is skipped, not refused.
       if (const {
             'picker.preview',
             'navigation.quick_open',
             'team.open',
+            'swarm.quick_switcher',
           }.contains(command) &&
           !commands.contains(command)) {
         continue;
