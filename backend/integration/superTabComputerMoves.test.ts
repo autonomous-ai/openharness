@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { cleanUpComputers, otherAccountsOnComputer, teamCleanupPending } from '../src/superTabs/computerMoves.js'
+import { cleanUpComputers, otherAccountsOnComputer } from '../src/superTabs/computerMoves.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { localReportMemory } from '../src/superTabs/machineReports.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -34,8 +34,7 @@ beforeAll(async () => {
     machineId, userId, computerId, sessionKind: 'computer', apiKey: `fixture-${machineId}`, managerId: '', autonomousEnv: 'prod', authMode: 'remote', ...extra } })
   await machine('kelvin-mac', kelvin, COMPUTER)
   await machine('tt-mac', tt, COMPUTER)
-  // Not another account's sign-in on this computer: a Team row, a deleted row, another environment's, another computer's.
-  await machine('kelvin-team', kelvin, COMPUTER, { sessionKind: 'team', hostMachineId: 'kelvin-mac' })
+  // Not another account's sign-in on this computer: a deleted row, another environment's, another computer's.
   await machine('other-deleted', other, COMPUTER, { deletedAt: new Date() })
   await machine('other-stag', other, COMPUTER, { autonomousEnv: 'stag' })
   await machine('other-elsewhere', other, OTHER)
@@ -54,7 +53,7 @@ afterAll(async () => {
 })
 
 describe("a computer's other accounts", () => {
-  it('are the live rows of other accounts signed in on it before, never the owner\'s own, a Team row, or another computer\'s', async () => {
+  it('are the live rows of other accounts signed in on it before, never the owner\'s own or another computer\'s', async () => {
     expect(await otherAccountsOnComputer(db, { computerId: COMPUTER, ownerId: tt, autonomousEnv: 'prod' }))
       .toEqual([{ machineId: 'kelvin-mac', userId: kelvin }])
     expect(await otherAccountsOnComputer(db, { computerId: COMPUTER, ownerId: kelvin, autonomousEnv: 'prod' }))
@@ -245,25 +244,4 @@ describe('the cleanup script', () => {
     expect(printed).toMatchObject({ write: false, env: 'prod', moves: expect.any(Array), left: expect.any(Array) })
     expect(Date.now() - started).toBeLessThan(60_000)
   }, 90_000)
-})
-
-describe("a Harness Team account's previous account's Swarm cleanup", () => {
-  it('is pending while a Swarm lists its Team machine for cleanup, read from the computer and cleanup indexes', async () => {
-    const TEAM_COMPUTER = '9'.repeat(32)
-    await db.machine.create({ data: { machineId: 'kelvin-team-c', userId: kelvin, computerId: TEAM_COMPUTER, sessionKind: 'team', hostMachineId: 'kelvin-mac',
-      apiKey: 'fixture-kelvin-team-c', managerId: '', autonomousEnv: 'prod', authMode: 'remote' } })
-    const tab = (await store.create(owner, randomUUID(), 'Cleanup')).id
-    // What a commit writes for a Swarm whose machineCleanups name that machine (parts/commit.ts): the index the read uses.
-    await db.superTab.update({ where: { id: tab }, data: { cleanupMachineIds: ['kelvin-team-c'] } })
-    expect(await teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: tt })).toBe(true)
-    // Its own account signing in again (a plain repair) waits on nothing of its own.
-    expect(await teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: kelvin })).toBe(false)
-    const entries = await profiled(db, () => teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: tt }))
-    const machines = reads(entries, 'machines', ['computerId'])
-    expect(machines[0]!.planSummary, JSON.stringify(plan(machines))).toMatch(/IXSCAN \{ computerId: 1, userId: 1 \}/)
-    const swarms = reads(entries, 'SuperTab', ['cleanupMachineIds'])
-    expect(swarms[0]!.planSummary, JSON.stringify(plan(swarms))).toMatch(/IXSCAN \{ autonomousEnv: 1, cleanupMachineIds: 1/)
-    await db.superTab.update({ where: { id: tab }, data: { cleanupMachineIds: [] } })
-    expect(await teamCleanupPending(db, { computerId: TEAM_COMPUTER, userId: tt })).toBe(false)
-  })
 })

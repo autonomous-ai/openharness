@@ -84,41 +84,6 @@ Future<void> pumpSidebar(
   await tester.pumpAndSettle();
 }
 
-/// The Machines group on its own, heading included.
-Future<void> pumpMachines(
-  WidgetTester tester,
-  SuperTabController controller,
-  AppNotifier app, {
-  double width = 280,
-  double scale = 1,
-  DateTime Function()? now,
-}) async {
-  await tester.binding.setSurfaceSize(Size(width, 1000));
-  await tester.pumpWidget(
-    MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context)
-            .copyWith(textScaler: TextScaler.linear(scale)),
-        child: child!,
-      ),
-      home: Scaffold(
-        body: ListenableBuilder(
-          listenable: controller,
-          builder: (context, _) => SuperTabMachines(
-            controller: controller,
-            app: app,
-            onAddAgent: (_) {},
-            embedded: true,
-            now: now ?? DateTime.now,
-          ),
-        ),
-      ),
-    ),
-  );
-  await tester.pumpAndSettle();
-}
-
 Future<void> disposeSidebar(
   WidgetTester tester,
   SuperTabController controller,
@@ -227,8 +192,8 @@ void main() {
   });
 
   testWidgets(
-    'narrow panes and large text retain top navigation and a readable '
-    'heading while machines reconnect',
+    'narrow panes and large text retain top navigation, also while the '
+    'Swarm cannot be read',
     (tester) async {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final app = createApp(connected: true);
@@ -236,14 +201,9 @@ void main() {
       final server = ConversationServer();
       final controller = await projectSidebar(server);
       for (final unreachable in [false, true]) {
-        DateTime Function()? now;
         if (unreachable) {
           server.failReads = true;
           await controller.refresh();
-          final pinned = controller.unreachableSince!.add(
-            const Duration(minutes: 12),
-          );
-          now = () => pinned;
         }
         for (final width in [180.0, 240.0]) {
           for (final scale in [1.0, 2.0]) {
@@ -257,37 +217,6 @@ void main() {
             );
             expect(tester.takeException(), isNull, reason: reason);
             expect(find.text('Manage'), findsOneWidget, reason: reason);
-
-            await pumpMachines(
-              tester,
-              controller,
-              app,
-              width: width,
-              scale: scale,
-              now: now,
-            );
-            expect(tester.takeException(), isNull, reason: reason);
-            expect(
-              find.byTooltip('Add machine'),
-              findsOneWidget,
-              reason: reason,
-            );
-            expect(
-              find.byType(SuperTabMachinesPill),
-              unreachable ? findsOneWidget : findsNothing,
-              reason: reason,
-            );
-            if (unreachable) {
-              final pill = tester.getRect(find.byType(SuperTabMachinesPill));
-              final add = tester.getRect(find.byTooltip('Add machine'));
-              expect(pill.right, lessThanOrEqualTo(add.left), reason: reason);
-              expect(
-                find.byTooltip('Reconnecting · 12m').evaluate().isNotEmpty ||
-                    find.text('Reconnecting · 12m').evaluate().isNotEmpty,
-                isTrue,
-                reason: reason,
-              );
-            }
           }
         }
       }

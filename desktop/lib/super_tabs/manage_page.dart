@@ -117,7 +117,6 @@ class SuperTabManagePage extends StatelessWidget {
           onOpenAgent: onOpenAgent,
           readLocal: readLocal,
           now: now,
-          manage: true,
         ),
         SuperTabManageTab.models => _ManageModels(
           controller: controller,

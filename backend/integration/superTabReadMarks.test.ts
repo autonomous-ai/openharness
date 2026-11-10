@@ -31,9 +31,8 @@ let app: FastifyInstance
 let clock = NOW
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
-const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
 const signedIn = (authorization: string | undefined) =>
-  authorization === 'Bearer team' ? ownerTeam : [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
+  [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
 const MIGRATED = NOW - 60_000
 
 beforeAll(async () => {
@@ -87,7 +86,7 @@ async function scene() {
 }
 
 const call = async (method: 'GET' | 'POST', url: string, as: AuthUser, payload?: unknown) => {
-  const response = await app.inject({ method, url, headers: { authorization: as === ownerTeam ? 'Bearer team' : `Bearer ${as.sub}` },
+  const response = await app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` },
     ...(payload ? { payload } : {}) })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string } } }
 }
@@ -234,11 +233,10 @@ describe('Mark unread (the one write that moves a mark back)', () => {
     clock = NOW
   })
 
-  it('refuses a chat the person cannot read, a Team session and an agent, storing nothing', async () => {
+  it('refuses a chat the person cannot read and an agent, storing nothing', async () => {
     const s = await scene()
     expect((await unread(s.tabId, s.secretGroup, 10, outsider)).status).toBe(404)
     expect((await unread(s.tabId, 'no-such-group', 10, outsider)).status).toBe(404)
-    expect((await unread(s.tabId, s.web, 10, ownerTeam)).status).toBe(403)
     expect((await unread(s.tabId, s.web, 10, owner, '?asAgentId=some-agent')).status).toBe(400)
     expect(await db.superTabReadMark.count({ where: { tabId: s.tabId } })).toBe(0)
   })
@@ -364,10 +362,9 @@ describe('thread marks (one per person and thread)', () => {
     clock = NOW
   })
 
-  it('keeps no thread marks for agents or Team sessions', async () => {
+  it('keeps no thread marks for agents', async () => {
     const s = await scenario()
     expect((await markThread(s.tabId, s.web, s.root, 11, owner, '?asAgentId=some-agent')).status).toBe(400)
-    expect((await markThread(s.tabId, s.web, s.root, 11, ownerTeam)).status).toBe(403)
     expect(await db.superTabThreadMark.count({ where: { tabId: s.tabId } })).toBe(0)
   })
 
