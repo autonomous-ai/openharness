@@ -1,6 +1,7 @@
 /**
  * Installation tokens for Swarm agents (routes/superTabs.ts `github-token`): one per agent and task, kept until ten
- * minutes before it expires, and revoked as soon as that task ends (superTabs/store.ts `workEnded`).
+ * minutes before it expires, and revoked as soon as that task ends (superTabs/store.ts `workEnded`). Since Swarm v4 (slice S6)
+ * only sessions started with the app before ask for one: this module goes on or after 2026-12-10.
  *
  * The cache is shared by every backend process (Redis in production), so a task closed on one process revokes the token
  * another process issued. Entries are sealed with a key derived from the app's private key (github/app.ts
@@ -9,7 +10,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { logger } from '../utils/logger.js'
-import { GitHubApp, GitHubAppError, PREPARE_PERMISSIONS, cacheSecret, githubAppConfig, type BranchProtection } from './app.js'
+import { GitHubApp, GitHubAppError, cacheSecret, githubAppConfig, type BranchProtection } from './app.js'
 import type { GitHubRepository } from './repository.js'
 import type { WorkHold } from './holds.js'
 
@@ -219,18 +220,6 @@ export class GitHubTokens {
     const branch = await this.app.defaultBranch(actual, entry.token)
     return { token: entry.token, expiresAt: entry.expiresAt, repository, defaultBranch: branch.branch,
       defaultBranchProtected: branch.protection === 'pull_request', defaultBranchProtection: branch.protection }
-  }
-
-  /**
-   * A token that only reads [repository], for a machine preparing a Swarm agent's folder before the agent exists (routes/
-   * superTabs.ts, a start's `github-token`): the clone and the fetch of its default branch, so that the machine's own git
-   * login is never used for another person's project. Never cached: one start asks once, and it lasts at most an hour.
-   */
-  async prepare(repository: GitHubRepository): Promise<{ token: string; expiresAt: string; repository: string }> {
-    const resolved = await this.app.resolve(repository)
-    if (resolved === null) throw this.app.notInstalled(repository)
-    const minted = await this.app.createToken(resolved.installation, resolved.repository, PREPARE_PERMISSIONS)
-    return { ...minted, repository: repository.fullName }
   }
 
   private async revokeTokens(tabId: string, agentId: string, repository: string, tokens: readonly string[], why: string): Promise<void> {

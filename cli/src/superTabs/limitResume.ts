@@ -6,9 +6,8 @@
  * a task handed on before the reset never resumes in the old session.
  */
 import type { CoreApi } from '../core/api.js'
-import { backend } from './host.js'
 import { WAITING } from './terminal.js'
-import { identifier, object, SuperTabHostError } from './wire.js'
+import { backend, identifier, object, SuperTabHostError } from './wire.js'
 
 /** The agent was told its task moved when it was lost (liveness.ts), so the line says the task is its own again. */
 export const CONTINUE = 'continue: your usage limit has reset and this task is yours again'
