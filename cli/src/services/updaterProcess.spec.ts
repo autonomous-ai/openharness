@@ -111,6 +111,8 @@ describe('the updater in its own process', () => {
     const m = make()
     const service = runUpdaterService(undefined, m.deps)
     expect(m.cli()).toMatchObject({ currentVersion: VERSION, stageWhileJudged: true })
+    // The Node the build comes up on is made sure of first, and the one this daemon runs on is the way back.
+    expect(m.cli().node).toMatchObject({ ensure: expect.any(Function), running: process.execPath })
     expect(m.hn()).toMatchObject({ currentVersion: VERSION, isInstalledCopy: true })
     expect(m.calls[0]).toMatch(new RegExp(`^\\[update\\] self-update on · v${VERSION.replace(/\./g, '\\.')} · every \\d+s`))
     service.stop()

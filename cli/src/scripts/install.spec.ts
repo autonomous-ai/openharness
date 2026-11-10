@@ -309,6 +309,36 @@ describe("scripts/install.sh command contract", () => {
     expect(source).not.toContain("deb.nodesource.com");
   });
 
+  // A fake `node` that only answers `-e` with a major version is enough: node_major reads nothing else.
+  const nodeSelection = (major: string) => {
+    const source = readFileSync(installer, "utf8");
+    const scratch = mkdtempSync(join(tmpdir(), "harness-node-floor-"));
+    try {
+      const runtime = join(scratch, "runtime");
+      const node = join(runtime, `node-v${major}`, "bin", "node");
+      mkdirSync(join(runtime, `node-v${major}`, "bin"), { recursive: true });
+      writeCommand(join(runtime, `node-v${major}`, "bin"), "node", [`printf ${major}`, "echo"]);
+      writeFileSync(join(runtime, "current-node"), `${node}\n`);
+      const script = source.slice(source.indexOf("# Prints the major version"), source.indexOf("if [ -z \"$NODE_BIN\" ]; then\n  # Fetch"));
+      const out = spawnSync("/bin/sh", ["-c", `RUNTIME_DIR='${runtime}'; CURRENT_NODE_FILE="$RUNTIME_DIR/current-node"; ${script}\nprintf '[%s]' "$NODE_BIN"`], {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin", HOME: scratch },
+      });
+      return { node, stdout: out.stdout };
+    } finally { rmSync(scratch, { recursive: true, force: true }); }
+  };
+
+  it("replaces a managed Node below 24 and keeps one that is 24", () => {
+    const old = nodeSelection("22");
+    expect(old.stdout).toContain("[]");
+    const current = nodeSelection("24");
+    expect(current.stdout).toContain(`[${current.node}]`);
+  });
+
+  it("names the floor an explicit Node override fails", () => {
+    expect(readFileSync(installer, "utf8")).toContain("is older than Node 24");
+  });
+
   it("refuses an unverified Node archive", () => {
     const source = readFileSync(installer, "utf8");
 

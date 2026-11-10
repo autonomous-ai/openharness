@@ -1041,6 +1041,25 @@ export function npmRuntimeBins(runtimeNode: string = managedNodePath()): string[
   return [...new Set([dirname(runtimeNode), dirname(baseNode(process.execPath))])]
 }
 
+const NODE_FOLDER = /^node-v(\d+)\.(\d+)\.(\d+)-/
+
+/**
+ * Where an npm engine may sit: the current runtime's folders, then every other managed Node under the runtime directory,
+ * newest first. A Node upgrade lays down a new folder and leaves the old one, with the engines installed under it; those
+ * still run, so looking only beside the current Node called them missing and reinstalled them. Only for finding an
+ * executable: the pane's `node` stays the current runtime's ([npmRuntimeBins]).
+ */
+export function npmEngineBins(runtimeNode: string = managedNodePath()): string[] {
+  const current = npmRuntimeBins(runtimeNode)
+  let folders: string[] = []
+  try { folders = readdirSync(env.ADAPTER_RUNTIME_DIR) } catch { /* no runtime directory yet: only the current folders */ }
+  const version = (name: string) => NODE_FOLDER.exec(name)!.slice(1).map(Number)
+  const older = folders.filter((name) => NODE_FOLDER.test(name))
+    .sort((a, b) => { const [x, y] = [version(a), version(b)]; return (y[0] - x[0]) || (y[1] - x[1]) || (y[2] - x[2]) })
+    .map((name) => join(env.ADAPTER_RUNTIME_DIR, name, ...(process.platform === 'win32' ? [] : ['bin'])))
+  return [...new Set([...current, ...older])]
+}
+
 function npmRuntimePrelude(recipe: EngineInstallRecipe, runtimeNode: string): string {
   if (!recipe.executable.npmGlobal) return ''
   const bins = npmRuntimeBins(runtimeNode)

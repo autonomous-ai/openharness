@@ -26,7 +26,7 @@ upload-desktop:
 upload-desktop-linux:
 	TARGET_ARCH="$(ARCH)" bash scripts/upload-desktop-linux.sh $(ARGS)
 
-## upload-node-runtime: publish checksum-verified managed Node runtimes for desktop bootstrap.
+## upload-node-runtime: publish checksum-verified managed Node runtimes to the staging manifest (production: explicit METADATA_PATH, after the staging E2E).
 upload-node-runtime:
 	bash scripts/publish-managed-node-runtime.sh $(ARGS)
 

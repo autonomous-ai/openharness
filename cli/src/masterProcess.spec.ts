@@ -39,14 +39,14 @@ const LEAN: LeanBundle = { files: new Map([[LEAN_ENTRY, Buffer.from('lean')]]), 
 const PRINT = leanFingerprint(LEAN)
 
 function deps(over: Partial<Deps> = {}) {
-  const calls = { starts: [] as unknown[], execs: [] as Array<{ file: string; args: string[]; env: NodeJS.ProcessEnv }>, logs: [] as string[], probes: [] as Array<{ path: string; env: NodeJS.ProcessEnv }> }
+  const calls = { starts: [] as unknown[], execs: [] as Array<{ file: string; args: string[]; env: NodeJS.ProcessEnv }>, logs: [] as string[], probes: [] as Array<{ node: string; path: string; env: NodeJS.ProcessEnv }> }
   const given: Deps = {
     env: { HOME: '/home/someone' },
     leanOff: () => false,
     exists: () => true,
     read: () => Buffer.from('cli.js'),
     write: () => '/data/lean/harnessd-aaaa.mjs',
-    probe: (path, env) => { calls.probes.push({ path, env }); return { ok: true, detail: PROBE_ANSWER } },
+    probe: (node, path, env) => { calls.probes.push({ node, path, env }); return { ok: true, detail: PROBE_ANSWER } },
     execve: (file, args, env) => { calls.execs.push({ file, args, env }) },
     start: (start) => { calls.starts.push(start) },
     log: (line) => { calls.logs.push(line) },
@@ -62,7 +62,7 @@ describe('a master started on cli.js', () => {
     const { given, calls } = deps()
     startMasterFromBundle('/cli/cli.js', given)
     const handed = { HOME: '/home/someone', [BUNDLE_ENV]: '/cli/cli.js', [BUNDLE_SHA256_ENV]: 'b'.repeat(64), [LEAN_FINGERPRINT_ENV]: PRINT }
-    expect(calls.probes).toEqual([{ path: '/data/lean/harnessd-aaaa.mjs', env: handed }])
+    expect(calls.probes).toEqual([{ node: process.execPath, path: '/data/lean/harnessd-aaaa.mjs', env: handed }])
     expect(calls.execs).toEqual([{ file: process.execPath, args: [process.execPath, ...process.execArgv, '/data/lean/harnessd-aaaa.mjs', '__harnessd'], env: handed }])
     expect(calls.starts).toEqual([])
     expect(calls.logs).toEqual([])
@@ -77,6 +77,34 @@ describe('a master started on cli.js', () => {
     startMasterFromBundle('/cli/cli.js', gone.given)
     expect(gone.calls.execs).toEqual([])
     expect(gone.calls.logs).toEqual([expect.stringContaining(`${named} is not there to re-execute on`)])
+  })
+
+  it('probes and execs on the managed Node 24 while this process runs on an older one, and stays on its own otherwise', () => {
+    // The suite's own runtime folder (vitest.setup.ts). A name link is all the exec needs of the binary: an empty file.
+    const runtime = env.ADAPTER_RUNTIME_DIR
+    const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
+    const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
+    try {
+      for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); writeFileSync(node, '', { mode: 0o755 }) }
+      writeFileSync(join(runtime, 'current-node'), `${v24}\n`)
+      const link = join(runtime, 'node-v24.22.2-test', 'libexec', 'harnessd', 'harnessd')
+      const moving = deps({ node: processBundleDeps().node })
+      startMasterFromBundle('/cli/cli.js', moving.given)
+      expect(moving.calls.probes.map(({ node }) => node)).toEqual([link])
+      expect(moving.calls.execs.map(({ file, args }) => [file, args[0]])).toEqual([[link, link]])
+      // A Node that cannot re-execute runs the master itself: the probe is of the Node it runs on.
+      const kept = deps({ node: processBundleDeps().node, execve: null })
+      startMasterFromBundle('/cli/cli.js', kept.given)
+      expect(kept.calls.probes.map(({ node }) => node)).toEqual([process.execPath])
+      // The managed Node below the minimum (a rollback put it back, or there is no Node 24 for this computer): this one.
+      writeFileSync(join(runtime, 'current-node'), `${v22}\n`)
+      const staying = deps({ node: processBundleDeps().node })
+      startMasterFromBundle('/cli/cli.js', staying.given)
+      expect(staying.calls.probes.map(({ node }) => node)).toEqual([process.execPath])
+      expect(staying.calls.execs.map(({ file }) => file)).toEqual([process.execPath])
+    } finally {
+      for (const path of [join(runtime, 'current-node'), dirname(dirname(v22)), dirname(dirname(v24))]) rmSync(path, { recursive: true, force: true })
+    }
   })
 
   it('runs from cli.js, with the services still from the lean bundle, where this Node cannot re-execute', () => {
@@ -152,7 +180,7 @@ describe('a master started on cli.js', () => {
     // The data folder is a test's own (vitest.setup.ts).
     const written = real.write(LEAN)
     expect(written.startsWith(LEAN_DIR)).toBe(true)
-    expect(real.probe(written, process.env).ok).toBe(false)
+    expect(real.probe(process.execPath, written, process.env).ok).toBe(false)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     real.log('[harnessd] a line')
     expect(log.mock.calls[0][0]).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[harnessd\] a line$/)
@@ -402,13 +430,13 @@ describe('the probe of a lean bundle', () => {
   }
 
   it('passes when it answers as a master would, and says why it did not otherwise', () => {
-    expect(probeLean(script(`if (process.argv[2] === '__harnessd-probe' && process.env.HANDED === 'yes') console.log(${JSON.stringify(PROBE_ANSWER)})`), { ...process.env, HANDED: 'yes' }))
+    expect(probeLean(process.execPath, script(`if (process.argv[2] === '__harnessd-probe' && process.env.HANDED === 'yes') console.log(${JSON.stringify(PROBE_ANSWER)})`), { ...process.env, HANDED: 'yes' }))
       .toEqual({ ok: true, detail: PROBE_ANSWER })
-    expect(probeLean(script(`console.error('it broke'); process.exit(3)`), process.env)).toEqual({ ok: false, detail: 'it broke' })
-    expect(probeLean(script(`console.log('something else')`), process.env)).toEqual({ ok: false, detail: 'something else' })
-    expect(probeLean(script(''), process.env)).toEqual({ ok: false, detail: 'exit 0' })
-    expect(probeLean(script(`process.kill(process.pid, 'SIGKILL')`), process.env)).toEqual({ ok: false, detail: 'signal SIGKILL' })
-    expect(probeLean(script('setInterval(() => {}, 1000)'), process.env, 200).ok).toBe(false)
+    expect(probeLean(process.execPath, script(`console.error('it broke'); process.exit(3)`), process.env)).toEqual({ ok: false, detail: 'it broke' })
+    expect(probeLean(process.execPath, script(`console.log('something else')`), process.env)).toEqual({ ok: false, detail: 'something else' })
+    expect(probeLean(process.execPath, script(''), process.env)).toEqual({ ok: false, detail: 'exit 0' })
+    expect(probeLean(process.execPath, script(`process.kill(process.pid, 'SIGKILL')`), process.env)).toEqual({ ok: false, detail: 'signal SIGKILL' })
+    expect(probeLean(process.execPath, script('setInterval(() => {}, 1000)'), process.env, 200).ok).toBe(false)
   })
 })
 
@@ -426,6 +454,30 @@ describe('starting the master', () => {
     expect((runMaster.mock.calls[0][0] as { updater: boolean }).updater).toBe(true)
     expect(LEAN_DIR).toMatch(/[\\/]lean$/)
     expect(LEAN_OFF_FILE).toMatch(/[\\/]lean-off$/)
+  })
+
+  it('on Windows, a failed update names the Node before in current-node, which the handover\'s launcher starts the next master on', () => {
+    const runtime = env.ADAPTER_RUNTIME_DIR
+    const cli = env.ADAPTER_CLI_DIR
+    const v22 = join(runtime, 'node-v22.23.2-test', 'node.exe')
+    const v24 = join(runtime, 'node-v24.22.2-test', 'node.exe')
+    try {
+      for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); writeFileSync(node, '', { mode: 0o755 }) }
+      // What the updater left: Node 24 in current-node, and the update's note naming the Node the daemon ran on.
+      writeFileSync(join(runtime, 'current-node'), `${v24}\r\n`)
+      mkdirSync(cli, { recursive: true })
+      writeFileSync(join(cli, 'update-pending.json'), JSON.stringify({ version: '9.9.9', sha256: 'a'.repeat(64), previousNode: v22 }))
+      runMaster.mockClear()
+      startMaster({ scriptPath: '/cli/cli.js' }, () => {}, 'win32', () => ({}))
+      const config = runMaster.mock.calls[0][0] as { restoreUpdate(): string | null }
+      expect(config.restoreUpdate()).toBe(v22)
+      expect(readFileSync(join(runtime, 'current-node'), 'utf8').trim()).toBe(v22)
+      expect(existsSync(join(cli, 'update-pending.json'))).toBe(false)
+    } finally {
+      for (const path of [join(runtime, 'current-node'), join(cli, 'update-pending.json'), join(cli, 'update-rejected.json'), join(cli, 'node-migration.json'), dirname(v22), dirname(v24)]) {
+        rmSync(path, { recursive: true, force: true })
+      }
+    }
   })
 
   it('on Windows, judges a terminal host on probation with the build: unjudged at start, rolled back, kept', () => {

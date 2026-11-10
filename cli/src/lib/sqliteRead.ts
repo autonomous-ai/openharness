@@ -4,7 +4,7 @@
  *
  * Two ways in, tried in this order:
  *
- *  1. `node:sqlite` (`sqliteBuiltin.ts`, eagerly available for hook admission) — built into the Node the installers ship (22.23, see `runtime/current-node`),
+ *  1. `node:sqlite` (`sqliteBuiltin.ts`, eagerly available for hook admission) — built into the Node the installers ship (24.22, see `runtime/current-node`; `node:sqlite` and `busy_timeout` probed on 22.23.2 and 24.22.2),
  *     and into any Node ≥ 22.13 without a flag. In-process, parameterised, no JSON round-trip: the
  *     query that hung the `sqlite3` CLI for good on one machine (an opencode session with a ~7.5 MB
  *     row) finishes here in tens of milliseconds. The binding is SYNCHRONOUS — it blocks the event

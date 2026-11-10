@@ -293,7 +293,7 @@ class EnvironmentPlanItem {
 
   static const harnessCli = EnvironmentPlanItem(
     step: EnvironmentStep.harness,
-    title: 'Managed Node 20+ & Harness CLI',
+    title: 'Managed Node 24+ & Harness CLI',
     detail: '~/.harness only',
     command: kHarnessDesktopInstallCommand,
   );
@@ -302,7 +302,7 @@ class EnvironmentPlanItem {
   /// terminal host, so either item alone runs the same command.
   static final windowsHarnessCli = EnvironmentPlanItem(
     step: EnvironmentStep.harness,
-    title: 'Managed Node 20+ & Harness CLI',
+    title: 'Managed Node 24+ & Harness CLI',
     detail: r'%USERPROFILE%\.harness only',
     command: windowsManualInstallCommand(harnessInstallScriptUrl()),
   );
@@ -634,10 +634,10 @@ class EnvironmentProvisioner {
                   '$_minimumCliVersion or newer.'
             : 'Harness CLI or its managed Node runtime is missing.',
         output: probe.harnessRuns
-            ? '✓ managed Node >= 20 · harness version'
+            ? '✓ managed Node >= 24 · harness version'
             : _harnessOutdated != null
             ? '✗ harness $_harnessOutdated < $_minimumCliVersion'
-            : '✗ managed Node >= 20 · harness version',
+            : '✗ managed Node >= 24 · harness version',
         plan: probe.plan,
       );
       return probe;
@@ -1489,11 +1489,11 @@ fi''';
     }
   }
 
-  /// Node 20 or newer answered `--version`.
+  /// Node 24 or newer answered `--version`.
   static bool _nodeRuns(ProcessResult node) {
     if (node.exitCode != 0) return false;
     final match = RegExp(r'^v?(\d+)').firstMatch('${node.stdout}'.trim());
-    return match != null && int.parse(match.group(1)!) >= 20;
+    return match != null && int.parse(match.group(1)!) >= 24;
   }
 
   /// `harness version` answered with a version this app runs against, and

@@ -338,7 +338,7 @@ InstallFailure describeInstallFailure(DshInstallRun run, String harnessName) {
       body: text,
       command: _onWindows
           ? 'winget install --id OpenJS.NodeJS.LTS -e'
-          : 'brew install node@22',
+          : 'brew install node@24',
     );
   }
   if (lower.contains('doctor still running')) {

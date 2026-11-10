@@ -17,6 +17,7 @@ import 'package:harness/settings/sections/about_section.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/update/desktop_updater.dart';
+import 'package:harness/ws/daemon_node.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -123,5 +124,31 @@ void main() {
     // Still an error about *this* update, so the version it failed on must not
     // read as if it were still simply on offer.
     expect(find.text('1.0.4 available'), findsNothing);
+  });
+
+  testWidgets('the status row shows the Node version and why it stayed on 22', (
+    tester,
+  ) async {
+    final notifier = await pumpAbout(tester);
+    expect(find.textContaining('Node '), findsNothing);
+
+    notifier.ownDaemonMachineIdForTest(
+      'm1',
+      node: const DaemonNode('v24.22.2'),
+    );
+    notifier.notifyListeners();
+    await tester.pump();
+    expect(find.text('Node v24.22.2'), findsOneWidget);
+
+    notifier.ownDaemonMachineIdForTest(
+      'm1',
+      node: const DaemonNode('v22.23.2', 'download-failed'),
+    );
+    notifier.notifyListeners();
+    await tester.pump();
+    expect(
+      find.text('Node v22.23.2 · stays on 22: the download failed'),
+      findsOneWidget,
+    );
   });
 }
