@@ -153,6 +153,33 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, \d\d:\d\d: READ-OK f6edb44"\.$/)])
   })
 
+  // A reader is one however it writes its name: a HOLD as "Kai Lee" stood for good after its READ-OK as "kai-lee".
+  it('lets a reader\'s later READ-OK lift its own HOLD however it writes its name', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Kai Lee, 14:10: HOLD f6edb44 fix the test'),
+      comment('kai-lee, 14:30: READ-OK f6edb44', { created_at: '2026-11-09T12:30:00Z' })])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  it('never lets a signed READ-OK lift an unsigned HOLD of a login whose name reads the same, nor the other way round', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('HOLD f6edb44 the test fails', { user: { login: 'kai-lee' } }),
+      comment('Kai Lee, 14:30: READ-OK f6edb44', { user: { login: 'kenmore' }, created_at: '2026-11-09T12:30:00Z' })])
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+  })
+
+  it('knows a team agent posting as the opener\'s login however it writes its name, so its own READ-OK lifts its own HOLD', async () => {
+    const f = setup()
+    f.crew.mockResolvedValue({ builders: [{ id: 'pip', name: 'Pip', label: 'builder:pip', machineId: 'mac', engine: 'claude' },
+      { id: 'kai', name: 'Kai Lee', label: 'builder:kai-lee', machineId: 'mac', engine: 'codex' }], machines: [] })
+    f.github.repo.pulls = [pull({ user: { login: 'deehw' } })]
+    f.github.repo.comments.set(4, [comment('Kai Lee, 14:10: HOLD f6edb44 fix the test'), comment('KaiLee, 14:30: READ-OK f6edb44', { created_at: '2026-11-09T12:30:00Z' })])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
   it('counts a reader who signs its name two ways once for TWO READS', async () => {
     const f = setup()
     f.github.repo.pulls = [pull({ body: 'Closes #2\n\nTWO READS: it changes the default voice.' })]

@@ -272,6 +272,16 @@ describe('Harness gives a team\'s tasks to its builders (githubAssign.ts)', () =
       expect(asks(f)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*Atlas\*\*: please read this pull request, and start your comment with your name, as in "Atlas, \d\d:\d\d: READ-OK f6edb44"/)])
     })
 
+    // The reader Harness asked as "Kai Lee" and that answered as "kai-lee" is one: it read, and is not still waited for.
+    it('knows a reader it asked by its verdict however it writes its name, and asks another for TWO READS', async () => {
+      const f = setup([], { crew: team })
+      f.github.state.pulls = [pull({ body: 'Closes #14. TWO READS' })]
+      f.github.state.comments.set(30, [comment('Harness, 07:20, to **Kai Lee**: please read this pull request, and start your comment with READ-OK f6edb44 '
+        + 'or HOLD f6edb44 (with the file, line and fix).', { created_at: '2026-11-09T07:20:00Z' }), comment('kai-lee, 07:25: READ-OK f6edb44', { created_at: '2026-11-09T07:25:00Z' })])
+      await f.assigner.tick()
+      expect(asks(f)).toEqual([expect.stringMatching(/to \*\*Atlas\*\*: please read this pull request/)])
+    })
+
     it('asks none of a pull request\'s writers to read it: its label\'s agent nor its branch\'s', async () => {
       const f = setup([], { crew: team })
       f.github.state.pulls = [pull({ labels: [{ name: 'builder:atlas' }], head: { sha: HEAD, ref: 'juno/14' } })]
