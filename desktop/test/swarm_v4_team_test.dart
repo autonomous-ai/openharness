@@ -92,6 +92,14 @@ void main() {
   Future<void> look(WidgetTester tester, String name) =>
       captureWindow(tester, shots, 'team-$name');
 
+  /// Opens the rows past Your Team's first eight, as its person does with "N more".
+  Future<void> more(WidgetTester tester) async {
+    await tester.ensureVisible(key('super-team-more'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('super-team-more'));
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('forty agents: the list scrolls, Manage stays at the foot', (
     tester,
   ) async {
@@ -102,6 +110,7 @@ void main() {
     expect(key('super-agent-zed'), findsNothing);
     expect(find.text('Manage'), findsOneWidget);
     await look(tester, 'top');
+    await more(tester);
     await tester.dragUntilVisible(
       key('super-agent-zed'),
       sidebar,
@@ -136,6 +145,7 @@ void main() {
     'an agent far down is deleted from its row, and the list stays whole',
     (tester) async {
       final c = await openSwarmV4(tester, forty(), machines: computers);
+      await more(tester);
       await tester.dragUntilVisible(
         key('super-agent-wes'),
         sidebar,
