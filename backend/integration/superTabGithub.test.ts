@@ -17,6 +17,7 @@ import { GitHubTokens, MemoryTokenCache } from '../src/github/tokens.js'
 import { OWNER_CHECKS_PER_MINUTE, resetOwnerChecks } from '../src/github/repositoryCreate.js'
 import { fakeApp, fakeGitHub, throwawayKey } from '../src/github/fakeGitHub.js'
 import { poolRows } from './hostRows.test-support.js'
+import { storeAssignment } from './storedWork.test-support.js'
 import { logger } from '../src/utils/logger.js'
 
 // The Harness GitHub App's token endpoint on the real control API: a fresh loopback MongoDB and a fake GitHub. This suite
@@ -121,7 +122,7 @@ async function working(env: Env, repositoryUrl: string | null = 'https://github.
     checks: [{ description: 'Search works', independent: false }] } as Command)).result.conversationId)
   const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'gh-host', harnessId: randomUUID(),
     name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
-  const assignmentId = String((await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)).result.assignmentId)
+  const assignmentId = (await storeAssignment(db, tab, group, worker)).id
   return { tab, group, worker, assignmentId }
 }
 const ask = (env: Env, tab: string, agentId: string | null, machineId = 'gh-host', user = host) => env.app.inject({ method: 'POST',
@@ -152,7 +153,7 @@ describe('the GitHub token endpoint', () => {
   })
 
   // Security reviews 1 and 2 of #2492: who asked for a group changes no token. The owner's email is the gate and the commits
-  // name the owner, as on main; only each task's message names its requester (projects.ts requestedByLine).
+  // name the owner, as on main.
   it('gives the token and owner trailers whoever asked, and refuses it when the owner has no email, though the requester has one', async () => {
     const env = await fresh()
     const tab = (await env.store.create(owner, randomUUID(), 'Pilot')).id
@@ -163,7 +164,7 @@ describe('the GitHub token endpoint', () => {
       requesterId: host.sub } as Command)).result.conversationId)
     const worker = String((await env.run(tab, { type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(),
       name: 'Builder', configuration: config, lead: false } as Command)).result.agentId)
-    await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)
+    await storeAssignment(db, tab, group, worker)
     const given = await ask(env, tab, worker, 'owner-mac', owner)
     expect(given.statusCode, given.body).toBe(200)
     expect(given.json().data).toMatchObject({ requestedBy: { name: 'Olive Owner', email: owner.email },
@@ -269,8 +270,8 @@ describe('the GitHub token endpoint', () => {
   })
 })
 
-// What was the start token's describe: a queued start for approvals, and an agent's token for a resumed task (slice S6 left both).
-describe('approving a repository, and a resumed task\'s token', () => {
+// What was the start token's describe: a queued start for approvals (slice S6 left it).
+describe('approving a repository', () => {
   const observed = { resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9,
     projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null }, quotas: [], tools: { git: true },
     runningHarnessIds: [], stoppedHarnessIds: [] }
@@ -366,27 +367,6 @@ describe('approving a repository, and a resumed task\'s token', () => {
     expect(await read(owner, 'lead')).not.toHaveProperty('approvedFor')
   })
 
-  // Security re-check of #1976: a task lost to a usage limit keeps its id when it resumes, and its loss marked it ended,
-  // so after resuming it was refused GitHub tokens for 70 minutes.
-  it('gives a task resumed after a usage limit a fresh token, while the one from before the loss stays revoked', async () => {
-    const env = await fresh()
-    const { tab, group, worker, assignmentId } = await working(env)
-    const before = await ask(env, tab, worker)
-    expect(before.statusCode, before.body).toBe(200)
-    const resetAt = new Date(Date.now() + 1500).toISOString()
-    await env.run(tab, { type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt } as Command, host, worker)
-    await env.settled()
-    expect(env.github.revoked).toContain(before.json().data.token)
-    const lostAt = (await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.lost!.at
-    await new Promise(done => setTimeout(done, Date.parse(resetAt) - Date.now() + 50))
-    await env.run(tab, { type: 'work.resume', conversationId: group, assignmentId, lostAt } as Command, host, worker)
-    await env.settled()
-    const after = await ask(env, tab, worker)
-    expect(after.statusCode, after.body).toBe(200)
-    expect(after.json().data.token).not.toBe(before.json().data.token)
-    expect(env.github.issued.has(before.json().data.token)).toBe(false)
-  })
-
   it('says when the server cannot approve, and refuses a project not on GitHub', async () => {
     const env = await fresh({ approveAll: false })
     const { tab } = await queued(env)
@@ -394,10 +374,6 @@ describe('approving a repository, and a resumed task\'s token', () => {
       headers: { authorization: `Bearer ${owner.sub}` }, payload: { scope: 'swarm' } })
     expect(none.json().error).toMatchObject({ code: 'GITHUB_APPROVAL_NOT_CONFIGURED' })
   })
-
-
-
-
 })
 
 describe('revoking the token when the task ends', () => {
@@ -406,33 +382,6 @@ describe('revoking the token when the task ends', () => {
     const token = (await ask(env, work.tab, work.worker)).json().data.token as string
     return { ...work, token }
   }
-
-  it('revokes on done', async () => {
-    const env = await fresh()
-    const { tab, group, worker, assignmentId, token } = await issued(env)
-    const checkId = (await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await env.run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'npm test passed' } as Command, host, worker)
-    await env.run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready' } as Command, host, worker)
-    await env.settled()
-    // Out for review is still the Builder's task.
-    expect(env.github.revoked).toEqual([])
-    await env.run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Merged' } as Command, host, worker)
-    await env.settled()
-    expect(env.github.revoked).toEqual([token])
-    expect((await ask(env, tab, worker)).json().error.code).toBe('NO_ASSIGNMENT')
-  })
-
-  it('revokes on cancel, and a reassigned task gets a new token', async () => {
-    const env = await fresh()
-    const { tab, group, worker, assignmentId, token } = await issued(env)
-    await env.run(tab, { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Not needed' } as Command)
-    await env.settled()
-    expect(env.github.revoked).toEqual([token])
-    await env.run(tab, { type: 'agent.release', agentId: worker, decision: 'keep' } as Command).catch(() => undefined)
-    await env.run(tab, { type: 'work.assign', conversationId: group, agentId: worker } as Command)
-    const again = (await ask(env, tab, worker)).json().data.token
-    expect(again).not.toBe(token)
-  })
 
   it('revokes when the host confirms the agent stopped', async () => {
     const env = await fresh()
@@ -454,9 +403,9 @@ describe('revoking the token when the task ends', () => {
     const env = await fresh()
     const { tab, group, assignmentId, token } = await issued(env)
     env.github.control.revokeStatus = 502
-    await env.run(tab, { type: 'work.cancel', conversationId: group, assignmentId, reason: 'Not needed' } as Command)
+    await env.store.stopped(host, tab, assignmentId, 'fixture stop receipt')
     await env.settled()
-    expect((await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.status).toBe('cancelled')
+    expect((await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.status).toBe('stopped')
     expect(env.github.revoked).toEqual([])
     expect(env.log.warn).toHaveBeenCalledWith('[github] token revoke failed', expect.objectContaining({ tabId: tab, repository: 'example/app', why: 'task ended' }))
     expect(JSON.stringify(env.log.warn.mock.calls)).not.toContain(token)

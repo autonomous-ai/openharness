@@ -297,7 +297,7 @@ export function applyCrewKeep(state: SuperTabState, now: number, deps: CrewDeps)
   return drafts
 }
 
-/** New work for an asleep crew member wakes it (work.assign): its host reopens the session in place. The reopen grace counts
+/** An asleep agent woken for work (a Buddy's, buddySleep.ts and buddyEngine.ts): its host reopens the session in place. The reopen grace counts
  *  from now (#3397's CREW_REOPEN_GRACE_MS from downSince), so the task is not lost while it reopens. Whether it was asleep. */
 export function wakeCrewMember(agent: Agent, now: number): boolean {
   if (!agent.asleep) return false

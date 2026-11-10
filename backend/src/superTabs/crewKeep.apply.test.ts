@@ -3,6 +3,7 @@ import { applyCommand, type Command } from './commands.js'
 import { applyCrewKeep } from './crewKeep.js'
 import { config, fixture, machine, NOW, person } from './crewKeep.test-support.js'
 import { activeWork, type SuperTabState } from './model.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const everywhere = { admits: () => true }
 const host = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
@@ -13,8 +14,8 @@ const run = (state: SuperTabState, command: Command, operationId: string, now = 
 function working(f: ReturnType<typeof fixture>) {
   f.state = run(f.state, { type: 'conversation.create', title: 'Fix it', brief: 'Fix the thing', checks: [] } as Command, 'task-1', NOW - 3_600_000)
   const task = f.state.conversations.find(c => c.title === 'Fix it')!
-  f.state = run(f.state, { type: 'work.assign', conversationId: task.id, agentId: f.ada.id } as Command, 'assign-1', NOW - 60_000)
-  return f.state.conversations.find(c => c.id === task.id)!
+  storedAssignment(f.state, task.id, f.ada.id, NOW - 60_000)
+  return task
 }
 
 describe('applying the crew keeper in the Swarm\'s sweep', () => {
@@ -52,18 +53,6 @@ describe('applying the crew keeper in the Swarm\'s sweep', () => {
 })
 
 describe('waking and moving through commands', () => {
-  it('new work wakes an asleep crew member in place, and a moving one takes none', () => {
-    const f = fixture()
-    f.ada.asleep = { since: NOW - 7_200_000 }
-    const task = working(f)
-    const ada = f.state.agents.find(a => a.id === f.ada.id)!
-    expect(ada.asleep).toBeUndefined()
-    expect(activeWork(task) && task.assignment!.agentId).toBe(ada.id)
-    const moving = fixture()
-    moving.ada.movedTo = { machineId: 'mini', startId: 's', reason: 'offline', at: NOW - 1000 }
-    expect(() => working(moving)).toThrow(/moving/)
-  })
-
   it('a moved member\'s new session takes over: same name, crew and groups, its task lost to be handed on, the old session closed', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
     const task = working(f)

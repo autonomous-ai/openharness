@@ -95,17 +95,13 @@ it.each(['autoApprove', 'review'] as const)('new member → Buddy → PM proposa
   if (mode === 'review') {
     await execute({ type: 'task.suggest', conversationId: task, agentId: worker }, owner, pm)
     expect(await row(task)).toMatchObject({ status: 'proposal', canApprove: true, suggested: true, agent: { id: worker } })
-    await expect(execute({ type: 'work.assign', conversationId: task, agentId: worker }, owner, pm)).rejects.toMatchObject({ code: 'TASK_APPROVAL_REQUIRED' })
     await expect(execute({ type: 'task.approve', conversationId: task }, owner, pm)).rejects.toMatchObject({ code: 'TASK_APPROVAL_FORBIDDEN' })
     const rejected = await convert('Another draft')
     await execute({ type: 'task.suggest', conversationId: rejected, agentId: worker }, owner, pm)
     await execute({ type: 'task.reject', conversationId: rejected, reason: 'Keep this for later' }, member)
     expect(await row(rejected)).toMatchObject({ status: 'rejected', canApprove: false, reason: 'Keep this for later' })
-    await expect(execute({ type: 'work.assign', conversationId: rejected, agentId: worker }, owner, pm)).rejects.toMatchObject({ code: 'TASK_APPROVAL_REQUIRED' })
     await execute({ type: 'task.approve', conversationId: task }, member)
   }
-  await execute({ type: 'work.assign', conversationId: task, agentId: worker }, owner, pm)
-  expect(await row(task)).toMatchObject({ status: 'working', canApprove: false, agent: { id: worker } })
 
   expect((await reads.firstLoad(owner, tab)).personalTasks!.upserts).toEqual([])
 })
