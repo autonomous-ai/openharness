@@ -27,9 +27,14 @@ export interface Person {
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Nothing sets a chosen one any
    *  more (2026-11-09): those chosen before stay. Only members read it. */
   username?: string
-  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Nothing sets one any more
-   *  (2026-11-09): those set before stay. Only members read it. */
+  /** The name they show (personNames.ts), such as "Minh Nguyen": their account's name since 2026-11-10, written when they join and
+   *  whenever they rename their account (nameFromAccount); absent, the Swarm shows their username. Only members read it. */
   name?: string
+  /** The name they chose in this Swarm before it followed their account (2026-11-09), kept as it was and read by nothing. Can go
+   *  from 2026-12-10. */
+  chosenName?: string
+  /** Their [name] is their account's, so a name kept in it is no longer one they chose here. */
+  nameFollowsAccount?: true
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
 }

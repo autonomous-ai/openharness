@@ -4,7 +4,7 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { split } from './parts/shape.js'
 import { readerView } from './read/views.js'
 import { actorName } from './activity.js'
-import { authorForAgent, lazyUsernames, namesPerson, nameRefusal, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
+import { authorForAgent, lazyUsernames, nameFromAccount, namesPerson, nameRefusal, rowForAgent, shownNameOf, writtenNameOf } from './personNames.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'Ken15@autonomous.ai' }
@@ -112,6 +112,48 @@ describe('the name a person set', () => {
 
 // Task #2954 (Ken, 11-04): a person's message is stored with their email as its author's name, and agents copied it into
 // commands and pull request bodies until a machine's privacy hook stopped their sessions. An agent reads names instead.
+// anh Dee, 2026-11-10: with no editor left, a person's name in a Swarm follows their account's.
+describe('a name that follows the account', () => {
+  const someone = () => ({ id: 'p1', email: 'minh@example.com', role: 'collaborator' as const, generation: 'g' })
+
+  it('takes the account name, keeps a name chosen here before out of sight, and keeps it only once', () => {
+    const chose = { ...someone(), name: 'Minh (design)' }
+    expect(nameFromAccount(chose, ' Minh Nguyen ')).toBe(true)
+    expect(chose).toMatchObject({ name: 'Minh Nguyen', chosenName: 'Minh (design)', nameFollowsAccount: true })
+    expect(nameFromAccount(chose, 'Minh Tran')).toBe(true)
+    expect(chose).toMatchObject({ name: 'Minh Tran', chosenName: 'Minh (design)' })
+    expect(nameFromAccount(chose, 'Minh Tran')).toBe(false)
+  })
+
+  it('shows the username when the account has no name, and keeps no chosen name where there was none', () => {
+    const plain = someone()
+    expect(nameFromAccount(plain, null)).toBe(true)
+    expect(plain).toEqual({ ...someone(), nameFollowsAccount: true })
+    expect(nameFromAccount(plain, '  ')).toBe(false)
+    const named = { ...someone(), name: 'Minh' }
+    nameFromAccount(named, null)
+    expect(named).not.toHaveProperty('name')
+    expect(named.chosenName).toBe('Minh')
+  })
+
+  it('names them so everywhere the Swarm shows them, and an agent reads it', () => {
+    const f = fixture()
+    const stored = f.state.people.find(p => p.id === 'peer')!
+    nameFromAccount(stored, 'Dee Ho')
+    expect(f.shown('peer')).toBe('Dee Ho')
+    expect(writtenNameOf(f.state, 'peer')).toBe('Dee Ho')
+    expect(authorForAgent(f.state, { kind: 'person', id: 'peer' }, lazyUsernames(f.state)).displayName).toBe('Dee Ho')
+  })
+
+  it('takes the account name when an invitation is accepted', () => {
+    const f = fixture()
+    const newcomer = person('newcomer', 'nam@example.com')
+    const invited = f.run({ type: 'invite.create', email: newcomer.email, role: 'collaborator', conversationId: 'lead' })
+    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, newcomer, { accountName: 'Nam Le' })
+    expect(f.shown('newcomer')).toBe('Nam Le')
+  })
+})
+
 describe('a person author as an agent reads it', () => {
   const stored = (id: string, email: string) => ({ kind: 'person' as const, id, name: email, membershipGeneration: 'g' })
 

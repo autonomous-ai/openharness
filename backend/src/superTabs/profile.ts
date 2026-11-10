@@ -18,13 +18,14 @@ export const avatarView = (avatar: Avatar): AvatarView => avatar.kind === 'uploa
 export function withAvatarView<T extends { avatar?: Avatar }>(holder: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
   return holder.avatar ? { ...holder, avatar: avatarView(holder.avatar) } : holder
 }
-/** A person as readers get them: [withAvatarView], and without the status and time zone that Swarms from before v4 stored for them.
- *  Nothing sets either any more (2026-11-09) and no app draws them, so a status with no end would only haunt an older app for
- *  ever. A person with neither stored is read as `withAvatarView` always read them, with no copy. The stored values can go from
- *  2026-12-09. */
+/** A person as readers get them: [withAvatarView], and without the status and time zone that Swarms from before v4 stored for them,
+ *  or the name they chose before their name followed their account (personNames.ts nameFromAccount). Nothing sets a status or a
+ *  zone any more (2026-11-09) and no app draws them, so a status with no end would only haunt an older app for ever. A person with
+ *  none of these stored is read as `withAvatarView` always read them, with no copy. The stored values can go from 2026-12-09. */
 export function personView<T extends { avatar?: Avatar }>(holder: T): Omit<T, 'avatar'> & { avatar?: AvatarView } {
-  if (!('status' in holder) && !('timeZone' in holder)) return withAvatarView(holder)
-  const { status: _status, timeZone: _timeZone, ...rest } = holder as T & { status?: unknown; timeZone?: unknown }
+  if (!('status' in holder) && !('timeZone' in holder) && !('chosenName' in holder) && !('nameFollowsAccount' in holder)) return withAvatarView(holder)
+  const { status: _status, timeZone: _timeZone, chosenName: _chosen, nameFollowsAccount: _follows, ...rest } =
+    holder as T & { status?: unknown; timeZone?: unknown; chosenName?: unknown; nameFollowsAccount?: unknown }
   return withAvatarView(rest as T)
 }
 export const avatarChoice = z.discriminatedUnion('kind', [

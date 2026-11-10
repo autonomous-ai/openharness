@@ -14,7 +14,7 @@ import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
-import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
+import { authorForAgent, lazyUsernames, nameFromAccount, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -148,6 +148,9 @@ async function countersBefore(tx: Transaction, tabId: string, conversationId: st
 }
 const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
+/** The name of account [userId], which a person's name in a Swarm follows (personNames.ts nameFromAccount); null when it has none. */
+const accountNameOf = async (tx: Transaction, userId: string): Promise<string | null> =>
+  (await tx.user.findUnique({ where: { id: userId }, select: { name: true } }))?.name ?? null
 type SendCommand = Extract<Command, { type: 'message.send' }>
 /** How many of a project chat's newest rows are read to find the top-level line above a person's (thread replies come between). */
 const ABOVE_ROWS = 20
@@ -1196,6 +1199,7 @@ export class SuperTabStore {
         return { id, revision: prior.revision }
       }
       const state = createSuperTab(id, name, { id: user.sub, email: user.email }, user.autonomousEnv, projectVisibility)
+      nameFromAccount(state.people[0]!, await accountNameOf(tx, user.sub))
       // Born in parts: its state lives in the Swarm* parts, and `state` only fences older backends (schema.prisma).
       await tx.superTab.create({ data: { id, ownerId: user.sub, autonomousEnv: user.autonomousEnv, ...indexesOf(state), format: 2, state: { version: 2 } } })
       await insertParts(tx, split({ ...state, sequenceBase: 0 }, { tabId: id, version: 1, now: clock.next() }))
@@ -1259,7 +1263,9 @@ export class SuperTabStore {
       if (!domain || !email || emailDomain(email) !== domain || state.people.some(p => p.id === user.sub) ||
         state.autoJoinDeclined?.includes(user.sub) || state.people.length >= AUTO_JOIN_CAP) return 'skipped' as const
       const stamp = clock.next(), generation = stableId('auto-join', tabId, user.sub, String(stamp))
-      admitPerson(state, { id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' })
+      const person: Person = { id: user.sub, email, role: state.sharing!.access.role, generation, joinedVia: 'domain' }
+      nameFromAccount(person, await accountNameOf(tx, user.sub))
+      admitPerson(state, person)
       await this.save(tx, loaded, state, stamp, [{ kind: 'head', key: 'head' }])
       // People per Swarm is what warns first at scale (spec, Design 4).
       logger.info('[super-tab] auto-join', { tabId, userId: user.sub, people: state.people.length })
@@ -1269,6 +1275,43 @@ export class SuperTabStore {
       if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'skipped' as const
       throw error
     })
+  }
+
+  /** Makes the names of Swarm [tabId]'s people their accounts' (personNames.ts nameFromAccount): everyone's, or only [personId]'s.
+   *  One transaction, which writes only when a name changed; how many changed, or 'gone' for a Swarm no longer there. The worker's
+   *  one-time pass (migration/accountNamesJob.ts) and an account's rename (accountRenamed) call it. */
+  async followAccountNames(tabId: string, personId?: string): Promise<number | 'gone'> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt) return 'gone' as const
+      const loaded = await loadRow(tx, requireParts(row), {})
+      const ids = loaded.state.people.map(p => p.id).filter(id => personId === undefined || id === personId)
+      if (!ids.length) return 0
+      // A Swarm holds at most a few hundred people (AUTO_JOIN_CAP): one read by id.
+      const accounts = new Map((await tx.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(u => [u.id, u.name]))
+      const state = cloneData(loaded.state), changed = state.people.filter(p => ids.includes(p.id) && nameFromAccount(p, accounts.get(p.id)))
+      if (changed.length) await this.save(tx, loaded, state, clock.next(), changed.map(p => ({ kind: 'member' as const, key: p.id })))
+      return changed.length
+    })
+  }
+
+  /** Account [user] was renamed (routes/auth.ts): their name follows it in every Swarm they are in, 100 at a time. A Swarm that
+   *  fails is logged and the rest go on; how many Swarms changed and how many failed. */
+  async accountRenamed(user: AuthUser): Promise<{ changed: number; failed: number }> {
+    let changed = 0, failed = 0, after: string | undefined
+    for (;;) {
+      const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 100 })
+      for (const row of rows) {
+        try {
+          if (await this.followAccountNames(row.id, user.sub) === 1) changed++
+        } catch (error) {
+          failed++
+          logger.warn('[super-tab] a Swarm name did not follow its account', { tabId: row.id, code: error instanceof SuperTabError ? error.code : 'unknown' })
+        }
+      }
+      if (rows.length < 100) return { changed, failed }
+      after = rows.at(-1)!.id
+    }
   }
 
   async invitations(user: AuthUser) {
@@ -1358,6 +1401,7 @@ export class SuperTabStore {
       const alreadyMember = !!member
       if (!member) {
         member = { id: user.sub, email: authenticatedEmail(user.email)!, role: sharing.access.role, generation: receiptId }
+        nameFromAccount(member, await accountNameOf(tx, user.sub))
         admitPerson(state, member)
       }
       // A join by link or domain link is coming back on purpose: it clears a decline (spec 2026-11-03, Leaving is final).
@@ -1869,6 +1913,7 @@ export class SuperTabStore {
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
+      if (command.type === 'invite.accept' && actor.kind === 'person') context.accountName = await accountNameOf(tx, actor.userId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       // A Buddy settling its own question names its owner's answer in its chat (task #4525): that message, and whether it is
       // their newest there, by the chat's newest rows as buddy.propose reads them.

@@ -27,6 +27,7 @@ import { authRoutes } from './auth.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 import { SsoAuthError, type AuthUser } from '../lib/ssoAuth.js'
+import { onAccountRenamed } from '../superTabs/accountRenames.js'
 
 const elvis: AuthUser = { sub: 'u1', email: 'phorom12a@example.com', role: 'user', autonomousEnv: 'prod' }
 const team: AuthUser = { ...elvis, harnessSessionId: 's-team', harnessSessionKind: 'team', harnessComputerId: 'c'.repeat(32) }
@@ -66,6 +67,20 @@ describe('PATCH /api/auth/me: a person changes their own account name', () => {
     expect(response.statusCode).toBe(200)
     expect(response.json().data).toEqual({ user: expect.objectContaining({ id: 'u1', name: 'Elvis' }), avatarUrl: null, description: null })
     expect((await me('elvis')).user.name).toBe('Elvis')
+  })
+
+  // anh Dee, 2026-11-10: a person's name in each of their Swarms follows their account's (superTabs/personNames.ts).
+  it('has their Swarms follow the new name before it answers, and a refused name tells them nothing', async () => {
+    const told: AuthUser[] = []
+    onAccountRenamed(async user => { told.push(user) })
+    try {
+      expect((await patch('elvis', { name: 'https://ev.il' })).statusCode).toBe(400)
+      expect(told).toEqual([])
+      expect((await patch('elvis', { name: 'Elvis Tran' })).statusCode).toBe(200)
+      expect(told.map(user => user.sub)).toEqual(['u1'])
+    } finally {
+      onAccountRenamed(null)
+    }
   })
 
   it('changes only the caller\'s own row, whatever the body names', async () => {

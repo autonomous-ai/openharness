@@ -49,6 +49,7 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { markNothingNew } from '../lib/routeLatency.js'
 import { onMachineRenamed } from '../superTabs/machineRenames.js'
+import { onAccountRenamed } from '../superTabs/accountRenames.js'
 import { onComputerSignedIn } from '../superTabs/computerMoves.js'
 
 /** Runs a poll and marks its reply nothing-new for `route latency` when `empty` says so (spec 2026-11-02 poll cost, Part 0). */
@@ -318,6 +319,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const store = options.store ?? await productionStore(github, approvals)
   // A rename in Machines reaches the Swarms the machine is in at once (MachineService.rename).
   onMachineRenamed(rename => store.machineRenamed(rename))
+  // An account's rename: the person's name in each of their Swarms follows it (personNames.ts followAccountName).
+  onAccountRenamed(user => store.accountRenamed(user))
   // Another account's sign-in on a computer moves the computer's Swarm entries to it (computerMoves.ts).
   onComputerSignedIn(signIn => store.computerSignedIn(signIn))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })

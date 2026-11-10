@@ -18,7 +18,7 @@ import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { githubRelaySchema, relayGitHub } from './githubRelay.js'
 import { ownsBoard, readsProject, requireCanChat, requirePriorityRight, steers } from './boardRights.js'
 import { keepUsernames, swarmUsernames, usernameOf } from './usernames.js'
-import { agentWrittenNameOf, shownNameOf } from './personNames.js'
+import { agentWrittenNameOf, nameFromAccount, shownNameOf } from './personNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
 import {
@@ -731,6 +731,8 @@ export interface CommandContext {
   voiceWords?: Record<string, string>
   /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
   avatarUpload?: AvatarUpload
+  /** `invite.accept`'s person's account name, which their name in the Swarm follows (personNames.ts nameFromAccount). */
+  accountName?: string | null
   /** The message `message.react` names, read by the store (reactions.ts). */
   reaction?: ReactionTarget
   /** The message `message.edit` or `message.delete` names, read by the store (messageEdits.ts). */
@@ -1186,7 +1188,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const existing = state.people.find(p => p.id === actor.userId)
     if (!existing) {
       // A project from before ownerGeneration whose owner left is settled before they come back, never matched to them again.
-      admitPerson(state, { id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
+      const person: Person = { id: actor.userId, email: invite.email, role: invite.role, generation: invite.id }
+      nameFromAccount(person, context.accountName)
+      admitPerson(state, person)
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
     // Back on purpose: auto-join may add them again if they leave and the owner invites them once more (spec, Leaving is final).
