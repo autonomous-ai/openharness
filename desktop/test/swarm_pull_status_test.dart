@@ -34,10 +34,13 @@ void main() {
     bool intoDefault = true,
     String? opener,
     Set<String>? team,
+    String author = 'pip',
+    Set<String> writers = const {},
   }) => SwarmPull.statusOf(
     draft: draft,
     head: head,
-    author: 'pip',
+    author: author,
+    writers: writers,
     body: body,
     comments: comments,
     checks: checks,
@@ -161,6 +164,70 @@ void main() {
         expect(
           status(opener: 'deehw', team: team, comments: [said('HOLD f6edb44')]),
           SwarmPullStatus.held,
+        );
+      });
+
+      test('its writers are named as the merger names them: in any spelling, every builder label and the branch', () {
+        // A two-word author signing its own.
+        expect(
+          status(
+            opener: 'deehw',
+            team: const {'pip-two', 'juno'},
+            author: 'pip-two',
+            comments: [said('Pip Two, 10:00: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.review,
+        );
+        // A task taken over: Juno's label, Pip's branch; Pip is a writer too.
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            author: 'juno',
+            writers: SwarmPull.writersOf(const ['Builder:Juno'], 'pip/12'),
+            comments: [said('Pip, 10:00: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.review,
+        );
+        // A teammate who hyphenates their name is still a teammate.
+        expect(
+          status(
+            opener: 'deehw',
+            team: const {'juno-bee', 'pip'},
+            comments: [said('Juno-Bee, 10:00: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.merging,
+        );
+      });
+
+      test('a later READ-OK from it lifts its own HOLD, but is no read', () {
+        final hold = said('HOLD f6edb44', at: '2026-11-09T01:00:00Z');
+        final ok = said('READ-OK f6edb44', at: '2026-11-09T02:00:00Z');
+        expect(
+          status(opener: 'deehw', team: team, comments: [hold, ok]),
+          SwarmPullStatus.review,
+        );
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            comments: [
+              hold,
+              ok,
+              said('Juno, 10:00: READ-OK f6edb44', at: '2026-11-09T03:00:00Z'),
+            ],
+          ),
+          SwarmPullStatus.merging,
+        );
+      });
+
+      test('before the team is known, no signature from it counts', () {
+        expect(
+          status(
+            opener: 'deehw',
+            comments: [said('Juno, 10:00: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.review,
         );
       });
 
@@ -392,6 +459,35 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('swarm-issue-pull-open')));
       expect(opened, ['https://github.com/autonomous-ai/lampOS/pull/5770']);
     });
+
+    testWidgets(
+      'opened by deehw: its own unsigned READ-OK leaves it in Review, a teammate\'s signed one merges it',
+      (tester) async {
+        Map<String, Object?> read(String body) => {
+          ...pullNode(),
+          'author': {'login': 'deehw'},
+          'commits': {
+            'nodes': [
+              {
+                'commit': {
+                  'statusCheckRollup': {'state': 'SUCCESS'},
+                },
+              },
+            ],
+          },
+          'comments': {
+            'nodes': [said(body)],
+          },
+        };
+        await panel(tester, github([read('READ-OK f6edb44')]));
+        expect(find.text('#5770 Review'), findsOneWidget);
+        // A panel opened afresh.
+        await tester.pumpWidget(const SizedBox());
+        // Seventh is an agent of lampOS's project in this Swarm, and is not its builder.
+        await panel(tester, github([read('Seventh, 10:00: READ-OK f6edb44')]));
+        expect(find.text('#5770 Merging'), findsOneWidget);
+      },
+    );
 
     testWidgets('a task with no open pull request shows no row', (
       tester,

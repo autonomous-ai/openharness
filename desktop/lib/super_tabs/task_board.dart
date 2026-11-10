@@ -173,7 +173,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
       try {
         final pulls = await widget.github.pulls(
           repository,
-          team: swarmTeamNames(widget.controller),
+          team: SwarmPull.teamOf(widget.controller.snapshot, repository),
         );
         if (mounted && repository == _repository) {
           setState(() => _pulls = pulls);
@@ -547,16 +547,6 @@ class _BoardSkeleton extends StatelessWidget {
     ),
   );
 }
-
-/// The names of this Swarm's agents, in lowercase, as they sign on GitHub; null before the Swarm is read.
-Set<String>? swarmTeamNames(SuperTabController controller) =>
-    switch (controller.snapshot) {
-      final snapshot? => {
-        for (final agent in snapshot.agents)
-          (agent.displayName ?? agent.name).toLowerCase(),
-      },
-      null => null,
-    };
 
 /// The face of the agent named [name] in this Swarm (a `builder:<name>` label, or the name a comment is signed with),
 /// matched without case; a face drawn from the name when the Swarm has no such agent.

@@ -257,7 +257,8 @@ class SwarmGitHub {
   /// newest activity. One GraphQL read of the newest [pullsMax], each with its head's checks, whether it conflicts, and its
   /// newest comments, where its readers' verdicts are.
   ///
-  /// [team] names the Swarm's agents, in lowercase: from the login that opened a pull request, only their signed READ-OK counts.
+  /// [team] names the agents of its project ([SwarmPull.teamOf]): from the login that opened a pull request, only their signed
+  /// READ-OK counts.
   Future<Map<int, SwarmPull>> pulls(
     String repository, {
     Set<String>? team,

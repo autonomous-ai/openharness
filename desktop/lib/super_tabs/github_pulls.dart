@@ -1,3 +1,6 @@
+import 'github_issues.dart';
+import 'model.dart';
+
 /// A task's pull request on its project's board (Swarm v4, anh Dee 2026-11-09: "show PR status on task cards"): the open
 /// pull request that closes the issue ("Closes #14"), else the one on its builder's branch for it (`pip/14`), and where it
 /// stands by the rule Harness merges by (cli/src/superTabs/githubMerge.ts), so a card says what happens next.
@@ -70,10 +73,39 @@ class SwarmPull {
   );
 
   /// What a first line opens with that is no reader's name: a verdict, or a reader's shorthand for one.
-  static final _notAName = RegExp(
-    r'^(?:READ-OK|HOLD|LGTM)\b',
-    caseSensitive: false,
-  );
+  static final _notAName = RegExp(r'^(?:READ-OK|HOLD|LGTM)\b');
+
+  /// A name as the merger compares names: lowercase, its spaces and underscores as hyphens (`Pip Two`, `pip_two`, `pip-two`).
+  static String nameKey(String name) =>
+      name.trim().toLowerCase().replaceAll(RegExp(r'[\s_]+'), '-');
+
+  /// Who wrote it, as the merger counts writers (none of them is its reader): each builder label's name, in any case, and
+  /// its branch's first part (`pip/12`).
+  static Set<String> writersOf(List<String> labels, String branch) => {
+    for (final label in labels)
+      if (label.toLowerCase().startsWith('builder:') && label.length > 8)
+        nameKey(label.substring(8)),
+    if (branch.contains('/')) nameKey(branch.split('/').first),
+  };
+
+  /// The agents of the Swarm's projects on [repository], by [nameKey]: from the login that opened a pull request, only their
+  /// signed READ-OK is a read. Null before the Swarm is read.
+  static Set<String>? teamOf(SuperTabSnapshot? snapshot, String repository) {
+    if (snapshot == null) return null;
+    final projects = {
+      for (final project in snapshot.projects)
+        if (SwarmGitHub.repositoryOf(
+              project.repository?['repositoryUrl'] as String?,
+            ) ==
+            repository)
+          project.id,
+    };
+    return {
+      for (final agent in snapshot.agents)
+        if (projects.contains(agent.projectId))
+          nameKey(agent.displayName ?? agent.name),
+    };
+  }
 
   /// Who may give a verdict: the repository's people, as GitHub names them.
   static const _team = {'OWNER', 'MEMBER', 'COLLABORATOR'};
@@ -120,6 +152,7 @@ class SwarmPull {
         draft: row['isDraft'] == true,
         head: head,
         author: authorOf(labels, branch),
+        writers: writersOf(labels, branch),
         body: row['body'] is String ? row['body'] as String : '',
         comments: [
           for (final comment in _nodes(row['comments']))
@@ -162,13 +195,17 @@ class SwarmPull {
     required String? checks,
     required String? mergeable,
     bool intoDefault = true,
+    Set<String> writers = const {},
     String? opener,
     Set<String>? team,
   }) {
     if (draft) return SwarmPullStatus.draft;
     var twoReads = RegExp(r'\bTWO READS\b').hasMatch(body);
-    // Each reader's last verdict, by comment time: GitHub lists them oldest first.
-    final last = <String, ({String verdict, String sha, String at})>{};
+    final notReaders = {...writers, ?(author == null ? null : nameKey(author))};
+    // Each reader's last verdict, by comment time: GitHub lists them oldest first. [own] marks one from the opener's login
+    // that no teammate signed: it may be its author's, so it is never a read, but it still replaces that login's last word.
+    final last =
+        <String, ({String verdict, String sha, String at, bool own})>{};
     for (final comment in comments) {
       if (!_team.contains(comment['authorAssociation'])) continue;
       final text = comment['body'] is String ? comment['body'] as String : '';
@@ -185,25 +222,26 @@ class SwarmPull {
       var signed = _signature.firstMatch(first)?.group(1);
       // A verdict's own words ("READ-OK f6edb44: looks good") are no name.
       if (signed != null && _notAName.hasMatch(signed)) signed = null;
-      // Every agent of a person posts as that person's login, which opened the pull request: from it, a READ-OK counts only
-      // signed by a teammate, never unsigned (it may be its author's own). An unsigned HOLD from it still holds.
-      final fromOpener =
-          opener != null && login.toLowerCase() == opener.toLowerCase();
-      if (fromOpener &&
-          (signed == null ||
-              (team != null && !team.contains(signed.toLowerCase())))) {
-        if (found.group(1) != 'HOLD') continue;
-        signed = null;
-      }
-      final reader = signed ?? login;
+      // Every agent of a person posts as that person's login, which opened the pull request: from it, only a teammate's
+      // signature names a reader (Harness's merger, cli githubMerge.ts). Before the team is known, none does.
+      final own =
+          opener != null &&
+          login.toLowerCase() == opener.toLowerCase() &&
+          (signed == null || team == null || !team.contains(nameKey(signed)));
+      final reader = own ? login : signed ?? login;
       if (reader.isEmpty || reader == _harness) continue;
       final at = comment['createdAt'] is String
           ? comment['createdAt'] as String
           : '';
-      final key = reader.toLowerCase();
+      final key = own ? 'login:${login.toLowerCase()}' : nameKey(reader);
       final before = last[key];
       if (before == null || at.compareTo(before.at) >= 0) {
-        last[key] = (verdict: found.group(1)!, sha: found.group(2)!, at: at);
+        last[key] = (
+          verdict: found.group(1)!,
+          sha: found.group(2)!,
+          at: at,
+          own: own,
+        );
       }
     }
     if (last.values.any((v) => v.verdict == 'HOLD')) {
@@ -220,8 +258,9 @@ class SwarmPull {
         .where(
           (e) =>
               e.value.verdict == 'READ-OK' &&
+              !e.value.own &&
               head.startsWith(e.value.sha) &&
-              e.key != author,
+              !notReaders.contains(e.key),
         )
         .length;
     return intoDefault && reads >= (twoReads ? 2 : 1)

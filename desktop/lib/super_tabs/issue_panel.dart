@@ -156,7 +156,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     try {
       final pulls = await widget.github.pulls(
         repository,
-        team: swarmTeamNames(widget.controller),
+        team: SwarmPull.teamOf(widget.controller.snapshot, repository),
       );
       if (mounted &&
           repository == widget.repository &&
