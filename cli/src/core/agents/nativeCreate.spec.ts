@@ -8,6 +8,8 @@ import type { RegisteredSession } from '../../lib/registry.js'
 
 const spawn = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: spawn }))
+/** Cold, this file's imports alone took up to 22.6 s in six parallel runs at load 12-16 (2026-11-10). */
+const TEST_MS = 90_000
 let root: string
 let stop: (() => void) | undefined
 beforeEach(() => {
@@ -24,6 +26,14 @@ beforeEach(() => {
   writeFileSync(join(process.env.CODEX_HOME!, 'config.toml'), 'model_provider = "openai"\n')
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.resetModules(); spawn.mockReset()
+  // In those runs a Codex preparation here took up to 6.4 s, past the product's 5 s: these fixtures sit ten folders deep
+  // (vitest.tmpdir.ts), so it makes 44 fsyncs where ~/.codex makes 20, which took 2.4-3.1 s at that load. Mocked after the reset,
+  // so each test still gets its own copy of the module: vi.mock's would outlive it.
+  vi.doMock('../../engines/kit/nativeHookFiles.js', async original => {
+    const actual = await original<typeof import('../../engines/kit/nativeHookFiles.js')>()
+    return { ...actual, runHookPreparation: (...[files, work, options]: Parameters<typeof actual.runHookPreparation>) =>
+      actual.runHookPreparation(files, work, { timeoutMs: 30_000, ...options }) }
+  })
 })
 afterEach(() => {
   stop?.(); stop = undefined
@@ -39,7 +49,7 @@ it('records Claude trust at its captured shell home when that shell omitted CLAU
   expect(folderTrust('claude', null, { HOME: selected })!.record('/fixture/work')).toBe('trusted')
   expect(JSON.parse(readFileSync(config, 'utf8')).projects['/fixture/work'].hasTrustDialogAccepted).toBe(true)
   expect(readFileSync(ambient, 'utf8')).toBe('{}\n')
-})
+}, TEST_MS)
 
 it.each([true, false])('completes native Codex preparation before its dispatch claim with saved local authority %s', async local => {
   const { createAgentCreator } = await import('./create.js')
@@ -73,10 +83,18 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const replies: Record<string, unknown>[] = []
   const input = { creationId: 'native_trust_fixture_1', engine: 'codex', cwd, bypassPermission: false, prompt: 'original prompt' }
   await requests.create(input, { local }, result => { replies.push(result) })
-  await vi.waitFor(() => expect(replies[0]).toMatchObject({ state: 'created' }), { timeout: 10_000 })
+  // Past five seconds the receipt answers pending while the same preparation goes on (agentCreationReceipt.ts runIntent), as it
+  // did in those runs; the client then asks what became of it.
+  const status = async () => {
+    let answer: Record<string, unknown> = {}
+    await requests.createStatus({ creationId: input.creationId }, { local }, reply => { answer = reply })
+    return answer
+  }
+  await vi.waitFor(async () => expect(await status()).toMatchObject({ state: 'created' }), { timeout: 40_000 })
+  await vi.waitFor(() => expect(['created', 'pending']).toContain(replies[0]?.state))
   expect(spawn).toHaveBeenCalledOnce()
   await requests.create(input, { local: !local }, result => { replies.push(result) })
   await vi.waitFor(() => expect(replies[1]).toMatchObject({ state: 'created' }))
   expect(spawn).toHaveBeenCalledOnce()
   expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe(local)
-}, 20_000)
+}, TEST_MS)
