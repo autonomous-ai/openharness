@@ -55,17 +55,6 @@ void main() {
     'source': ?source,
   });
 
-  // The rows view.dart draws for themselves, with no header to join (Diego,
-  // #2547).
-  const ownRows = <String, Map<String, Object?>>{
-    'terminal input': {'kind': 'terminal-input'},
-    'terminal alert': {
-      'kind': 'terminal-alert',
-      'alert': 'prompt',
-      'agentId': 'pm',
-    },
-  };
-
   group('the rule', () {
     // Its header is where its tag shows (#2552), and a message after it is not
     // part of that ask.
@@ -180,47 +169,6 @@ void main() {
       );
     });
 
-    for (final MapEntry(key: line, value: source) in ownRows.entries) {
-      group('after a $line line from the same sender', () {
-        final person = message(1, start, author: ken);
-        final row = message(
-          2,
-          start.add(const Duration(seconds: 20)),
-          source: source,
-        );
-        final plan = message(3, start.add(const Duration(seconds: 30)));
-
-        test('the next message starts a header', () {
-          expect(
-            SuperTabMessageRow.consecutiveUpdates([person, row, plan]),
-            isNot(contains('m3')),
-          );
-          expect(SuperTabMessageRow.groupsWith(plan, row), isFalse);
-        });
-
-        test('the next reply in a thread starts a header', () {
-          expect(
-            SuperTabMessageRow.groupsWith(plan, row, inThread: true),
-            isFalse,
-          );
-        });
-
-        test('the line joins nothing above it', () {
-          expect(
-            SuperTabMessageRow.groupsWith(
-              message(
-                4,
-                start.add(const Duration(seconds: 40)),
-                source: source,
-              ),
-              plan,
-            ),
-            isFalse,
-          );
-        });
-      });
-    }
-
     test('two plain messages ten seconds apart still group', () {
       expect(
         SuperTabMessageRow.groupsWith(
@@ -232,18 +180,30 @@ void main() {
     });
 
     test('a plain message that only looks like a line still groups', () {
-      // A routing line from before Swarm v4 draws as a plain message.
-      expect(
-        SuperTabMessageRow.groupsWith(
-          message(2, start.add(const Duration(seconds: 10))),
-          message(
-            1,
-            start,
-            source: const {'kind': 'route', 'decisionId': 'decision-1'},
+      // A routing line, a Lead's typing into a terminal or a terminal's alert from before Swarm v4 draws as a plain
+      // message, on either side.
+      for (final source in const <Map<String, Object?>>[
+        {'kind': 'route', 'decisionId': 'decision-1'},
+        {'kind': 'terminal-input'},
+        {'kind': 'terminal-alert', 'alert': 'prompt', 'agentId': 'pm'},
+      ]) {
+        expect(
+          SuperTabMessageRow.groupsWith(
+            message(2, start.add(const Duration(seconds: 10))),
+            message(1, start, source: source),
           ),
-        ),
-        isTrue,
-      );
+          isTrue,
+          reason: '$source',
+        );
+        expect(
+          SuperTabMessageRow.groupsWith(
+            message(2, start.add(const Duration(seconds: 10)), source: source),
+            message(1, start),
+          ),
+          isTrue,
+          reason: '$source',
+        );
+      }
     });
   });
 

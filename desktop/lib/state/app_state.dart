@@ -3014,7 +3014,8 @@ class AppNotifier extends ChangeNotifier {
     final stream = BrowserStream(
       machineId: machineId,
       agentId: agentId,
-      send: (type, payload) => _conn(machineId).sendTerminalFrame(type, payload),
+      send: (type, payload) =>
+          _conn(machineId).sendTerminalFrame(type, payload),
       sendBinary: (frame) => _sendTerminalBinary(machineId, frame),
     );
     final streams = _browserStreams.putIfAbsent(machineId, () => {})
@@ -15859,7 +15860,6 @@ class AppNotifier extends ChangeNotifier {
     String? claudeHome,
     String? dsh,
     String? swarmRole,
-    String? swarmSkillMode,
     GridModel? model,
     String? prompt,
     String? name,
@@ -15888,10 +15888,7 @@ class AppNotifier extends ChangeNotifier {
       // The harness this agent is created from. `engine` above is its BASE —
       // the machine refuses the pair when they disagree (`INVALID_DSH`).
       'dsh': ?dsh,
-      if (engine == 'claude' || engine == 'codex') ...{
-        'swarmRole': ?swarmRole,
-        'swarmSkillMode': ?swarmSkillMode,
-      },
+      if (engine == 'claude' || engine == 'codex') 'swarmRole': ?swarmRole,
       'gridModel': ?model?.id,
       'gridName': ?model?.grid,
       'model': ?launch?.model,

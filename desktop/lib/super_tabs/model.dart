@@ -35,8 +35,7 @@ List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
     : throw const FormatException('Invalid Swarm list.');
 
-/// What a project calls its coordinator when the backend names none (one from before project instructions), and
-/// what every new project starts with.
+/// What a project's coordinator is called (the Naming System: never "Lead" on screen).
 const kDefaultCoordinatorName = 'Product Manager';
 
 /// A role's compact badge: the name when it is 12 characters or fewer, else its first 11 and "…".
@@ -162,9 +161,6 @@ class SuperTabAgent {
       roleId = row['roleId'] as String?,
       roleName = row['roleName'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
-      alerting = List.unmodifiable(
-        (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
-      ),
       switchRequest = row['switchRequest'] is Map
           ? Map.unmodifiable(superTabMap(row['switchRequest']))
           : null,
@@ -189,10 +185,6 @@ class SuperTabAgent {
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
-
-  /// What its machine is alerting about now (backend terminal.ts): `prompt`
-  /// while it waits at a prompt in its terminal, gone once that is answered.
-  final List<String> alerting;
 
   /// A Product Manager's engine switch that is asked for and not yet
   /// done (backend `switchRequest`); null otherwise.
@@ -314,21 +306,12 @@ class SuperTabConversation {
   final int reactionSeq;
 }
 
-/// The zone a project's day is read in when its digest names none (backend
-/// superTabs/localTime.ts `DEFAULT_TIME_ZONE`).
-const superTabDefaultTimeZone = 'Asia/Ho_Chi_Minh';
-
 class SuperTabProject {
   SuperTabProject.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       name = _text(row, 'name'),
       ownerId = _text(row, 'ownerId'),
       leadConversationId = _text(row, 'leadConversationId'),
-      skillMode = row['skillMode'] == 'default' ? 'default' : 'orchestration',
-      coordinatorName = row['coordinatorName'] as String?,
-      instructionsRevision =
-          (row['instructionsRevision'] as num?)?.toInt() ?? 0,
-      notesRevision = (row['notesRevision'] as num?)?.toInt() ?? 0,
       githubRevision = (row['githubRevision'] as num?)?.toInt() ?? 0,
       isPrivate = row['visibility'] == 'private',
       memberIds = [
@@ -341,10 +324,6 @@ class SuperTabProject {
               superTabMap(member)['generation'] as String?,
       },
       updateMinutes = (row['updateMinutes'] as num?)?.toInt() ?? 5,
-      timeZone = switch (row['digest']) {
-        {'timeZone': final String zone} when zone.isNotEmpty => zone,
-        _ => superTabDefaultTimeZone,
-      },
       status = SuperTabProjectStatus.read(row['status']),
       repository = row['repository'] is Map
           ? Map.unmodifiable(superTabMap(row['repository']))
@@ -359,24 +338,10 @@ class SuperTabProject {
   /// commands.ts `project.closeTab`).
   final bool archived;
 
-  /// The zone its day is read in, as the server reads it for the crew
-  /// dispatch and the morning digest: its digest's, else
-  /// [superTabDefaultTimeZone] (backend dispatch.ts `openTasks`).
-  final String timeZone;
-
-  /// Sent to the daemon unchanged as `swarmSkillMode` when an agent starts (an older CLI refuses other values).
-  final String skillMode;
-
-  /// What this project calls its coordinator; null from a backend before project instructions.
-  final String? coordinatorName;
-  final int instructionsRevision, notesRevision;
-
   /// Moves when its repository's GitHub access may have changed (someone allowed it, or the app was installed): the
   /// app reads that access again at once rather than keeping it 5 minutes. 0 from a backend before it (task #2316).
   final int githubRevision;
 
-  /// Whether the backend keeps an instruction document for it.
-  bool get hasInstructions => coordinatorName != null;
   final bool isPrivate;
   final List<String> memberIds;
 
@@ -690,11 +655,6 @@ class SuperTabSnapshot {
             lead.machineOwnerId == accountId);
   }
 
-  /// What [projectId] calls its coordinator: its `coordinatorName`, or [kDefaultCoordinatorName] from a backend
-  /// that names none.
-  String coordinatorNameOf(String projectId) =>
-      projectById(projectId)?.coordinatorName ?? kDefaultCoordinatorName;
-
   /// The role [agentId] goes by, and its badge: the role the project's document gives it, or, from a backend before
   /// project instructions, its kind's (Product Manager/PM, Reviewer/Rev, Engineer/Dev). Null for an unknown agent.
   ({String name, String badge})? roleOf(String agentId) {
@@ -710,7 +670,7 @@ class SuperTabSnapshot {
   String? leadProtectionReason(String agentId) {
     final project = leadProjectForAgent(agentId);
     if (project == null) return null;
-    return '${agentName(agentId)} is the ${coordinatorNameOf(project.id)} of project ${project.name}. Delete the project first.';
+    return '${agentName(agentId)} is the $kDefaultCoordinatorName of project ${project.name}. Delete the project first.';
   }
 
   /// The person [personId] by the name the Swarm shows: their username; null for someone not in it.
@@ -1250,33 +1210,6 @@ class SuperTabMessage {
   /// diagnosis, and a required recovery still reaches the coordinator.
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
 
-  /// The agent a "waiting at a prompt" note is about; null for any other row.
-  String? get promptAlertAgentId =>
-      source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
-      ? source['agentId'] as String?
-      : null;
-
-  /// The Product Manager a usage-limit note is about; null for any other row.
-  String? get leadLimitAgentId =>
-      source['kind'] == 'terminal-alert' &&
-          source['alert'] == 'limit' &&
-          source['lead'] == true
-      ? source['agentId'] as String?
-      : null;
-
-  /// A note the backend writes about a terminal: a Lead's typing, or an alert.
-  bool get terminalEvent =>
-      source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
-
-  /// A line the backend posted for an instructions save: no chat row and
-  /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
-  /// #3165). The backend posts none since #3132; the History keeps every
-  /// revision.
-  bool get instructionsSave => source['kind'] == 'instructions';
-
-  /// A line the chat draws as its own row, with no sender's header (view.dart):
-  /// a message after it has no header to join (Diego, #2547).
-  bool get drawsOwnRow => terminalEvent;
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

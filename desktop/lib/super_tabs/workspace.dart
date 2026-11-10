@@ -518,12 +518,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
             final terminal = SuperPane(
               machineId: lead?.machineId ?? '',
               harnessId: lead?.harnessId ?? '',
-              title: lead == null
-                  ? kDefaultCoordinatorName
-                  : controller.snapshot!.coordinatorNameOf(
-                      controller.snapshot!.leadProjectForAgent(lead.id)?.id ??
-                          '',
-                    ),
+              title: kDefaultCoordinatorName,
               titles: {
                 for (final p in local)
                   if (app
