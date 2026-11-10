@@ -219,6 +219,8 @@ export class BackendSocket {
   observers: { receive(connId: string, type: string, payload: Record<string, unknown>): Promise<void> | void; closeAll(): void } | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
+  /** What a message to an agent waits for now (core/input.ts `waitingFor`): its frame says so. */
+  waitingForProvider: ((session: RegisteredSession) => 'engine' | null) | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
   /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
   viewerStreams: ViewerStreams | null = null
@@ -1463,6 +1465,7 @@ export class BackendSocket {
       terminalAvailable: registry.terminalAvailable(s.agentId),
       dsh: this.dshFrameProvider?.(s) ?? null,
       activity: () => this.activityFrameProvider?.(s) ?? null,
+      waitingFor: () => this.waitingForProvider?.(s) ?? null,
       gridAnnotation: this.gridAnnotation,
     })
   }

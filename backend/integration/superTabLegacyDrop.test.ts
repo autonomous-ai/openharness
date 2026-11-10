@@ -260,7 +260,7 @@ describe('the automatic removal after a release', () => {
     await empty()
     const ids = [await migratedSwarm(), await migratedSwarm()]
 
-    const stop = startLegacyDrop(db, 0)
+    const stop = startLegacyDrop(db, new SuperTabStore(db, () => NOW), 0)
     try {
       await vi.waitFor(async () => expect(await Promise.all(ids.map(kept))).toEqual([null, null]), { timeout: 10_000 })
     } finally {
@@ -273,7 +273,7 @@ describe('the automatic removal after a release', () => {
     const ids = [await migratedSwarm(), await migratedSwarm(), await migratedSwarm()]
     const removed = async () => (await Promise.all(ids.map(kept))).filter(state => state === null).length
 
-    const stop = startLegacyDrop(db, 0, 1)
+    const stop = startLegacyDrop(db, new SuperTabStore(db, () => NOW), 0, 1)
     await vi.waitFor(async () => expect(await removed()).toBeGreaterThan(0), { timeout: 10_000 })
     stop()
     // The pause between writes is cut short by the stop, and no further write follows it.

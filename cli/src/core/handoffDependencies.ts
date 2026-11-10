@@ -2,8 +2,9 @@
 import { handoffProviderDeps, ownedByOther, type HandoffWiring } from '../lib/handoffDiscovery.js'
 import { createHandoffPublisher } from './handoffPublication.js'
 
-export function createHandoffDependencies(wiring: HandoffWiring, directory: string) {
-  const publish = createHandoffPublisher({ directory,
+/** `deadlineMs`: a longer request deadline, for a test on a loaded machine; as shipped, HANDOFF_DEADLINE_MS. */
+export function createHandoffDependencies(wiring: HandoffWiring, directory: string, deadlineMs?: number) {
+  const publish = createHandoffPublisher({ directory, deadlineMs,
     resolve: id => wiring.registry.resolve(id) ?? wiring.stopped.get(id),
     ownedByOther: (sessionId, agentId) => ownedByOther({ bySession: id => wiring.registry.bySession(id),
       stoppedIds: () => wiring.stopped.ids(), stopped: id => wiring.stopped.get(id) }, sessionId, agentId),

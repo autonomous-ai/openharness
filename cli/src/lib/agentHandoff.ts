@@ -29,7 +29,7 @@
  *    request authority between durable publication steps and retains interrupted work for retry.
  */
 
-import { HandoffError, handoffBaseName, handoffExcludeText, handoffSessionFact, type HandoffPermit, type PreparedHandoff, type NativeHandoffRead } from './handoffAuthority.js'
+import { HANDOFF_DEADLINE_MS, HandoffError, handoffBaseName, handoffExcludeText, handoffSessionFact, type HandoffPermit, type PreparedHandoff, type NativeHandoffRead } from './handoffAuthority.js'
 import { readNativeHandoff, type SummaryRead } from './nativeHandoffRead.js'
 import { NativeFiles } from '../engines/kit/nativeFiles.js'
 import { REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
@@ -82,8 +82,6 @@ export const MAX_FORK_HOPS = 5
 const DISCOVER_MS = 1_500
 /** Engines that keep their history in a database: never read for an ancestor, never discovered. */
 const DATABASE_ENGINES: ReadonlySet<string> = new Set<string>(SQLITE_BACKED_ENGINES)
-/** How long a preparation may take before it gives up without writing: under the desktop's 6 s wait. */
-const DEADLINE_MS = 5_000
 
 // ── names ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -638,7 +636,7 @@ function withDeadline<T>(deps: HandoffDeps, work: (expired: () => boolean) => Pr
   let over = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { over = true; reject(new HandoffError('TIMEOUT')) }, deps.deadlineMs ?? DEADLINE_MS)
+    timer = setTimeout(() => { over = true; reject(new HandoffError('TIMEOUT')) }, deps.deadlineMs ?? HANDOFF_DEADLINE_MS)
   })
   return Promise.race([work(() => over), timeout]).finally(() => clearTimeout(timer))
 }
@@ -646,7 +644,7 @@ function withDeadline<T>(deps: HandoffDeps, work: (expired: () => boolean) => Pr
 async function prepare(deps: HandoffDeps, session: RegisteredSession, cwd: string, req: HandoffRequest, expired: () => boolean): Promise<HandoffResult> {
   const git = deps.git ?? 'git'
   const now = deps.now ?? Date.now
-  const deadline = now() + (deps.deadlineMs ?? DEADLINE_MS)
+  const deadline = now() + (deps.deadlineMs ?? HANDOFF_DEADLINE_MS)
   const base = handoffBaseName(session.agentId, req.changeId)
   const file = `${HANDOFF_DIR}/${base}.md`
   const degraded: HandoffDegraded[] = []

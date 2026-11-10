@@ -29,7 +29,7 @@ function setup() {
   }
   const owed = (on = 'lead') => (f.group(on).owed ?? []).map(ask => ask.id)
   const react = (by: string, on: string, messageId: string, emoji: string, add = true) => f.run({ type: 'message.react', conversationId: on, messageId, emoji, on: add } as Command,
-    f.as(by), { reaction: { messageId, reacted: false } })
+    f.as(by), { reaction: { messageId } })
   const request = (id: string) => ({ id, conversationId: 'lead', replyTo: null, source: null, author: person })
   const taskFrom = (ask: string) => f.run({ type: 'conversation.create', title: 'From the ask', brief: 'Do it.', checks: DONE_WHEN, priority: 'P2', requestMessageId: ask } as Command,
     f.as(f.lead), { request: request(ask) } as Partial<CommandContext>)

@@ -145,7 +145,7 @@ import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createEngineReaders } from './engines/readers.js'
 import { createLiveTransport } from './engines/liveTransport.js'
 import { createLiveWatcher } from './engines/liveWatcher.js'
-import { readerEngine, READER_SERVICES } from '../engines/worker/protocol.js'
+import { readerEngine, READER_SERVICES, type ReaderEngine } from '../engines/worker/protocol.js'
 import { createRecaps } from './turns/recaps.js'
 import { summaryReader } from './turns/summaries.js'
 import { stopDeadline } from './stopDeadline.js'
@@ -194,7 +194,7 @@ import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_REQUESTS, S
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { SUPER_TAB_REQUESTS, SUPER_TAB_FALLBACKS } from './api.js'
 import { startStalls } from './stall.js'
-import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
+import { createServiceLinks, READER_START_MS, type ServiceLinks } from './serviceLinks.js'
 import { createViewerStreams } from './viewerStreams.js'
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
@@ -419,6 +419,8 @@ function bootHandoff(version: string): void {
 
 /** Set by runForeground once the DSH companions exist; a frame projected before that carries none. */
 let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | null = null
+/** Set by runForeground once the input is built: what a message to an agent waits for (core/input.ts), for every frame. */
+let waitingForRef: ((s: RegisteredSession) => 'engine' | null) | null = null
 
 let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
 
@@ -435,6 +437,7 @@ function projectFrame(s: RegisteredSession, selectedModel: string | null): Promi
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
     activity: () => activityFrameContextRef?.(s) ?? null,
+    waitingFor: () => waitingForRef?.(s) ?? null,
     gridAnnotation: (grid) => gridAnnotationRef?.(grid) ?? null,
   })
 }
@@ -1409,8 +1412,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
     typed: (id) => ports.agentCleanup?.typed(id),
     moveGate,
+    // Its waitingFor changed: every window gets the agent's frame again.
+    sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
+    // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
+    engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
   const input = inputs.input
+  // A window that connects while a message waits for its engine reads it off the agent's frame, pushed or listed. A message is
+  // sent by an agent's id, or by its session's.
+  waitingForRef = (s) => input.waitingFor(s.agentId) ?? input.waitingFor(s.sessionId)
+  backend.waitingForProvider = waitingForRef
   const deviceInput = inputs.deviceInput
 
   // agy's turn closed from its pane when its final Stop never comes (core/turns/agyBackstop.ts).
@@ -1618,6 +1629,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
     // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`).
     waitsThroughRestart: new Set(['store']),
+    // Claude Code's and Codex's readers may take longer to start: a person's first message waits for them (core/input.ts).
+    startWaits: Object.fromEntries(Object.values(READER_SERVICES).map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)

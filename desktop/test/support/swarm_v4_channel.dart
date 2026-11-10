@@ -4,6 +4,7 @@ import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import '../swarm_state_test.dart' show createApp;
@@ -100,7 +101,8 @@ void swarmV4Talk(ConversationServer server) {
 
 /// Opens [server]'s Swarm as its person does, in a window of [size]. With [saved] the Swarm was left on that chat, as a person
 /// who comes back finds it; without, it is the first open. Two computers are known: Mac Studio, up, and Juno's laptop, off.
-/// [github] answers the project's issues, as `gh` does.
+/// [github] answers the project's issues, as `gh` does, and [instructions] an agent's file, as its computer does; [machines]
+/// are the computers the app knows; [onNewAgent] and [onNewProject] are what the two + buttons do.
 Future<SuperTabController> openSwarmV4(
   WidgetTester tester,
   ConversationServer server, {
@@ -108,6 +110,10 @@ Future<SuperTabController> openSwarmV4(
   Size size = const Size(1440, 860),
   Brightness brightness = Brightness.light,
   SwarmGitHub? github,
+  SwarmInstructionsLink? instructions,
+  List<Machine>? machines,
+  VoidCallback? onNewAgent,
+  VoidCallback? onNewProject,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -123,20 +129,22 @@ Future<SuperTabController> openSwarmV4(
   addTearDown(c.dispose);
   final app = createApp();
   addTearDown(app.dispose);
-  app.machines = const [
-    Machine(
-      machineId: 'host',
-      authMode: MachineAuthMode.managed,
-      name: 'Mac Studio',
-      status: 'online',
-    ),
-    Machine(
-      machineId: 'laptop',
-      authMode: MachineAuthMode.managed,
-      name: 'Juno\'s laptop',
-      status: 'offline',
-    ),
-  ];
+  app.machines =
+      machines ??
+      const [
+        Machine(
+          machineId: 'host',
+          authMode: MachineAuthMode.managed,
+          name: 'Mac Studio',
+          status: 'online',
+        ),
+        Machine(
+          machineId: 'laptop',
+          authMode: MachineAuthMode.managed,
+          name: 'Juno\'s laptop',
+          status: 'offline',
+        ),
+      ];
   await tester.runAsync(c.refresh);
   await tester.pumpWidget(
     MaterialApp(
@@ -149,11 +157,12 @@ Future<SuperTabController> openSwarmV4(
           onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
-          onNewAgent: () {},
-          onNewProject: () {},
+          onNewAgent: onNewAgent ?? () {},
+          onNewProject: onNewProject ?? () {},
           machineName: (id) =>
               app.machines.firstWhere((m) => m.machineId == id).displayName,
           github: github,
+          instructions: instructions,
           board: true,
         ),
       ),

@@ -1514,7 +1514,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -1562,7 +1562,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -1987,7 +1987,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2035,7 +2035,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2083,7 +2083,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2131,7 +2131,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:2:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:2:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:2:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:2:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2179,7 +2179,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2226,7 +2226,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2273,7 +2273,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2320,7 +2320,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2367,7 +2367,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2415,7 +2415,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2462,7 +2462,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2510,7 +2510,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2558,7 +2558,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2606,7 +2606,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2654,7 +2654,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2702,7 +2702,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "link",
@@ -2753,7 +2753,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "link",
@@ -2880,7 +2880,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -3004,7 +3004,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -3078,7 +3078,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -3127,7 +3127,7 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
@@ -3175,7 +3175,7 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
@@ -3250,7 +3250,7 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
@@ -3298,7 +3298,7 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
@@ -3345,7 +3345,7 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "file",
@@ -3393,7 +3393,7 @@
    "home/.codex/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"/<session-flags>/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"<hash shell guard>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
+    "text": "[hooks.state.\"<root>/home/.codex/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 install>\"\n\n[hooks.state.\"<root>/home/.codex/hooks.json:post_tool_use:0:0\"]\ntrusted_hash = \"<hash PostToolUse messages>\"\n"
    },
    "home/.codex/hooks.json": {
     "type": "link",

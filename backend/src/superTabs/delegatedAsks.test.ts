@@ -177,7 +177,7 @@ describe('an ask entrusted to a project agent', () => {
     const { f, guest, owes, count, lines } = setup()
     const id = f.run({ type: 'message.send', conversationId: 'lead', text: 'hảo hn1', replyTo: null, recipientIds: [] }, guest).result.messageId as string
     const react = (by: string, emoji: 'check') => f.run({ type: 'message.react', conversationId: 'lead', messageId: id, emoji, on: true },
-      f.as(by), { reaction: { messageId: id, reacted: false } })
+      f.as(by), { reaction: { messageId: id } })
     react(f.dev, 'check')
     expect(owes()).toEqual([id])
     expect(react(f.lead, 'check').messages).toEqual([])

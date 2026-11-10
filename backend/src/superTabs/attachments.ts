@@ -28,6 +28,8 @@ export const MAX_FORM_ATTACHMENT_BYTES = 10 * 1024 * 1024
 export const MAX_ATTACHMENTS = 10
 /** How long an upload link may be started: storage checks it when a request begins, so a long transfer that started in time finishes. */
 export const UPLOAD_LINK_MS = 10 * 60_000
+/** The longest a finished upload's check and its picture's read-back may wait on the bucket, whose client retries for minutes. */
+export const UPLOAD_CHECK_MS = 20_000
 /** The `purpose` of an upload whose link was handed out and whose bytes the server has not yet checked. Servers before this
  *  one refuse a row with any purpose as a message's file, so a rollout never sends a file that has not arrived. */
 export const PENDING_UPLOAD_PURPOSE = 'pending-upload'
@@ -42,9 +44,6 @@ export const HOURLY_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
 export const PENDING_UPLOAD_LIFE_MS = UPLOAD_LINK_MS + 3_600_000
 /** The form route's own refusal, seen only by a client from before upload links. */
 export const FORM_TOO_LARGE_MESSAGE = 'Update Harness to send files over 10 MB. Files can be up to 256 MB.'
-/** An avatar is a small picture: Desktop resizes it before upload, and the backend still holds it to this. */
-export const MAX_AVATAR_BYTES = 1024 * 1024
-export const AVATAR_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp'])
 /** The `purpose` of an avatar upload (schema.prisma SuperTabAttachment): never sendable as a chat file. */
 export const AVATAR_PURPOSE = 'avatar'
 /** How long an upload may wait to be sent. */
@@ -72,10 +71,10 @@ export interface DirectUploads {
   uploadLink(objectKey: string, file: { name: string }, size: number, expiresAt: number): Promise<UploadLink>
   /** The stored object's size, or null while nothing is there. */
   stored(objectKey: string): Promise<{ size: number } | null>
-  /** Its first `bytes` bytes. */
-  head(objectKey: string, bytes: number): Promise<Buffer>
-  /** The whole object, for a picture to be thumbnailed once its upload is complete; `size` is what `stored` answered. */
-  read(objectKey: string): Promise<Buffer>
+  /** Its first `bytes` bytes; `signal` stops the download. */
+  head(objectKey: string, bytes: number, signal?: AbortSignal): Promise<Buffer>
+  /** The whole object, for a picture to be thumbnailed once its upload is complete; `signal` stops the download. */
+  read(objectKey: string, signal?: AbortSignal): Promise<Buffer>
   /** Removes it; an object already gone counts as removed. */
   delete(objectKey: string): Promise<void>
 }
@@ -173,7 +172,7 @@ export function imageTypeOf(head: Buffer): string | null {
 
 /** The raster type `body`'s first bytes are, or null, and `body` handed back with those bytes in front, so the store
  * still reads the whole file as a stream. */
-export async function peekType(body: Readable): Promise<{ type: string | null; body: Readable }> {
+async function peekType(body: Readable): Promise<{ type: string | null; body: Readable }> {
   // One iterator for the whole read: leaving a `for await` early would destroy the request stream.
   const source = body[Symbol.asyncIterator]()
   const parts: Buffer[] = []
@@ -235,6 +234,12 @@ export function serviceAccountFrom(raw: string): ServiceAccount | null {
     credentials: { client_email: key.client_email as string, private_key: key.private_key as string } }
 }
 
+/** All of [stream], or its error. Aborting [signal] destroys the stream, which ends its request, so a download its caller gave up on
+ *  holds no memory and no connection. */
+async function downloaded(stream: Readable, signal?: AbortSignal): Promise<Buffer> {
+  return Buffer.concat(await stream.toArray({ signal }) as Buffer[])
+}
+
 export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
   private bucket: Promise<import('@google-cloud/storage').Bucket> | null = null
   constructor(private readonly name: string, private readonly account: ServiceAccount | null = null,
@@ -266,13 +271,11 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
       throw error
     }
   }
-  async head(objectKey: string, bytes: number) {
-    const [content] = await (await this.files()).file(objectKey).download({ start: 0, end: bytes - 1 })
-    return content
+  async head(objectKey: string, bytes: number, signal?: AbortSignal) {
+    return downloaded((await this.files()).file(objectKey).createReadStream({ start: 0, end: bytes - 1 }), signal)
   }
-  async read(objectKey: string) {
-    const [content] = await (await this.files()).file(objectKey).download()
-    return content
+  async read(objectKey: string, signal?: AbortSignal) {
+    return downloaded((await this.files()).file(objectKey).createReadStream(), signal)
   }
   async delete(objectKey: string) {
     await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
@@ -353,8 +356,8 @@ export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
     return 200
   }
   async stored(objectKey: string) { const object = this.objects.get(objectKey); return object ? { size: object.bytes.byteLength } : null }
-  async head(objectKey: string, bytes: number) { return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
-  async read(objectKey: string) { return this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0) }
+  async head(objectKey: string, bytes: number, signal?: AbortSignal) { signal?.throwIfAborted(); return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
+  async read(objectKey: string, signal?: AbortSignal) { signal?.throwIfAborted(); return this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0) }
   async delete(objectKey: string) { this.objects.delete(objectKey) }
 }
 
