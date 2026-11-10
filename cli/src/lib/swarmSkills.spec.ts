@@ -119,6 +119,11 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
     expect(text).not.toMatch(/decision/i)
     expect(text).not.toContain('## Ask your owner')
+    // Sending to the PM is as it was before Decisions (#4525): the quoted line shown with the offer, then propose.
+    expect(text).toContain('"Want me to propose this to <project>?" Show the exact proposal below that question, in the quoted format below.')
+    expect(text).toContain('It is their message to the team: one plain line, as they would say it.')
+    expect(text).toContain('A change they ask for is a new line to show them.')
+    expect(text).toContain('PROJECT is the project\'s id from status (a session in one project leaves projectId out)')
   })
 
   it('tells a Buddy to answer its owner right below their message, and inside a thread in that thread (task #2929)', () => {
@@ -331,7 +336,7 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
     expect(text).toContain('Nothing when nothing changed')
     // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
-    expect(text).toContain('Show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
+    expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
     expect(text).toContain('"text":"the line they okayed, or their own words"')
     expect(text).toContain('Quotes around that line are required')
     expect(text).toContain('Only the quoted line immediately after "I\'ll post this as you:" counts as shown; nothing after its closing quote counts')
