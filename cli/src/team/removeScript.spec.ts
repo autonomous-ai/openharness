@@ -74,7 +74,7 @@ describe('the macOS removal', () => {
     expect(() => buildRemoveScript({ ...MAC, ownerHome: "/Users/o'b" })).toThrow()
   })
 
-  function mac(over: { account?: boolean; refuse?: boolean; mark?: boolean; otherShared?: boolean; keptHome?: boolean; otherOwner?: boolean } = {}) {
+  function mac(over: { account?: boolean; refuse?: boolean; bootstrapFails?: boolean; mark?: boolean; otherShared?: boolean; keptHome?: boolean; otherOwner?: boolean } = {}) {
     const root = temp()
     const state = join(root, 'state'), log = join(root, 'calls')
     mkdirSync(state)
@@ -110,7 +110,7 @@ describe('the macOS removal', () => {
         `  *-read*NFSHomeDirectory*) [ -e ${sh(`${state}/account`)} ] && echo ${sh(`NFSHomeDirectory: ${paths.TEAM_HOME}`)} ;;`,
         `  *-delete*) ${over.refuse ? "echo '<dscl_cmd> DS Error: -14120 (eDSPermissionError)' >&2; return 40" : `rm ${sh(`${state}/account`)}`} ;;`,
         'esac'].join('\n')),
-      s('launchctl', ['case "$1" in', `  bootout) rm -f ${sh(`${state}/loaded`)} ;;`, `  bootstrap) : > ${sh(`${state}/loaded`)} ;;`, 'esac'].join('\n')),
+      s('launchctl', ['case "$1" in', `  bootout) rm -f ${sh(`${state}/loaded`)} ;;`, `  bootstrap) ${over.bootstrapFails ? 'return 5' : `: > ${sh(`${state}/loaded`)}`} ;;`, `  print) [ -e ${sh(`${state}/loaded`)} ] ;;`, 'esac'].join('\n')),
       s('pkill', ':'),
       s('sleep', ':'),
     ].join('\n')
@@ -138,6 +138,13 @@ describe('the macOS removal', () => {
     for (const path of [m.paths.TEAM_HOME, m.paths.PLIST, m.paths.CONFIG, m.paths.STATUS_DIR, m.paths.SENTINEL, m.paths.SHARED_MARK]) expect(m.gone(path), path).toBe(false)
     expect(existsSync(join(m.state, 'loaded'))).toBe(true)
     expect(m.calls.some((c) => c.startsWith('pkill'))).toBe(false)
+  })
+
+  it('says so when the team daemon does not start again after a refusal', () => {
+    const m = mac({ refuse: true, bootstrapFails: true })
+    expect(m.result.status).toBe(REMOVE_REFUSED)
+    expect(m.result.stderr).toContain('Nothing was removed, and the team daemon stays stopped')
+    expect(m.gone(m.paths.PLIST)).toBe(false)
   })
 
   it('finishes after the account was deleted in Users & Groups, stopping what still runs under its old id', () => {

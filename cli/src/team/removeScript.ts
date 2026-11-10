@@ -25,7 +25,7 @@ export const REMOVE_REFUSED = 9
 export const SENTINEL_NAME = '.harness-team-privacy'
 
 /** Where setup put what it made on a Mac. */
-export const MAC_TEAM = {
+const MAC_TEAM = {
   label: 'ai.autonomous.harness.team',
   plist: '/Library/LaunchDaemons/ai.autonomous.harness.team.plist',
   statusDir: '/Library/Application Support/Harness/Team',
@@ -34,7 +34,7 @@ export const MAC_TEAM = {
 } as const
 
 /** Where setup put what it made on Linux. */
-export const LINUX_TEAM = {
+const LINUX_TEAM = {
   unitName: 'harness-team.service',
   unit: '/etc/systemd/system/harness-team.service',
   statusDir: '/var/lib/harness/team',
@@ -111,14 +111,17 @@ export function buildRemoveScript(input: RemoveScriptInput): string {
     'if [ -n "$exists" ]; then',
     '  if ! why=$(dscl . -delete "/Users/$TEAM" 2>&1); then',
     '    why=$(printf \'%s\\n\' "$why" | tail -n 1)',
+    '    again=no',
     '    if [ -f "$PLIST" ]; then',
     '      tries=0',
     '      until launchctl bootstrap system "$PLIST" >/dev/null 2>&1; do',
     '        tries=$((tries + 1)); [ "$tries" -lt 5 ] || break',
     '        launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true; sleep 1',
     '      done',
+    '      launchctl print "system/$LABEL" >/dev/null 2>&1 && again=yes',
     '    fi',
     '    case $why in *eDSPermissionError*) why="macOS did not allow it (eDSPermissionError)" ;; esac',
+    `    [ "$again" = yes ] || die "could not delete the account $TEAM: $why. Nothing was removed, and the team daemon stays stopped" ${REMOVE_REFUSED}`,
     `    die "could not delete the account $TEAM: $why. Nothing was removed" ${REMOVE_REFUSED}`,
     '  fi',
     '  say "deleted the account $TEAM"',
@@ -211,13 +214,16 @@ export function buildLinuxRemoveScript(input: RemoveScriptInput): string {
     // userdel -r exits 12 when it removed the user but not all of its home: that is not a refusal.
     '  if ! why=$(userdel -r "$TEAM" 2>&1) && getent passwd "$TEAM" >/dev/null; then',
     '    why=$(printf \'%s\\n\' "$why" | tail -n 1)',
+    '    again=no',
     '    if [ -f "$UNIT" ]; then',
     '      tries=0',
     '      until systemctl enable --now "$UNIT_NAME" >/dev/null 2>&1; do',
     '        tries=$((tries + 1)); [ "$tries" -lt 5 ] || break',
     '        systemctl reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true; sleep 1',
     '      done',
+    '      systemctl is-active --quiet "$UNIT_NAME" && again=yes',
     '    fi',
+    `    [ "$again" = yes ] || die "could not delete the account $TEAM: $why. Nothing was removed, and the team daemon stays stopped" ${REMOVE_REFUSED}`,
     `    die "could not delete the account $TEAM: $why. Nothing was removed" ${REMOVE_REFUSED}`,
     '  fi',
     '  say "deleted the account $TEAM"',

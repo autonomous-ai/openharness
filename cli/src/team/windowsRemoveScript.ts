@@ -14,7 +14,7 @@ import { ps } from '../lib/windows/powershellQuote.js'
 import { TEAM_CONFIG_FILES, checkWindowsPath, checkWindowsUser } from './layout.js'
 import { REMOVE_REFUSED, SENTINEL_NAME, type RemoveScriptInput } from './removeScript.js'
 
-export const WINDOWS_TEAM = {
+const WINDOWS_TEAM = {
   sharedDir: 'C:\\ProgramData\\Harness',
   sharedMark: 'C:\\ProgramData\\Harness\\.made-by-harness-team-setup',
   statusDir: 'C:\\ProgramData\\Harness\\Team',
@@ -377,7 +377,7 @@ export function buildWindowsRemoveScript(input: RemoveScriptInput): string {
     '  try { Remove-LocalUser -Name $TEAM } catch {',
     '    Restore-Tasks',
     '    if ($task) { Enable-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME | Out-Null; Start-ScheduledTask -TaskPath $TASK_PATH -TaskName $TASK_NAME }',
-    `    die "could not delete the account $TEAM ($($_.Exception.Message)). Its profile was removed" ${REMOVE_REFUSED}`,
+    `    die "could not delete the account $TEAM ($($_.Exception.Message)). Its profile was removed" 1`,
     '  }',
     '  say "deleted the account $TEAM"',
     '}',

@@ -1,11 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { describe, expect, it } from 'vitest'
 import type { GuestRunResult } from '../lib/guestAccounts.js'
 import type { AdminResult } from '../lib/windows/elevated.js'
 import type { TeamConfig } from './config.js'
-import { TEAM_REMOVAL_PROMPT, removeTeamAccount, teamRemovalDeps, type TeamRemovalDeps } from './remove.js'
+import { TEAM_REMOVAL_PROMPT, removeTeamAccount, rootLine, teamRemovalDeps, teamRemovalTarget, type TeamRemovalDeps, type TeamRemovalTarget } from './remove.js'
 
 const MAC_CONFIG = {
   version: 1, user: 'harnessteam', realName: 'Harness Team', home: '/Users/harnessteam', owner: 'ken', ownerHome: '/Users/ken',
@@ -16,29 +14,31 @@ const MAC_CONFIG = {
 const LINUX_CONFIG: TeamConfig = { ...MAC_CONFIG, home: '/home/harnessteam', ownerHome: '/home/ken', sentinel: '/home/ken/.harness-team-privacy' }
 const WINDOWS_CONFIG: TeamConfig = { ...MAC_CONFIG, home: 'C:\\Users\\harnessteam', ownerHome: 'C:\\Users\\ken', ownerSid: 'S-1-5-21-1-2-3-1001' }
 
-const stages: string[] = []
-afterEach(() => { for (const dir of stages.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+/** The account each config names, as the removal reads it. */
+const target = (config: TeamConfig): TeamRemovalTarget => ({ user: config.user, home: config.home, owner: config.owner, ownerHome: config.ownerHome, realName: config.realName })
 
-/** A computer with [config], whose commands answer [answer], recording each call and the script it was handed. */
+/** The script a root line carries (`rootLine`), decoded as root would. */
+const carried = (line: string): string | undefined => {
+  const b64 = /printf %s ([A-Za-z0-9+/=]+) \|/.exec(line)?.[1]
+  return b64 ? Buffer.from(b64, 'base64').toString('utf8') : undefined
+}
+
+/** A computer with [config], whose commands answer [answer], recording each call and the script it carries. */
 function computer(platform: NodeJS.Platform, config: TeamConfig | null, answer: (command: string) => GuestRunResult, over: Partial<TeamRemovalDeps> = {}) {
   const calls: { command: string; args: readonly string[]; script?: string }[] = []
-  const removed: string[] = []
   const deps: TeamRemovalDeps = {
     platform,
-    readConfig: () => config,
+    target: () => config && target(config),
     runner: async (command, args) => {
-      const path = args.find((a) => a.endsWith('remove.sh')) ?? /quoted form of "([^"]+)"/.exec(args.join(' '))?.[1]
-      calls.push({ command, args, ...path && existsSync(path) ? { script: readFileSync(path, 'utf8') } : {} })
-      if (path) expect(statSync(path).mode & 0o777).toBe(0o700)
+      const script = carried(args.join(' '))
+      calls.push({ command, args, ...script ? { script } : {} })
       return answer(command)
     },
     windowsAdmin: async () => { throw new Error('not Windows') },
     graphical: () => true,
-    makeStage: () => { const dir = mkdtempSync(join(tmpdir(), 'team-stage-')); stages.push(dir); return dir },
-    removeStage: (dir) => { removed.push(dir); rmSync(dir, { recursive: true, force: true }) },
     ...over,
   }
-  return { deps, calls, removed }
+  return { deps, calls }
 }
 const ok = (stdout = ''): GuestRunResult => ({ code: 0, stdout, stderr: '' })
 const fail = (code: number | null, stderr: string): GuestRunResult => ({ code, stdout: '', stderr })
@@ -57,29 +57,33 @@ describe('removing an old Team account', () => {
   })
 
   describe('on a Mac', () => {
-    it('runs the removal once as root behind the administrator prompt, from a private folder it then deletes', async () => {
+    it('runs the removal once as root behind the administrator prompt, the script carried in the line itself', async () => {
       const c = computer('darwin', MAC_CONFIG, () => ok('harness: removed the Harness Team account, its home folder and its daemon\n'))
       expect(await removeTeamAccount(c.deps)).toEqual({ ok: true, removed: true })
       expect(c.calls.map((call) => call.command)).toEqual(['osascript'])
       const [line] = c.calls[0]!.args.slice(1)
-      expect(line).toContain('with administrator privileges')
-      expect(line).toContain(TEAM_REMOVAL_PROMPT)
+      expect(line).toMatch(/^do shell script "\/bin\/sh -c \\"\$\(printf %s [A-Za-z0-9+/=]+ \| \/usr\/bin\/base64 --decode\)\\"" with prompt /)
+      expect(line).toContain(`with prompt "${TEAM_REMOVAL_PROMPT}" with administrator privileges`)
       expect(c.calls[0]!.script).toContain("TEAM='harnessteam'")
       expect(c.calls[0]!.script).toContain("SENTINEL='/Users/ken/.harness-team-privacy'")
-      expect(c.removed).toHaveLength(1)
-      expect(existsSync(c.removed[0]!)).toBe(false)
+      // No file: nothing of this account's could swap it before root reads it.
+      expect(c.calls[0]!.args.join(' ')).not.toMatch(/remove\.sh|\/tmp\/|\/var\/folders\//)
     })
 
     it('says the person cancelled when they did', async () => {
       const c = computer('darwin', MAC_CONFIG, () => fail(1, 'execution error: User canceled. (-128)'))
       expect(await removeTeamAccount(c.deps)).toEqual({ ok: false, code: 'CANCELLED', message: 'Nothing was removed: the administrator prompt was cancelled.' })
-      expect(c.removed).toHaveLength(1)
+      // Only the prompt's own status is a Cancel, not a -128 inside a reason.
+      const other = computer('darwin', MAC_CONFIG, () => fail(1, 'harness: dscl said -1280 at x (1)'))
+      expect(await removeTeamAccount(other.deps)).toEqual({ ok: false, code: 'FAILED', message: 'dscl said -1280 at x' })
     })
 
     it('when macOS keeps the account, says where to delete it by the name Users & Groups shows', async () => {
-      const c = computer('darwin', MAC_CONFIG, () => fail(1, 'harness: could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed (9)'))
-      expect(await removeTeamAccount(c.deps)).toEqual({ ok: false, code: 'KEPT',
-        message: 'macOS kept the account. Delete "Harness Team" in System Settings > Users & Groups, then try again.' })
+      for (const said of ['Nothing was removed (9)', 'Nothing was removed, and the team daemon stays stopped (9)']) {
+        const c = computer('darwin', MAC_CONFIG, () => fail(1, `harness: could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). ${said}`))
+        expect(await removeTeamAccount(c.deps)).toEqual({ ok: false, code: 'KEPT',
+          message: 'macOS kept the account. Delete "Harness Team" in System Settings > Users & Groups, then try again.' })
+      }
     })
 
     it('gives any other stop in the script\'s own words, from its last line', async () => {
@@ -101,7 +105,7 @@ describe('removing an old Team account', () => {
       const c = computer('linux', LINUX_CONFIG, () => ok())
       expect(await removeTeamAccount(c.deps)).toEqual({ ok: true, removed: true })
       expect(c.calls[0]!.command).toBe('pkexec')
-      expect(c.calls[0]!.args[0]).toBe('/bin/sh')
+      expect(c.calls[0]!.args.slice(0, 2)).toEqual(['/bin/sh', '-c'])
       expect(c.calls[0]!.script).toContain("RELAY_DIR='/var/lib/harness/team-relay-ken'")
     })
 
@@ -109,7 +113,6 @@ describe('removing an old Team account', () => {
       const c = computer('linux', LINUX_CONFIG, () => ok(), { graphical: () => false })
       expect(await removeTeamAccount(c.deps)).toMatchObject({ ok: false, code: 'NO_PROMPT' })
       expect(c.calls).toEqual([])
-      expect(c.removed).toEqual([])
     })
 
     it('reads a dismissed dialog as cancelled, but no agent to ask with as a failure', async () => {
@@ -124,6 +127,9 @@ describe('removing an old Team account', () => {
       const c = computer('linux', LINUX_CONFIG, () => fail(9, 'harness: could not delete the account harnessteam: busy. Nothing was removed'))
       expect(await removeTeamAccount(c.deps)).toEqual({ ok: false, code: 'KEPT',
         message: 'Something still runs as the account, so nothing was removed. Restart this computer, then try again.' })
+      // pkexec's own status is the script's: a "(9)" in a reason is not one.
+      const other = computer('linux', LINUX_CONFIG, () => fail(1, 'harness: stopped at (9)'))
+      expect(await removeTeamAccount(other.deps)).toMatchObject({ code: 'FAILED' })
     })
   })
 
@@ -147,10 +153,13 @@ describe('removing an old Team account', () => {
       expect(w.handed[0]!.script).toContain('Remove-LocalUser -Name $TEAM')
     })
 
-    it('says what Windows removes only at the next restart', async () => {
-      const w = windows({ ok: true, stdout: 'harness: Windows still holds the registry of harnessteam; the rest of C:\\Users\\harnessteam (3 items) is removed at the next restart\n' })
+    it('says what Windows removes only at the next restart, and a task it could not remove', async () => {
+      const w = windows({ ok: true, stdout: 'harness: deleted the account harnessteam\n'
+        + 'harness: could not remove 1 task(s) the team account registered: Updater\n'
+        + 'harness: Windows still holds the registry of harnessteam; the rest of C:\\Users\\harnessteam (3 items) is removed at the next restart\n' })
       expect(await removeTeamAccount(w.deps)).toEqual({ ok: true, removed: true,
-        later: 'Windows still holds the registry of harnessteam; the rest of C:\\Users\\harnessteam (3 items) is removed at the next restart' })
+        left: 'could not remove 1 task(s) the team account registered: Updater. '
+          + 'Windows still holds the registry of harnessteam; the rest of C:\\Users\\harnessteam (3 items) is removed at the next restart' })
     })
 
     it('reads a No at User Account Control as cancelled, and a kept profile as kept', async () => {
@@ -166,12 +175,30 @@ describe('removing an old Team account', () => {
     })
   })
 
-  it('is wired to this computer\'s own config, commands and temporary folder', () => {
-    const deps = teamRemovalDeps()
-    expect(deps.platform).toBe(process.platform)
-    const stage = deps.makeStage()
-    expect(existsSync(stage)).toBe(true)
-    deps.removeStage(stage)
-    expect(existsSync(stage)).toBe(false)
+  it('is wired to this computer\'s own config and commands', () => {
+    expect(teamRemovalDeps().platform).toBe(process.platform)
+  })
+})
+
+describe('the line root runs', () => {
+  it('carries the script whole, quotes and all, and runs it', () => {
+    const script = 'set -eu\nprintf \'%s|\' "a b" \'it\'"\'"\'s\' "$((1 + 1))"\n'
+    expect(execFileSync('/bin/sh', ['-c', rootLine(script)], { encoding: 'utf8' })).toBe("a b|it's|2|")
+  })
+})
+
+describe('which account is removed', () => {
+  it('is the one the config names', () => {
+    expect(teamRemovalTarget('darwin', () => true, () => MAC_CONFIG)).toEqual(target(MAC_CONFIG))
+  })
+
+  it('is setup\'s own names when the config is there but no check passes, and none without a config', () => {
+    const owner = () => ({ user: 'ken', home: '/Users/ken' })
+    expect(teamRemovalTarget('darwin', () => true, () => null, owner)).toEqual({
+      user: 'harnessteam', home: '/Users/harnessteam', owner: 'ken', ownerHome: '/Users/ken', realName: 'Harness Team' })
+    expect(teamRemovalTarget('linux', (path) => path === '/etc/harness/team.json', () => null, owner)).toMatchObject({ home: '/home/harnessteam' })
+    expect(teamRemovalTarget('win32', () => true, () => null, () => ({ user: 'ken', home: 'C:\\Users\\ken' }))).toMatchObject({ home: 'C:\\Users\\harnessteam' })
+    expect(teamRemovalTarget('darwin', () => false, () => null, owner)).toBeNull()
+    expect(teamRemovalTarget('freebsd', () => true, () => null, owner)).toBeNull()
   })
 })

@@ -196,6 +196,10 @@ describe('the Windows remove script\'s values', () => {
     expect(() => buildWindowsRemoveScript(removeInput({ ownerHome: "C:\\Users\\o'b" }))).toThrow()
   })
 
+  it('stops with exit 1, not 9, when the account is refused after its profile went: something was removed', () => {
+    expect(buildWindowsRemoveScript(removeInput())).toContain('Its profile was removed" 1')
+  })
+
   it('stops with exit 1, not 9, when its safe delete cannot be compiled: nothing kept the account', () => {
     expect(buildWindowsRemoveScript(removeInput())).toMatch(/try \{ Load-Helper \} catch \{ die "[^"]*nothing was removed" 1 \}/)
   })
