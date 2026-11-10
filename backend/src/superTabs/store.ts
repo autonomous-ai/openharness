@@ -73,6 +73,7 @@ import { tasksHoldingMoves } from './ruleGuard.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { finishedWakes } from './crewTimes.js'
 import { teamMachineIds } from './migration/teamMachinesJob.js'
+import { beforeCutoff } from './migration/wipeJob.js'
 import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { groupsOf } from './tidy.js'
@@ -917,11 +918,12 @@ export class SuperTabStore {
   }
 
   /** The owner's deleted Swarms they can still restore, newest first (deletion.ts): names only, from their heads. By the owner
-   *  index, at most 100. */
+   *  index, at most 100. None from before Swarm v4, which the wipe removes for good (migration/wipeJob.ts). */
   async deletedList(user: AuthUser) {
     const now = this.now()
     const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: { $ne: null } } },
-      { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { deletedAt: 1, purgeAt: 1 } }]))
+      { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { deletedAt: 1, purgeAt: 1, createdAt: 1 } }]))
+      .filter(row => !beforeCutoff(row.createdAt == null ? null : ms(row.createdAt)))
       .map(row => ({ id: row._id as string, deletedAt: ms(row.deletedAt), purgeAt: ms(row.purgeAt) })).filter(row => row.purgeAt > now)
     const heads = await this.heads(rows.map(row => ({ id: row.id, format: 2 })))
     return { tabs: rows.flatMap(row => {
@@ -1000,6 +1002,25 @@ export class SuperTabStore {
         undefined, undefined, { teamMachineGone: true })
     }
     return ids.length
+  }
+
+  /** Deletes Swarm [tabId] for the one-time wipe of every Swarm from before Swarm v4 (migration/wipeJob.ts): `swarm.delete` run as
+   *  its owner and given `wipe` by the store alone, so a Personal Swarm goes too and no name is typed. 'gone' when it is deleted
+   *  already or not there: another runner came first. */
+  async wipeSwarm(tabId: string): Promise<'deleted' | 'gone'> {
+    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: { ownerId: true, autonomousEnv: true, deletedAt: true } })
+    if (!row || row.deletedAt) return 'gone'
+    // An owner whose account is gone still owns the Swarm; the deletion reads no email.
+    const email = (await this.db.user.findUnique({ where: { id: row.ownerId }, select: { email: true } }))?.email ?? ''
+    const user: AuthUser = { sub: row.ownerId, email, autonomousEnv: row.autonomousEnv as AuthUser['autonomousEnv'], role: 'user' }
+    try {
+      await this.executeOnce(user, tabId, { operationId: 'swarm-wipe', command: { type: 'swarm.delete', name: '' } }, undefined, undefined, { wipe: true })
+    } catch (error) {
+      // Deleted meanwhile: it answered as a Swarm that does not exist.
+      if (!await this.isLive(tabId)) return 'gone'
+      throw error
+    }
+    return 'deleted'
   }
 
   /** A person who just joined [tabId] takes their account's name once more, outside the join: a rename committed while the join
@@ -1239,9 +1260,9 @@ export class SuperTabStore {
   }
 
   /** [only]: what the store alone may give a command: `movedTo` for machine.moved (computerSignedIn), `teamMachineGone` for
-   *  machine.teamGone (takeOutTeamMachines). */
+   *  machine.teamGone (takeOutTeamMachines), `wipe` for swarm.delete (wipeSwarm). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; teamMachineGone?: true; wipe?: true } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     // The read before the transaction is its own phase (commandTiming.ts): it calls GitHub.
     const pullRequestMerges = await timedPhase('read:pullRequestMerges', () => this.pullRequestMergesFor(user, tabId, command))
@@ -1252,6 +1273,11 @@ export class SuperTabStore {
       started = []
       const stamp = clock.next()
       const first = await this.load(tx, user, tabId, namedFor(command), DELETED_SWARM_COMMANDS.has(command.type))
+      // A Swarm from before Swarm v4 is wiped for good (migration/wipeJob.ts): none comes back, deleted by its owner or by the wipe.
+      if (command.type === 'swarm.restore') {
+        const made = (await tx.superTab.findUnique({ where: { id: tabId }, select: { createdAt: true } }))?.createdAt
+        if (beforeCutoff(made ? made.getTime() : null)) notThere()
+      }
       const named = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
       // A person's other Buddies' chats load with their main one, which lists them (task #3818): a command that reads that person's
       // Buddies, their default's chat included, reads all of them. Nothing more is read when none is listed.
@@ -1315,6 +1341,7 @@ export class SuperTabStore {
       }
       const context: CommandContext = { operationId, now: this.now() }
       if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
+      if (command.type === 'swarm.delete' && only.wipe) context.wipe = true
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
