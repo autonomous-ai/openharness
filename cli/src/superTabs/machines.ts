@@ -28,7 +28,6 @@ import { repositoryKey } from './repositoryKey.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
 import { defaultCodexHome, listCodexProfiles } from '../lib/codexProfiles.js'
 import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
-import { folderTrust } from '../engines/launchPrep.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -1193,11 +1192,11 @@ export class ContributedMachines {
     if (!record) return
     // Diego, 10-30: a folder deleted by hand kept its record for good, and every later stop tried it again. Only a folder
     // that is not there drops it; one that cannot be read for any other reason keeps it. Nothing on disk is touched.
-    if (await folderGone(record.path)) return this.removed(file, record, mine)
+    if (await folderGone(record.path)) return this.removed(file, mine)
     if (record.kind === 'agent-folder') return this.removeAgentFolder(file, record, mine)
     if (!await swarmWorktree(record.path, record.source, record.startId)) {
       // The record no longer proves this belongs to Harness. Keep it; never loosen the proof to recover it.
-      if (await folderGone(record.path)) return this.removed(file, record, mine)
+      if (await folderGone(record.path)) return this.removed(file, mine)
       this.log('Kept a Swarm worktree: WORKTREE_UNPROVEN')
       return
     }
@@ -1213,11 +1212,11 @@ export class ContributedMachines {
     if (!await sweepOne(record.path, Date.now(), 0, unused).catch(error => {
       this.log(`Kept a Swarm worktree: ${error instanceof WorktreeKept ? error.code : 'WORKTREE_CHECK_FAILED'}`); return false
     })) return
-    this.removed(file, record, mine)
+    this.removed(file, mine)
   }
 
   /** A worktree gone: its record goes. */
-  private removed(file: string, record: SwarmWorktree, mine: (w: SwarmWorktree) => boolean) {
+  private removed(file: string, mine: (w: SwarmWorktree) => boolean) {
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
   }
 
