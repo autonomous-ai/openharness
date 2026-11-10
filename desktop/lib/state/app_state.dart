@@ -1,3 +1,5 @@
+import '../browser/browser_availability.dart';
+import '../browser/browser_settings.dart';
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
@@ -3170,6 +3172,101 @@ class AppNotifier extends ChangeNotifier {
           request: (payload) => orchestratorRequest(machineId, payload),
         ),
       );
+
+  /// One request to [machineId]'s Browser service. Never sent to a machine shared with this account: an agent's
+  /// Browser holds its person's logins, and its daemon refuses anyone else (`NOT_OWNER`) as well.
+  Future<Map<String, dynamic>> _agentBrowserRequest(
+    String machineId,
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.machine.isSharedMachine ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected ||
+        !_conn(machineId).isReady) {
+      throw StateError('Reconnect this machine to open its browser');
+    }
+    return _conn(machineId).request(type, payload: payload, timeout: timeout);
+  }
+
+  /// Whether New agent may offer Browser on [machineId]. Never throws: a daemon too old to know the request is
+  /// [BrowserAvailability.unsupported], and one whose service did not answer is [BrowserAvailability.unavailable].
+  Future<BrowserAvailability> agentBrowserAvailable(String machineId) async {
+    try {
+      return BrowserAvailability.fromJson(
+        await _agentBrowserRequest(machineId, 'agent_browser_available'),
+      );
+    } on WsRequestFailure catch (e) {
+      appLog.warn('browser', 'availability refused: ${e.code}');
+      return BrowserAvailability(
+        e.code == 'UNSUPPORTED'
+            ? BrowserAvailability.unsupported
+            : BrowserAvailability.unavailable,
+      );
+    } on Object catch (e) {
+      appLog.warn('browser', 'availability unanswered: ${e.runtimeType}');
+      return const BrowserAvailability(BrowserAvailability.unavailable);
+    }
+  }
+
+  /// Installs Podman on this computer: the daemon asks for the person's password once, and refuses any asker but
+  /// this computer's own app (`LOCAL_ONLY`).
+  Future<void> agentBrowserSetup(String machineId) =>
+      _agentBrowserRequest(machineId, 'agent_browser_setup');
+
+  /// Restarts Windows to finish setup, from this computer only.
+  Future<void> agentBrowserRestart(String machineId) =>
+      _agentBrowserRequest(machineId, 'agent_browser_restart');
+
+  Future<void> agentBrowserRetry(String machineId, String agentId) =>
+      _agentBrowserRequest(
+        machineId,
+        'agent_browser_retry',
+        payload: {'agentId': agentId},
+      );
+
+  Future<BrowserSettings> agentBrowserSettings(
+    String machineId,
+    String agentId,
+  ) async => BrowserSettings.fromJson(
+    await _agentBrowserRequest(
+      machineId,
+      'agent_browser_settings',
+      payload: {'agentId': agentId},
+    ),
+  );
+
+  /// Saves [settings] ([BrowserSettings.toSave]) and gives what the machine kept.
+  Future<BrowserSettings> agentBrowserSettingsSave(
+    String machineId,
+    String agentId,
+    Map<String, Object?> settings,
+  ) async => BrowserSettings.fromJson(
+    await _agentBrowserRequest(
+      machineId,
+      'agent_browser_settings_save',
+      payload: {'agentId': agentId, 'settings': settings},
+    ),
+  );
+
+  /// The agent's machine asks the exit lookup through [proxy] (15 s there), so this waits a little longer.
+  Future<ProxyTestResult> agentBrowserProxyTest(
+    String machineId,
+    String agentId,
+    Map<String, Object?> proxy,
+  ) async => ProxyTestResult.fromJson(
+    await _agentBrowserRequest(
+      machineId,
+      'agent_browser_proxy_test',
+      payload: {'agentId': agentId, 'proxy': proxy},
+      timeout: const Duration(seconds: 25),
+    ),
+  );
 
   void openOrchestratorProject(String machineId, String id, String title) {
     final existing = swarms
@@ -11371,6 +11468,7 @@ class AppNotifier extends ChangeNotifier {
           prev.dsh != agent.dsh ||
           prev.dshName != agent.dshName ||
           prev.viewerUrl != agent.viewerUrl ||
+          prev.browser != agent.browser ||
           prev.viewerError != agent.viewerError ||
           prev.viewerName != agent.viewerName ||
           prev.verdict != agent.verdict ||
@@ -16117,6 +16215,9 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     AgentCreationAttempt? attempt,
     HarnessPlacement? placement,
+
+    /// Gives the agent its own sandboxed Chrome (Swarm New agent's Browser).
+    bool browser = false,
   }) async {
     final creation = attempt ?? AgentCreationAttempt();
     final launch = creation._launchModelDropped ? null : creation.launchModel;
@@ -16155,6 +16256,8 @@ class AppNotifier extends ChangeNotifier {
       // a general session. Same absent-unless-asked rule as `prompt`, and the
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
+      // Absent unless asked for, as above: an older daemon ignores it.
+      if (browser) 'browser': true,
     };
     Future<String?> ask() => _create(
       machineId,

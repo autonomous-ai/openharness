@@ -283,6 +283,43 @@ void main() {
     });
   });
 
+  // Browser settings carry a proxy's host, its login and its exit address.
+  test('no agent_browser request or its failure is logged', () async {
+    final previousLog = appLog;
+    final stream = LogStream();
+    appLog = StreamAppLog(stream);
+    addTearDown(() => appLog = previousLog);
+    hub = await FakeHub.start();
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'test',
+      machineId: 'fixture',
+      accessTokenProvider: (_, _) async => 'fixture-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    await conn!.connect();
+    await expectLater(
+      conn!.request(
+        'agent_browser_settings_save',
+        payload: {
+          'agentId': 'a1',
+          'settings': {
+            'proxy': {'host': 'proxy.example', 'username': 'ken'},
+          },
+        },
+        timeout: const Duration(milliseconds: 50),
+      ),
+      throwsA(isA<WsRequestTimeout>()),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      stream.entries.where((e) => e.message.contains('agent_browser')),
+      isEmpty,
+    );
+  });
+
   test(
     'uses SSO subprotocol, environment, readiness, and machine_select',
     () async {
