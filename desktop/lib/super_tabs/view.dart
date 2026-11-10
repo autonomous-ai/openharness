@@ -59,6 +59,7 @@ import 'reminders.dart';
 import 'places.dart';
 import 'agent_state.dart';
 import 'attention.dart';
+import 'back_to_chat.dart';
 import 'controller.dart';
 import 'file_links.dart';
 import 'dialog_scope.dart';
@@ -68,6 +69,7 @@ import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
 import 'agent_details.dart';
+import 'agent_info.dart';
 import 'identity.dart' show SuperTabAvatar, superTabMachineName;
 import 'identity_card.dart';
 import 'prompt_alerts.dart';
@@ -3333,6 +3335,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final name = Text(
       _agentName(agent),
       key: const ValueKey('swarm-agent-name'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
       style: DesktopChrome.text(medium: true),
     );
     final mine = agent.myAgent ?? agent.contributorId == c.accountId;
@@ -3880,6 +3884,49 @@ class _SuperTabViewState extends State<SuperTabView>
   /// An agent's instructions file, open beside its chat (Swarm v4).
   bool _instructionsOpen = false;
 
+  /// What the app knows of the agent, open beside its chat (Swarm v4).
+  bool _infoOpen = false;
+
+  /// Keep each pane's state (what is typed in the instructions, what the tasks read and where they are scrolled) as a window
+  /// resize moves it between the right pane and the chat's place.
+  final _instructionsKey = GlobalKey(), _taskBoardKey = GlobalKey();
+  final _infoKey = GlobalKey();
+  final _issueKey = GlobalKey();
+
+  /// Chat, over a pane in the chat's place: the instructions, the info or the tasks close, not a pane beside.
+  void _closePanesInPlace() {
+    setState(() {
+      _instructionsOpen = false;
+      _infoOpen = false;
+      _taskListOpen = false;
+    });
+    _returnToChat();
+  }
+
+  /// Chat, over a terminal in the chat's place: the terminal closes, and a pane beside stays.
+  void _closeTerminalInPlace() {
+    widget.onCloseTerminal?.call();
+    _returnToChat();
+  }
+
+  /// Back in the chat, it reads to the end and its composer has the keys again, as the v3 bar's Chat did.
+  void _returnToChat() {
+    _readVisibleTailAfterFrame();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
+  }
+
+  /// Under 720 the list of conversations is a drawer, behind this button at the start of the bar.
+  Widget _conversationsButton() => fingerTarget(
+    enabled: _phone,
+    AppIconButton(
+      icon: AppIcons.menu,
+      tooltip: 'Conversations',
+      onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
+    ),
+  );
+
   /// The agent of a person's chat with their own agent, or null.
   SuperTabAgent? _chatAgent(SuperTabConversation? group) =>
       group != null && group.isAgentChat && group.agentIds.isNotEmpty
@@ -3894,16 +3941,16 @@ class _SuperTabViewState extends State<SuperTabView>
   };
 
   /// An agent chat's header (Swarm v4): the agent, where it runs, then its instructions and its terminal, each opening
-  /// beside the chat.
-  Widget _agentHeader(SuperTabConversation group, SuperTabAgent agent) {
+  /// beside the chat. The name takes two thirds of the room the buttons leave at most and is cut with an ellipsis, where the
+  /// agent runs the rest, so a long name never pushes the buttons off the bar; under 720 the list of conversations is behind
+  /// a button first, as a project's bar has it.
+  Widget _agentHeader(
+    SuperTabConversation group,
+    SuperTabAgent agent, {
+    required bool narrow,
+  }) {
     final machine = widget.machineName(agent.machineId);
-    final engine = switch (agent.configuration['engine']) {
-      'codex' => 'Codex',
-      'claude' => 'Claude Code',
-      final String other => other,
-      _ => null,
-    };
-    final detail = [machine, ?engine].join(' · ');
+    final detail = [machine, ?swarmEngineName(agent)].join(' · ');
     final terminalOpen = _terminalsVisible;
     return Container(
       key: const ValueKey('swarm-agent-header'),
@@ -3914,19 +3961,50 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       child: Row(
         children: [
+          if (narrow) _conversationsButton(),
           SuperTabAvatar.agent(agent, size: 22, engineBadge: false),
           const SizedBox(width: 6),
-          // Its person renames it here, by its name (the v3 bar's ⋮ menu is gone).
-          _agentTitle(agent),
-          const SizedBox(width: 6),
           Expanded(
-            child: Text(
-              detail,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(),
+            child: LayoutBuilder(
+              builder: (context, room) => Row(
+                children: [
+                  // Its person renames it here, by its name (the v3 bar's ⋮ menu is gone).
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: room.maxWidth * SwarmLayout.nameShare,
+                    ),
+                    child: _agentTitle(agent),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
+          // A cut line never touches the first button.
+          const SizedBox(width: 6),
+          AppIconButton(
+            key: const ValueKey('swarm-info-button'),
+            icon: AppIcons.info,
+            size: AppIcons.inlineSize,
+            tooltip: 'Info',
+            selected: _infoOpen,
+            onPressed: () => setState(() {
+              _infoOpen = !_infoOpen;
+              if (_infoOpen) {
+                _instructionsOpen = false;
+                if (terminalOpen) widget.onCloseTerminal?.call();
+              }
+            }),
+          ),
+          const SizedBox(width: 4),
           AppIconButton(
             key: const ValueKey('swarm-instructions-button'),
             icon: AppIcons.fileText,
@@ -3935,8 +4013,9 @@ class _SuperTabViewState extends State<SuperTabView>
             selected: _instructionsOpen,
             onPressed: () => setState(() {
               _instructionsOpen = !_instructionsOpen;
-              if (_instructionsOpen && terminalOpen) {
-                widget.onCloseTerminal?.call();
+              if (_instructionsOpen) {
+                _infoOpen = false;
+                if (terminalOpen) widget.onCloseTerminal?.call();
               }
             }),
           ),
@@ -3950,7 +4029,7 @@ class _SuperTabViewState extends State<SuperTabView>
             onPressed: terminalOpen
                 ? widget.onCloseTerminal
                 : () {
-                    setState(() => _instructionsOpen = false);
+                    setState(() => _instructionsOpen = _infoOpen = false);
                     _openTerminals(group)?.call();
                   },
           ),
@@ -3961,7 +4040,9 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Widget _header(SuperTabConversation? group, bool narrow) {
     final chatAgent = widget.board ? _chatAgent(group) : null;
-    if (chatAgent != null) return _agentHeader(group!, chatAgent);
+    if (chatAgent != null) {
+      return _agentHeader(group!, chatAgent, narrow: narrow);
+    }
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
     // The one Buddy has one chat, as a project does; it has no pull requests.
@@ -3986,15 +4067,7 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       child: Row(
         children: [
-          if (narrow)
-            fingerTarget(
-              enabled: _phone,
-              AppIconButton(
-                icon: AppIcons.menu,
-                tooltip: 'Conversations',
-                onPressed: () => setState(() => _sidebarOpen = !_sidebarOpen),
-              ),
-            ),
+          if (narrow) _conversationsButton(),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
@@ -6244,50 +6317,134 @@ class _SuperTabViewState extends State<SuperTabView>
           c.snapshot?.isProjectLead(c.selectedId) == true;
       final opened = _issue;
       final issue = taskList && opened != null && opened.channel == c.selectedId
-          ? SwarmIssuePanel(
-              key: ValueKey(
-                'swarm-issue-${opened.repository}-${opened.number}',
+          ? KeyedSubtree(
+              key: _issueKey,
+              child: SwarmIssuePanel(
+                key: ValueKey(
+                  'swarm-issue-${opened.repository}-${opened.number}',
+                ),
+                controller: c,
+                github: _github,
+                repository: opened.repository,
+                number: opened.number,
+                refreshEvery: kUnderTest ? null : const Duration(seconds: 30),
+                onClose: () => setState(() => _issue = null),
               ),
+            )
+          : null;
+      final taskBoard = taskList
+          ? SwarmTaskBoard(
+              key: _taskBoardKey,
               controller: c,
+              conversationId: c.selectedId,
               github: _github,
-              repository: opened.repository,
-              number: opened.number,
-              refreshEvery: kUnderTest ? null : const Duration(seconds: 30),
-              onClose: () => setState(() => _issue = null),
+              app: widget.app,
+              openNumber: _issue?.number,
+              refreshEvery: kUnderTest ? null : const Duration(minutes: 1),
+              onOpen: (repository, opened) => setState(
+                () => _issue = (
+                  channel: c.selectedId,
+                  repository: repository,
+                  number: opened.number,
+                ),
+              ),
+              onClose: () => setState(() => _taskListOpen = false),
             )
           : null;
       final viewer = _imageViewer();
       // A thread opened since Members takes its side and closes it.
       if (thread != null) _rosterOpen = false;
+      final scale = MediaQuery.textScalerOf(context);
       final wide =
-          constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
+          constraints.maxWidth >= scale.scale(SuperTabPaneLayout.twoPanesFrom);
       final threadDrawer = thread != null && !wide;
       // A terminal on screen keeps its chat beside it, in the right pane, as
       // a thread sits; a thread or Members takes that side, and a narrow
-      // window shows one at a time (Huy, 11-04, #2792).
+      // window shows one at a time (Huy, 11-04, #2792). A v4 terminal needs
+      // about 480 of its own, so it sits beside from a little wider than the
+      // text panes do.
+      // A Swarm with no projects shows the way to start in the chat's place, unless v4 keeps an agent's chat open there
+      // (task #4219): that chat's panes and terminal open as in any other Swarm.
+      final empty =
+          c.snapshot?.projects.isEmpty == true &&
+          (!widget.board || c.selected == null);
       final chatBeside =
           wide &&
+          (!widget.board ||
+              constraints.maxWidth >=
+                  scale.scale(SuperTabPaneLayout.terminalBesideFrom)) &&
           thread == null &&
           !_rosterOpen &&
           terminal != null &&
           _terminalsVisible &&
           !_manageVisible &&
           !_notificationsVisible &&
-          c.snapshot?.projects.isEmpty != true;
-      final narrow =
-          constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
+          !empty;
+      final narrow = constraints.maxWidth < scale.scale(720);
+      // Swarm v4: an agent's terminal opens right of its chat, as its instructions do.
+      final terminalRight = widget.board && chatBeside;
+      final instructionsAgent = widget.board && _instructionsOpen
+          ? _chatAgent(c.selected)
+          : null;
+      // Kept by its key where the pane moves between the right pane and the chat's place, so what is typed in it stays.
+      final instructions = instructionsAgent == null
+          ? null
+          : SwarmAgentInstructions(
+              key: _instructionsKey,
+              agent: instructionsAgent,
+              link: _instructions,
+              machineName: widget.machineName(instructionsAgent.machineId),
+              onClose: () => setState(() => _instructionsOpen = false),
+            );
+      final infoAgent = widget.board && _infoOpen
+          ? _chatAgent(c.selected)
+          : null;
+      final info = infoAgent == null
+          ? null
+          : SwarmAgentInfo(
+              key: _infoKey,
+              controller: c,
+              agent: infoAgent,
+              machineName: widget.machineName(infoAgent.machineId),
+              github: _github,
+              app: widget.app,
+              refreshEvery: kUnderTest ? null : const Duration(minutes: 1),
+              onClose: () => setState(() => _infoOpen = false),
+            );
+      // What a person opened beside the chat: where two panes do not fit, it takes the chat's place, under Chat, and comes
+      // before a terminal there as it does in the right pane.
+      final pane = issue ?? taskBoard ?? instructions ?? info;
+      final pagesIndex = _devicesVisible
+          ? 1
+          : _manageVisible
+          ? 4
+          : _notificationsVisible
+          ? 3
+          : pane != null && !wide
+          ? 6
+          : empty
+          ? 0
+          : _terminalsVisible && !terminalRight
+          ? 1
+          : _showPullRequests
+          ? 2
+          : _showTasks
+          ? 5
+          : 0;
       final chat = SuperTabImageGallery(
         images: () => _images(_shownMessages(c.selectedId)),
         child: _conversation(narrow),
       );
       final chatCovered =
           (narrow && _sidebarOpen) || (!wide && _rosterOpen) || threadDrawer;
-      if (_chatCovered && !chatCovered) {
+      // A pane in the chat's place covers it as a drawer does, and keeps its own focus.
+      final covered = chatCovered || pagesIndex == 6;
+      if (_chatCovered && !covered) {
         // Both dismissing a drawer and widening the window reveal the cached
         // transcript without loading another message.
         _readVisibleTailAfterFrame();
       }
-      _chatCovered = chatCovered;
+      _chatCovered = covered;
       final roster = SuperTabRoster(
         // A new board is a new roster: the old one read another Swarm.
         key: ObjectKey(_board),
@@ -6318,26 +6475,6 @@ class _SuperTabViewState extends State<SuperTabView>
         },
         onClose: _closeRoster,
       );
-      // Swarm v4: an agent's terminal opens right of its chat, as its instructions do.
-      final terminalRight = widget.board && chatBeside;
-      final instructionsAgent = widget.board && _instructionsOpen
-          ? _chatAgent(c.selected)
-          : null;
-      final pagesIndex = _devicesVisible
-          ? 1
-          : _manageVisible
-          ? 4
-          : _notificationsVisible
-          ? 3
-          : c.snapshot?.projects.isEmpty == true
-          ? 0
-          : _terminalsVisible && !terminalRight
-          ? 1
-          : _showPullRequests
-          ? 2
-          : _showTasks
-          ? 5
-          : 0;
       final view = Focus(
         canRequestFocus: false,
         skipTraversal: true,
@@ -6360,37 +6497,10 @@ class _SuperTabViewState extends State<SuperTabView>
                     ? null
                     : issue ??
                           thread ??
-                          (taskList
-                              ? SwarmTaskBoard(
-                                  controller: c,
-                                  conversationId: c.selectedId,
-                                  github: _github,
-                                  app: widget.app,
-                                  openNumber: _issue?.number,
-                                  refreshEvery: kUnderTest
-                                      ? null
-                                      : const Duration(minutes: 1),
-                                  onOpen: (repository, opened) => setState(
-                                    () => _issue = (
-                                      channel: c.selectedId,
-                                      repository: repository,
-                                      number: opened.number,
-                                    ),
-                                  ),
-                                  onClose: () =>
-                                      setState(() => _taskListOpen = false),
-                                )
-                              : instructionsAgent != null
-                              ? SwarmAgentInstructions(
-                                  agent: instructionsAgent,
-                                  link: _instructions,
-                                  machineName: widget.machineName(
-                                    instructionsAgent.machineId,
-                                  ),
-                                  onClose: () =>
-                                      setState(() => _instructionsOpen = false),
-                                )
-                              : _rosterOpen
+                          taskBoard ??
+                          instructions ??
+                          info ??
+                          (_rosterOpen
                               ? roster
                               : terminalRight
                               ? terminal
@@ -6406,7 +6516,8 @@ class _SuperTabViewState extends State<SuperTabView>
                     (thread != null ||
                         chatBeside ||
                         _taskListOpen ||
-                        instructionsAgent != null),
+                        instructionsAgent != null ||
+                        infoAgent != null),
                 // Over the chat, beside an open thread, as in Slack.
                 over: wide ? viewer : null,
                 // A project's own chat keeps its header and tabs (Project options, Tasks): the full chat view.
@@ -6424,6 +6535,13 @@ class _SuperTabViewState extends State<SuperTabView>
                           onChoose: _chooseManageTab,
                         ),
                       ),
+                    // Where two panes do not fit, a pane in the chat's place leads back to it.
+                    if (widget.board && pagesIndex == 6)
+                      SwarmBackToChat(onBack: _closePanesInPlace)
+                    else if (widget.board &&
+                        pagesIndex == 1 &&
+                        _terminalsVisible)
+                      SwarmBackToChat(onBack: _closeTerminalInPlace),
                     // The chat draws the line itself, and a terminal's chat beside it answers for the terminal's own
                     // connection; every other surface in the middle gets it here.
                     if (pagesIndex != 0 &&
@@ -6471,6 +6589,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                 )
                               : const SizedBox.shrink(),
                           _tasksPage(),
+                          // Beside the chat the pane is in the right pane, and one widget is in one place. It is built only while
+                          // it shows, so a hidden board reads nothing from GitHub.
+                          pagesIndex == 6 ? pane! : const SizedBox.shrink(),
                         ],
                       ),
                     ),

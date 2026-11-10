@@ -15,6 +15,12 @@ abstract final class SwarmLayout {
   /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane.
   static const double chatColumn = 720;
 
+  /// The strip that leads back to the chat when a pane has taken its place: the pill's room, in from the bar's side.
+  static const EdgeInsets backPadding = EdgeInsets.symmetric(
+    horizontal: barSide,
+    vertical: 8,
+  );
+
   /// The corners of a task card and of the agents-only line.
   static const double cardRadius = 12;
 
@@ -56,4 +62,16 @@ abstract final class SwarmLayout {
     vertical: 2,
   );
   static const EdgeInsets nameInset = EdgeInsets.symmetric(horizontal: 4);
+
+  /// The most of the room its buttons leave that an agent's name takes: a long name is cut with an ellipsis, and where the agent
+  /// runs keeps the rest.
+  static const double nameShare = 2 / 3;
+
+  /// An agent's Info: its rows' inset from the pane's edges, the gap around each row, and the width of the labels' column.
+  static const EdgeInsets infoPadding = EdgeInsets.symmetric(
+    horizontal: barSide,
+    vertical: 12,
+  );
+  static const EdgeInsets infoRowPadding = EdgeInsets.symmetric(vertical: 6);
+  static const double infoLabelWidth = 88;
 }
