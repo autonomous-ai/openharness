@@ -26,7 +26,7 @@ import 'personal_projects.dart' show PersonalProjects;
 import 'places.dart';
 import 'buddy_rows.dart';
 import 'identity.dart';
-import 'leaderboard/reader.dart';
+import 'leaderboard/shipping.dart';
 import 'section_heading.dart';
 import 'swarm_switcher.dart';
 import 'private_project_lock.dart';
@@ -73,6 +73,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onAttachAgent,
     this.onOpenAgentChat,
     this.onOpenPane,
+    this.joining = const {},
     this.boardProjectId,
     this.onOpenAgentTerminal,
     this.leaderboard,
@@ -83,9 +84,9 @@ class ProjectSidebar extends StatelessWidget {
   /// What each agent of Your Team is doing, its row's one line; without it a row says only that its agent is offline.
   final SwarmAgentStates? agentStates;
 
-  /// The board Humans lists on the Desktop (task #4466): the view's, which the right pane reads too. Without it, or
-  /// before it is read, Humans is its heading alone.
-  final SuperTabLeaderboardReader? leaderboard;
+  /// The leaderboard Top Teams lists on the Desktop: the view's, which its Leaderboard page shows too. Without it, or before it
+  /// is read, there is no Top Teams.
+  final SuperTabShippingReader? leaderboard;
 
   /// How many people Humans lists, most points first; the heading opens the whole board.
   static const humansShown = 8;
@@ -107,8 +108,12 @@ class ProjectSidebar extends StatelessWidget {
   /// Opens the chat of an agent chosen in My agents in the middle; [onSelect] when not given.
   final ValueChanged<String>? onOpenAgentChat;
 
-  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm; its row opens nothing without it.
+  /// Opens a pane of the person's own listed under Your Team in their Personal Swarm, which makes it an agent of the Swarm; its
+  /// row opens nothing without it.
   final ValueChanged<PersonalAgent>? onOpenPane;
+
+  /// The panes ([PersonalAgent.swarmId]) joining the Swarm now: their rows say so and wait.
+  final Set<String> joining;
 
   /// The project whose Board holds the Desktop's middle, if one does. Its row is then the lit one, though the selected
   /// chat is the Buddy's on the right (task #4220).
@@ -700,18 +705,22 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  /// Humans (task #4466): the Leaderboard in short, its people most points first with their points on the right. The
-  /// heading and every person open the whole board.
+  /// Top Teams: the Leaderboard in short, its people most points first with their points on the right (people ranked by how
+  /// many of their agents ship, docs/plans/2026-11-09-swarm-v4-leaderboard.md). Every person opens the whole board.
   List<Widget> _humans(SuperTabSnapshot? snapshot) {
     final onPage = this.onPage;
     if (snapshot == null || onPage == null) return const [];
-    final scores = [...?leaderboard?.board?.people].take(humansShown).toList();
+    // This week's, whichever the Leaderboard page shows.
+    final board = leaderboard?.week;
+    final scores = [...?board?.people].take(humansShown).toList();
     // An empty list shows nothing (anh Dee's rule): no heading until someone has points. A Swarm of one person before its first
     // task ships has a board of one zero, empty too; a team's zeros stay, the way to its Leaderboard.
-    if (scores.isEmpty ||
-        (snapshot.people.length < 2 && (scores.first.points) <= 0)) {
-      return const [];
-    }
+    final empty =
+        scores.isEmpty ||
+        (snapshot.people.length < 2 && scores.first.points <= 0);
+    // A computer of the reader's that could not read GitHub is why nobody may be shipping: it is said even then.
+    final failures = empty ? [...?board?.failures] : const <ShippingFailure>[];
+    if (empty && failures.isEmpty) return const [];
     void open() => onPage(SwarmPage.leaderboard);
     final people = {for (final person in snapshot.people) person.id: person};
     return [
@@ -729,20 +738,28 @@ class ProjectSidebar extends StatelessWidget {
               leading: person == null
                   ? SuperTabAvatar(
                       identity: 'person:${score.personId}',
-                      name: score.displayName ?? '',
+                      name: score.displayName,
                       size: SuperTabQuietRow.faceSize,
                     )
                   : SuperTabAvatar.person(
                       person,
                       size: SuperTabQuietRow.faceSize,
                     ),
-              name: person?.shownName ?? score.displayName ?? 'Someone',
-              detail: '${score.points}',
+              name: person?.shownName ?? score.displayName,
+              detail: shippingPoints(score.points),
               selected:
                   page == SwarmPage.leaderboard &&
                   score.personId == controller.accountId,
               onTap: open,
             ),
+      if (controller.topTeamsGroupOpen)
+        for (final failure in failures.take(1))
+          _iconRow(
+            key: 'super-human-reading',
+            icon: AppIcons.triangleAlert,
+            name: shippingFailureText(failure.code),
+            onTap: open,
+          ),
     ];
   }
 
@@ -863,29 +880,88 @@ class ProjectSidebar extends StatelessWidget {
         attachTooltip: 'Attach agent',
         attachKey: const ValueKey('project-sidebar-agents-attach'),
       ),
-      if (controller.agentsGroupOpen) ...[
-        for (final (agent, chat) in reading.myAgents)
-          _agentRow(snapshot, agent, chat),
-        for (final pane in reading.panes) _paneRow(pane),
-      ],
+      if (controller.agentsGroupOpen) ..._teamRows(snapshot, reading),
       const SizedBox(height: grid.AppDesktop.groupGap),
     ];
   }
 
+  /// How many of Your Team's rows show before "N more" (tester Q1, 2026-11-10: with forty agents a person scrolled past
+  /// every one to reach a project).
+  static const teamShown = 8;
+
+  /// Your Team's rows: every one when at most one more than [teamShown] would show, or once the reader opened them all;
+  /// else the [teamShown] that matter most (something new first, then on a task, then the rest; a pane not in the Swarm
+  /// yet last), each where it stands in the list, plus the open one, and "N more". Only the rows shown are built.
+  List<Widget> _teamRows(SuperTabSnapshot snapshot, _SidebarReading reading) {
+    final agents = reading.myAgents;
+    final count = agents.length + reading.panes.length;
+    bool unread(SuperTabConversation? chat) =>
+        chat != null && controller.unreadShown(chat);
+    Widget build(int i) => i < agents.length
+        ? _agentRow(snapshot, agents[i].$1, agents[i].$2)
+        : _paneRow(reading.panes[i - agents.length]);
+    final all = [for (var i = 0; i < count; i++) i];
+    if (count <= teamShown + 1) return [for (final i in all) build(i)];
+    if (controller.agentsAllShown) {
+      return [
+        for (final i in all) build(i),
+        SuperTabFoldRow(open: true, onTap: controller.toggleAllAgents),
+      ];
+    }
+    int rank(int i) {
+      if (i >= agents.length) return 3;
+      final (agent, chat) = agents[i];
+      if (unread(chat)) return 0;
+      return agentStates?.taskOf(agent) != null ? 1 : 2;
+    }
+
+    final ranks = [for (final i in all) rank(i)];
+    final order = [...all]
+      ..sort((a, b) {
+        final byRank = ranks[a].compareTo(ranks[b]);
+        return byRank != 0 ? byRank : a.compareTo(b);
+      });
+    final shown = {
+      ...order.take(teamShown),
+      for (var i = 0; i < agents.length; i++)
+        if (_chatLit(agents[i].$2)) i,
+    };
+    final hidden = [
+      for (final i in all)
+        if (!shown.contains(i)) i,
+    ];
+    if (hidden.length < 2) return [for (final i in all) build(i)];
+    return [
+      for (final i in all)
+        if (shown.contains(i)) build(i),
+      SuperTabFoldRow(
+        hidden: hidden.length,
+        // Something new behind it says so, as a row's bold name does.
+        unread: hidden.any((i) => i < agents.length && unread(agents[i].$2)),
+        onTap: controller.toggleAllAgents,
+      ),
+    ];
+  }
+
   /// A pane of the person's own in their Personal Swarm, an agent of theirs that has not joined it: its face as it will be,
-  /// its name and its computer.
-  Widget _paneRow(PersonalAgent pane) => SuperTabQuietRow(
-    key: ValueKey('super-pane-${pane.machineId}-${pane.agent.id}'),
-    leading: SuperTabAvatar(
-      identity: 'agent:${pane.swarmId}',
+  /// its name and its computer. A click joins it, which needs its computer on and is done once at a time.
+  Widget _paneRow(PersonalAgent pane) {
+    final busy = joining.contains(pane.swarmId);
+    return SuperTabQuietRow(
+      key: ValueKey('super-pane-${pane.machineId}-${pane.agent.id}'),
+      leading: SuperTabAvatar(
+        identity: 'agent:${pane.swarmId}',
+        name: pane.name,
+        size: SuperTabQuietRow.faceSize,
+        face: true,
+      ),
       name: pane.name,
-      size: SuperTabQuietRow.faceSize,
-      face: true,
-    ),
-    name: pane.name,
-    detail: pane.place,
-    onTap: onOpenPane == null ? null : () => onOpenPane!(pane),
-  );
+      detail: busy ? 'joining' : pane.place,
+      onTap: busy || pane.machine.isOffline || onOpenPane == null
+          ? null
+          : () => onOpenPane!(pane),
+    );
+  }
 
   Widget _agentRow(
     SuperTabSnapshot snapshot,
@@ -902,7 +978,12 @@ class ProjectSidebar extends StatelessWidget {
       tooltip: chat == null && onOpenAgentTerminal != null
           ? 'Opens its terminal'
           : null,
-      detail: agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
+      // A message waits while its engine starts: it says so, before anything else it is doing.
+      detail:
+          SwarmAgentStates.offlineOf(agent) == null &&
+              (app?.engineStarting(agent.machineId, agent.harnessId) ?? false)
+          ? 'starting'
+          : agentStates?.of(agent) ?? SwarmAgentStates.offlineOf(agent),
       selected: _chatLit(chat),
       unread: chat != null && controller.unreadShown(chat),
       onTap: switch ((chat, onOpenAgentTerminal)) {
@@ -1389,3 +1470,33 @@ Set<String> superTabHiddenProjects(
 /// An agent's one quiet detail in the Desktop's My agents (task #4466): "offline", else the project a Lead [leads].
 String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>
     activity == HarnessActivity.offline ? 'offline' : leads;
+
+/// Under Your Team's first rows (`teamShown`): "N more", which opens every row, and once they are open "Show fewer", which
+/// folds them again. Bold while a row it folds has something new.
+class SuperTabFoldRow extends StatelessWidget {
+  const SuperTabFoldRow({
+    super.key = const ValueKey('super-team-more'),
+    this.hidden = 0,
+    this.open = false,
+    this.unread = false,
+    required this.onTap,
+  });
+
+  /// How many rows it folds; none once [open].
+  final int hidden;
+  final bool open;
+  final bool unread;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => SuperTabQuietRow(
+    leading: Icon(
+      open ? AppIcons.chevronUp : AppIcons.chevronDown,
+      size: AppIcons.inlineSize,
+      color: grid.SidebarInk.inkMuted,
+    ),
+    name: open ? 'Show fewer' : '$hidden more',
+    unread: unread,
+    onTap: onTap,
+  );
+}
