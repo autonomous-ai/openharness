@@ -1102,7 +1102,12 @@ async function rootEngineProcess(rootPid, engine) {
  * accepting an unknown row can replace the parent's session with a child.
  */
 async function hermesTopLevelSession(dbPath, sessionId) {
-  if (!/^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/.test(String(sessionId || ''))) return false
+  // Hermes 0.23's unified runtime names a session `local-<sha256>` and keeps a CLI or TUI one as
+  // source='local', its creator in `created_source` (cli/src/engines/hermes/contract.ts `HERMES_SOURCE`).
+  // Only that runtime makes such ids, and it adds the column to every store it opens, so only they ask
+  // for it; a store without it fails the query and reads as unreadable, which is fail-closed.
+  const local = /^local-[0-9a-f]{64}$/.test(String(sessionId || ''))
+  if (!local && !/^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/.test(String(sessionId || ''))) return false
   // EVERY home on this machine, this one first. `hermes -p <name>` keeps its sessions in
   // `~/.hermes/profiles/<name>/state.db`, and the block in a profile's config.yaml may still name the
   // DEFAULT home (Hermes copies the config when it creates a profile, and older installs baked the
@@ -1116,7 +1121,7 @@ async function hermesTopLevelSession(dbPath, sessionId) {
     for (const db of homes) {
       const raw = await execFileText('sqlite3', [
         '-json', '-cmd', '.timeout 500', '-cmd', 'PRAGMA query_only=1', `file:${db}?mode=ro`,
-        `SELECT source FROM sessions WHERE id = '${sessionId}';`,
+        `SELECT source${local ? ', created_source' : ''} FROM sessions WHERE id = '${sessionId}';`,
         // As long as the process scan gets: on a loaded machine a second is not always enough to
         // spawn sqlite3, and a lookup cut short drops a real session's registration.
       ], 3000)
@@ -1126,6 +1131,12 @@ async function hermesTopLevelSession(dbPath, sessionId) {
         const rows = JSON.parse(raw.trim() || '[]')
         if (!Array.isArray(rows) || rows.length === 0) continue
         const source = typeof rows[0]?.source === 'string' ? rows[0].source : ''
+        if (local && source === 'local') {
+          const created = rows[0]?.created_source
+          // Not stamped yet ('unknown' is Hermes's placeholder): ask again, as for a row not written yet.
+          if (created === null || created === undefined || created === '' || created === 'unknown' || created === 'local') continue
+          return (created === 'cli' || created === 'tui') ? db : false
+        }
         return (source === '' || source === 'cli' || source === 'tui') ? db : false
       } catch {
         return false
