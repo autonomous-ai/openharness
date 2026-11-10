@@ -2614,7 +2614,6 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   void _openAgent(SuperTabAgent agent) {
-    setState(() {});
     widget.onOpenTerminal(agent);
   }
 
@@ -3229,11 +3228,8 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// On a phone, the view ⋮ opened in place of the chat, which the bar has no
   /// icon to mark as selected; null while the chat is the view.
-  String? get _openViewName => !_menuNamesViews
-      ? null
-      : _terminalsVisible
-      ? 'Group terminals'
-      : null;
+  String? get _openViewName =>
+      _menuNamesViews && _terminalsVisible ? 'Group terminals' : null;
 
   /// The line under the header's title: on a phone the open view, then the
   /// group's linked tasks.
@@ -3374,7 +3370,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (chatAgent != null) return _agentHeader(group!, chatAgent);
     final isProject =
         group != null && c.snapshot?.isProjectLead(group.id) == true;
-    // The one Buddy has one chat, as a project does; it has no pull requests.
+    // The one Buddy has one chat, as a project does.
     final oneBuddy = group?.isSwarmBuddyChat == true;
     final restsOnChat = isProject || oneBuddy;
     return Container(
@@ -3493,6 +3489,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ],
             if (!isProject) ...[
+              const SizedBox(width: 4),
               fingerTarget(
                 enabled: _phone,
                 _options(group, views: _menuNamesViews),
@@ -3665,7 +3662,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
-  /// header has no room for — the group's terminals and its pull requests —
+  /// header has no room for — the group's terminals —
   /// each a finger's height.
   Widget _options(SuperTabConversation group, {bool views = false}) {
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
