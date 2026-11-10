@@ -140,7 +140,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('Attach a stopped session
     await api(`/api/super-tabs/${tab}/commands`, 'POST', { operationId: randomUUID(), command: { type: 'agent.remove', agentId: cade } })
     await until('Cade to leave Your Team', async () => (await swarm(tab)).agents.every((a: any) => a.id !== cade) || null, 30_000, 500)
     // Its session is on its computer still, running or stopped, for Attach to find (swarm_screen.dart _attachContext).
-    // Running still: a person's removal stops nothing on the computer (backend agent.remove), whatever Delete's dialog says (#3791).
+    // Running still: the Swarm's removal stops nothing on the computer (backend agent.remove); Desktop's Delete stops it first (#3791).
     const after = await until('the session to settle', async () => (await rows()).find(a => a.id === harnessId) ?? null, 30_000, 500)
     if (after.status === 'stopped') {
       const resumed = await me.client.request('agent_resume', { agentId: harnessId, creationId: randomUUID() }, 90_000)
