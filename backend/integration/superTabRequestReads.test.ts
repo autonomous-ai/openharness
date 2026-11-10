@@ -1,6 +1,6 @@
 /**
- * What three per-request reads cost (task #2674, Ken's prod scan of 2026-11-04 12:00 VN): the decisions list, the leaderboard
- * and the mentions list. Each answers exactly what a read straight from Mongo answers (a store without the read cache), and
+ * What two per-request reads cost (task #2674, Ken's prod scan of 2026-11-04 12:00 VN): the leaderboard and the mentions
+ * list. Each answers exactly what a read straight from Mongo answers (a store without the read cache), and
  * reads only what changed since its Swarm's last stamp.
  */
 import { randomUUID } from 'node:crypto'
@@ -15,7 +15,6 @@ import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
-import type { DecisionList } from '../src/superTabs/decisions.js'
 import { WEEK_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -49,8 +48,7 @@ afterAll(async () => {
 const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
 
 /** A Swarm in parts: requests of peer's shipped this week and two weeks ago (dormant since), a third shipped last week and
- *  still active, a worker waiting on the owner, the owner's open and answered decisions (one in the dormant chat) and three
- *  tags of the owner's, one a reply in a thread. */
+ *  still active, a worker waiting on the owner, and three tags of the owner's, one a reply in a thread. */
 async function scene() {
   const s = swarm(NOW)
   s.join(peerActor)
@@ -72,13 +70,6 @@ async function scene() {
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 50 })
   const report = await migrateSwarm(db, tabId, { now: () => NOW - 60_000 })
   if (!report.ok) throw new Error(report.error)
-  const decision = (id: string, conversationId: string, answered: boolean) => db.superTabDecision.create({ data: { id: `${tabId}-${id}`, tabId,
-    batchId: `${tabId}-batch-${id}`, projectId: 'lead', conversationId, assignmentId: null, personId: owner.sub, askerAgentId: worker,
-    question: `Question ${id}?`, options: ['Yes', 'No'], recommended: 0, unblocks: 'the work', createdAt: new Date(NOW - DAY),
-    ...answered ? { answeredAt: new Date(NOW - HOUR), choice: 1 } : {} } })
-  await decision('open', waiting, false)
-  await decision('quiet', old, false)
-  await decision('answered', waiting, true)
   const agent: Author = { kind: 'agent', id: worker, name: 'Worker', membershipGeneration: 'fixture' }
   const root = await say(tabId, waiting, agent, [owner])
   await say(tabId, waiting, agent, [owner], root)
@@ -115,32 +106,6 @@ async function edit(tabId: string, conversationId: string, change: (group: Conve
     await guardedWrite(tx, tabId, { op: 'update', kind: 'group', key: conversationId, seen: row!.version, data }, Date.now())
   })
 }
-
-describe('the decisions list (GET /decisions)', () => {
-  it('reads no Swarm part again at an unchanged stamp, and answers as a read straight from Mongo', async () => {
-    const s = await scene()
-    for (const list of ['open', 'answered', 'settled'] as DecisionList[]) {
-      const first = await cached.decisions(owner, s.tabId, list)
-      expect(first, list).toEqual(await direct.decisions(owner, s.tabId, list))
-      const again = await partReads(() => cached.decisions(owner, s.tabId, list))
-      expect(again.value, list).toEqual(first)
-      // Only the quiet conversation a decision names, by its key; never the members, agents, machines, starts or active groups.
-      expect(Object.keys(again.byCollection).filter(c => c !== 'SwarmGroup'), list).toEqual([])
-      expect(again.byCollection.SwarmGroup ?? 0, list).toBeLessThanOrEqual(1)
-    }
-    // The quiet chat's decision is read by its key and checked like any; this fixture's reader does not get it, read either way.
-    expect((await cached.decisions(owner, s.tabId, 'open')).decisions.map(d => d.question)).toEqual(['Question open?'])
-    expect((await cached.decisions(owner, s.tabId, 'answered')).decisions.map(d => d.question)).toEqual(['Question answered?'])
-  })
-
-  it('answers as a direct read after the Swarm changes', async () => {
-    const s = await scene()
-    await cached.decisions(owner, s.tabId, 'open')
-    await edit(s.tabId, s.waiting, group => { group.title = 'Waiting, renamed' })
-    expect(await cached.decisions(owner, s.tabId, 'open')).toEqual(await direct.decisions(owner, s.tabId, 'open'))
-    expect((await cached.decisions(owner, s.tabId, 'open')).decisions.map(d => d.conversationTitle)).toContain('Waiting, renamed')
-  })
-})
 
 describe('the leaderboard (GET /leaderboard)', () => {
   const boards = (s: { tabId: string }, reads: SwarmReads) => Promise.all([

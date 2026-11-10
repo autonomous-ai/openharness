@@ -846,7 +846,7 @@ export const AGENT_ONLY = { kind: 'agent-only' }
  *  read can still be one row's recipients' alone (forRecipients): a cancel told to its worker, a routing line in the project
  *  chat. A kind no code here knows, stored by a newer server, reads as `people`. */
 export const NOTICE_READERS = {
-  // Only its agent: a skill update (cli host.ts), a decision answered (decisions.ts).
+  // Only its agent: a skill update (cli host.ts), a decision answered (until Swarm v4's 2026-11-10).
   'agent-only': 'agent',
   // What GitHub said to a person's agent, relayed by their own Harness (githubRelay.ts): the person reads it in their chat.
   github: 'people',
@@ -885,11 +885,11 @@ export const NOTICE_READERS = {
   // Proposal history, and the private Buddy notices stored before task #4558, are visible to the people who can read their card/chat.
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
-  // An agent's question to a person in a switched project, in their default Buddy chat (decisions.ts askedThroughBuddy, #3826).
+  // Decisions, written until Swarm v4 removed them (2026-11-10), read still: an agent's question to a person in a switched
+  // project, in their default Buddy chat; a Buddy's question settled, in its owner's Buddy chat; a decision its person must
+  // agree to that reached its time, told to the PM alone. Delete them with the notice readers of v1-v3 (slice S18).
   'decision-asked': 'people',
-  // A Buddy's question settled in its owner's Decisions, in their Buddy chat (decisions.ts settleBuddyDecision).
   'decision-answered': 'people',
-  // A decision its person must agree to reached its time unanswered, told to the PM alone (decisions.ts mustAgreePassed).
   'decision-must-agree': 'recipients',
   // A computer signed in as another account now, told to its old owner in their Buddy chat (commands.ts machine.moved, #3122).
   'computer-moved': 'people',
@@ -992,13 +992,6 @@ export interface CommandEffects {
   terminal?: import('./terminal.js').TerminalEffect
   /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
   closedProposal?: { messageId: string; conversationId: string; reason: string }
-  /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
-  decisions?: import('./decisions.js').DecisionDraft[]
-  decisionAnswer?: import('./decisions.js').DecisionAnswer
-  /** A must-agree decision past its time, kept waiting for its person (decisions.ts keepWaiting). */
-  decisionKeptWaiting?: string
-  /** Decisions whose question was answered elsewhere, closed by the store (decisions.ts closeDecisions; task #4547). */
-  closedDecisions?: string[]
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>

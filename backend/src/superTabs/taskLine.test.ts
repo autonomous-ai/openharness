@@ -210,17 +210,18 @@ describe('ordinary task messages and progress replies', () => {
     expect(thread(asked, root)).toEqual([expect.stringMatching(/^Needs a decision: Keep drafts for a week\? Next: .+ is on it\.$/)])
   })
 
-  // Review of #3223, Minor 1: the line follows the decision, so the PM's own question on a builder's task still tags.
-  it('tags the person the PM asks on a builder\'s task, with its default', () => {
+  // Review of #3223, Minor 1: the line follows who asked, so the PM's own question on a builder's task still tags. No default:
+  // Swarm v4 opens no decision that could take one (2026-11-10).
+  it('tags the person the PM asks on a builder\'s task', () => {
     const f = fixture(), id = f.group(), root = f.task(id).cards!.line!.messageId
     const builder = f.add('Kai', id)
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     const asked = f.status(id, f.pm, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
       unblocks: 'how long drafts are kept' } })
-    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week? Default: A month.'])
+    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week?'])
   })
 
-  it('tags the person a decision waits on, with its default, in a project with no PM', () => {
+  it('tags the person the work waits on, in a project with no PM', () => {
     const f = fixture()
     const project = f.run({ type: 'project.create', name: 'Quiet', visibility: 'private', brief: '' }).result.projectId as string
     const chat = f.state.projects!.find(p => p.id === project)!.leadConversationId
@@ -231,7 +232,7 @@ describe('ordinary task messages and progress replies', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: builder })
     const asked = f.status(id, builder, 'needs_human', 'Keep drafts for a week?', { ask: { personId: 'owner', options: ['A week', 'A month'], recommended: 1,
       unblocks: 'how long drafts are kept' } })
-    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week? Default: A month.'])
+    expect(thread(asked, root)).toEqual(['@dee Your call: Keep drafts for a week?'])
   })
 
   it('says it is not building a cancelled task, with the reason', () => {

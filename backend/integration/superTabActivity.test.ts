@@ -510,35 +510,16 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect(await whom(() => tagging(s.tabId, s.web, 'Peer, if nobody takes this', owner, null, [peer.sub], { mentionsIfNoWorker: true }))).toEqual([])
   })
 
-  it('a decision asked of a person reaches their phone once, worded as the app does, linking its card; asking it again does not', async () => {
-    const s = await scene()
-    const ask = (question: string) => run(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
-      questions: [{ question, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release' }] } as Command, owner, s.worker)
-    let ids: string[] = []
-    const notices = await pushed(async () => { ids = (await ask('Ship it today?')).result.decisionIds as string[] })
-    expect(notices).toEqual([{ personId: peer.sub, key: `decision:${ids[0]}`, slot: `task:${s.tabId}:${s.web}`, title: 'worker-harness asks you',
-      subtitle: await swarmName(s.tabId), body: 'Open Harness to answer.', link: `swarm:${s.tabId}/${s.web}/decision/${ids[0]}` }])
-    // The same open question asked again is the same decision: no second push.
-    expect(await pushed(() => ask('Ship it today?'))).toEqual([])
-  })
-
-  it('a decision a task\'s needs_human asks of a person reaches their phone too', async () => {
+  // Swarm v4 opens no decision (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat.
+  it('a task\'s needs_human that names a person rings no phone, and opens no decision', async () => {
     const s = await scene()
     const state = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
     const assignmentId = state.conversations.find(c => c.id === s.web)!.assignment!.id
     const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(),
       result: 'Ship it behind a flag?', ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command,
     owner, s.worker))
-    expect(notices.map(n => [n.personId, n.key.split(':')[0], n.title, n.link.includes('/decision/'), n.quiet === true]))
-      .toEqual([[peer.sub, 'decision', 'worker-harness asks you', true, false]])
-  })
-
-  it('one ask of several questions sounds once', async () => {
-    const s = await scene()
-    const notices = await pushed(() => run(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [
-      { question: 'Which day?', options: ['Mon', 'Tue'], recommended: 0, unblocks: 'The plan' },
-      { question: 'Which machine?', options: ['Mac', 'Linux'], recommended: 0, unblocks: 'The plan' }] } as Command, owner, s.worker))
-    expect(notices.map(n => [n.personId, n.title, n.quiet === true])).toEqual([[peer.sub, 'worker-harness asks you', false], [peer.sub, 'worker-harness asks you', true]])
+    expect(notices).toEqual([])
+    expect(await db.superTabDecision.count({ where: { tabId: s.tabId } })).toBe(0)
   })
 
   it('tags nobody who cannot read the chat, so no push reaches them', async () => {

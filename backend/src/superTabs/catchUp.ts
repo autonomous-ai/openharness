@@ -26,13 +26,14 @@ export interface CatchUp {
   /** More rows past `through` than one summary reads: the lists and `unread` cover only the span up to `through`, and no
    *  status is listed, since a later one past it may have replaced it. */
   more: boolean
-  /** Decisions waiting for the reader in this conversation (decisions.ts). */
-  decisions: number
+  /** Decisions waiting for the reader in this conversation: none since Swarm v4 removed them (2026-11-10). An app from before
+   *  reads the field; it goes with this read (slice S11). */
+  decisions: 0
   landed: CatchUpList
   blocked: CatchUpList
   needsYou: CatchUpList
 }
-export interface CatchUpSpan { after: number; more: boolean; decisions: number }
+export interface CatchUpSpan { after: number; more: boolean }
 
 type RowAuthor = { kind?: unknown; id?: unknown; name?: unknown; displayName?: unknown }
 const LANDED = new Set<string>([STATUS_LABELS.done])
@@ -94,5 +95,5 @@ export function catchUpSummary(rows: CatchUpRow[], personId: string, span: Catch
   const blocked = latest && BLOCKED.has(latest.label) ? [item(latest.row, latest.text)] : []
   const needsYou = unread.filter(row => row.mentions.includes(personId)).map(row => item(row, row.text))
   return { after: span.after, through: rows.at(-1)?.sequence ?? span.after, unread: unread.filter(inMainStream).length, more: span.more,
-    decisions: span.decisions, landed: list(landed), blocked: list(blocked), needsYou: list(needsYou) }
+    decisions: 0, landed: list(landed), blocked: list(blocked), needsYou: list(needsYou) }
 }

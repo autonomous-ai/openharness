@@ -13,8 +13,8 @@ function row(text: string, extra: Partial<CatchUpRow> = {}): CatchUpRow {
   return { id: `m${sequence}`, sequence, author: lead, source: null, text, thread: null, alsoInChat: null, mentions: [], ...extra }
 }
 const status = (text: string, author = builder) => row(text, { author, source: { kind: 'system' } })
-const summary = (rows: CatchUpRow[], span: Partial<{ after: number; more: boolean; decisions: number }> = {}) =>
-  catchUpSummary(rows, READER, { after: 0, more: false, decisions: 0, ...span })
+const summary = (rows: CatchUpRow[], span: Partial<{ after: number; more: boolean }> = {}) =>
+  catchUpSummary(rows, READER, { after: 0, more: false, ...span })
 const texts = (list: { items: Array<{ text: string }> }) => list.items.map(i => i.text)
 
 describe('catch-up summary of the unread span', () => {
@@ -100,12 +100,12 @@ describe('catch-up summary of the unread span', () => {
     expect(item!.text).toBe(`${'a'.repeat(139)}…`)
   })
 
-  it('names a person by the start of their email, and answers the span it read', () => {
+  it('names a person by the start of their email, and answers the span it read, with no decisions since Swarm v4', () => {
     const peer = { kind: 'person' as const, id: 'peer', name: 'ken@example.com' }
     const tagged = row('Dee?', { author: peer, mentions: [READER] })
-    const result = summary([tagged], { after: 3, more: true, decisions: 2 })
+    const result = summary([tagged], { after: 3, more: true })
     expect(result.needsYou.items[0]!.author).toBe('ken')
-    expect(result).toMatchObject({ after: 3, through: tagged.sequence, more: true, decisions: 2 })
+    expect(result).toMatchObject({ after: 3, through: tagged.sequence, more: true, decisions: 0 })
     expect(summary([], { after: 9 })).toMatchObject({ after: 9, through: 9, unread: 0 })
   })
 })

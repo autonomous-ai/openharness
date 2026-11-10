@@ -202,6 +202,29 @@ describe('the retired scorecard read', () => {
   })
 })
 
+// Decisions are gone with Swarm v4 (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat. An older Desktop, phone or
+// host still reads its list: it gets an empty one, whoever asks, whichever Swarm and list it names, and nothing is read.
+describe('the retired reads', () => {
+  let app: FastifyInstance
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    // A store, reads and host reads that fail on any call: the answer must not touch them.
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  it('answers an older client\'s decisions read with none, with each query it sent, and reads nothing', async () => {
+    for (const url of ['/api/super-tabs/tab-1/decisions?state=open', '/api/super-tabs/tab-1/decisions?state=answered&asAgentId=agent-1',
+      '/api/super-tabs/tab-2/decisions?state=settled', '/api/super-tabs/tab-2/decisions']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data: { more: false, decisions: [] } } })
+    }
+  })
+})
+
 // No picture is set any more (2026-11-09), but an older Desktop or phone still uploads one before it sends the retired `member.avatar`
 // or `agent.avatar`. Whoever asks, for whichever Swarm, the upload is refused in words, nothing is read and nothing is kept.
 // integration/superTabProfile.test.ts tries it against the real store.

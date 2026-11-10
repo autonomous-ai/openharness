@@ -1,4 +1,4 @@
-import { projectPm } from './crewNeeds.js'
+import { crewNeedOf, projectPm } from './crewNeeds.js'
 import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { activeWork, isLeads, stableId, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
@@ -81,14 +81,12 @@ function progress(state: SuperTabState, effects: CommandEffects, group: Conversa
   if (was?.id !== assignment.id) return null
   switch (assignment.status) {
     case 'needs_human': {
-      const decision = effects.decisions?.find(d => d.conversationId === group.id && d.assignmentId === assignment.id)
-      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): with a PM, a question that opened no decision for a person is
-      // the PM's crew need, so its line tells nobody it is their call. The line follows the decision, as commands.ts routes by
-      // who asked (review of #3223).
-      if (projectPm(state, group) && !decision) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
+      // People talk only to the PM (anh Dee, 11-05; crewNeeds.ts): a question routed to the PM is its crew need, so its line tells
+      // nobody it is their call; the PM's own question still tags the person (review of #3223). No decision opens (2026-11-10).
+      const routed = effects.messages.some(m => crewNeedOf(m.source)?.conversationId === group.id)
+      if (projectPm(state, group) && (routed || !assignment.askedOf)) return `Needs a decision: ${sentence(assignment.result) || 'a decision is needed.'} Next: ${pm} is on it.`
       const asked = assignment.askedOf && usernameOf(state, assignment.askedOf)
-      const fallback = decision && decision.options[decision.recommended]
-      return `${asked ? `@${asked} ` : ''}Your call: ${sentence(assignment.result) || 'a decision is needed.'}${fallback ? ` Default: ${sentence(fallback)}` : ''}`
+      return `${asked ? `@${asked} ` : ''}Your call: ${sentence(assignment.result) || 'a decision is needed.'}`
     }
     case 'review': {
       const linked = [...new Set([...assignment.result?.match(PULL_REQUEST) ?? [], ...group.pullRequestUrls ?? []])]

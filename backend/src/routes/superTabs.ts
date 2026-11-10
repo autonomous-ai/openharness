@@ -43,7 +43,7 @@ import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
-import { PICTURES_RETIRED } from '../superTabs/retired.js'
+import { PICTURES_RETIRED, RETIRED_READS } from '../superTabs/retired.js'
 import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
@@ -161,7 +161,6 @@ const deliveryAction = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hold'), claimId: id, reason: holdReason }).strict(),
 ])
 const mentionQuery = z.object({ state: z.enum(['waiting', 'earlier']) }).strict()
-const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered', 'settled']) }).strict()
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySaveSchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
@@ -637,9 +636,11 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof activityReadBody> }>('/api/super-tabs/:tabId/activity/read',
     { preHandler: [validateParams(tabParams), validateQuery(noQuery), validateBody(activityReadBody)] },
     (req, reply) => respond(reply, () => reads.markActivityRead(req.user!, req.params.tabId, req.body.through)))
-  // The scorecard is gone with Swarm v4, but an older Desktop's Scorecard tab still reads it: it answers no days, to everyone, and
-  // names no Swarm, as `updateRequired` does for the retired full-state reads. A Team session never reaches it (lib/teamSession.ts).
-  app.get('/api/super-tabs/:tabId/scorecard', { preHandler: validateParams(tabParams) }, (_req, reply) => sendSuccess(reply, { days: [] }))
+  // Reads Swarm v4 removed, which an older client still makes (superTabs/retired.ts): each answers its empty answer to everyone, with
+  // whatever query it sent, and names no Swarm, as `updateRequired` does for the retired full-state reads.
+  for (const [url, empty] of Object.entries(RETIRED_READS)) {
+    app.get(url, { preHandler: validateParams(tabParams) }, (_req, reply) => sendSuccess(reply, empty))
+  }
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof leaderboardQuery> }>('/api/super-tabs/:tabId/leaderboard',
     { preHandler: [validateParams(tabParams), validateQuery(leaderboardQuery)] },
     (req, reply) => respond(reply, () => reads.leaderboard(req.user!, req.params.tabId, req.query.projectId, req.query.week, req.query.period, req.query.scope === 'all')))
@@ -753,9 +754,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',
     { preHandler: [validateParams(tabParams), validateQuery(mentionQuery)] },
     (req, reply) => respond(reply, () => store.mentions(req.user!, req.params.tabId, req.query.state)))
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof personDecisionQuery> }>('/api/super-tabs/:tabId/decisions',
-    { preHandler: [validateParams(tabParams), validateQuery(personDecisionQuery)] },
-    (req, reply) => respond(reply, () => store.decisions(req.user!, req.params.tabId, req.query.state, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof startParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/starts/:startId',
     { preHandler: [validateParams(startParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, req.query.asAgentId)))

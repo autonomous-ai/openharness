@@ -6,8 +6,7 @@ import type { PushDevice } from './devices.js'
  * app never posts it a second time; `link` is the phone's `swarm:` payload, which opens the thread at the reply.
  *
  * `slot` is the notification it shows in, the one the app's own notice for the same thing uses (task #3248): a tag's own
- * key, one per thread for its reply, one per task for its decisions, so the app's notice replaces the push instead of
- * showing beside it. `quiet` shows it with no sound and no banner: it only replaces what that slot showed.
+ * key, one per thread for its reply, so the app's notice replaces the push instead of showing beside it. `quiet` shows it with no sound and no banner: it only replaces what that slot showed.
  *
  * `setting` is a tag's: the id of its person's setting for the chat, which drops it as it is sent when that chat is
  * muted (push/muted.ts). The senders never send it.

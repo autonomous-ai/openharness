@@ -414,8 +414,8 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
   return !isClosedPmChat(group) && readsRecordsIn(state, actor, group)
 }
 
-/** Whether [actor] reads what was asked in [group] (decisions.ts): as canReadGroup, and in a closed Chat with PM still its
- *  person, at the generation they were listed with, and the project's Lead, so a decision asked there before stays theirs. */
+/** Whether [actor] reads the records of [group]: as canReadGroup, and in a closed Chat with PM still its person, at the
+ *  generation they were listed with, and the project's Lead, so what was asked there before stays theirs. */
 export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
   if (isSwarmBuddyChat(group)) return readsSwarmBuddyChat(state, actor, group)

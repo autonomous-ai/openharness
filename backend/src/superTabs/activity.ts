@@ -1,6 +1,6 @@
 /**
  * A person's Activity in one Swarm (Desktop's Activity view, as Slack's): replies to their messages.
- * Tags and decisions have their own rows (mentions.ts, decisions.ts); Desktop merges the three.
+ * Tags have their own rows (mentions.ts); Desktop merges the two.
  *
  * A row is written when it happens, in the command's own transaction (store.ts): a thread reply, for everyone in its thread but
  * its author (writeReplyActivity). Reactions are gone (reactions.ts): the rows they left are listed to nobody and expire with the rest. Rows live in

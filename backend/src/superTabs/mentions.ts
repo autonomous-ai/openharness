@@ -349,7 +349,7 @@ export async function mentionsWaiting(tx: Tx, tabId: string, state: SuperTabStat
   return (await waitingMentions(tx, tabId, state, actor, now)).count
 }
 
-/** A person's waiting tags: how many, and a digest of which, as decisions.ts decisionsWaiting. A client reads its lists again
+/** A person's waiting tags: how many, and a digest of which. A client reads its lists again
  *  when either moves (a tag made, answered or expired, though the count may stay), not on every change of the Swarm. Only
  *  the person's own tags they can still read go into it, and only their ids. */
 export async function waitingMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>,

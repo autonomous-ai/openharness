@@ -12,7 +12,6 @@ import { availableSlots, slotCounter, type ContributedMachine } from '../machine
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
-import { promptWaits } from '../promptWaits.js'
 import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
@@ -42,10 +41,6 @@ export interface ReadExtras {
   mentionsWaiting?: number
   /** Which ones they are, as a digest (mentions.ts). */
   mentionsDigest?: string
-  /** A person's open decisions (decisions.ts). */
-  decisionsWaiting?: number
-  /** Which ones they are, as a digest (decisions.ts). */
-  decisionsDigest?: string
   /** Which of their Activity rows are unread, as a digest (activity.ts). */
   activityDigest?: string
   /** Which reminders they have and when each is due, as a digest (reminders.ts). */
@@ -221,10 +216,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(visible.ownerlessProjects ? { ownerlessProjects: visible.ownerlessProjects } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.mentionsDigest !== undefined ? { mentionsDigest: extras.mentionsDigest } : {}),
-    ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
-    ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
-    // Its agents waiting at a prompt in their tasks, under Decisions (promptWaits.ts): from the live state, every read.
-    ...(actor.kind === 'person' ? { promptsWaiting: promptWaits(state, actor) } : {}),
     ...(actor.kind === 'person' && extras.activityDigest !== undefined ? { activityDigest: extras.activityDigest } : {}),
     ...(actor.kind === 'person' && extras.remindersDigest !== undefined ? { remindersDigest: extras.remindersDigest } : {}),
     threadSessions: true as const,

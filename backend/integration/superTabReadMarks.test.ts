@@ -289,12 +289,12 @@ describe('catch-up summary (what the reader missed since their mark)', () => {
     const s = await scenario()
     const { status, body } = await catchUp(s.tabId, s.web, 1)
     expect(status).toBe(200)
-    expect(body.data).toEqual({ after: 1, through: 6, unread: 4, more: false, decisions: 1,
+    expect(body.data).toEqual({ after: 1, through: 6, unread: 4, more: false, decisions: 0,
       landed: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m2`, sequence: 2, author: 'River', text: 'Avatars' }] },
       blocked: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m6`, sequence: 6, author: 'River', text: 'Stuck: No simulator on this Mac.' }] },
       needsYou: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m3`, sequence: 3, author: 'River', text: 'Owner, which colour?' }] } })
-    // Another reader's tags and decisions are their own.
-    expect((await catchUp(s.tabId, s.web, 1, peer)).body.data).toMatchObject({ decisions: 1,
+    // Another reader's tags are their own. No decision counts since Swarm v4 (2026-11-10), not even one stored before.
+    expect((await catchUp(s.tabId, s.web, 1, peer)).body.data).toMatchObject({ decisions: 0,
       needsYou: { total: 1, items: [{ text: 'Peer, which font?' }] } })
   })
 
@@ -332,7 +332,7 @@ describe('catch-up summary (what the reader missed since their mark)', () => {
     expect((await catchUp(s.tabId, s.secretGroup, 0, outsider)).status).toBe(404)
     expect((await catchUp(s.tabId, 'no-such-group', 0, outsider)).status).toBe(404)
     // Its owner reads it.
-    expect((await catchUp(s.tabId, s.secretGroup, 0)).body.data).toMatchObject({ decisions: 1, needsYou: { total: 1 } })
+    expect((await catchUp(s.tabId, s.secretGroup, 0)).body.data).toMatchObject({ needsYou: { total: 1 } })
   })
 
   it('stops summarizing a conversation once the reader can no longer read it', async () => {

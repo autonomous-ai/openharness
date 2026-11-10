@@ -316,11 +316,10 @@ export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryByt
 /** The line a Buddy's chat shows once its session joined. */
 export const buddyReady = (name: string): string => `${name} is ready. Tell it what you have in mind.`
 
-/** What a Buddy may send: posts in its own chat, its owner's proposals, its own questions to its owner and their answers in its
- *  chat (decisions.ts checkBuddyAsker, task #4525), and what its machine reports for every agent (its model, a terminal alert,
- *  its own stop). Every other command is refused, so it can never assign, start, route, ask anyone else or change anything for
- *  its owner (spec constraint: PRIVACY-CRITICAL). */
-const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'decision.ask', 'decision.answer', 'agent.configuration', 'agent.alert',
+/** What a Buddy may send: posts in its own chat, its owner's proposals, and what its machine reports for every agent (its
+ *  model, a terminal alert, its own stop). Every other command is refused, so it can never assign, start, route, ask anyone or
+ *  change anything for its owner (spec constraint: PRIVACY-CRITICAL). */
+const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.react', 'buddy.propose', 'agent.configuration', 'agent.alert',
   'agent.stopLease', 'agent.stopRefused', 'agent.remove', 'buddy.modelResult', 'agent.switchClaim', 'agent.switchResult', 'agent.rebind'])
 
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {

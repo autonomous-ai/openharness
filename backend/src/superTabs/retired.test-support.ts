@@ -13,6 +13,9 @@ export const OLD_PAYLOADS = {
   'member.timeZone': { timeZone: 'Asia/Ho_Chi_Minh' },
   'member.username': { username: 'minh' },
   'member.name': { name: 'Minh Nguyen' },
+  'decision.ask': { conversationId: 'task-1', personId: 'u2', questions: [{ question: 'Ship it?', options: ['Yes', 'No'], recommended: 0,
+    unblocks: 'The release', defaultAt: '2026-11-11T09:00:00.000Z' }, { send: { text: 'Please review #12', projectId: 'lead' } }] },
+  'decision.answer': { decisionId: 'decision-1', choice: 1, note: 'Not today', ownerMessageId: 'm-2' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

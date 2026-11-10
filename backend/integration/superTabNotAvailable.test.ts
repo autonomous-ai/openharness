@@ -94,7 +94,6 @@ function calls(tab: string, chat: string, project: string) {
     json('POST', 'POST /api/super-tabs/:tabId/commands', `${t}/commands`,
       { operationId: op(), command: { type: 'message.send', conversationId: chat, text: 'hello', replyTo: null, recipientIds: [] } }),
     json('GET', 'GET /api/super-tabs/:tabId/mentions', `${t}/mentions?state=waiting`),
-    json('GET', 'GET /api/super-tabs/:tabId/decisions', `${t}/decisions?state=open`),
     json('GET', 'GET /api/super-tabs/:tabId/leaderboard', `${t}/leaderboard?projectId=${project}`),
     json('GET', 'GET /api/super-tabs/:tabId/shipping', `${t}/shipping`),
     json('GET', 'GET /api/super-tabs/:tabId/machine-readings', `${t}/machine-readings`),
@@ -172,10 +171,10 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
     const f = await swarm()
     const real = calls(f.tab, 'lead', 'lead'), missing = calls(MISSING, 'lead', 'lead')
     // Compare against actual registration, so adding a route requires a real refusal test.
-    // The retired full-state read always asks every client to update, the retired scorecard read answers no days, the retired
+    // The retired full-state read always asks every client to update, the retired scorecard and decisions reads answer none, the retired
     // terminal recording answers ok and ignored and the retired picture upload refuses in words, each without reading a Swarm: they are
     // tried alike for everyone in the tests below (and the upload's in superTabProfile.test.ts).
-    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', 'GET /api/super-tabs/:tabId/scorecard', 'POST /api/super-tabs/:tabId/native',
+    expect(new Set([...real.map(c => c.route), 'GET /api/super-tabs/:tabId', 'GET /api/super-tabs/:tabId/scorecard', 'GET /api/super-tabs/:tabId/decisions', 'POST /api/super-tabs/:tabId/native',
       'GET /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/native/:contextId', 'POST /api/super-tabs/:tabId/avatars'])).toEqual(registeredPersonRoutes)
     for (const [i, call] of real.entries()) {
       const cases = { missing: await answer(missing[i]!, outsider), refused: await answer(call, outsider), revoked: await answer(call, removed) }
@@ -249,6 +248,18 @@ describe('a Swarm the caller cannot reach, on every person route', () => {
       for (const [tab, project] of [[f.tab, 'lead'], [f.tab, f.privateProject], [MISSING, 'lead']] as const) {
         const res = await read(tab, project, as)
         expect({ status: res.statusCode, body: res.body }, `${as.email} ${tab} ${project}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { days: [] } }) })
+      }
+    }
+  })
+
+  // Decisions are gone with Swarm v4: an older Desktop, phone or host still reads its list, and gets none, whoever asks and whatever
+  // Swarm it names, even a missing one, so the answer says nothing of any of them.
+  it('answers the retired decisions read with none, alike to everyone, naming nothing of the Swarm', async () => {
+    const f = await swarm()
+    for (const as of [owner, member, outsider, removed]) {
+      for (const tab of [f.tab, MISSING]) {
+        const res = await app.inject({ url: `/api/super-tabs/${tab}/decisions?state=open`, headers: { 'x-user': as.sub } })
+        expect({ status: res.statusCode, body: res.body }, `${as.email} ${tab}`).toEqual({ status: 200, body: JSON.stringify({ success: true, data: { more: false, decisions: [] } }) })
       }
     }
   })

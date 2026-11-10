@@ -14,6 +14,8 @@ import { z } from 'zod'
 export const RETIRED_COMMANDS = [
   'process.confirm', 'project.digest', 'machine.projects', 'machine.ownAccountWork', 'machine.access',
   'member.status', 'member.timeZone', 'member.username', 'member.name',
+  // Decisions (2026-11-10): an agent reaches its person in their 1:1 chat.
+  'decision.ask', 'decision.answer',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
@@ -23,6 +25,16 @@ export const isRetiredCommand = (type: unknown): type is RetiredCommand => retir
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or
  *  logged, and the route's body limit bounds it as it does every command. */
 export const retiredCommandSchemas = RETIRED_COMMANDS.map(type => z.object({ type: z.literal(type) }))
+
+/** Reads of Swarm v1-v3 that an older Desktop, phone or host still makes, each with the empty answer it takes as "nothing here".
+ *  As a retired command's, one constant answer for everyone, whatever Swarm and query it names: nothing is read, so nothing is
+ *  shown that the caller may not see. Each goes with this file's commands, not before 2026-12-09. */
+export const RETIRED_READS: Readonly<Record<string, object>> = {
+  // The daily scorecard (2026-11-09): an older Desktop's Scorecard tab.
+  '/api/super-tabs/:tabId/scorecard': { days: [] },
+  // Decisions (2026-11-10): an older Desktop's and phone's Decisions, and an older host's or Buddy's own asks.
+  '/api/super-tabs/:tabId/decisions': { more: false, decisions: [] },
+}
 
 /** What a retired command's result says, where an agent or an older app prints a command's answer. */
 export const RETIRED_NOTE = 'Swarm no longer has this. Nothing was done.'

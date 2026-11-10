@@ -1355,9 +1355,9 @@ model SuperTabSweepCursor {
   updatedAt DateTime
 }
 
-/// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
-/// state, as mentions are: an asking agent and the asked person read it, and the person answers it once.
-/// writeDecisions removes answered rows older than LEDGER_WEEKS on the next ask; Swarm purge removes all its rows.
+/// A question to one person, with options and a recommendation, of Swarm v1-v3. Swarm v4 has no decisions (anh Dee, 2026-11-10):
+/// nothing writes or reads a row since. Swarm purge removes a deleted Swarm's rows; the one-time decisions drop that follows the
+/// backend release without them removes the rest, and this model with it.
 model SuperTabDecision {
   id             String    @id @map("_id")
   tabId          String
@@ -1392,17 +1392,17 @@ model SuperTabDecision {
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
   kind           String?
   /// Closed unanswered because the work it was asked about is over: its task done or cancelled, or its group archived
-  /// (decisions.ts withdrawIn; Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
+  /// (Dee, 10-31). Set with answeredAt and no choice, so it waits no more, is in no list and goes
   /// with the answered ones after the ledger's weeks. Absent on every other decision.
   withdrawn      Boolean?
   /// With kind "buddy-send" (task #4525): the words its owner's Send posts as them, and the proposal's goal, scope, priority
-  /// and project (decisions.ts SendPayload), at most a message and a proposal's fields. Absent on every other decision.
+  /// and project, at most a message and a proposal's fields. Absent on every other decision.
   send           Json?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
   @@index([tabId, projectId, createdAt])
-  /// The decisions waiting in a conversation whose work ended (decisions.ts withdrawIn).
+  /// The decisions waiting in a conversation whose work ended (read until Swarm v4 removed decisions).
   @@index([tabId, conversationId])
   /// Read by the hourly overdue sweep Swarm v4 removed (the waiting decisions of the last 8 days); nothing reads it now.
   @@index([answeredAt, createdAt], map: "decision_waiting_created")

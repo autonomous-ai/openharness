@@ -3,8 +3,8 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { CREW_NEED_KIND, crewNeedOf } from './crewNeeds.js'
 import { agentOnly, createSuperTab, type Actor, type MessageDraft } from './model.js'
 
-// People talk only to the PM (anh Dee, 2026-11-05; task #3404, River's ruling): an agent's tag of a person, its needs_human,
-// its decision.ask and its person.tell become a crew need for the PM, and the agent is told. The PM tags anyone; any other
+// People talk only to the PM (anh Dee, 2026-11-05; task #3404, River's ruling): an agent's tag of a person, its needs_human
+// and its person.tell become a crew need for the PM, and the agent is told. The PM tags anyone; any other
 // agent tags only the person it is answering. With no PM in the project, everything stays as before.
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -104,7 +104,7 @@ describe('an agent’s tag of a person goes to the PM', () => {
   })
 })
 
-describe('an agent’s needs_human, decision ask and line to a person go to the PM', () => {
+describe('an agent’s needs_human and line to a person go to the PM', () => {
   const assigned = () => {
     const f = fixture()
     const assignmentId = f.run({ type: 'work.assign', conversationId: f.group, agentId: f.worker }).result.assignmentId as string
@@ -115,7 +115,6 @@ describe('an agent’s needs_human, decision ask and line to a person go to the 
     const f = assigned()
     const sent = f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
       result: 'Ship to everyone, or behind a flag?', ask: { personId: 'peer', ...choices } }, asAgent(f.worker))
-    expect(sent.decisions ?? []).toEqual([])
     const row = sent.messages.find(m => (m.source as { status?: string } | null)?.status === 'needs_human')!
     expect(row.recipients).toEqual([f.pm])
     expect(row.text).not.toContain('Asked peer')
@@ -138,26 +137,11 @@ describe('an agent’s needs_human, decision ask and line to a person go to the 
     const ask = (actor: Actor) => f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
       result: 'Ship to everyone, or behind a flag?', ask: { personId: 'peer', ...choices } }, actor)
     const byOther = ask(asAgent(other))
-    expect(byOther.decisions ?? []).toEqual([])
     expect(byOther.messages.map(m => crewNeedOf(m.source)).filter(Boolean)).toEqual([expect.objectContaining({ agentId: other, personIds: ['peer'] })])
     expect(byOther.result.routedToPm).toMatch(/PM/)
     f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, asAgent(f.worker))
     const byPm = ask(asAgent(f.pm))
-    expect(byPm.decisions).toHaveLength(1)
     expect(byPm.messages.filter(m => crewNeedOf(m.source))).toEqual([])
-  })
-
-  it('turns a worker’s decision ask into a crew need, and keeps the PM’s', () => {
-    const f = assigned()
-    const question = { question: 'Ship how?', ...choices }
-    const byWorker = f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer', questions: [question] }, asAgent(f.worker))
-    expect(byWorker.decisions ?? []).toEqual([])
-    expect(needs(byWorker).map(m => [m.recipients, crewNeedOf(m.source)])).toEqual([[[f.pm],
-      { agentId: f.worker, personIds: ['peer'], messageId: needs(byWorker)[0]!.id, conversationId: f.group, question: 'Ship how?', options: choices.options, recommended: 0 }]])
-    expect(byWorker.result.routedToPm).toMatch(/PM/)
-    const byPm = f.run({ type: 'decision.ask', conversationId: f.group, personId: 'peer', questions: [question] }, asAgent(f.pm))
-    expect(byPm.decisions).toHaveLength(1)
-    expect(needs(byPm)).toEqual([])
   })
 
   it('turns a worker’s line to a person into a crew need in the project chat, and refuses the PM’s private line (task #4558)', () => {

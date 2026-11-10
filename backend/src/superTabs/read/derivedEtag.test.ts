@@ -36,7 +36,6 @@ describe('derivedEtag', () => {
       d => { d.machines.m1!.machineSuspended = 'full' },
       d => { d.avatars = { 'person:p1': 'https://example.test/a?sig=2' } },
       d => { d.mentionsWaiting = 2 },
-      d => { d.decisionsDigest = 'x' },
       d => { delete d.avatars },
     ]
     for (const change of changes) {

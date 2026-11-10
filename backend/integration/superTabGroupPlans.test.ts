@@ -16,7 +16,6 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { HeldParts } from '../src/superTabs/parts/held.js'
 import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
 import { weekStart } from '../src/superTabs/leaderboard/week.js'
-import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
 import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -269,24 +268,6 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expectOnlyReturned(reads)
     // The open conversations and the tagged one, at most: never the Swarm's QUIET_LEAD + QUIET_OTHER quiet ones.
     expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(s.active.length + 1)
-  })
-
-  it('a person\'s decisions read the quiet conversations they wait in by id', async () => {
-    const quiet = s.quietLead[4]!.key
-    await db.superTabDecision.create({ data: { id: `${s.tabId}-ask`, tabId: s.tabId, batchId: 'b', projectId: 'lead', conversationId: quiet, personId: owner.sub,
-      askerAgentId: s.lead, question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work', createdAt: new Date(MIGRATED) } })
-    const state = parts.reassemble(await db.$transaction(tx => parts.loadActive(tx, s.tabId)))
-    const actor = { kind: 'person' as const, userId: owner.sub, email: owner.email }
-    let count = 0, listed: Array<{ conversationId: string }> = []
-    const reads = await profiled(async () => {
-      count = (await db.$transaction(tx => decisionsWaiting(tx, s.tabId, state, actor))).count
-      listed = (await db.$transaction(tx => listDecisions(tx, s.tabId, state, actor, 'open'))).decisions
-    })
-    expect(count).toBe(1)
-    expect(listed.map(d => d.conversationId)).toEqual([quiet])
-    expect(reads.length).toBeGreaterThan(0)
-    expectIndexed(reads)
-    expectOnlyReturned(reads)
   })
 
   // Folded from #1964: a later page started at no bound, so each page read every newer quiet conversation again.

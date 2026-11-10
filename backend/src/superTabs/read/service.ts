@@ -10,7 +10,6 @@ import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../..
 import { agentOnly, author, fail, groupForBuddy, isLeads, seenMachineIds, stableId, SuperTabError, visibleState, type Actor, type AgentStart, type Conversation, type SuperTabState } from '../model.js'
 import { logger } from '../../utils/logger.js'
 import { mentionsDigest, resolveRead, swarmsWithTags, waitingMentions, waitingTagRows, type WaitingTagRow } from '../mentions.js'
-import { decisionsWaiting } from '../decisions.js'
 import { lowerReadMark, readMarkRows, readThreadMarks, writeThreadFollow, writeThreadMark, type ReadMarkRow } from '../readMarks.js'
 import { activityDigest, listActivity, markActivityRead, markActivityThreadRead, type ActivityItem } from '../activity.js'
 import { clearReminder, listReminders, REMINDER_AHEAD_MS, remindersDigest, setReminder, type ReminderItem } from '../reminders.js'
@@ -195,8 +194,7 @@ export class SwarmReads {
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
       // derive values. The base is one per Swarm and stamp, whoever reads: the Lead conversations, running work, unfinished
-      // starts and the like, and no progress parts (the feed sends changed ones). Open decisions count their conversations
-      // themselves (decisions.ts).
+      // starts and the like, and no progress parts (the feed sends changed ones).
       const base = await readLight(tx, cached, tabId, LIGHT)
       const from = readCursor(cursor, base.visibilityEpoch, t0)
       // Reloading readers still pass the access check first, as every read does.
@@ -646,13 +644,13 @@ export class SwarmReads {
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [machineVersions, counts, newest] = await Promise.all([
       this.machineLookups(state),
-      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0, waitingRows), decisionsWaiting(tx, tabId, state, actor),
+      actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0, waitingRows),
         activityDigest(tx, tabId, actor.userId, t0), remindersDigest(tx, tabId, actor.userId)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
     const view = readerView(loaded, actor, t0, { machineVersions,
-      ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
-        decisionsDigest: counts[1].digest, activityDigest: counts[2], remindersDigest: counts[3] } : {}) }, state)
+      ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, activityDigest: counts[1],
+        remindersDigest: counts[2] } : {}) }, state)
     // People count a chat unread by its newest main row; agents keep no read marks.
     if (actor.kind === 'person') view.parts.groups = await this.servedTops.served(tabId, state, view.parts.groups)
     return { parts: loaded, actor, lastChangedAt: newest, view }

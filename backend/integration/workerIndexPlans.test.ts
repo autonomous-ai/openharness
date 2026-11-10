@@ -117,43 +117,6 @@ describe('the minute billing sync', () => {
   })
 })
 
-describe('the routing reads', () => {
-  it('reads a Swarm’s failed starts of the last 7 days by its tabId+createdAt index', async () => {
-    const { failedStarts } = await import('../src/superTabs/costs/read.js')
-    const decision = (createdAt: number, outcome: string | null) => ({ id: randomUUID(), tabId: 'tab-f', conversationId: 'g1', record: {},
-      final: { kind: 'new', startId: randomUUID(), machineId: 'secret-mac', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high' }, outcome, createdAt: new Date(createdAt) })
-    await db.superTabRouteDecision.createMany({ data: [
-      ...Array.from({ length: 20 }, () => decision(NOW - 30 * DAY, 'failed')),
-      decision(NOW - DAY, 'failed'), decision(NOW - 2 * DAY, 'done'), decision(NOW - 3 * DAY, null),
-    ] })
-    let found: Awaited<ReturnType<typeof failedStarts>> = []
-    const entries = await profiled(db, async () => { found = await failedStarts(db, 'tab-f', NOW - 7 * DAY) })
-    expect(found).toEqual([{ conversationId: 'g1', engine: 'codex', model: 'gpt-6.1-sol', effort: 'high', at: NOW - DAY }])
-    const rows = reads(entries, 'SuperTabRouteDecision', ['tabId', 'createdAt'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, createdAt: 1/)
-  })
-
-  it('reads a project’s reflection decisions by the decisions’ project index, never another project’s (review of #2276)', async () => {
-    const { reflectionDecisions } = await import('../src/superTabs/decisions.js')
-    const decision = (projectId: string, kind?: string) => ({ id: randomUUID(), tabId: 'tab-d', batchId: 'b', projectId, conversationId: 'c', personId: 'p',
-      askerAgentId: 'a', question: `${kind ?? 'Plain'}? Saving.`, options: ['Yes', 'No'], recommended: 0, unblocks: 'x', createdAt: new Date(NOW), ...kind ? { kind } : {} })
-    await db.superTabDecision.createMany({ data: [
-      ...Array.from({ length: 20 }, () => decision('other', 'routing-reflection')),
-      decision('lead'), decision('lead', 'routing-reflection'), decision('lead', 'routing-reflection'),
-    ] })
-    let found: Awaited<ReturnType<typeof reflectionDecisions>> = []
-    const entries = await profiled(db, async () => { found = await reflectionDecisions(db, 'tab-d', 'lead') })
-    expect(found).toHaveLength(2)
-    const rows = reads(entries, 'SuperTabDecision', ['tabId', 'projectId'])
-    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
-    // The project's decisions, its plain ones too: no other project's.
-    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
-    expect(rows[0]!.planSummary, JSON.stringify(plan(rows))).toMatch(/IXSCAN \{ tabId: 1, projectId: 1, createdAt: 1/)
-  })
-})
-
 describe('the pending-upload sweep', () => {
   it('reads only the unfinished uploads it removes, by the (purpose, createdAt) index', async () => {
     const { sweepPendingUploads } = await import('../src/lib/pendingUploadSweep.js')

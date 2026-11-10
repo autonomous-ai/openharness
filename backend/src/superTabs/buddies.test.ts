@@ -3,9 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
-import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, defaultBuddy, defaultBuddyChat, ownAgentAuthor, refuseOthersInPrivateChat, shownBefore, swarmBuddyChatId } from './buddies.js'
-import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { AGENT_NAMES, isRoleName } from './agentNames.js'
 import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
@@ -563,7 +561,7 @@ describe('what a Buddy may do', () => {
       .toThrow('A Buddy posts only in its own chat')
   })
 
-  it('never assigns, starts agents, opens groups, asks anyone but its owner, sets rules or reacts outside its chat', () => {
+  it('never assigns, starts agents, opens groups, sets rules or reacts outside its chat', () => {
     const f = on()
     const refused: Command[] = [
       { type: 'work.assign', conversationId: f.group, agentId: 'buddy' },
@@ -571,8 +569,6 @@ describe('what a Buddy may do', () => {
       { type: 'conversation.create', projectId: f.app.projectId, title: 'New', brief: 'Brief', checks: [{ description: 'Done', independent: false }] },
       { type: 'agent.start', request: { conversationId: f.group, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' },
-      // Its own owner only (task #4525, buddyDecisions.test.ts).
-      { type: 'decision.ask', conversationId: f.chat, personId: 'owner', questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] },
       { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
       { type: 'conversation.agent', conversationId: f.app.conversationId, agentId: 'buddy', present: true, lead: false },
       { type: 'message.react', conversationId: f.app.conversationId, messageId: 'm', emoji: 'thumbs_up', on: true },
@@ -1078,10 +1074,11 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
   it('is never opened again, by a person or the PM', () => {
     const f = setup()
     const refusal = (actor?: Actor) => { try { f.run({ ...open([actor ? 'peer' : 'owner']), projectId: f.app.projectId }, actor) } catch (e) { return String((e as Error).message) } return '' }
-    // Task #4547: neither refusal points at the retired private line; a Lead is told the project chat or a Decision.
+    // Task #4547: neither refusal points at the retired private line; a Lead is told the project chat, tagging (no Decisions since
+    // Swarm v4, 2026-11-10).
     expect(refusal()).toContain('Chat with PM is closed')
     expect(refusal()).not.toMatch(/private lines/)
-    expect(refusal(agentActor(f.pm))).toMatch(/project chat.*decision\.ask|decision\.ask.*project chat/)
+    expect(refusal(agentActor(f.pm))).toMatch(/project chat, tagging them\.$/)
     expect(refusal(agentActor(f.pm))).not.toContain('person.tell')
     expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
   })
@@ -1108,25 +1105,12 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
     expect(f.state.conversations.map(c => c.id)).toContain(f.pmChat)
   })
 
-  it('takes no posts or decisions, the PM\'s included', () => {
+  it('takes no posts, the PM\'s included', () => {
     const f = setup()
     expect(() => f.run(say(f.pmChat), peer)).toThrow('unavailable')
     expect(() => f.run(say(f.pmChat), agentActor(f.pm))).toThrow('unavailable')
-    expect(() => f.run({ type: 'decision.ask', conversationId: f.pmChat, personId: 'peer',
-      questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] }, agentActor(f.pm))).toThrow('unavailable')
   })
 
-  it('keeps a decision asked there before answerable by its person alone; the PM hears in the project chat, with none of the answer', () => {
-    const f = setup()
-    const decision = { id: 'old', personId: 'peer', conversationId: f.pmChat, projectId: f.app.projectId, askerAgentId: f.pm,
-      question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
-    expect(() => f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, owner, { decision: { ...decision, personId: 'owner' } })).toThrow('unavailable')
-    const answered = f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, peer, { decision })
-    expect(answered.result.decisionId).toBe('old')
-    // Told in the project chat, so the notice never says it was asked there.
-    expect(answered.messages.map(m => [m.conversationId, m.recipients, m.text])).toEqual([[f.app.conversationId, [f.pm], CLOSED_CHAT_ANSWERED_NOTICE]])
-    expect(CLOSED_CHAT_ANSWERED_NOTICE).not.toContain('in this conversation')
-  })
 })
 
 describe('a person\'s Buddy chat before any Buddy (Lead, 10-29)', () => {
@@ -1237,25 +1221,6 @@ describe('a Buddy\'s terminal alert', () => {
     const f = setup()
     const rows = f.run({ type: 'agent.alert', agentId: 'buddy', alert: 'prompt', active: true }, agentActor('buddy')).messages
     expect(rows.map(r => [r.conversationId, r.recipients])).toEqual([[f.chat, []]])
-  })
-})
-
-describe('a decision left to the PM while Buddies are on', () => {
-  it('has their own Buddy say what the PM chose in their one Buddy chat marked with its project, and in their older Buddy chat there, to no one, not in their read-only Chat with PM', () => {
-    const f = setup()
-    // Only they and their own agent post in their private chat (task #4558): their default Buddy writes the line.
-    giveOwnBuddy(f.state, 'peer')
-    const decision = { id: 'decision-1', personId: 'peer', conversationId: f.group, projectId: f.app.projectId, askerAgentId: f.pm,
-      question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
-    const delegate = () => f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision }).messages
-      .filter(m => (m.source as { kind?: string } | undefined)?.kind === 'decision-delegated')
-    const lines = delegate()
-    expect(lines).toEqual([
-      expect.objectContaining({ conversationId: peerSwarmChat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-        author: expect.objectContaining({ id: 'peer-buddy' }), source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: f.app.projectId } }),
-      expect.objectContaining({ conversationId: f.chat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-        source: { kind: 'decision-delegated', decisionId: 'decision-1' } })])
-    expect(lines.map(m => m.conversationId)).not.toContain(f.pmChat)
   })
 })
 

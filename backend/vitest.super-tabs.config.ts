@@ -48,7 +48,6 @@ export default defineConfig({ test: {
     'integration/superTabBuddyProbes.test.ts',
     'integration/superTabBuddySessions.test.ts',
     'integration/superTabSwarmBuddy.test.ts',
-    'integration/superTabBuddyDecisions.test.ts',
     'integration/superTabPersonalLead.test.ts',
     'integration/superTabCosts.test.ts',
     'integration/harnessSharesList.test.ts',
