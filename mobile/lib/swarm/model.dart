@@ -476,6 +476,11 @@ class SuperTabConversation {
   /// 2026-10-31-one-buddy-per-swarm): in no project, keyed by the empty id.
   bool get isSwarmBuddyChat => kind == 'swarm-buddy';
 
+  /// A person's 1:1 chat with one agent of theirs (Swarm v4, backend
+  /// projects.ts isAgentChat): only they read it, and its agent's words ring
+  /// their phone ([SwarmChatNotices]).
+  bool get isAgentChat => kind == 'agent-chat';
+
   /// The person a Buddy chat belongs to; only they read it.
   final String? buddyOwnerId;
 
