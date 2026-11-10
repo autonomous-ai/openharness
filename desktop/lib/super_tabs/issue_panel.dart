@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' show max;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -13,7 +14,6 @@ import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
-import 'foreground_refresh.dart';
 import 'github_issues.dart';
 import 'github_pulls.dart';
 import 'message_row.dart';
@@ -22,6 +22,7 @@ import 'model.dart';
 import 'pull_chip.dart';
 import 'swarm_type.dart';
 import 'task_board.dart';
+import 'visible_tick.dart';
 
 /// A task opened beside its project's channel (Swarm v4, anh Dee 2026-11-09): the GitHub issue, read with `gh` on this
 /// computer as its person, its text and its comments as one conversation, each named by the agent that signed it. People
@@ -60,7 +61,8 @@ class SwarmIssuePanel extends StatefulWidget {
   State<SwarmIssuePanel> createState() => _SwarmIssuePanelState();
 }
 
-class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
+class _SwarmIssuePanelState extends State<SwarmIssuePanel>
+    with WidgetsBindingObserver, VisibleTick<SwarmIssuePanel> {
   SwarmIssueThread? _thread;
 
   /// The task's open pull request, as last read: shown under its title.
@@ -74,14 +76,34 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   String? _earlier;
   bool _showing = false;
   String? _error;
-  SwarmForegroundRefresh? _refresh;
+
+  /// When the last read started: back in sight, the task reads only once its clock would have by now.
+  DateTime? _readAt;
+
+  /// Reads still going: the clock's read waits for the next while one is.
+  int _reads = 0;
 
   @override
   void initState() {
     super.initState();
     _open();
-    if (widget.refreshEvery case final every?) {
-      _refresh = SwarmForegroundRefresh(every, _read);
+    // Its clock runs only while it shows: hidden, it would spend the person's GitHub rate limit on nobody.
+    if (widget.refreshEvery case final every?) visibleTick(every);
+  }
+
+  @override
+  void onTick() {
+    if (_reads == 0) _read();
+  }
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    final (every, readAt) = (widget.refreshEvery, _readAt);
+    if (onScreen &&
+        _reads == 0 &&
+        every != null &&
+        (readAt == null || clock.now().difference(readAt) >= every)) {
+      _read();
     }
   }
 
@@ -127,13 +149,17 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   static String _key(SwarmIssueComment c) =>
       c.url ?? '${c.createdAt?.toIso8601String()}${c.author}${c.body.hashCode}';
 
-  @override
-  void dispose() {
-    _refresh?.dispose();
-    super.dispose();
+  Future<void> _read() async {
+    _reads++;
+    _readAt = clock.now();
+    try {
+      await _readThread();
+    } finally {
+      _reads--;
+    }
   }
 
-  Future<void> _read() async {
+  Future<void> _readThread() async {
     final (repository, number) = (widget.repository, widget.number);
     try {
       final thread = await widget.github.thread(repository, number);

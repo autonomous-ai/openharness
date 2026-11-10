@@ -238,30 +238,6 @@ void main() {
       },
     );
 
-    test('while the app is hidden no board is read on its clock; back in sight it is read again', () async {
-      final binding = TestWidgetsFlutterBinding.ensureInitialized();
-      addTearDown(
-        () => binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed),
-      );
-      final c = await read(world());
-      final calls = <List<String>>[];
-      final states = reader(
-        c,
-        github: swarmV4GitHub(calls: calls),
-        boardEvery: const Duration(milliseconds: 60),
-      );
-      await idle(states);
-      expect(calls, hasLength(1));
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      // Five of its clock's turns: none reads.
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(calls, hasLength(1));
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-      await until(() => calls.length >= 2);
-    });
-
     test('a board is read once when it has no time', () async {
       final c = await read(world());
       final calls = <List<String>>[];

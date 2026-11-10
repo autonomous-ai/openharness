@@ -3,7 +3,6 @@ import 'dart:math' show max;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
 
 import '../logging/app_log.dart';
 import 'controller.dart';
@@ -23,7 +22,7 @@ import 'my_agents.dart';
 /// (at most [maxProjects]), and only what changed: a channel again when the Swarm says it moved past what was read (the posts
 /// after that mark, as the open chat reads them; more than a page of them and the latest page instead), a board once a
 /// [boardEvery] while the Swarm is on screen, once when it is null.
-class SwarmAgentStates extends ChangeNotifier with WidgetsBindingObserver {
+class SwarmAgentStates extends ChangeNotifier {
   SwarmAgentStates({
     required this.controller,
     required this.github,
@@ -31,28 +30,7 @@ class SwarmAgentStates extends ChangeNotifier with WidgetsBindingObserver {
     this.settle = const Duration(milliseconds: 400),
   }) {
     controller.addListener(_changed);
-    WidgetsBinding.instance.addObserver(this);
     _changed();
-  }
-
-  /// While the app is hidden (minimized, behind another app's window) no board is read: each read spends its person's GitHub
-  /// rate limit. Back in sight, what is due is read at once.
-  bool _hidden = false;
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    final hidden =
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached;
-    if (hidden == _hidden) return;
-    _hidden = hidden;
-    if (hidden) {
-      _boards?.cancel();
-      _boards = null;
-    } else {
-      _changed();
-    }
   }
 
   final SuperTabController controller;
@@ -166,10 +144,7 @@ class SwarmAgentStates extends ChangeNotifier with WidgetsBindingObserver {
           if (_disposed) return;
           moved |= await _readBoard(repository);
         }
-        if (projects.isNotEmpty &&
-            !_disposed &&
-            !_hidden &&
-            boardEvery != null) {
+        if (projects.isNotEmpty && !_disposed && boardEvery != null) {
           // Back for the boards: nothing pushes a change of GitHub's.
           _boards?.cancel();
           _boards = Timer(boardEvery!, _changed);
@@ -278,8 +253,7 @@ class SwarmAgentStates extends ChangeNotifier with WidgetsBindingObserver {
   Future<bool> _readBoard(String repository) async {
     final at = _boardRead[repository];
     final every = boardEvery;
-    if (_hidden ||
-        _waiting('board/$repository') ||
+    if (_waiting('board/$repository') ||
         (at != null && (every == null || clock.now().difference(at) < every))) {
       return false;
     }
@@ -301,7 +275,6 @@ class SwarmAgentStates extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     _disposed = true;
     controller.removeListener(_changed);
-    WidgetsBinding.instance.removeObserver(this);
     _settling?.cancel();
     _settling = null;
     _boards?.cancel();
