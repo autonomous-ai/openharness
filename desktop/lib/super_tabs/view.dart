@@ -4176,8 +4176,9 @@ class _SuperTabViewState extends State<SuperTabView>
       consumeOutsideTap: false,
       alignmentOffset: Offset.zero,
       children: [
-        // Swarm v4 (anh Dee, 2026-11-09): a project has its notifications and its settings; its status, pull requests,
-        // instructions document, crew and sharing are v3. The browser still draws the v3 layout, so it keeps them.
+        // Swarm v4 (anh Dee, 2026-11-09): a project has its settings and nothing else; its status, pull requests,
+        // instructions document, crew, sharing and notifications (agents talk to agents) are v3. The browser still draws
+        // the v3 layout, so it keeps them.
         if (!widget.board) ...[
           item(
             'Status',
@@ -4197,9 +4198,9 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Crew', () => _groupAction('crew', group)),
           if (editable && owner)
             item('Sharing', () => _groupAction('sharing', group)),
+          _notifyMenu(group),
+          const AppMenuDivider(),
         ],
-        _notifyMenu(group),
-        const AppMenuDivider(),
         item(
           'Project settings…',
           () => unawaited(_projectSettings(group, project)),
@@ -4441,16 +4442,6 @@ class _SuperTabViewState extends State<SuperTabView>
       'deliveryId': delivery.id,
       'resolution': resolution,
     });
-  }
-
-  Future<void> _react(
-    SuperTabMessage message,
-    SuperTabReactionEmoji emoji,
-  ) async {
-    final failure = await c.react(message, emoji);
-    if (failure == null || !mounted) return;
-    ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(SnackBar(content: Text(failure)));
   }
 
   /// More ▸ Edit message, saved: a refusal says why, and the row keeps the
@@ -4807,19 +4798,6 @@ class _SuperTabViewState extends State<SuperTabView>
           : null,
       onReturnToComposer: _focus.requestFocus,
       readerId: c.accountId,
-      reactorName: (kind, id) => kind == 'agent'
-          ? c.snapshot?.agentName(id) ?? 'Agent'
-          : switch (_people[id]) {
-              final person? => person.shownName,
-              null => 'Someone',
-            },
-      // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).
-      onReact:
-          c.canWrite &&
-              c.selected?.archived == false &&
-              !c.isEarlierBuddyChat(c.selected)
-          ? (emoji) => unawaited(_react(message, emoji))
-          : null,
       receipts: [
         if (message.source['truncated'] == true ||
             message.source['interrupted'] == true)

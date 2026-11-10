@@ -56,14 +56,12 @@ ConversationServer office() {
   void say(
     String text,
     Map<String, dynamic> author, {
-    List<Map<String, dynamic>>? reactions,
     Duration at = const Duration(minutes: 9),
   }) {
     server.append(text);
     server.messages.last
       ..['author'] = author
-      ..['createdAt'] = ago(at)
-      ..['reactions'] = reactions ?? const [];
+      ..['createdAt'] = ago(at);
   }
 
   final river = {
@@ -77,43 +75,16 @@ ConversationServer office() {
     river,
     at: const Duration(minutes: 12),
   );
-  say(
-    'Love the generated faces 😍',
-    {'kind': 'person', 'id': 'ivy', 'name': 'ivy@example.com'},
-    reactions: [
-      {
-        'emoji': 'heart',
-        'count': 2,
-        'by': [
-          {'kind': 'person', 'id': 'owner'},
-          {'kind': 'agent', 'id': 'kai'},
-        ],
-      },
-      {
-        'emoji': 'laugh',
-        'count': 1,
-        'by': [
-          {'kind': 'person', 'id': 'sam'},
-        ],
-      },
-    ],
-  );
-  say(
-    'Merging now.',
-    {'kind': 'person', 'id': 'owner', 'name': 'dee@example.com'},
-    at: const Duration(minutes: 2),
-    reactions: [
-      {
-        'emoji': 'rocket',
-        'count': 3,
-        'by': [
-          {'kind': 'person', 'id': 'ivy'},
-          {'kind': 'agent', 'id': 'river'},
-          {'kind': 'agent', 'id': 'theo'},
-        ],
-      },
-    ],
-  );
+  say('Love the generated faces 😍', {
+    'kind': 'person',
+    'id': 'ivy',
+    'name': 'ivy@example.com',
+  });
+  say('Merging now.', {
+    'kind': 'person',
+    'id': 'owner',
+    'name': 'dee@example.com',
+  }, at: const Duration(minutes: 2));
   server.append('🎉 Shipped: Avatars and moments of delight');
   server.messages.last
     ..['author'] = river

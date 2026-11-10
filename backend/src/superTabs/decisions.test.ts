@@ -3,7 +3,8 @@ import { storeOldLeads } from './leads.test-support.js'
 import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { ANSWERED_NOTICE, askDecisions, checkAsker, decisionsWaiting, listDecisions, overdueNotice, delegatedNotice, answerDecision, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, CLOSED_CHAT_ANSWERED_NOTICE, closedChatDelegatedNotice, askDecisions, checkAsker, decisionsWaiting, listDecisions, mustAgreePassed, overdueNotice, delegatedNotice, answerDecision, withdrawIn, workEnded, workOver, type DecisionTarget } from './decisions.js'
+import { missingVerbs } from './cliVerbs.test-support.js'
 import { buddyChatId } from './buddies.js'
 import { giveOwnBuddy } from './ownBuddy.test-support.js'
 
@@ -310,6 +311,25 @@ describe('leaving a decision to the PM', () => {
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).not.toHaveProperty('overdue')
     expect(answered.messages[0]!.text).toBe(delegatedNotice('Product Manager'))
+  })
+
+  it('tells its asker and the Lead no command the CLI lacks, however the decision was settled', () => {
+    const answer = { type: 'decision.answer', decisionId: 'decision-1' } as const
+    const timed = { defaulted: true, now: 1000 } as Partial<CommandContext>
+    const notices: Array<(s: ReturnType<typeof swarm>) => string> = [
+      s => s.run({ ...answer, choice: 0 }, peer, { decision: open(s) }).messages[0]!.text,
+      s => s.run({ ...answer, note: 'Use the Mac Studio' }, peer, { decision: open(s) }).messages[0]!.text,
+      s => delegate(s, peer, open(s)).messages[0]!.text,
+      s => s.run({ ...answer, delegate: true }, peer, { decision: open(s), overdue: true }).messages[0]!.text,
+      s => { withBuddy(s); return s.run({ ...answer, delegate: true }, peer, { decision: open(s, { defaultAt: 1000 }), ...timed }).messages[0]!.text },
+      s => mustAgreePassed(s.state, peer, open(s, { defaultAt: 1000, mustAgree: true }), 1000).text,
+    ]
+    // And the two a closed Chat with PM gets in its project chat instead.
+    const closed = [CLOSED_CHAT_ANSWERED_NOTICE, closedChatDelegatedNotice('Product Manager')]
+    for (const [at, text] of [...notices.map(notice => notice(swarm())), ...closed].entries()) {
+      expect(text, `notice ${at}`).toMatch(/^A decision /)
+      expect(missingVerbs(text), text).toEqual([])
+    }
   })
 })
 

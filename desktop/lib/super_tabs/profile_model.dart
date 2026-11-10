@@ -1,6 +1,5 @@
-/// Avatars and reactions as the backend sends them (backend
-/// superTabs/profile.ts and reactions.ts). Only Swarm members read them; a
-/// value this build does not know reads as absent.
+/// Avatars as the backend sends them (backend superTabs/profile.ts). Only
+/// Swarm members read them; a value this build does not know reads as absent.
 library;
 
 /// What a member or agent shows instead of the default.
@@ -80,45 +79,3 @@ const superTabAvatarPresets = {
   'rocket': '🚀',
   'sun': '🌞',
 };
-
-/// The reactions a message can carry, in the order counts show (backend
-/// REACTIONS). Agents acknowledge with the last three, as Slack bots do:
-/// 👀 started, ✅ done, 🚀 merged.
-enum SuperTabReactionEmoji {
-  thumbsUp('thumbs_up', '👍'),
-  tada('tada', '🎉'),
-  heart('heart', '❤️'),
-  laugh('laugh', '😄'),
-  eyes('eyes', '👀'),
-  check('check', '✅'),
-  rocket('rocket', '🚀');
-
-  const SuperTabReactionEmoji(this.key, this.glyph);
-  final String key, glyph;
-
-  static SuperTabReactionEmoji? of(Object? key) =>
-      values.where((e) => e.key == key).firstOrNull;
-}
-
-/// One emoji's count on one message, and who gave it.
-class SuperTabReactionCount {
-  const SuperTabReactionCount(this.emoji, this.by);
-  final SuperTabReactionEmoji emoji;
-  final List<({String kind, String id})> by;
-  int get count => by.length;
-
-  bool includes(String kind, String id) =>
-      by.any((who) => who.kind == kind && who.id == id);
-
-  static List<SuperTabReactionCount> listFromJson(Object? value) => [
-    if (value is List)
-      for (final row in value)
-        if (row case {'emoji': final Object key}
-            when SuperTabReactionEmoji.of(key) != null)
-          SuperTabReactionCount(SuperTabReactionEmoji.of(key)!, [
-            for (final who in row['by'] as List? ?? const [])
-              if (who case {'kind': final String kind, 'id': final String id})
-                (kind: kind, id: id),
-          ]),
-  ];
-}

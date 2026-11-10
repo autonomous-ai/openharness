@@ -1,33 +1,10 @@
 import 'controller.dart';
 import 'model.dart';
 
-/// Reactions, and edits and deletes of the reader's own messages. Each goes
-/// as its own request rather than waiting behind a message being sent; the
-/// answer is null when it went through, or what to tell the person.
+/// Edits and deletes of the reader's own messages. Each goes as its own
+/// request rather than waiting behind a message being sent; the answer is
+/// null when it went through, or what to tell the person.
 extension SuperTabProfileActions on SuperTabController {
-  /// Adds the reader's [emoji] to [message], or takes it back when it is
-  /// already theirs.
-  Future<String?> react(
-    SuperTabMessage message,
-    SuperTabReactionEmoji emoji,
-  ) async {
-    final mine = message.reactions.any(
-      (r) => r.emoji == emoji && r.includes('person', accountId),
-    );
-    final failure = await _send({
-      'type': 'message.react',
-      'conversationId': message.conversationId,
-      'messageId': message.id,
-      'emoji': emoji.key,
-      'on': !mine,
-      // An app that knows one Buddy per Swarm says so: the server then
-      // refuses it in an older Buddy chat (security review 1 of #2435).
-      if (oneBuddy) 'oneBuddy': true,
-    });
-    if (failure == null) await loadMessages(message.conversationId);
-    return failure;
-  }
-
   /// Whether the reader may edit [message]: their own plain post
   /// (no `source`: no task line, route or note the server wrote in their
   /// name), not deleted, in a conversation they may write in. The server
