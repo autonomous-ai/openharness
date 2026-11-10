@@ -12,10 +12,6 @@ export const SWITCH_UNCLAIMED_MS = 2 * 60_000
 
 const time = (value: string | undefined) => value === undefined ? undefined : Date.parse(value)
 
-/** The loaded groups an agent belongs to or worked in. */
-export const groupsOf = (state: SuperTabState, target: Agent): Conversation[] =>
-  state.conversations.filter(c => c.agentIds.includes(target.id) || c.assignment?.agentId === target.id)
-
 /** When the agent last had anything to do: its start, its coordinator's keep, its own progress, or a message in one of its
  *  groups. An agent the Swarm started that never had an assignment (no task of its own, never lost one) only sits in its
  *  groups, whose messages are about others' work: it is idle from its start or keep (Swarm autonomous-harness, 2026-10-29:
