@@ -30,7 +30,7 @@ typedef PersonalMachineRow = ({
 /// (`PersonalSwarm.show`). An offline machine cannot be set up, so it waits
 /// here until it is online. One the person removed stays out, on every
 /// computer: the server keeps that (backend commands.ts machine.remove).
-/// Draws nothing itself: where the rows show is the list's (machines.dart).
+/// Draws nothing itself.
 class PersonalMachines extends ChangeNotifier {
   PersonalMachines._(this.app);
   static final _of = Expando<PersonalMachines>();

@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
-import '../shared/theme/swarm_layout.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
@@ -164,7 +163,8 @@ class SuperTabMessageRow extends StatefulWidget {
   /// no faces, as a one-on-one iMessage draws it.
   final bool oneOnOne;
 
-  /// The teammates a post is to ([superTabPostTo]): its name reads "Pip to Juno", so the channel reads as the team talking.
+  /// The teammates a post is to ([superTabPostTo]), by the name their tags read: each its words do not tag opens its bubble
+  /// (`@Juno`), as a group chat addresses a post.
   final List<String> to;
   final VoidCallback? onReply, onOpenAgent;
 
@@ -217,8 +217,16 @@ class SuperTabMessageRow extends StatefulWidget {
   /// Above and below a grouped line, and below a sender's last line.
   static const rowPad = 6.0;
 
-  /// A bubble takes at most this share of the row (anh Dee's mockup, 11-07).
-  static const bubbleShare = .75;
+  /// Another's bubble, and a card, takes at most this share of the row: an agent's words read nearly the column's width, as
+  /// Codex's answers do (anh Dee, 2026-11-10: "the center chat area is too small").
+  static const bubbleShare = .92;
+
+  /// Your own bubble takes at most this share, on the right (anh Dee's mockup, 11-07), as Codex keeps yours narrower.
+  static const ownBubbleShare = .75;
+
+  /// The share of the row [own]'s bubble takes at most.
+  static double shareOf({required bool own}) =>
+      own ? ownBubbleShare : bubbleShare;
 
   /// The room between one sender's joined bubbles.
   static const joinedGap = 2.0;
@@ -516,20 +524,13 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
 
   /// The sender's name: opens the agent when it is one.
   Widget _name(TextStyle style, bool finger) {
-    // Beside who a post is to ("Pip to Juno"), one line that gives way with an ellipsis; alone, the whole name.
-    final phrase = widget.to.isNotEmpty;
     final name = fingerTarget(
       enabled: finger,
       Align(
         alignment: Alignment.centerLeft,
         widthFactor: 1,
         heightFactor: 1,
-        child: Text(
-          widget.author,
-          maxLines: phrase ? 1 : null,
-          overflow: phrase ? TextOverflow.ellipsis : null,
-          style: style,
-        ),
+        child: Text(widget.author, style: style),
       ),
     );
     return InkWell(onTap: widget.onOpenAgent, child: name);
@@ -592,11 +593,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     // would push it down.
     final phone = workspaceIsCompact(context);
     final finger = phone && named;
-    final nameStyle = DesktopChrome.text(
-      size: SwarmType.nameSize,
-      height: SwarmType.bodyLine / SwarmType.nameSize,
-      color: DesktopChrome.muted,
-    );
+    final nameStyle = SwarmType.nameLine(context, color: DesktopChrome.muted);
     final slack = finger ? 12.0 : 0.0;
     // One sender's bubbles sit close; a new sender starts a group gap down.
     final above = widget.grouped
@@ -705,8 +702,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     maxWidth:
                                         room.maxWidth *
                                             (1 -
-                                                SuperTabMessageRow
-                                                    .bubbleShare) -
+                                                SuperTabMessageRow.shareOf(
+                                                  own: own,
+                                                )) -
                                         8,
                                   ),
                                   child: Padding(
@@ -723,7 +721,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   constraints: BoxConstraints(
                                     maxWidth:
                                         room.maxWidth *
-                                        SuperTabMessageRow.bubbleShare,
+                                        SuperTabMessageRow.shareOf(own: own),
                                   ),
                                   child: SwarmBubbleSide(
                                     own: own,
@@ -743,39 +741,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                               crossAxisAlignment:
                                                   WrapCrossAlignment.center,
                                               children: [
-                                                if (widget.to.isEmpty)
-                                                  _name(nameStyle, finger)
-                                                else
-                                                  // "Pip to Juno" is one phrase: the name and who it is to stay on a line,
-                                                  // each giving way to the other.
-                                                  Row(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      Flexible(
-                                                        child: _name(
-                                                          nameStyle,
-                                                          finger,
-                                                        ),
-                                                      ),
-                                                      const SizedBox(
-                                                        width: SwarmLayout
-                                                            .namePhraseGap,
-                                                      ),
-                                                      Flexible(
-                                                        child: Text(
-                                                          'to ${widget.to.join(', ')}',
-                                                          key: ValueKey(
-                                                            'super-message-to-${message.id}',
-                                                          ),
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          style: nameStyle,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
+                                                _name(nameStyle, finger),
                                                 if (widget.thread?.askTag
                                                     case final tag?)
                                                   Text(
@@ -915,6 +881,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                             widget.onOpenGroup,
                                                         mentions:
                                                             widget.mentions,
+                                                        addressed: widget.to,
                                                         agents:
                                                             widget.agentNames,
                                                         addresses: widget

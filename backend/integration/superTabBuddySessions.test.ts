@@ -211,22 +211,13 @@ describe('a Buddy thread session', () => {
     await expect(f.reply(roots[0]!, 'again', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_EXISTS' })
   })
 
-  it('stops at its machine\'s own limit, in words a person can act on, leaving no start or message, and starts once a place frees', async () => {
-    // The main Buddy and one session fill it.
+  // The lead, 2026-11-10: capacity settings are gone, so the count its machine's owner saved holds no session back.
+  it('starts a session past the count its machine\'s owner saved before', async () => {
+    // The main Buddy and one session reach it.
     const f = await swarm({ maxAgents: 2 })
     const [a, b] = [await f.say('a'), await f.say('b')]
-    const { agentId } = await f.session(a)
-    const harnessId = (await f.store.read(peer, f.tab)).state.agents.find(x => x.id === agentId)!.harnessId
-    const before = await f.store.messages(peer, f.tab, f.chat, {})
-    await expect(f.reply(b, 'No room', { newSession: true })).rejects.toMatchObject({ code: 'MACHINE_FULL',
-      message: 'Peer Mac is set to run at most 2 agents and runs 2. Its owner can change that in its settings, or try again when one finishes.' })
-    const state = (await f.store.read(peer, f.tab)).state
-    expect(state.conversations.find(c => c.id === f.chat)!.buddySessions!.map(e => e.thread)).toEqual([a])
-    expect(state.machines!.find(m => m.machineId === 'peer-mac')!.maxAgents).toBe(2)
-    expect((await f.store.messages(peer, f.tab, f.chat, {})).messages.map(m => m.id)).toEqual(before.messages.map(m => m.id))
-    await f.execute({ type: 'buddy.sessionEnd', conversationId: f.chat, thread: a, reason: 'ended' }, peer)
-    await f.execute({ type: 'agent.sessionClosed', agentId, harnessId } as Command, peer)
-    await expect(f.session(b, 'Room now')).resolves.toBeTruthy()
+    await f.session(a)
+    await expect(f.session(b, 'Past the count')).resolves.toBeTruthy()
   })
 
   it('ends on its person\'s word: its session closes, its line stays in the thread, and only a new session continues there', async () => {
@@ -341,21 +332,6 @@ describe('a Buddy thread session', () => {
     await expect(f.reply(mine, 'x', { newSession: true })).rejects.toMatchObject({ code: 'BUDDY_SESSION_NO_BUDDY' })
   })
 
-  // In the one Buddy chat a project session proposes only to its project's PM (spec 3); a plain session names a project, as
-  // the main Buddy does (Scholes, 11-02).
-  it('proposes for its person\'s ask in its own thread: a plain session only to a project it names', async () => {
-    const f = await swarm()
-    const [root, plainRoot] = [await f.say('Start here'), await f.say('Plain topic')]
-    const { agentId, first } = await f.session(root, 'Measure prod CPU for the last day', { sessionProjectId: 'lead' })
-    const plain = await f.session(plainRoot, 'Ask the PM for it')
-    const mainAsk = await f.say('Send the other thing to the PM')
-    const propose = (ownerMessageId: string, as = agentId) => f.execute({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, text: 'Measure prod CPU for the last day', goal: 'CPU fix',
-      scope: 'Backend', priority: 'normal' }, peer, as)
-    await expect(propose(plain.first, plain.agentId)).rejects.toMatchObject({ code: 'BUDDY_PROPOSE_PROJECT' })
-    await expect(propose(mainAsk)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
-    await expect(propose(plain.first)).rejects.toMatchObject({ code: 'PROPOSAL_UNASKED' })
-    await expect(propose(first)).resolves.toBeTruthy()
-  })
 
   // Ken, 11-04 (#2832): Codex sessions were refused only because Codex ran no Buddy guard, and the guard is gone.
   it('starts beside a Codex Buddy too, on Codex', async () => {

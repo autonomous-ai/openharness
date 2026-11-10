@@ -9,6 +9,7 @@ import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
 import 'instructions_link.dart';
 import 'model.dart';
+import 'swarm_type.dart';
 
 /// An agent's own instructions (Swarm v4, anh Dee 2026-11-09): the plain file `agents/NAME.md` in its folder, which the agent
 /// writes when its person tells it a rule and reads at every start. Its person reads and changes it here, from any of their
@@ -333,7 +334,9 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           child: SelectableText(
             file!.text!,
             key: const ValueKey('swarm-instructions-text'),
-            style: grid.AppType.mono(color: DesktopChrome.foreground),
+            // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+            style: grid.AppType.mono(color: DesktopChrome.foreground)
+                .copyWith(fontSize: SwarmType.sizeOf(context)),
           ),
         )
       else if (shared.files.isEmpty)
@@ -399,7 +402,9 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
           SelectableText(
             file.text,
             key: ValueKey('swarm-shared-text-$index'),
-            style: grid.AppType.mono(color: DesktopChrome.foreground),
+            // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+            style: grid.AppType.mono(color: DesktopChrome.foreground)
+                .copyWith(fontSize: SwarmType.sizeOf(context)),
           ),
         if (file.truncated && file.sameAs == null)
           Padding(
@@ -440,7 +445,9 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             expands: true,
             textAlignVertical: TextAlignVertical.top,
             keyboardType: TextInputType.multiline,
-            style: grid.AppType.mono(color: DesktopChrome.foreground),
+            // At the terminal's size, as the panes beside it (anh Dee, 2026-11-10).
+            style: grid.AppType.mono(color: DesktopChrome.foreground)
+                .copyWith(fontSize: SwarmType.sizeOf(context)),
             decoration: const InputDecoration.collapsed(hintText: ''),
           ),
         ),

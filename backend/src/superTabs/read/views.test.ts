@@ -150,9 +150,11 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     }
   })
 
-  // Free slots count every session the machine runs, as today, even ones this reader cannot see.
-  it('derives a machine\'s free slots, and cuts its harness ids to what the reader can see', () => {
-    const { parts } = scene()
+  // Free slots are what its free memory takes, whatever count its owner saved before (capacity settings went, 2026-11-10).
+  it('derives a machine\'s free slots from its free memory, and cuts its harness ids to what the reader can see', () => {
+    const { s } = scene()
+    s.edit(state => { state.machines![0]!.observation!.resources = { memoryTotalBytes: 16 * 1024 ** 3, memoryUsedBytes: 13 * 1024 ** 3 } as never })
+    const parts = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     const view = readerView(parts, peer, NOW, {})
     expect(view.parts.machines.map(m => m.key)).toEqual(['mac'])
     expect(view.parts.machines[0]!.data.observation!.runningHarnessIds).toEqual(['lead-harness'])
@@ -384,5 +386,14 @@ describe('what a group stored before Swarm v4 still holds', () => {
     for (const field of ['pullRequestChecks', 'pullRequestHeads', 'pullRequestEvents', 'stepIds', 'waitingWindowsStep', 'openedBy']) expect(view, field).not.toHaveProperty(field)
     expect(view.checks).toEqual([{ id: 'c1', description: 'Works', independent: false, evidence: 'Looks right', passedBy: 'agent:a' }])
     expect(view.pullRequestUrls).toEqual(['https://github.com/o/r/pull/1'])
+  })
+})
+
+// Swarm v4 hands out no tasks (2026-11-10): a task's lane is not worked out.
+describe('a task\'s lane', () => {
+  it('is not worked out from its owned paths', () => {
+    const task = { id: 't', title: 'Server', projectId: 'lead', leadId: null, agentIds: [], archived: false, checks: [], assignment: null,
+      lastMessageSequence: 0, task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['backend/src/x.ts'] } } as unknown as Conversation
+    expect(groupView(task, new Set())).not.toHaveProperty('handOutLane')
   })
 })

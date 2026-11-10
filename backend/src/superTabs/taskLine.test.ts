@@ -80,15 +80,6 @@ describe('ordinary task messages and progress replies', () => {
     })
   })
 
-  it('links a proposal root instead of posting a second opening message, and adds no brief under the proposal', () => {
-    const f = fixture()
-    const created = f.run({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', proposalMessageId: 'proposal' }, f.as(f.pm),
-      { proposal: { id: 'proposal', conversationId: 'lead', author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: f.state.people[0]!.generation },
-        source: { kind: 'buddy-proposal', personId: 'owner', buddyId: 'former-buddy' } } })
-    expect(f.lines(created)).toEqual([])
-    expect(f.task(created.result.conversationId as string).cards?.line).toMatchObject({ messageId: 'proposal', conversationId: 'lead' })
-    expect(created.messages.filter(m => m.conversationId === 'lead')).toEqual([])
-  })
 
   it('keeps the message a person asked in as the root, with them as requester', () => {
     const f = fixture()
