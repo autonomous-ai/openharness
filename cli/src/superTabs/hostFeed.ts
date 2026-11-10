@@ -50,13 +50,6 @@ export class HostFeed {
     return this.running ??= this.read().finally(() => { this.running = null })
   }
 
-  /** A read sent after this call. One already out may have been sent before what the caller must see, such as a takeover
-   *  (#1757 re-check), so it is waited out, never joined. */
-  async fresh(): Promise<HostRead> {
-    await this.running?.catch(() => {})
-    return this.refresh()
-  }
-
   /** [watcher] is told of each read this feed makes, once it is held; returns what stops it. A watcher that throws is
    *  passed over: it never fails the read. */
   watch(watcher: (read: HostRead) => void): () => void {

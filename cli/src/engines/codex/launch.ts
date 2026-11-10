@@ -5,11 +5,6 @@ const permissionModes = {
   readOnly: ['--sandbox', 'read-only'],
   ask: [],
   full: ['--dangerously-bypass-approvals-and-sandbox'],
-  // Code a Harness Team agent wrote (backend superTabs/teamWritten.ts, audit H2). Codex has no flag for it: a worktree takes its
-  // main repository's trust, and `-c projects...` does not turn it off (0.165.0, tried). The start gives this mode an engine
-  // home of its own, which trusts no project (superTabs/start.ts). Since v3 it runs as the project owner on their own computer,
-  // so with Codex's own approvals and sandbox, never bypassed (review of #3485).
-  teamWritten: [],
 }
 
 /**

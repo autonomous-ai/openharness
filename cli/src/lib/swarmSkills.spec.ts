@@ -133,11 +133,6 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
     expect(text).not.toMatch(/decision/i)
     expect(text).not.toContain('## Ask your owner')
-    // Sending to the PM is as it was before Decisions (#4525): the quoted line shown with the offer, then propose.
-    expect(text).toContain('"Want me to propose this to <project>?" Show the exact proposal below that question, in the quoted format below.')
-    expect(text).toContain('It is their message to the team: one plain line, as they would say it.')
-    expect(text).toContain('A change they ask for is a new line to show them.')
-    expect(text).toContain('PROJECT is the project\'s id from status (a session in one project leaves projectId out)')
   })
 
   it('tells a Buddy to answer its owner right below their message, and inside a thread in that thread (task #2929)', () => {
@@ -318,47 +313,34 @@ describe('when this computer first ran the team\'s basics (noteSwarmBasics)', ()
 })
 
 describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
-  it.each([undefined, 'default', 'orchestration'] as const)('offers ready ideas and sends only with consent, the same in every mode (%s)', mode => {
+  it.each([undefined, 'default', 'orchestration'] as const)('brainstorms with its owner, the same in every mode (%s)', mode => {
     expect(parseSwarmSkill({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })).toEqual({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
     const prepared = prepareBuddy(fixture(), { role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
     const text = readFileSync(prepared.file, 'utf8')
     expect(text.startsWith('---\nname: swarm-buddy\n')).toBe(true)
     // Harness Instructions' brainstorming: the goal first, options with a recommendation, an agreed scope.
     for (const step of ['Ask the goal first', 'Offer 2 or 3 options', 'Agree the scope']) expect(text).toContain(step)
-    expect(text).toContain('clear goal, why it matters and how to know it is done')
-    expect(text).toContain('check the project for an existing proposal or task')
-    expect(text).toContain('point to a match instead of duplicating it')
-    expect(text).toContain('offer without waiting to be asked: "Want me to propose this to <project>?"')
-    expect(text).toContain('Send only after your owner says yes to that proposal')
-    expect(text).toContain('One offer per idea; never repeat an ignored or declined offer')
-    expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
-    // Task #4470: a picture it drew and showed its owner goes by id, from a machine without the project's code too.
-    expect(text).toContain('"attachmentIds":["ID"] in the JSON for a file your owner sent in your chat, or one you showed them there on your own message')
-    // Scholes (11-02): its one Buddy sends, naming the project, and asks which when it is unclear; never "open a session".
-    expect(text).toContain('"projectId":"PROJECT"')
-    expect(text).toContain('If they read several and it is unclear which one this is for, ask them first.')
-    expect(text).toContain('never tell them to open a session just to send')
-    expect(text).not.toContain('tell them to start a New session')
-    // Ken, 11-04 (task #2832): its owner's right hand on their own machine; in the Swarm it still only talks and proposes.
-    expect(text).toContain('In the Swarm you only talk with your owner and send the proposals they ask for: never assign work or start agents there.')
+    // Ken, 11-04 (task #2832): its owner's right hand on their own machine; in the Swarm it only talks.
+    expect(text).toContain('In the Swarm you only talk with your owner: never assign work or start agents there.')
     expect(text).toContain('you run as they do in their own Claude Code or Codex session, with full access')
     expect(text).not.toContain('git grep, log, show, diff, blame and status')
     expect(text).not.toContain('Your folder is for reading')
     // Task #4547: only its owner and it write in its chat, so no PM's private line lands there.
     expect(text).not.toContain('private lines')
-    // Diego (10-29): it tells its owner how their proposals go, unasked, one note per milestone and nothing otherwise.
+    // Diego (10-29): it tells its owner how their requests go, unasked, one note per milestone and nothing otherwise.
     expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
     expect(text).toContain('Nothing when nothing changed')
-    // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
-    expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
-    expect(text).toContain('"text":"the line they okayed, or their own words"')
-    expect(text).toContain('Quotes around that line are required')
-    expect(text).toContain('Only the quoted line immediately after "I\'ll post this as you:" counts as shown; nothing after its closing quote counts')
-    expect(text).toContain('If an unquoted line is refused, show it again in quotes and wait for a new ok')
-    expect(text).toContain('in full, never cut, as their own message, with no reply from you in the chat')
-    expect(text).not.toContain('Short name (at most 80 characters)')
-    expect(text).not.toContain('with your full proposal as the first reply in its thread')
     expect(text).toBe(readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
+  })
+
+  // Backend S9 (#3867): proposals are gone, and the server answers buddy.propose as retired; the CLI took `propose` out of
+  // super-tab in #3648. A Buddy is never told to offer or send one.
+  it('tells a Buddy nothing of sending proposals', () => {
+    const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'session' }).file, 'utf8')
+    expect(text).not.toContain('## Send to the PM')
+    expect(text).not.toMatch(/propos/i)
+    // A Buddy running since before keeps its old start note, which offered proposals: the refreshed skill overrides it.
+    expect(text).toContain('Never offer to send anything to a project\'s PM: nothing you write reaches one. Your owner asks the PM in their own chat with it.')
   })
 })
 

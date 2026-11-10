@@ -589,8 +589,7 @@ describe('stdin for -', () => {
   })
 })
 
-// Task #3403: the PM answers each ask once, in its place. `answer` names the message; the server places it in that message's
-// thread or right below it, and refuses a second answer with where the first is.
+// Task #3403: `answer` names the message; the server places the answer in that message's thread or right below it.
 it('sends answer as the answer to a message, placed by the server', () => {
   expect(parseSuperTabArgs([...prefix, 'answer', 'lead', 'ask-1', 'Out at 09:00.', 'op-1'], where).payload).toMatchObject({ action: 'command', operationId: 'op-1',
     command: { type: 'message.send', conversationId: 'lead', text: 'Out at 09:00.', replyTo: null, answers: 'ask-1', answer: true, recipientIds: [] } })
