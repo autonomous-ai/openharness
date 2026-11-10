@@ -18,8 +18,11 @@ import { fileURLToPath } from 'node:url'
 
 const [, , command, name] = process.argv
 if (command === '__swarm-shell-guard') {
-  // Engine hooks need only the guard; ordinary CLI initialization would touch account and daemon state.
-  ;(await import('./superTabs/shellGuardHook.js')).runShellGuard()
+  // The Swarm's shell guard is gone (anh Dee, 2026-11-09), but an agent a release before started still runs its hook before
+  // each tool, as its engine was told at launch, and Codex fails a tool call whose hook fails: the call is read, so the engine's
+  // write never breaks, and allowed by printing nothing. Nothing else is loaded. Goes on 2026-12-10, 30 days on, when every
+  // such session has been relaunched without it.
+  ;(await import('node:fs')).readFileSync(0)
 } else if (command === '__harnessd') {
   // This file is the bundle: the master starts the core from it, as cli.ts's own `SCRIPT_PATH` names it
   // for a master started from the sources, and itself and the services from the lean bundle it carries.

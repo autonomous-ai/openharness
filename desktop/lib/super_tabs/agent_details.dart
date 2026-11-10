@@ -98,6 +98,7 @@ class SuperTabAgentInfo {
         : '$mac$kTeamEntryLabel';
   }
 
+  String? get folder => _known(native?.project?.cwd);
   DateTime? get lastActive => native?.lastActivityAt;
   bool get hasQuestion =>
       app?.questionFor(agent.machineId, agent.harnessId) != null;

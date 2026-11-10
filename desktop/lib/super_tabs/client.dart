@@ -8,7 +8,6 @@ import '../core/local_key_value_store.dart';
 import '../core/models.dart';
 import 'account_keys.dart';
 import 'attachment_upload.dart';
-import 'avatar_upload.dart';
 import 'controller.dart';
 import 'model.dart';
 import 'my_agents.dart';
@@ -38,7 +37,6 @@ class SuperTabClient {
     this.onChatMessage,
     this.onNotices,
     this.upload = refuseUpload,
-    this.avatarUpload = refuseAvatarUpload,
     this.discoveryInterval = const Duration(seconds: 15),
   }) : _storage = storage,
        viewStorage = viewStorage ?? storage;
@@ -81,7 +79,6 @@ class SuperTabClient {
   };
 
   final SuperTabUpload upload;
-  final SuperTabAvatarUpload avatarUpload;
   final Duration discoveryInterval;
 
   /// How every Swarm tab here keeps itself current. Desktop's unless the host
@@ -846,7 +843,6 @@ class SuperTabClient {
             },
             save: (state) => storage.write(key, jsonEncode(state)),
             upload: upload,
-            avatarUpload: avatarUpload,
             reading: _reading,
             stillListed: onTabs == null ? null : () => _stillListed(id),
           )

@@ -76,14 +76,21 @@ void main() {
     expect(c.snapshot!.conversations.where((g) => g.closed), hasLength(2));
   });
 
-  // The quick switcher once made this read, to find an archived task by its number; only the Archived conversations list asks now.
-  test('selecting a chat reads none of its project\'s closed groups', () async {
+  // Review of #3739: the read also tells the task's menu whether to offer
+  // Archived conversations; without it the entry showed for a project with
+  // none and opened an empty list.
+  test('selecting a task reads its project\'s closed groups once, so its menu '
+      'knows whether there are archived ones', () async {
     final c = open();
     await c.refresh();
     expect(await c.select('offline'), isTrue);
     await pumpEventQueue();
-    expect(reads.where((p) => p.contains('dormant=1')), isEmpty);
-    expect(c.dormantLoaded('lead'), isFalse);
+    expect(reads.where((p) => p.contains('dormant=1')), hasLength(1));
+    expect(c.dormantLoaded('lead'), isTrue);
+    expect(await c.select('lead'), isTrue);
+    expect(await c.select('offline'), isTrue);
+    await pumpEventQueue();
+    expect(reads.where((p) => p.contains('dormant=1')), hasLength(1));
   });
 
   test(

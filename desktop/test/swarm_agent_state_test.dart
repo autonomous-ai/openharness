@@ -518,6 +518,33 @@ void main() {
       expect(stateOf(states, c, 'second'), 'free');
     });
 
+    test('an agent whose project names no repository is read on the repo its own pane works in (Personal Swarm)', () async {
+      final server = world();
+      // A Personal Swarm's project names no repository: the server never learns it.
+      (server.state['projects'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((p) => p['id'] == 'lead')
+          .remove('repository');
+      final c = await read(server);
+      final asked = <String>[];
+      final states = SwarmAgentStates(
+        controller: c,
+        github: swarmV4GitHub(),
+        localRepository: (agent) {
+          asked.add(agent.id);
+          return agent.id == 'first builder'
+              ? 'github.com/autonomous-ai/lampos'
+              : null;
+        },
+        settle: Duration.zero,
+      );
+      addTearDown(states.dispose);
+      await idle(states);
+      expect(stateOf(states, c, 'first builder'), 'on #5759');
+      expect(stateOf(states, c, 'second'), 'free');
+      expect(asked, contains('first builder'));
+    });
+
     test('projects of one repository read its board once', () async {
       final server = world();
       final agents = (server.state['agents'] as List)

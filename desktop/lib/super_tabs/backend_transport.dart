@@ -17,7 +17,7 @@ const _id = r'[A-Za-z0-9_-]+';
 final _swarmRoute = RegExp(
   '^/api/super-tabs(?:'
   '|/list|/invitations|/deleted'
-  '|/$_tab/(?:parts|changes|commands|leaderboard|sharing'
+  '|/$_tab/(?:parts|changes|commands|leaderboard|shipping|sharing'
   '|routing-policy|groups|groups/$_id|join|join/preview|native'
   // New Project's New Repository asks whether an organization can (#3374).
   '|github/owners/$_id'

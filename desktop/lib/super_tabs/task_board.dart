@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -9,6 +10,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/skeleton.dart';
 import '../logging/app_log.dart';
+import '../state/app_state.dart' show AppNotifier;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
@@ -16,8 +18,10 @@ import 'github_issues.dart';
 import 'github_pulls.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'personal_projects.dart' show PersonalProjects;
 import 'pull_chip.dart';
 import 'swarm_type.dart';
+import 'visible_tick.dart';
 
 /// A project's tasks (Swarm v4, anh Dee 2026-11-09): its repository's open GitHub issues, read with `gh` on this computer
 /// as its person ([SwarmGitHub]), as a board of three columns, newest activity first: To do (nobody has it), Assigned (its
@@ -32,6 +36,7 @@ class SwarmTaskBoard extends StatefulWidget {
     required this.github,
     required this.onOpen,
     required this.onClose,
+    this.app,
     this.openNumber,
     this.refreshEvery = const Duration(minutes: 1),
     this.now = DateTime.now,
@@ -47,6 +52,9 @@ class SwarmTaskBoard extends StatefulWidget {
   final void Function(String repository, SwarmIssue issue) onOpen;
   final VoidCallback onClose;
 
+  /// The person's app: a Personal project's repository is known only on their own Desktop ([repositoryOf]).
+  final AppNotifier? app;
+
   /// The issue open beside the channel: its card shows selected.
   final int? openNumber;
 
@@ -58,14 +66,23 @@ class SwarmTaskBoard extends StatefulWidget {
   /// app opens in (1280 wide: a pane of 490, 147 a column), so On it, the column people look for, is never out of sight.
   static const columnMinWidth = 140.0;
 
-  /// The project's repository as `owner/name`, or null when it has none on GitHub.
+  /// The project's repository as `owner/name`, or null when it has none on GitHub: its record's, else, in the person's
+  /// Personal Swarm, the repo its panes work in, read on [app]'s Desktop (personal_projects.dart).
   static String? repositoryOf(
     SuperTabController controller,
-    String conversationId,
-  ) {
+    String conversationId, {
+    AppNotifier? app,
+  }) {
     final project = controller.snapshot?.projectFor(conversationId);
-    final url = project?.repository?['repositoryUrl'];
-    return SwarmGitHub.repositoryOf(url is String ? url : null);
+    if (project == null) return null;
+    final url = project.repository?['repositoryUrl'];
+    return SwarmGitHub.repositoryOf(
+      url is String
+          ? url
+          : app == null
+          ? null
+          : PersonalProjects.of(app).repositoryOf(controller, project.id),
+    );
   }
 
   /// The three columns of [issues], each newest activity first: To do, Assigned, On it.
@@ -98,24 +115,52 @@ class SwarmTaskBoard extends StatefulWidget {
   State<SwarmTaskBoard> createState() => _SwarmTaskBoardState();
 }
 
-class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
+class _SwarmTaskBoardState extends State<SwarmTaskBoard>
+    with WidgetsBindingObserver, VisibleTick<SwarmTaskBoard> {
   List<SwarmIssue>? _issues;
 
   /// The open pull requests by the task each is for, as last read.
   Map<int, SwarmPull>? _pulls;
   String? _error;
   String? _repository;
-  Timer? _refresh;
+
+  /// When the last read started: back in sight, the board reads only once its clock would have by now.
+  DateTime? _readAt;
 
   /// The repository being read now: a refresh that comes while its read is still going waits for the next.
   String? _reading;
 
+  /// A Personal project's repository becomes known on this Desktop after the board may have opened: read it then.
+  void _personalMoved() {
+    final repository = SwarmTaskBoard.repositoryOf(
+      widget.controller,
+      widget.conversationId,
+      app: widget.app,
+    );
+    if (repository != _repository) _read();
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.app case final app?) {
+      PersonalProjects.of(app).addListener(_personalMoved);
+    }
     _read();
-    if (widget.refreshEvery case final every?) {
-      _refresh = Timer.periodic(every, (_) => _read());
+    // Its clock runs only while it shows: hidden, it would spend the person's GitHub rate limit on nobody.
+    if (widget.refreshEvery case final every?) visibleTick(every);
+  }
+
+  @override
+  void onTick() => _read();
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    final (every, readAt) = (widget.refreshEvery, _readAt);
+    if (onScreen &&
+        every != null &&
+        (readAt == null || clock.now().difference(readAt) >= every)) {
+      _read();
     }
   }
 
@@ -132,7 +177,9 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
 
   @override
   void dispose() {
-    _refresh?.cancel();
+    if (widget.app case final app?) {
+      PersonalProjects.of(app).removeListener(_personalMoved);
+    }
     super.dispose();
   }
 
@@ -140,10 +187,12 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     final repository = SwarmTaskBoard.repositoryOf(
       widget.controller,
       widget.conversationId,
+      app: widget.app,
     );
     if (repository != _repository) setState(() => _repository = repository);
     if (repository == null || _reading == repository) return;
     _reading = repository;
+    _readAt = clock.now();
     // What was read last shows at once; the read below only brings what changed.
     final kept = _issues == null ? widget.github.kept(repository) : null;
     if (kept != null) {
@@ -329,7 +378,15 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
           padding: SwarmLayout.columnHeadPadding,
           child: Row(
             children: [
-              Text(name, style: DesktopChrome.text(medium: true)),
+              // A column at its least (140) with a larger text size: the name gives way, never the count.
+              Flexible(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.text(medium: true),
+                ),
+              ),
               const SizedBox(width: 8),
               Text('${issues.length}', style: DesktopChrome.metadata()),
             ],

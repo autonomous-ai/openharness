@@ -219,6 +219,8 @@ export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
     permissionMode: null,
     bypassPermission: null,
     namedAgent: null,
+    // A cloud harness is typed into by its own host: nothing here waits for it.
+    waitingFor: null,
     location: 'cloud',
     cloud: {
       place: CLOUD_AGENTS[harness.agent].place, state: harness.state, activity: harness.activity, links: harness.links, messages: harness.messages,

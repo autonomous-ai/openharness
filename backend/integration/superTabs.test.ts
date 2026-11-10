@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -12,8 +12,9 @@ import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
+import { PERSONAL_SWARM_OPERATION } from '../src/superTabs/deletion.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { attachmentsFromEnv, MemoryAttachmentStore, MemoryAvatarStore, REMOVING_UPLOAD_PURPOSE } from '../src/superTabs/attachments.js'
+import { attachmentsFromEnv, AVATAR_PURPOSE, MemoryAttachmentStore, MemoryAvatarStore, REMOVING_UPLOAD_PURPOSE } from '../src/superTabs/attachments.js'
 import { startAttachmentSweepFrom, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
@@ -2986,13 +2987,17 @@ describe('Super Tab chat attachments', () => {
     const aged = (id: string, hours: number) => db.superTabAttachment.update({ where: { id }, data: { createdAt: new Date(Date.now() - hours * HOUR) } })
     const row = (id: string) => db.superTabAttachment.findUnique({ where: { id } })
     const stored = (url: string) => files.objects.has(objectKey(url))
+    // A picture as the avatar route kept one before it was retired (2026-11-09): its object, and its row with the avatar's purpose.
+    // The last such uploads are still swept.
     const picture = async (tab: string) => {
-      const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24)])
-      const { avatar } = await new SuperTabStore(db, Date.now, bucket).uploadAvatar(owner, tab, { body: Readable.from([bytes]) })
-      return { id: avatar.id, key: (await row(avatar.id))!.objectKey }
+      const id = randomBytes(12).toString('hex'), key = `super-tabs/${tab}/${randomBytes(16).toString('hex')}/avatar`
+      await pictures.put(key, { name: 'avatar', mime: 'image/png' }, Readable.from([Buffer.alloc(32)]), 1024)
+      await db.superTabAttachment.create({ data: { id, tabId: tab, conversationId: '', actorKey: `person:${owner.sub}`, name: 'avatar', mime: 'image/png',
+        size: 32, objectKey: key, purpose: AVATAR_PURPOSE } })
+      return { id, key }
     }
-    const useAvatar = (tab: string, id: string) => new SuperTabStore(db, Date.now, bucket).execute(owner, tab,
-      { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id } } })
+    // A picture someone wears, as `member.avatar` marked its upload before it was retired.
+    const useAvatar = (id: string) => db.superTabAttachment.update({ where: { id }, data: { usedBy: randomBytes(12).toString('hex') } })
 
     it('removes a file nobody sent within a day, row and object, and keeps a sent one and a young one', async () => {
       const { tab } = await fixture()
@@ -3000,7 +3005,7 @@ describe('Super Tab chat attachments', () => {
         (await file(tab, 'sent.txt')).attachment, (await file(tab, 'young.txt')).attachment]
       const messageId = String((await send(tab, [sent.id])).result.messageId)
       const [unusedPicture, usedPicture] = [await picture(tab), await picture(tab)]
-      await useAvatar(tab, usedPicture.id)
+      await useAvatar(usedPicture.id)
       for (const [id, hours] of [[old.id, 25], [older.id, 48], [sent.id, 25], [young.id, 1], [unusedPicture.id, 25], [usedPicture.id, 25]] as const) await aged(id, hours)
 
       await sweep()
@@ -3062,7 +3067,6 @@ describe('Super Tab chat attachments', () => {
       const unknown = { code: never.code, message: never.message, status: never.status }
       await expect(send(tab, [stuck.id], peer)).rejects.toMatchObject(unknown)
       await expect(send((await fixture()).tab, [stuck.id])).rejects.toMatchObject(unknown)
-      await expect(useAvatar(tab, stuckPicture.id)).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
 
       await sweep()
       expect([await row(stuck.id), stored(stuck.url), await row(stuckPicture.id), pictures.objects.has(stuckPicture.key)]).toEqual([null, false, null, false])
@@ -3388,6 +3392,26 @@ describe('the owner\'s Lead machine joins its Swarm', () => {
     expect((await rosterRows(store, owner, machineId)).map(r => r.joinSwarm)).toEqual([false, false])
     await run(tab, { ...join, maxAgents: 8, cwd: '/elsewhere' })
     expect((await store.read(owner, tab)).state.machines!.find(m => m.machineId === machineId)).toEqual(added)
+  })
+
+  // Swarm v4: a plain agent leads no conversation, and a Personal Swarm may hold nothing else. Its host joined the machine only for a
+  // Lead, so such a Swarm never got its machine, and the machine's rows never came (Personal Swarm, 2026-11-10).
+  it('adds the machine a plain agent of the owner runs on, in a Personal Swarm with nothing else', async () => {
+    const machineId = `owner-plain-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const tab = (await store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal')).id
+    const chat = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId, engine: 'codex', name: 'Ada', local: true })).result.conversationId)
+    await run(tab, { type: 'agent.add', conversationId: chat, machineId, harnessId: randomUUID(), name: 'Ada', configuration: config, lead: false })
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([true])
+    await run(tab, { type: 'machine.contribute', machineId, name: 'Ken Mac', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 3, ifMissing: true })
+    expect((await store.read(owner, tab)).state.machines!.map(m => m.machineId)).toEqual([machineId])
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab).map(r => r.joinSwarm)).toEqual([false])
+    // Its person takes the machine out of the Swarm, then runs a new agent on it: the host is not asked to add it back (an older CLI
+    // does whatever this says).
+    await run(tab, { type: 'machine.remove', machineId })
+    const again = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId, engine: 'codex', name: 'Bo', local: true })).result.conversationId)
+    await run(tab, { type: 'agent.add', conversationId: again, machineId, harnessId: randomUUID(), name: 'Bo', configuration: config, lead: false })
+    expect((await rosterRows(store, owner, machineId)).filter(r => r.tabId === tab && r.agent?.name === 'Bo').map(r => r.joinSwarm)).toEqual([false])
   })
 
   it('never adds another account\'s machine', async () => {

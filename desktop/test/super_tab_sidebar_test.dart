@@ -152,54 +152,41 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 }
 
 void main() {
-  testWidgets(
-    'private projects use a leading lock and keep the muted mark at the right',
-    (tester) async {
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final app = createApp(connected: true);
-      addTearDown(app.dispose);
-      final server = ConversationServer();
-      final controller = await projectSidebar(server);
-      await controller.setNotify('empty-lead', SuperTabNotify.muted);
-      await pumpSidebar(tester, controller, app);
+  testWidgets('private projects use a leading lock', (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final server = ConversationServer();
+    final controller = await projectSidebar(server);
+    await pumpSidebar(tester, controller, app);
 
-      final privateRow = find.byKey(const ValueKey('super-group-empty-lead'));
-      final privateLock = inRow(
-        'super-group-empty-lead',
-        find.byIcon(AppIcons.lock),
-      );
-      final privateName = inRow(
-        'super-group-empty-lead',
-        find.text('sample-project'),
-      );
-      final publicName = inRow('super-group-lead', find.text('web-project'));
-      final muted = inRow(
-        'super-group-empty-lead',
-        find.byKey(const ValueKey('super-muted-empty-lead')),
-      );
+    final privateRow = find.byKey(const ValueKey('super-group-empty-lead'));
+    final privateLock = inRow(
+      'super-group-empty-lead',
+      find.byIcon(AppIcons.lock),
+    );
+    final privateName = inRow(
+      'super-group-empty-lead',
+      find.text('sample-project'),
+    );
+    final publicName = inRow('super-group-lead', find.text('web-project'));
 
-      expect(privateRow, findsOneWidget);
-      expect(privateLock, findsOneWidget);
-      expect(
-        inRow('super-group-empty-lead', find.byTooltip('Private project')),
-        findsOneWidget,
-      );
-      expect(inRow('super-group-empty-lead', find.text('#')), findsNothing);
-      expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
-      expect(muted, findsOneWidget);
-      expect(
-        tester.getCenter(privateLock).dx,
-        lessThan(tester.getCenter(privateName).dx),
-      );
-      expect(publicName, findsOneWidget);
-      expect(
-        tester.getCenter(muted).dx,
-        greaterThan(tester.getCenter(privateName).dx),
-      );
+    expect(privateRow, findsOneWidget);
+    expect(privateLock, findsOneWidget);
+    expect(
+      inRow('super-group-empty-lead', find.byTooltip('Private project')),
+      findsOneWidget,
+    );
+    expect(inRow('super-group-empty-lead', find.text('#')), findsNothing);
+    expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
+    expect(
+      tester.getCenter(privateLock).dx,
+      lessThan(tester.getCenter(privateName).dx),
+    );
+    expect(publicName, findsOneWidget);
 
-      await disposeSidebar(tester, controller);
-    },
-  );
+    await disposeSidebar(tester, controller);
+  });
 
   testWidgets('project A to Z ignores # and stays fixed after new activity', (
     tester,

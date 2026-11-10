@@ -238,7 +238,9 @@ void main() {
     expect(bold(r), isTrue);
   });
 
-  test('a muted project chat is never bold', () async {
+  // Swarm v4 has no way to unmute a project's chat, so a mute kept from
+  // before reads as Mentions only (lead, 2026-11-10).
+  test('a project chat muted before is bold as any other', () async {
     final r = await rig(readMarks: {leadChat: 1});
     r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
       cursor: 'c20',
@@ -250,7 +252,7 @@ void main() {
     await r.reader.refresh();
     await settle();
 
-    expect(bold(r), isFalse);
+    expect(bold(r), isTrue);
   });
 
   test(

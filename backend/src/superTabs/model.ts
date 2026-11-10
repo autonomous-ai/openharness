@@ -27,9 +27,14 @@ export interface Person {
   /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Nothing sets a chosen one any
    *  more (2026-11-09): those chosen before stay. Only members read it. */
   username?: string
-  /** The name they show (personNames.ts), such as "Minh Nguyen"; absent, the Swarm shows their username. Nothing sets one any more
-   *  (2026-11-09): those set before stay. Only members read it. */
+  /** The name they show (personNames.ts), such as "Minh Nguyen": their account's name since 2026-11-10, written when they join and
+   *  whenever they rename their account (nameFromAccount); absent, the Swarm shows their username. Only members read it. */
   name?: string
+  /** The name they chose in this Swarm before it followed their account (2026-11-09), kept as it was and read by nothing. Can go
+   *  from 2026-12-10. */
+  chosenName?: string
+  /** Their [name] is their account's, so a name kept in it is no longer one they chose here. */
+  nameFollowsAccount?: true
   /** `domain`: joined by themselves as someone at the owner's email domain (autoJoin.ts), so the people list says so. */
   joinedVia?: 'domain'
 }
@@ -528,7 +533,8 @@ export interface Conversation {
   /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
    *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
-  /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
+  /** Counts edits and deletes here (messageEdits.ts), so readers read an older message again. Named for the reactions it
+   *  first counted, which are gone (reactions.ts). */
   reactionSeq?: number
   /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
    *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
@@ -1005,9 +1011,6 @@ export interface CommandEffects {
   projectRules?: import('./policy.js').RulesWrite
   /** A coordinator's note kept or a note removed, written outside the tab state by the store (instructions.ts). */
   notes?: import('./instructions.js').NotesWrite
-  /** Reactions the Swarm adds as a task's agent on the message that asked for it (taskLine.ts), written by the store as that
-   *  agent's own `message.react`. */
-  reactions?: Array<{ conversationId: string; messageId: string; agentId: string; emoji: import('./reactions.js').Reaction }>
 }
 /** `details` go to the caller with the code: what it needs to act on the refusal (a stale save's current text). */
 export class SuperTabError extends Error {

@@ -8,7 +8,7 @@ const parts = (over: Record<string, unknown> = {}) => ({
   head: { data: { id: 't1', name: 'autonomous-harness', ownerId: 'u1', paused: false } },
   members: [{ data: { id: 'u1', email: 'owner@x.io', role: 'owner' } }],
   machines: [{ data: { machineId: 'm1', name: 'gridtest', contributorId: 'u1', engines: [{ engine: 'claude' }],
-    observation: { receivedAt: Date.now() - 2000, sessionKind: 'team' } } }],
+    observation: { receivedAt: Date.now() - 2000 } } }],
   agents: [{ data: { id: 'a1', name: 'Lead', machineId: 'm1', configuration: { engine: 'claude' }, leadOf: 'p1' } }],
   groups: [{ data: { id: 'lead', title: 'autonomous-harness', leadId: 'a1' } }],
   starts: [
@@ -58,7 +58,7 @@ describe('harness swarm', () => {
     expect(text).toContain('people      1')
     expect(text).toContain('machines    1')
     expect(text).toContain('work        1 running, 0 pending, 1 failed')
-    expect(text).toContain('lead        Lead on gridtest (team account)')
+    expect(text).toContain('lead        Lead on gridtest')
   })
 
   it('lists machines with owner, engines, agents and state, and never draws icons', async () => {
@@ -66,7 +66,7 @@ describe('harness swarm', () => {
     expect(await swarmCommand(['machines'], f.deps)).toBe(0)
     const text = f.out.join('\n')
     expect(text).toContain('MACHINE')
-    expect(text).toContain('gridtest (team account)')
+    expect(text).toContain('gridtest')
     expect(text).toContain('owner@x.io')
     expect(text).toContain('live')
     expect(text).not.toContain('·')

@@ -66,11 +66,6 @@ class SuperTabPerson {
       generation = row['generation'] as String?,
       joinedVia = row['joinedVia'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']),
-      timeZone = switch (row['timeZone']) {
-        final String zone when zone.trim().isNotEmpty => zone,
-        _ => null,
-      },
       chosenUsername = row['username'] as String?,
       name = switch (row['name']) {
         final String name when name.trim().isNotEmpty => name,
@@ -86,8 +81,6 @@ class SuperTabPerson {
       generation = person.generation,
       joinedVia = person.joinedVia,
       avatar = person.avatar,
-      status = person.status,
-      timeZone = person.timeZone,
       chosenUsername = person.chosenUsername,
       name = person.name;
   final String id, email, role;
@@ -109,15 +102,6 @@ class SuperTabPerson {
   /// still types [username].
   String get shownName => name ?? username;
   final SuperTabAvatarPicture? avatar;
-  final SuperTabPersonStatus? status;
-
-  /// Their time zone's IANA name, as their own app told the Swarm
-  /// (local_time_zone.dart); null until it has, and from an older server.
-  final String? timeZone;
-
-  /// Their status while it lasts.
-  SuperTabPersonStatus? statusAt(DateTime now) =>
-      status?.shownAt(now) == true ? status : null;
 
   /// This membership: a new one each time the person joins the Swarm. Null
   /// from a backend that does not send it.
@@ -570,6 +554,7 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       boardMode = row['boardMode'] == true,
+      archived = row['archived'] == true,
       deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
 
@@ -577,6 +562,10 @@ class SuperTabProject {
   /// people talk to their Buddies, work comes in as proposals.
   /// False when not switched and from an older backend: everything then works as today.
   final bool boardMode;
+
+  /// Kept read-only and out of the project list: a v3 tab's project that had messages when it was closed (backend
+  /// commands.ts `project.closeTab`).
+  final bool archived;
 
   /// Its top decider (for openharness, Dee), who may set P0 and pause like its owner; null when none is set.
   final String? deciderId;
@@ -847,6 +836,12 @@ class SuperTabSnapshot {
       _machines = _machineRows(rows);
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
+
+  /// The projects a list offers: an archived one (a v3 tab's project kept read-only, personal_projects.dart) is no
+  /// longer worked in.
+  late final List<SuperTabProject> listedProjects = List.unmodifiable(
+    projects.where((p) => !p.archived),
+  );
   final List<Map<String, dynamic>> invitations;
 
   /// Each agent start's outcome so far, by its id: the harness it made, or
@@ -1548,6 +1543,9 @@ class SuperTabMessage {
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      recipientIds = List.unmodifiable(
+        (row['recipientIds'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -1595,6 +1593,14 @@ class SuperTabMessage {
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;
+
+  /// The agents it was sent to (backend `recipientIds`): the ones its words name, with `--to`, or `@Name`. Empty for a post
+  /// that names nobody, and from a backend that does not send them.
+  final List<String> recipientIds;
+
+  /// An agent's post that is to other agents: Swarm v4's channel draws it on its own row, as talk ("Pip to Juno"). It reads the
+  /// message alone, so a roster that changes regroups no row.
+  bool get namesAgents => fromAgent && recipientIds.isNotEmpty;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

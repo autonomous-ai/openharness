@@ -12,7 +12,6 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/leaderboard/model.dart';
 import 'package:harness/super_tabs/leaderboard/person_row.dart';
 import 'package:harness/super_tabs/model.dart';
-import 'package:harness/super_tabs/profile_sheet.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'box_render_preview_test.dart' show loadPreviewFonts;
@@ -240,8 +239,7 @@ void main() {
         grid.AppTheme.brightness.value = brightness;
         addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
         final s = server();
-        // The reader is the person who set the name, to show their profile.
-        final c = await show(tester, s, brightness: brightness);
+        await show(tester, s, brightness: brightness);
         await tester.tap(find.byKey(const ValueKey('super-members-button')));
         await tester.pumpAndSettle();
         await _shot(tester, 'chat-people-${brightness.name}');
@@ -253,28 +251,6 @@ void main() {
         await _shot(tester, 'picker-${brightness.name}');
         await tester.enterText(composer, '');
         await tester.pumpAndSettle();
-        unawaited(
-          showSuperTabProfile(tester.element(find.byType(SuperTabView)), c),
-        );
-        await tester.pumpAndSettle();
-        await tester.enterText(
-          find.byKey(const ValueKey('super-name-field')),
-          'River Tran',
-        );
-        await tester.pump();
-        await _shot(tester, 'profile-${brightness.name}');
-        s.refuse = {
-          'code': 'NAME_TAKEN',
-          'message': 'Someone here already goes by that name.',
-        };
-        await tester.enterText(
-          find.byKey(const ValueKey('super-name-field')),
-          'Minh Nguyen',
-        );
-        await tester.pump();
-        await tester.tap(find.byKey(const ValueKey('super-name-save')));
-        await tester.pumpAndSettle();
-        await _shot(tester, 'profile-taken-${brightness.name}');
       }, skip: shots == null);
     }
   });

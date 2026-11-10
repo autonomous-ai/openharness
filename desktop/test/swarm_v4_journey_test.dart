@@ -28,13 +28,27 @@ void main() {
       'email': 'dee@example.com',
       'role': 'collaborator',
     });
-    server.leaderboard = {
-      'projectId': 'lead',
-      'week': 0,
+    server.shipping = {
+      'week': 1793577600000,
       'people': [
-        {'personId': 'dee', 'points': 120, 'rank': 1},
-        {'personId': 'owner', 'points': 12, 'rank': 2},
+        {
+          'personId': 'dee',
+          'displayName': 'dee',
+          'agentsShipping': 3,
+          'level': 3,
+          'points': 4.2,
+          'rank': 1,
+        },
+        {
+          'personId': 'owner',
+          'displayName': 'owner',
+          'agentsShipping': 1,
+          'level': 1,
+          'points': 1.4,
+          'rank': 2,
+        },
       ],
+      'failures': <dynamic>[],
     };
     final terminals = <String>[];
     final c = server.controller(

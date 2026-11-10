@@ -12,7 +12,6 @@ import '../logging/app_log.dart';
 import '../measurement/speed_marks.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
-import 'avatar_upload.dart';
 import 'task_priority.dart' show SuperTabTaskPriority;
 import 'message_link.dart';
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
@@ -21,7 +20,6 @@ import 'parts.dart';
 import 'read_marks.dart';
 import 'reading.dart';
 import 'linked_tasks.dart';
-import 'local_time_zone.dart';
 import 'task_steps.dart';
 
 /// A messages read started beside a state read, and what it asked for.
@@ -193,7 +191,6 @@ class SuperTabController extends ChangeNotifier {
     required this.request,
     required this.save,
     this.upload = refuseUpload,
-    this.avatarUpload = refuseAvatarUpload,
     this.uploadTimeout = const Duration(minutes: 2),
     Map<String, dynamic> initial = const {},
     this.pollInterval = const Duration(seconds: 3),
@@ -210,6 +207,7 @@ class SuperTabController extends ChangeNotifier {
       devicesSelected = initial['devicesSelected'] == true;
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       agentsGroupOpen = initial['agentsGroupOpen'] as bool? ?? true;
+      agentsAllShown = initial['agentsAllShown'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
       yourMachinesGroupOpen =
           initial['yourMachinesGroupOpen'] as bool? ?? false;
@@ -348,9 +346,6 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends one file to the backend.
   final SuperTabUpload upload;
-
-  /// Sends an avatar picture (profile_actions.dart).
-  final SuperTabAvatarUpload avatarUpload;
 
   /// How long an upload may go without a byte moving before the send gives up.
   final Duration uploadTimeout;
@@ -1060,6 +1055,9 @@ class SuperTabController extends ChangeNotifier {
   /// Whether the left pane's sections are open (Swarm v4, anh Dee 2026-11-09): Your Team and Projects open until the reader
   /// folds them, Your Machines and Top Teams folded until the reader opens them.
   bool agentsGroupOpen = true, projectsGroupOpen = true;
+
+  /// Your Team shows every agent, not only its first few (project_sidebar.dart `teamShown`); the reader's choice is kept.
+  bool agentsAllShown = false;
   bool yourMachinesGroupOpen = false, topTeamsGroupOpen = false;
 
   /// Whether its person opened or folded Your Machines: until they have, it is open while a computer is off and folded else.
@@ -1101,6 +1099,12 @@ class SuperTabController extends ChangeNotifier {
 
   void toggleAgentsGroup() {
     agentsGroupOpen = !agentsGroupOpen;
+    _saveSoon();
+    _changed();
+  }
+
+  void toggleAllAgents() {
+    agentsAllShown = !agentsAllShown;
     _saveSoon();
     _changed();
   }
@@ -1786,6 +1790,9 @@ class SuperTabController extends ChangeNotifier {
     (_messages[id] ?? const <SuperTabMessage>[]).where(_listed),
   );
 
+  /// Whether [id]'s newest page has been read, or drawn from the saved view: before it, no messages is not an empty chat.
+  bool messagesRead(String id) => _messages[id] != null;
+
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request' &&
       !m.terminalPrompt &&
@@ -2445,6 +2452,7 @@ class SuperTabController extends ChangeNotifier {
     'devicesSelected': devicesSelected,
     'machinesGroupOpen': machinesGroupOpen,
     'agentsGroupOpen': agentsGroupOpen,
+    'agentsAllShown': agentsAllShown,
     'projectsGroupOpen': projectsGroupOpen,
     'yourMachinesGroupOpen': yourMachinesGroupOpen,
     'yourMachinesGroupChosen': yourMachinesGroupChosen,
@@ -3052,6 +3060,13 @@ class SuperTabController extends ChangeNotifier {
     id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
+    final group = snapshot!.conversation(id)!;
+    // A task's project's closed tasks, read once: its menu offers Archived
+    // conversations only when there are some (view.dart _mayHaveArchived).
+    // A Buddy chat reads none.
+    if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
+      unawaited(loadDormant(group.projectId));
+    }
     _moveView(to: id);
     // Held from an earlier visit: what arrived meanwhile is not among them.
     if (_messages[id]?.isNotEmpty ?? false) {
@@ -3070,12 +3085,21 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The reader's notification setting for [id] (backend chatSettings.ts):
-  /// the one being sent, else the server's, else Mentions only.
-  SuperTabNotify notifyOf(String id) =>
-      _notifySending[id] ??
-      _notifyKept[id]?.$1 ??
-      snapshot?.chatSettings[id] ??
-      SuperTabNotify.mentions;
+  /// the one being sent, else the server's, else Mentions only. A project's
+  /// mute does not hold: Swarm v4's project menu has no Notifications, so a
+  /// project muted before could never be unmuted; its notices show, as
+  /// Mentions only, and what the server keeps stays as it is (U1, 2026-11-10).
+  SuperTabNotify notifyOf(String id) {
+    final level =
+        _notifySending[id] ??
+        _notifyKept[id]?.$1 ??
+        snapshot?.chatSettings[id] ??
+        SuperTabNotify.mentions;
+    if (level == SuperTabNotify.muted && snapshot?.isProjectLead(id) == true) {
+      return SuperTabNotify.mentions;
+    }
+    return level;
+  }
 
   /// Settings sent and not yet seen back in a read, newest choice per chat.
   final _notifySending = <String, SuperTabNotify>{};
@@ -3294,36 +3318,6 @@ class SuperTabController extends ChangeNotifier {
     if (lowered.isNotEmpty) _saveSoon();
   }
 
-  /// The zone this app last told the Swarm, or tried to: told once per zone
-  /// and session, so an older backend's refusal is not sent again.
-  String? _zoneTold;
-
-  /// Tells the Swarm the reader's time zone when it differs from the one it
-  /// keeps for them (backend `member.timeZone`), for the local time on their
-  /// card. Quietly: a refusal (an older backend) leaves their card without a
-  /// time, which is what it shows anyway.
-  void _reportTimeZone(SuperTabSnapshot next) {
-    final zone = superTabLocalTimeZone();
-    if (zone == null || zone == _zoneTold) return;
-    final me = next.people.where((p) => p.id == accountId).firstOrNull;
-    if (me == null || me.timeZone == zone) return;
-    _zoneTold = zone;
-    unawaited(
-      request(
-        'POST',
-        '/api/super-tabs/${Uri.encodeComponent(tabId)}/commands',
-        body: {
-          'operationId': superTabOperationId(),
-          'command': {'type': 'member.timeZone', 'timeZone': zone},
-        },
-      ).then<void>(
-        (_) {},
-        onError: (Object error) =>
-            appLog.debug('swarm', 'time zone not told: $error'),
-      ),
-    );
-  }
-
   /// Rechecks a compatibility refusal only when the person presses Retry.
   /// Leo's reconnect once returned an update refusal that survived until quit.
   Future<void> retryRead() async {
@@ -3432,7 +3426,6 @@ class SuperTabController extends ChangeNotifier {
         }
         snapshot = next;
         _takeLowered(parts.takeLowered());
-        _reportTimeZone(next);
         _notifyKept.removeWhere((_, kept) => kept.$2 < serial);
         final allowed = next.conversations.map((c) => c.id).toSet();
         // What this device keeps of a group goes with the group itself (a

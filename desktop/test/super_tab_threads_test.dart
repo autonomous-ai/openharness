@@ -348,7 +348,6 @@ void main() {
         'username': 'pia',
         'role': 'collaborator',
         'avatar': peerAvatar,
-        'status': {'text': 'Coffee break', 'emoji': '☕'},
       });
       (server.state['agents'] as List).add(riverRow());
       server.append('Who wants this?');
@@ -371,7 +370,7 @@ void main() {
         )
         .toList();
 
-    testWidgets('a person their uploaded picture and status, an agent its '
+    testWidgets('a person their uploaded picture, an agent its '
         'avatar, and someone who left the face their name gives', (
       tester,
     ) async {
@@ -380,7 +379,6 @@ void main() {
       expect(person.identity, 'person:peer');
       expect(person.name, 'pia');
       expect(person.picture, isA<SuperTabUploadedAvatar>());
-      expect(person.status?.text, 'Coffee break');
       expect(agent.identity, 'agent:river');
       expect(agent.name, 'River');
       expect(agent.picture, isA<SuperTabPresetAvatar>());
@@ -391,7 +389,6 @@ void main() {
       expect(left.identity, 'person:gone');
       expect(left.name, 'gone');
       expect(left.picture, isNull);
-      expect(left.status, isNull);
       // Faces about 24 points, as Slack's (Huy, 2026-11-03, #2315).
       expect(tester.getSize(find.byWidget(person)).width, 24);
       // The view saves its read mark 200 ms after the change: let it land.
@@ -432,7 +429,6 @@ void main() {
       await tester.pumpAndSettle();
       var [person, agent, _] = faces(tester);
       expect(person.picture, isNull);
-      expect(person.status, isNull);
       expect(person.name, 'peer');
       expect(agent.name, 'Rio');
       expect(agent.picture, isA<SuperTabPresetAvatar>());

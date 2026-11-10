@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/profile_sheet.dart';
 import 'package:harness/super_tabs/ship_row.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -26,14 +25,12 @@ ConversationServer office() {
       'email': 'dee@example.com',
       'role': 'owner',
       'avatar': {'kind': 'preset', 'key': 'fox'},
-      'status': {'text': 'Focusing', 'emoji': '🎯'},
     },
     {
       'id': 'ivy',
       'email': 'ivy@example.com',
       'role': 'collaborator',
       'avatar': {'kind': 'preset', 'key': 'cactus'},
-      'status': {'text': 'Coffee break', 'emoji': '☕'},
     },
     {'id': 'sam', 'email': 'sam@example.com', 'role': 'collaborator'},
   ];
@@ -165,15 +162,5 @@ void main() {
     await showOffice(tester, brightness: Brightness.light, reduceMotion: true);
     await tester.pumpAndSettle();
     await captureWindow(tester, shots, 'office-light-reduced-motion');
-    final context = tester.element(find.byType(SuperTabView));
-    final view = tester.widget<SuperTabView>(find.byType(SuperTabView));
-    showSuperTabProfile(context, view.controller);
-    await tester.pumpAndSettle();
-    await captureWindow(tester, shots, 'profile-sheet');
-    await tester.tap(find.text('Close'));
-    await tester.pumpAndSettle();
-    showSuperTabProfile(context, view.controller, agentId: 'kai');
-    await tester.pumpAndSettle();
-    await captureWindow(tester, shots, 'agent-avatar-sheet');
   }, skip: shots == null);
 }

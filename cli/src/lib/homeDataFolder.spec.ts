@@ -85,7 +85,7 @@ describe('config/startHome', () => {
     expect(await load('start')).toBeUndefined()
   })
 
-  it.each(['stop', 'logout', 'update', 'reset', 'team'])('%s follows HOME too, and says it dropped the variable', async (command) => {
+  it.each(['stop', 'logout', 'update', 'reset'])('%s follows HOME too, and says it dropped the variable', async (command) => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(await load(command)).toBeUndefined()
     expect(said).toHaveBeenCalledWith(expect.stringContaining('ignoring ADAPTER_DATA_DIR='))

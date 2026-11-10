@@ -199,35 +199,19 @@ void main() {
   });
 
   testWidgets(
-    'a person without a picture keeps their initial; a status shows beside it',
+    'a person without a picture keeps their initial, and a status an older '
+    'server still sends draws nothing',
     (tester) async {
-      final now = DateTime.utc(2026, 10, 27, 9);
       await tester.pumpWidget(
         host(
           SuperTabAvatar.person(
             personWith(status: {'text': 'Coffee', 'emoji': '☕'}),
-            now: now,
           ),
         ),
       );
       expect(find.text('D'), findsOneWidget);
-      expect(find.text('☕'), findsOneWidget);
-      expect(find.bySemanticsLabel(RegExp('Coffee')), findsOneWidget);
-      await tester.pumpWidget(
-        host(
-          SuperTabAvatar.person(
-            personWith(
-              status: {
-                'text': 'Lunch',
-                'emoji': '🍽️',
-                'until': '2026-10-27T08:00:00.000Z',
-              },
-            ),
-            now: now,
-          ),
-        ),
-      );
-      expect(find.text('🍽️'), findsNothing);
+      expect(find.text('☕'), findsNothing);
+      expect(find.bySemanticsLabel(RegExp('Coffee')), findsNothing);
     },
   );
 }
