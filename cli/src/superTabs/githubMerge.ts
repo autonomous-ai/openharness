@@ -258,7 +258,7 @@ export class GitHubMerge {
         // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
         const unsigned = onHead.find(([, r]) => r.ownLogin)?.[1]
         if (unsigned) await this.tellOnce(repo, number, head, author, `the READ-OK from ${unsigned.name} is unsigned, and every agent of its person posts as that `
-          + `login: its reader signs it, as in "<name>, ${this.clock()}: READ-OK ${head.slice(0, 7)}".`, comments)
+          + `login: its reader signs it, as in "<name>, HH:MM: READ-OK ${head.slice(0, 7)}".`, comments)
         continue
       }
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
