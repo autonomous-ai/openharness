@@ -235,16 +235,13 @@ void main() {
   });
 
   testWidgets(
-    'an agent whose computer is off still has its posts read, and Your Machines names the computer',
+    'an agent whose computer is off still has its posts read, and Your Machines opens by itself to name the computer',
     (tester) async {
       final server = swarmV4Channel();
       swarmV4Talk(server);
-      final c = await openSwarmV4(tester, server);
+      await openSwarmV4(tester, server);
       expect(rowOf('Reading #12 now'), findsOneWidget);
-      // Juno's laptop is off: the left pane says so under Your Machines, once it is opened.
-      await tester.tap(key('project-sidebar-machines'));
-      await tester.pumpAndSettle();
-      await tester.runAsync(c.flush);
+      // Juno's laptop is off: Your Machines opens by itself and says so on its row.
       expect(
         find.descendant(
           of: key('super-machine-laptop'),
