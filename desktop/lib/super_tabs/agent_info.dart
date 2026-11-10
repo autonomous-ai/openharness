@@ -17,6 +17,7 @@ import 'controller.dart';
 import 'github_issues.dart';
 import 'model.dart';
 import 'task_board.dart';
+import 'visible_tick.dart';
 
 /// An agent's engine as its chat's bar names it: `Claude Code`, else the app's one name for the engine (`Codex`, `OpenCode`),
 /// null when it has none.
@@ -62,7 +63,8 @@ class SwarmAgentInfo extends StatefulWidget {
   State<SwarmAgentInfo> createState() => _SwarmAgentInfoState();
 }
 
-class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
+class _SwarmAgentInfoState extends State<SwarmAgentInfo>
+    with WidgetsBindingObserver, VisibleTick<SwarmAgentInfo> {
   /// Why each board that could not be read was not, by repository, in the words GitHub's reader gives.
   Map<String, String> _errors = const {};
 
@@ -78,7 +80,6 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
       _readAtBy[widget.github] ??= <String, DateTime>{};
   static const _fresh = Duration(seconds: 30);
 
-  Timer? _refresh;
   late Listenable _changes;
 
   @override
@@ -86,12 +87,17 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
     super.initState();
     _changes = Listenable.merge([widget.controller, ?widget.app]);
     unawaited(_readBoards(_repositories()));
-    if (widget.refreshEvery case final every?) {
-      _refresh = Timer.periodic(
-        every,
-        (_) => unawaited(_readBoards(_repositories(), always: true)),
-      );
-    }
+    // Its clock runs only while it shows, as the board's: hidden, it would spend the person's GitHub rate limit on nobody.
+    if (widget.refreshEvery case final every?) visibleTick(every);
+  }
+
+  @override
+  void onTick() => unawaited(_readBoards(_repositories(), always: true));
+
+  /// Back in sight: read what was not read in the last [_fresh].
+  @override
+  void onScreenChanged(bool onScreen) {
+    if (onScreen) unawaited(_readBoards(_repositories()));
   }
 
   @override
@@ -104,12 +110,6 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
       _errors = const {};
       unawaited(_readBoards(_repositories()));
     }
-  }
-
-  @override
-  void dispose() {
-    _refresh?.cancel();
-    super.dispose();
   }
 
   /// The projects the agent is in, each with whether it is that project's PM: the project the agent names, or whose channel
@@ -134,6 +134,7 @@ class _SwarmAgentInfoState extends State<SwarmAgentInfo> {
       ?SwarmTaskBoard.repositoryOf(
         widget.controller,
         project.leadConversationId,
+        app: widget.app,
       ),
   };
 

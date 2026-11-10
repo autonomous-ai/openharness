@@ -500,7 +500,10 @@ void main() {
     });
   });
   group('Humans is the Leaderboard', () {
-    SuperTabShippingReader board(List<(String, double)> people) {
+    SuperTabShippingReader board(
+      List<(String, double)> people, {
+      List<String> failures = const [],
+    }) {
       final reader = SuperTabShippingReader(
         tabId: 'tab',
         request: (method, path, {body}) async => {
@@ -516,7 +519,9 @@ void main() {
                 'rank': i + 1,
               },
           ],
-          'failures': <dynamic>[],
+          'failures': [
+            for (final code in failures) {'machineId': 'mac-1', 'code': code},
+          ],
         },
       );
       addTearDown(reader.dispose);
@@ -607,6 +612,19 @@ void main() {
       final c2 = await show(tester, setup: people, leaderboard: team);
       expect(key('project-sidebar-humans'), findsOneWidget);
       await tester.runAsync(c2.flush);
+    });
+
+    testWidgets('a Swarm of one person with no points because GitHub could '
+        'not be read says why', (tester) async {
+      final reader = board([('owner', 0)], failures: ['GH_SIGNED_OUT']);
+      await tester.runAsync(reader.show);
+      final c = await show(tester, leaderboard: reader);
+      expect(key('project-sidebar-humans'), findsOneWidget);
+      // Top Teams starts folded: its person opens it.
+      await tester.tap(key('project-sidebar-humans'));
+      await settle(tester);
+      expect(key('super-human-reading'), findsOneWidget);
+      await tester.runAsync(c.flush);
     });
 
     testWidgets('before the board is read, nothing: an empty list shows no '

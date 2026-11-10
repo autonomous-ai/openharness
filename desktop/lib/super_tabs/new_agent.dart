@@ -183,32 +183,34 @@ Future<String> swarmAttachAgent(
   }
   final joins = _joins[app] ??= {};
   final key = (tabId, machineId, native.id);
-  final taken = [
+  // The names its Swarm has, and those other joins begun here into it hold.
+  Future<List<String>> taken() async => [
     for (final agent in (await app.superTabs.readSnapshot(tabId)).agents)
       agent.displayName ?? agent.name,
     for (final MapEntry(key: other, :value) in joins.entries)
-      if (other != key) value.name,
+      if (other != key && other.$1 == tabId) value.name,
   ];
-  final own = native.name.trim();
-  final keepOwn =
-      own.isNotEmpty &&
-      !isAutomaticHarnessName(own) &&
-      !taken.any((name) => name.toLowerCase() == own.toLowerCase());
-  var join =
-      joins[key] ??
-      (
-        operation: superTabOperationId(),
-        step: 'chat',
-        name: keepOwn ? own : freshAgentName(taken),
-        own: keepOwn,
-        model: native.modelName,
-        effort: native.modelEffort,
-      );
-  if (!joins.containsKey(key)) {
-    joins[key] = join;
+  var join = joins[key];
+  if (join == null) {
+    final names = await taken();
+    final own = native.name.trim();
+    final keepOwn =
+        own.isNotEmpty &&
+        !isAutomaticHarnessName(own) &&
+        !names.any((name) => name.toLowerCase() == own.toLowerCase());
+    join = joins[key] ??= (
+      operation: superTabOperationId(),
+      step: 'chat',
+      name: keepOwn ? own : freshAgentName(names),
+      own: keepOwn,
+      model: native.modelName,
+      effort: native.modelEffort,
+    );
     if (joins.length > _joinsKept) joins.remove(joins.keys.first);
   }
-  final creationId = join.operation;
+  // What this try asks for: the join kept, or the one a refused name gives way to.
+  var current = join;
+  final creationId = current.operation;
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -239,25 +241,30 @@ Future<String> swarmAttachAgent(
     'kind': 'regular',
     'machineId': machineId,
     'engine': engine,
-    'name': join.name,
+    'name': current.name,
     'local': true,
   });
   Map<String, dynamic> chat;
   try {
-    chat = await newChat(join.step);
+    chat = await newChat(current.step);
   } on SuperTabFailure catch (failure) {
+    if (!_nameRefusals.contains(failure.code)) rethrow;
+    // A name of the Swarm's refused too: the next try starts over, with a name read then.
+    if (!current.own) {
+      joins.remove(key);
+      rethrow;
+    }
     // The server refuses names Desktop cannot see (a person's here, a reserved
     // word): its own name then gives way, as an automatic one does.
-    if (!join.own || !_nameRefusals.contains(failure.code)) rethrow;
-    join = joins[key] = (
-      operation: join.operation,
+    current = joins[key] = (
+      operation: current.operation,
       step: 'chat-named',
-      name: freshAgentName([...taken, join.name]),
+      name: freshAgentName([...await taken(), current.name]),
       own: false,
-      model: join.model,
-      effort: join.effort,
+      model: current.model,
+      effort: current.effort,
     );
-    chat = await newChat(join.step);
+    chat = await newChat(current.step);
   }
   final chatId = chat['conversationId'] as String;
   await run('join', {
@@ -265,12 +272,12 @@ Future<String> swarmAttachAgent(
     'conversationId': chatId,
     'machineId': machineId,
     'harnessId': native.id,
-    'name': join.name,
+    'name': current.name,
     'lead': false,
     'configuration': {
       'engine': engine,
-      'model': join.model,
-      'effort': join.effort,
+      'model': current.model,
+      'effort': current.effort,
       'contextWindow': null,
       'engineVersion': null,
     },

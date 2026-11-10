@@ -713,17 +713,14 @@ class ProjectSidebar extends StatelessWidget {
     // This week's, whichever the Leaderboard page shows.
     final board = leaderboard?.week;
     final scores = [...?board?.people].take(humansShown).toList();
-    // A computer of the reader's that could not read GitHub is why nobody may be shipping: it is said even then.
-    final failures = scores.isEmpty
-        ? [...?board?.failures]
-        : const <ShippingFailure>[];
     // An empty list shows nothing (anh Dee's rule): no heading until someone has points. A Swarm of one person before its first
     // task ships has a board of one zero, empty too; a team's zeros stay, the way to its Leaderboard.
-    final oneZero =
-        snapshot.people.length < 2 &&
-        scores.isNotEmpty &&
-        scores.first.points <= 0;
-    if ((scores.isEmpty || oneZero) && failures.isEmpty) return const [];
+    final empty =
+        scores.isEmpty ||
+        (snapshot.people.length < 2 && scores.first.points <= 0);
+    // A computer of the reader's that could not read GitHub is why nobody may be shipping: it is said even then.
+    final failures = empty ? [...?board?.failures] : const <ShippingFailure>[];
+    if (empty && failures.isEmpty) return const [];
     void open() => onPage(SwarmPage.leaderboard);
     final people = {for (final person in snapshot.people) person.id: person};
     return [

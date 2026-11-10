@@ -3974,7 +3974,11 @@ class _SuperTabViewState extends State<SuperTabView>
         c.snapshot?.isProjectLead(group.id) != true) {
       return null;
     }
-    final repository = SwarmTaskBoard.repositoryOf(c, group.id);
+    final repository = SwarmTaskBoard.repositoryOf(
+      c,
+      group.id,
+      app: widget.app,
+    );
     if (repository == null) return null;
     final held = _feeds[group.id];
     if (held != null && held.repository == repository) return held;
