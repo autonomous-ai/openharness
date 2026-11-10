@@ -3,11 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/swarm_layout.dart';
 import 'package:harness/super_tabs/agent_instructions.dart';
+import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/pull_chip.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:xterm/xterm.dart' show TerminalStyle;
 
 import 'package:flutter/gestures.dart';
 
@@ -510,6 +512,36 @@ void main() {
   }
 
   const fileKey = 'session-first builder/first builder';
+
+  // anh Dee, 2026-11-10: "keep all the font size consistent between chat pane, terminal pane, and instruction pane. and resize
+  // the font will resize all."
+  testWidgets(
+    'an agent\'s instructions read at the terminal\'s size beside its chat, and follow it when it changes',
+    (tester) async {
+      final saved = terminalFontStore.value;
+      addTearDown(() => terminalFontStore.value = saved);
+      final computer = SwarmV4Computer(
+        files: {fileKey: 'Answer in Vietnamese.\n'},
+      );
+      await show(tester, computer: computer, size: const Size(2000, 900));
+      await openInstructions(tester);
+      double size() => tester
+          .widget<SelectableText>(key('swarm-instructions-text'))
+          .style!
+          .fontSize!;
+      expect(size(), terminalFontStore.size);
+      expect(size(), 13);
+      // As ⌘+ three times, or Settings ▸ Terminal's stepper, sets it.
+      terminalFontStore.value = TerminalStyle(
+        fontSize: 16,
+        fontFamily: saved.fontFamily,
+        fontFamilyFallback: saved.fontFamilyFallback,
+      );
+      await tester.pump();
+      expect(size(), 16);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'Instructions\' Edit and × end the header at the pane\'s right edge, and so do Cancel and Save',

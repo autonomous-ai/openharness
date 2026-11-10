@@ -564,7 +564,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   140 wide at least, so all three show beside the channel in the 1280 window the
   app opens in). A card is a hairline (`DesktopChrome.rim`) at radius 12
   on `cardBg` and holds what github.com's list shows: the issue's number in a
-  grey capsule (`AppSurface.recess`, 12 metadata), its title in 14 semibold on
+  grey capsule (`AppSurface.recess`, 12 metadata), its title at the text's size in semibold (`SwarmType.boardTitle`) on
   up to three lines, its labels as chips in their own GitHub colour (the first
   four and a `+N`; `SwarmLabelChips`: the colour at 18% behind it, its
   lighter shade as text in dark, its darker in light), then who opened it and
@@ -678,10 +678,16 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `SuperTabMessageRow.shareOf`). Between
   you and a chat's own agent (a Buddy chat, an agent chat) there are no names
   or faces; in a group chat a speaker's name sits over their first bubble in
-  14 plain secondary ink, and their round 28 face by their last. No engine
-  mark: colour is the face's. Text reads at 16 on 26 px lines, names at 14 and
-  times at 13 (`SwarmType`): Codex's reading size (anh Dee, 2026-11-10: "the
-  font size is also small"); a phone keeps the app's 14, 13 and 12. A
+  plain secondary ink at the text's size, and their round 28 face by their
+  last. No engine mark: colour is the face's. **One size with the terminal**
+  (anh Dee, 2026-11-10: "keep all the font size consistent between chat pane,
+  terminal pane, and instruction pane. and resize the font will resize all"):
+  a Swarm's chats, its task and pull request chats, its boards' titles and an
+  agent's instructions read at the terminal's own size (`SwarmType.sizeOf`,
+  `SwarmTextSize` over the Swarm's panes): 13 at first, on lines 1.6 times as
+  tall (21), names at it, times one smaller; ⌘+ and ⌘−, and Settings ▸
+  Terminal's stepper, change every pane together. The instructions keep the
+  terminal's own face too. A phone keeps the app's 14, 13 and 12. A
   message reads in the direction of its first words (the first letter of its prose; code, links, `@name` and `#12`
   aside): Arabic or Hebrew from the bubble's right edge, whatever the app's; its code still left to right
   (`SuperTabMessageText.directionOf`).
