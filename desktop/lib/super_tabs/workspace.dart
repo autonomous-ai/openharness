@@ -11,6 +11,7 @@ import '../state/workspace_chrome.dart';
 import 'agent_group_picker.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
+import 'github_issues.dart';
 import 'model.dart';
 import 'pane.dart';
 import 'personal_machines.dart';
@@ -33,6 +34,7 @@ class SuperTabWorkspace extends StatefulWidget {
     this.onNewAgent,
     this.onAttachAgent,
     this.onNewSwarm,
+    this.github,
   });
   final AppNotifier app;
   final Widget canvas;
@@ -45,6 +47,9 @@ class SuperTabWorkspace extends StatefulWidget {
   /// Attach beside + New agent: the ⌘P picker of agents already running on its person's own computers (Swarm v4).
   final VoidCallback? onAttachAgent;
   final VoidCallback? onNewSwarm;
+
+  /// Reads a project's tasks with `gh`; tests give their own.
+  final SwarmGitHub? github;
 
   @override
   State<SuperTabWorkspace> createState() => _SuperTabWorkspaceState();
@@ -237,13 +242,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
           );
         }
         if (current() && agents.isEmpty && tab != null) {
-          final personal = PersonalProjects.of(app);
-          if (personal.soleTab(local) case final source?) {
+          if (PersonalProjects.of(app).soleTab(local) case final source?) {
             app.copySuperTabLayout(swarmId, source);
-          } else if (local.isNotEmpty) {
-            // Panes from several tabs: the sizes the person gave this
-            // project on this computer, if any (task #3099).
-            personal.applyLayout(controller, request.$2, tab);
           }
         }
         if (current()) {
@@ -592,6 +592,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   onNewAgent: widget.onNewAgent,
                   onAttachAgent: widget.onAttachAgent,
                   onNewSwarm: widget.onNewSwarm,
+                  github: widget.github,
                   onOpenTerminal: (agent) => _focusAgent(
                     controller,
                     tab.id,

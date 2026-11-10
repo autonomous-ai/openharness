@@ -636,7 +636,7 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading, {
     required Widget? switcher,
   }) {
-    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
@@ -1032,14 +1032,17 @@ class ProjectSidebar extends StatelessWidget {
       ),
   ];
 
-  /// The projects Projects lists, each with a chat, in its order.
+  /// The projects Projects lists, each with a chat, in its order. An archived one is not listed (a v3 tab's project that
+  /// had messages: personal_projects.dart).
   Iterable<_ProjectReading> _listed(
     SuperTabSnapshot? snapshot,
     _SidebarReading reading,
   ) {
     final hidden = superTabHiddenProjects(controller, app: app);
     return [
-      for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
+      for (final project in ([
+        ...?snapshot?.listedProjects,
+      ]..sort(_compareProjects)))
         if (reading.of(project) case final read
             when read.lead != null &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
@@ -1064,7 +1067,7 @@ class ProjectSidebar extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
-    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
@@ -1358,7 +1361,7 @@ List<String> superTabSidebarOrder(
 }) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
-  final projects = [...snapshot.projects]..sort(_compareProjects);
+  final projects = [...snapshot.listedProjects]..sort(_compareProjects);
   final hidden = superTabHiddenProjects(controller, app: app);
   return [
     if (controller.oneBuddy)
