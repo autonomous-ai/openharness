@@ -64,9 +64,9 @@ const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 // A GitHub comment an agent posted (superTabs/githubComments.ts): `owner/name`, and GitHub's numeric id.
 const repository = z.string().max(200).regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
 const commentRecordQuery = z.object({ asAgentId: id }).strict()
-const commentRecordBody = z.object({ repository, kind: z.enum(COMMENT_KINDS), commentId: z.string().regex(/^\d{1,20}$/) }).strict()
+const commentRecordBody = z.object({ repository, kind: z.enum(COMMENT_KINDS), commentId: z.string().regex(/^[1-9]\d{0,19}$/) }).strict()
 const commentAuthorsQuery = z.object({ repository, asAgentId: id.optional(),
-  ids: z.string().max(4000).transform(ids => ids.split(',')).pipe(z.array(z.string().regex(/^[a-z-]+:\d{1,20}$/)).min(1).max(MAX_COMMENT_IDS)) }).strict()
+  ids: z.string().max(4000).transform(ids => ids.split(',')).pipe(z.array(z.string().regex(/^[a-z-]+:[1-9]\d{0,19}$/)).min(1).max(MAX_COMMENT_IDS)) }).strict()
 const uploadParams = z.object({ tabId: id, uploadId: id })
 const voiceParams = z.object({ tabId: id, attachmentId: id })
 const voiceQuery = agentQuery.extend({ lang: z.string().max(16).optional() })

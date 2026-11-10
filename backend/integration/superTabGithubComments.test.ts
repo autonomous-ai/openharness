@@ -71,10 +71,10 @@ describe('which agent wrote a GitHub comment', () => {
     await expect(s.record(s.oak, '101')).rejects.toMatchObject({ code: 'COMMENT_NOT_YOURS', status: 409 })
     expect(await s.record(s.oak, '102')).toEqual({ recorded: true })
     const rows = await db.superTabGithubComment.findMany({ where: { tabId: s.tab }, orderBy: { id: 'asc' } })
-    expect(rows.map(r => [r.id, r.projectId, r.agentId])).toEqual([['acme/app|issue|101', s.web.projectId, s.web.agentId], ['acme/app|issue|102', s.web.projectId, s.oak]])
+    expect(rows.map(r => [r.id, r.projectId, r.agentId])).toEqual([[`${s.tab}|acme/app|issue|101`, s.web.projectId, s.web.agentId], [`${s.tab}|acme/app|issue|102`, s.web.projectId, s.oak]])
   })
 
-  it('refuses another person speaking as an agent they do not host, and an agent on a repository none of its projects works on', async () => {
+  it('refuses another person speaking as an agent they do not host, and an agent on a repository of no project it reads', async () => {
     const s = await scene()
     await expect(s.record(s.web.agentId, '201', peer)).rejects.toMatchObject({ status: 403 })
     await expect(s.record(s.docs.agentId, '202')).rejects.toMatchObject({ code: 'REPOSITORY_NOT_PROJECT', status: 422 })

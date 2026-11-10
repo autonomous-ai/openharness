@@ -3605,14 +3605,15 @@ export class SuperTabStore {
   }
 
   /** Records that agent [asAgentId] wrote a GitHub comment it just posted (githubComments.ts). Only the agent the caller's own
-   *  machine runs may say so (the actor check every agent call has), and only on the repository of a project it works in. */
+   *  machine runs may say so (the actor check every agent call has), and only on the repository of a project it may read, as
+   *  it reads the Swarm now (not the read cache). */
   async recordGithubComment(user: AuthUser, tabId: string, asAgentId: string, comment: { repository: string; kind: CommentKind; commentId: string }) {
-    const { state } = await this.readLoad(user, tabId)
-    const actor = await this.actor(this.db, user, state, asAgentId)
-    const worker = state.agents.find(a => a.id === asAgentId)!
-    const own = new Set([agentProjectId(state, worker), ledProject(state, worker.id)?.id].filter(Boolean))
-    const project = projectsOf(state).find(p => own.has(p.id) && sameRepository(p, comment.repository))
-    if (!project || actor.kind !== 'agent') fail('REPOSITORY_NOT_PROJECT', 'This agent works on no project of that repository.', 422)
+    const project = await transaction(this.db, async tx => {
+      const { state } = await this.load(tx, user, tabId)
+      const actor = await this.actor(tx, user, state, asAgentId)
+      return projectsOf(state).find(p => sameRepository(p, comment.repository) && canReadProject(state, actor, p))
+    })
+    if (!project) fail('REPOSITORY_NOT_PROJECT', 'This agent works on no project of that repository.', 422)
     return recordComment(this.db, { tabId, projectId: project.id, agentId: asAgentId, ...comment, now: this.now() })
   }
 
