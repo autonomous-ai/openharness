@@ -10,8 +10,9 @@ import 'package:harness_mobile/swarm/swarm_buddy.dart';
 /// ⚠️ A fix made to one side only fails nowhere else: a field the backend adds
 /// would parse on a computer and be dropped on the phone. Here a drift fails
 /// until the change is carried across — or, if the two are meant to differ now,
-/// until the file leaves this list on purpose. `profile_model.dart` has: Desktop
-/// no longer has reactions, which the phone still reads and draws.
+/// until the file leaves this list on purpose. `profile_model.dart` has:
+/// Desktop no longer has a person's status or reactions, which the phone
+/// still reads and draws.
 const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
   'lib/swarm/tasks/personal_tasks.dart':
