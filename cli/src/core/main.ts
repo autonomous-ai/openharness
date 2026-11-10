@@ -1385,6 +1385,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The Swarm's chat is queued in the engine's own input while an agent works (superTabs/inCore/deliveries.ts).
     ...(swarm ? { typesWhileBusy: swarm.typesWhileBusy } : {}),
     answersQuestion: deliveries.answersQuestion,
+    personsOwn: deliveries.personsOwn,
     // Built further down: read when a person's message meets an open question, never now.
     pendingQuestion: (sessionId) => asking.pendingQuestion(sessionId),
     readScreen: screens.read,

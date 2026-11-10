@@ -128,12 +128,15 @@ describe('the session input controller\'s dependencies', () => {
     expect(t.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
   })
 
-  it('says an agent that is not here, a lapsed authority and a short-turn hold, as the write would', async () => {
+  // Its maker asks before it leases the delivery, and leases it only when nothing holds it: a lease it has not taken yet holds
+  // nothing. Said as a lapsed authority, a delivery the pane held once (an engine still starting) was held for good, and its
+  // person's message in their 1:1 chat was never typed (CLI end to end, 2026-11-10).
+  it('says an agent that is not here and a short-turn hold, as the write would, and no lease its maker has yet to take', async () => {
     const t = deps()
     const { holdOf } = createInput(t.deps)
     expect(await holdOf('nobody', 'team:service:superTabs:held')).toBe('team_waiting_unavailable')
     t.deps.deliveries.canWrite = () => false
-    expect(await holdOf('a1', 'team:service:superTabs:held')).toBe('team_waiting_control')
+    expect(await holdOf('a1', 'team:service:superTabs:held')).toBeNull()
     // Held by the short-turn guard: said before the pane is read.
     let at = 0
     const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
@@ -179,6 +182,22 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.beforeTeamWrite!(agents.get('cx')!, 'team:service:superTabs:d2')).toBeNull()
     at += 30_000
     expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBeNull()
+  })
+
+  // Its person's own message is their input, which the guard never holds (it stops agents typing into a loop, not their person):
+  // typed at once after ten quick turns, while another's message to the same agent still waits.
+  it('never holds its person\'s own message for the short-turn guard, and still holds an agent\'s', async () => {
+    let at = 0
+    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
+    for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
+    const { deps: given } = deps({ shortTurns, personsOwn: (id) => id === 'team:service:superTabs:person' })
+    const wired = sessionInputDeps(given, () => lock([]))
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:person')).toBeNull()
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:agent')).toBe('team_waiting_control')
+    // Its maker asks the same before it writes it again, and hears what the pane holds, never the guard.
+    const { holdOf } = createInput(given)
+    expect(await holdOf('a1', 'team:service:superTabs:person')).toBeNull()
+    expect(await holdOf('a1', 'team:service:superTabs:agent')).toBe('team_waiting_control')
   })
 
   it('asks whether an engine\'s reader is starting, and tells the app a message waits for it', async () => {

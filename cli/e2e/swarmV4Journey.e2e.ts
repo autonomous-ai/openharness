@@ -196,8 +196,9 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     const first = await read()
     // No file of its own yet; the repository's own files, read-only, as Desktop's Instructions shows them beside it.
     expect(first).toMatchObject({ text: null, version: '' })
-    expect(first.shared).toEqual([{ name: 'AGENTS.md', text: '# The shop\n\nThe goal: a small shop.\n', truncated: false },
-      { name: 'CLAUDE.md', text: '@AGENTS.md\n', truncated: false }])
+    // Each where it is and which engine loads it (#3729): Codex AGENTS.md, Claude Code CLAUDE.md.
+    expect(first.shared).toEqual([{ name: 'AGENTS.md', path: 'AGENTS.md', loadedBy: ['codex'], text: '# The shop\n\nThe goal: a small shop.\n', truncated: false },
+      { name: 'CLAUDE.md', path: 'CLAUDE.md', loadedBy: ['claude'], text: '@AGENTS.md\n', truncated: false }])
     const rule = 'Review every pull request within the hour.\n'
     const saved = await B.client.request<Record<string, any>>('agent_instructions_write', { agentId: agents.Kai.harnessId, name: 'Kai', text: rule, version: '' }, 30_000)
     expect(saved.error, JSON.stringify(saved)).toBeUndefined()

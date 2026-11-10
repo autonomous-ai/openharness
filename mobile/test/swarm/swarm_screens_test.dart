@@ -9,8 +9,6 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
-import 'package:harness_mobile/swarm/swarm_activity_page.dart';
-import 'package:harness_mobile/swarm/swarm_needs_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
@@ -214,19 +212,13 @@ void main() {
       .length;
 
   group('the Swarm page', () {
-    testWidgets('its projects come first, under the title; what needs the '
-        'person is in Needs you', (tester) async {
+    testWidgets('its projects come first, under the title', (tester) async {
       // An iPhone's screen: all of Home at once.
       tester.view.physicalSize = const Size(1170, 2532);
       tester.view.devicePixelRatio = 3;
       addTearDown(tester.view.reset);
       await pump(tester, backend(), const SwarmPage());
 
-      expect(
-        key('swarm-home-need-decision:d1'),
-        findsNothing,
-        reason: "the Activity tab's",
-      );
       expect(
         tester.getTopLeft(key('swarm-title-button')).dy,
         lessThan(tester.getTopLeft(key('swarm-project-$tab-$project')).dy),
@@ -237,18 +229,6 @@ void main() {
         reason: 'one Swarm: no heading, the title names it',
       );
 
-      openSwarmNeeds(
-        tester.element(find.byType(SwarmPage)),
-        focus: 'mention:m1',
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Open chat'),
-        findsOneWidget,
-        reason: 'the Naming System: a Swarm chat, not a conversation',
-      );
-      await tester.tap(key('tty-back'));
-      await tester.pumpAndSettle();
       final row = key('swarm-project-$tab-$project');
       expect(
         find.descendant(of: row, matching: find.text('@1')),
@@ -260,206 +240,6 @@ void main() {
         findsNothing,
         reason: 'one line: who reads it is on its Team, not on Home',
       );
-    });
-
-    testWidgets('an answer is held for Undo, and undone is never sent', (
-      tester,
-    ) async {
-      final fake = backend();
-      await pump(tester, fake, const SwarmActivityPage(focus: 'decision:d1'));
-
-      await tester.tap(key('swarm-option-d1-0'));
-      await tester.pump();
-      expect(find.text('Sending “Yes”'), findsOneWidget);
-
-      await tester.tap(key('swarm-undo-d1'));
-      await tester.pump(const Duration(seconds: 5));
-      expect(fake.commands, isEmpty);
-      expect(key('swarm-option-d1-0'), findsOneWidget);
-    });
-
-    testWidgets(
-      'an answer dropped before it was sent says so, and offers the options '
-      'again',
-      (tester) async {
-        final fake = backend();
-        final host = await pump(
-          tester,
-          fake,
-          const SwarmActivityPage(focus: 'decision:d1'),
-        );
-        await tester.tap(key('swarm-option-d1-0'));
-        await tester.pump();
-        expect(find.text('Sending “Yes”'), findsOneWidget);
-
-        // Read again in full within the Undo window: what waits for the
-        // person is read again, and that read is slow to answer.
-        const decisions = '/api/super-tabs/$tab/decisions?state=open';
-        final open = fake.routes[decisions]!(null);
-        final stalled = Completer<Object?>();
-        fake.routes[decisions] = (_) => stalled.future;
-        fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
-        await host.session!.inbox.refresh();
-        await tester.pump();
-        expect(find.text('Sending “Yes”'), findsNothing);
-
-        stalled.complete(open);
-        await tester.pump(const Duration(seconds: 5));
-        await tester.pumpAndSettle();
-
-        expect(fake.commands, isEmpty);
-        expect(find.text('Not sent, choose again.'), findsOneWidget);
-        expect(key('swarm-option-d1-0'), findsOneWidget);
-
-        await tester.tap(key('swarm-option-d1-1'));
-        await tester.pump();
-        expect(find.text('Not sent, choose again.'), findsNothing);
-        expect(find.text('Sending “No”'), findsOneWidget);
-        await tester.tap(key('swarm-undo-d1'));
-        await tester.pump();
-      },
-    );
-
-    testWidgets('one tap answers once the Undo window has passed', (
-      tester,
-    ) async {
-      final fake = backend();
-      await pump(tester, fake, const SwarmActivityPage(focus: 'decision:d1'));
-
-      await tester.tap(key('swarm-option-d1-1'));
-      await tester.pump(const Duration(seconds: 2));
-      expect(fake.commands, isEmpty);
-      await tester.pump(const Duration(seconds: 2));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands.single, {
-        'type': 'decision.answer',
-        'decisionId': 'd1',
-        'choice': 1,
-      });
-    });
-
-    testWidgets(
-      'an answer not confirmed offers only to send the same one again',
-      (tester) async {
-        final fake = backend();
-        var lost = true;
-        fake.routes['/api/super-tabs/$tab/commands'] = (_) => lost
-            ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
-            : {'result': <String, dynamic>{}};
-        await pump(tester, fake, const SwarmActivityPage(focus: 'decision:d1'));
-
-        await tester.tap(key('swarm-option-d1-1'));
-        await tester.pump(const Duration(seconds: 4));
-        await tester.pumpAndSettle();
-
-        expect(key('swarm-option-d1-0'), findsNothing);
-        expect(key('swarm-option-d1-1'), findsNothing);
-        expect(find.text('“No” is not confirmed.'), findsOneWidget);
-
-        lost = false;
-        await tester.tap(key('swarm-resend-d1'));
-        await tester.pumpAndSettle();
-
-        expect([for (final c in fake.commands) c['choice']], [1, 1]);
-        final operations = {
-          for (final call in fake.calls)
-            if (call.method == 'POST') call.body!['operationId'],
-        };
-        expect(operations, hasLength(1));
-      },
-    );
-
-    testWidgets('a tag is marked done from its row', (tester) async {
-      final fake = backend();
-      await pump(tester, fake, const SwarmActivityPage(focus: 'mention:m1'));
-
-      await tester.tap(key('swarm-done-m1'));
-      await tester.pumpAndSettle();
-
-      expect(fake.commands.single, {'type': 'mention.done', 'mentionId': 'm1'});
-    });
-
-    testWidgets('Done says so at once, and the tag row goes once confirmed', (
-      tester,
-    ) async {
-      final fake = backend();
-      await pump(tester, fake, const SwarmActivityPage(focus: 'mention:m1'));
-      final confirmed = Completer<Object?>();
-      fake.routes['/api/super-tabs/$tab/commands'] = (_) => confirmed.future;
-
-      await tester.tap(key('swarm-done-m1'));
-      await tester.pump();
-
-      expect(find.text('Done…'), findsOneWidget);
-      final tag = find.textContaining('River tagged you', findRichText: true);
-      expect(tag, findsOneWidget);
-
-      confirmed.complete({'result': <String, dynamic>{}});
-      await tester.pumpAndSettle();
-
-      expect(tag, findsNothing);
-    });
-
-    testWidgets('a Done that fails says so on its row', (tester) async {
-      final fake = backend();
-      await pump(tester, fake, const SwarmActivityPage(focus: 'mention:m1'));
-      fake.routes['/api/super-tabs/$tab/commands'] = (_) =>
-          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
-
-      await tester.tap(key('swarm-done-m1'));
-      await tester.pumpAndSettle();
-
-      expect(
-        find.textContaining('Not marked done. Try again.'),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining('River tagged you', findRichText: true),
-        findsOneWidget,
-      );
-      expect(key('swarm-done-m1'), findsOneWidget);
-    });
-
-    testWidgets('a need opens the conversation it was asked in', (
-      tester,
-    ) async {
-      await pump(tester, backend(), const SwarmActivityPage());
-      await tester.tap(
-        key('swarm-activity-row-work:$tab:g1:attempt-g1:needs_human'),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.byType(SwarmConversationPage),
-        findsNothing,
-        reason: 'the first tap opens it in place, where another was open',
-      );
-
-      // Open, it says who asks and where in one line, and that opens it.
-      await tester.tap(
-        find.textContaining('Nova needs you', findRichText: true),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byType(SwarmConversationPage), findsOneWidget);
-      expect(find.text('Which name should the flag have?'), findsOneWidget);
-    });
-
-    testWidgets('a tag opens the conversation from its text too', (
-      tester,
-    ) async {
-      await pump(
-        tester,
-        backend(),
-        const SwarmActivityPage(focus: 'mention:m1'),
-      );
-
-      await tester.tap(
-        find.textContaining('Can you check the copy?', findRichText: true),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byType(SwarmConversationPage), findsOneWidget);
     });
 
     testWidgets('with Swarm off, says where to turn it on', (tester) async {

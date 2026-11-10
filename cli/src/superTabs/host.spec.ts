@@ -4005,12 +4005,14 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     expect(typed(alone)).toEqual(['Attached files:\n- /drops/1-screen.png (screen.png, 5 B)'])
   })
 
-  it('still closes the question its person\'s message answers, as any person\'s Swarm message does', async () => {
+  // And is its person's own input, which the short-turn guard never holds (core/input.ts readTeamHold): a person's message anywhere
+  // else is not marked so (only the machine's own person's message may close its question, above).
+  it('still closes the question its person\'s message answers, as any person\'s Swarm message does, and is marked their own input', async () => {
     const t = inChat({ createdAt: '2026-11-09T08:00:00.000Z' })
     vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'ken', email: 'ken@example.test' })
     await t.open().tick()
     expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', 'ok, ship it', 'team:service:superTabs:delivery',
-      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z') })
+      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z'), personsOwn: true })
   })
 
   it('is typed again, as typed, when the pane held it, with nothing read for it and one reply owed', async () => {

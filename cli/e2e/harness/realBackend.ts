@@ -114,10 +114,11 @@ async function boot(accounts: Account[], log: (line: string) => void, stops: Arr
   })
   const url = `http://127.0.0.1:${port}`
   try {
-    // A backend that died while starting (a bad migration, a missing setting) fails at once, not at the deadline.
-    await until('backend health', async () => {
+    // A backend that died while starting (a bad migration, a missing setting) fails at once, not at the deadline. Ready, not
+    // only alive: /api/health answers before its Redis is connected, and a first request then failed (COMPUTER_LOCK_UNAVAILABLE).
+    await until('backend readiness', async () => {
       if (child.exitCode !== null || child.signalCode !== null) throw new WaitEnded(`the backend exited (${child.exitCode ?? child.signalCode}) while starting`)
-      return (await fetch(`${url}/api/health`)).ok
+      return (await fetch(`${url}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok
     })
   } catch (error) {
     throw new Error(`${(error as Error).message}; backend log ${logPath}:\n${readFileSync(logPath, 'utf8').slice(-2000)}`)
@@ -148,6 +149,7 @@ export async function signIn(backend: RealBackend, a: Account, env: Record<strin
   before?: (daemon: IsolatedDaemon) => void | Promise<void>, options: { submissionGate?: boolean } = {}): Promise<{ daemon: IsolatedDaemon; machineId: string; client: LocalClient }> {
   const computerId = randomUUID()
   const r = await backend.api(a, '/api/machines/resolve-computer', 'POST', { computerId, label: a.name })
+  if (r.status !== 200) throw new Error(`Sign-in of ${a.name} refused: ${r.status} ${JSON.stringify(r.body)}`)
   const machineId = r.body.data.machine.machineId as string
   const daemon = await IsolatedDaemon.create({ ...(options.submissionGate ? { submissionGate: true } : {}), env: {
     ADAPTER_COMPUTER_ID: computerId, BACKEND_WS_URL: backend.wsUrl, WEB_URL: backend.url,

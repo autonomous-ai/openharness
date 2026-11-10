@@ -120,7 +120,8 @@ try {
     { cwd: join(repo, 'backend'), env: backendEnv, timeout: 60_000 })
   run('backend', join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], backendEnv)
   const backendUrl = `http://127.0.0.1:${backendPort}`
-  await until('backend health', async () => (await fetch(`${backendUrl}/api/health`)).ok)
+  // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
+  await until('backend readiness', async () => (await fetch(`${backendUrl}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok)
   const resolved = await fetch(`${backendUrl}/api/machines/resolve-computer`, { method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-autonomous-env': 'prod' },
     body: JSON.stringify({ computerId, label: 'E2E fixture' }) })

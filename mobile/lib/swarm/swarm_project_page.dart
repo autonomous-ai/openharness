@@ -28,7 +28,6 @@ import 'swarm_message_row.dart';
 import 'swarm_pm_chat.dart';
 import 'swarm_project_details.dart';
 import 'swarm_project_settings.dart';
-import 'swarm_project_status.dart';
 import 'swarm_project_tabs.dart';
 import 'swarm_project_tasks.dart';
 import 'swarm_project_team.dart';
@@ -499,13 +498,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ),
   );
 
-  void _openStatusSheet() => _openSheet(
-    (_) => SwarmProjectStatusSheet(
-      swarmId: widget.swarmId,
-      projectId: widget.projectId,
-    ),
-  );
-
   void _openTeamSheet() => _openSheet(
     (_) => SwarmProjectTeamSheet(
       swarmId: widget.swarmId,
@@ -545,7 +537,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
                 until: reader,
               )
             : null,
-        onStatus: _openStatusSheet,
         onWork: _openWork,
         onTeam: _openTeamSheet,
         onLeaderboard: _openLeaderboardSheet,
@@ -675,7 +666,6 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             _ProjectMenu(
               reader: reader,
               projectId: project.id,
-              onStatus: _openStatusSheet,
               onLeaderboard: _openLeaderboardSheet,
               onWork: _openWork,
               onTeam: _openTeamSheet,
@@ -793,7 +783,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
           final chat = snapshot.conversation(project.leadConversationId);
           final asks = session.inbox.asks(widget.swarmId);
           // A project the person no longer reads (made private to others)
-          // keeps no sheet of its own, Status's text and decisions with it.
+          // keeps no sheet of its own.
           if (!swarmReadsProject(reader, project)) _closeSheet();
           return _Frame(
             top: Column(
@@ -908,11 +898,20 @@ SuperTabAgent? swarmProjectPm(SuperTabSnapshot? snapshot, String projectId) {
   return pm == null || pm.projectId != projectId || pm.isBuddy ? null : pm;
 }
 
+/// Whether the person reads [project], as the server does (`canReadProject`):
+/// a private project is its owner's and its members'.
+bool swarmReadsProject(SwarmReader reader, SuperTabProject project) {
+  if (!project.isPrivate || project.ownerId == reader.accountId) return true;
+  final me = reader.snapshot?.people
+      .where((p) => p.id == reader.accountId)
+      .firstOrNull;
+  return me != null && project.hasMember(me);
+}
+
 /// ⋮ at the end of a Swarm Home C project's header: a small menu, on the
 /// design system's menu surface (the theme's), of Open terminal first for
 /// someone who may write (Tony, 11-01: the PM's terminal on this phone, by
-/// the Buddy row's rule and words, [swarmTerminalAction]), its Status
-/// ([SwarmProjectStatusSheet]; the chat shows no box of it), its Leaderboard,
+/// the Buddy row's rule and words, [swarmTerminalAction]), its Leaderboard,
 /// its Team, its Sharing for its owner who may write, its project chat's
 /// Notifications ([showSwarmNotifySheet]), while that chat is read, and its
 /// Project settings… ([showSwarmProjectSettings]), as the desktop's project
@@ -924,7 +923,6 @@ class _ProjectMenu extends StatelessWidget {
   const _ProjectMenu({
     required this.reader,
     required this.projectId,
-    required this.onStatus,
     required this.onLeaderboard,
     required this.onWork,
     required this.onTeam,
@@ -936,7 +934,7 @@ class _ProjectMenu extends StatelessWidget {
 
   final SwarmReader reader;
   final String projectId;
-  final VoidCallback onStatus, onLeaderboard, onWork, onTeam, onSettings;
+  final VoidCallback onLeaderboard, onWork, onTeam, onSettings;
   final VoidCallback? onSharing, onNotifications, onFind;
 
   @override
@@ -988,11 +986,11 @@ class _ProjectMenu extends StatelessWidget {
     return MenuTheme(
       data: MenuThemeData(
         submenuIcon: MenuTheme.of(context).submenuIcon,
-        // Home C sits near the top of the phone. Nine rows at their 48-point
+        // Home C sits near the top of the phone. Eight rows at their 48-point
         // layout height, panel padding, and a small edge fit without scrolling.
         style: AppMenu.style(
           maxHeight:
-              9 * (minTouchTarget + AppSpace.xs) +
+              8 * (minTouchTarget + AppSpace.xs) +
               AppMenu.panelPadding.vertical +
               AppSpace.xs,
         ),
@@ -1009,7 +1007,6 @@ class _ProjectMenu extends StatelessWidget {
             ),
           if (onFind case final onTap?)
             row('swarm-project-menu-find', 'Find in chat', onTap),
-          row('swarm-project-menu-status', 'Status', onStatus),
           row('swarm-project-menu-leaderboard', 'Leaderboard', onLeaderboard),
           row('swarm-project-menu-work', 'Work', onWork),
           row('swarm-project-menu-team', 'Team', onTeam),

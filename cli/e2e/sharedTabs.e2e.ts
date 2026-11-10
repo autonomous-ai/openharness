@@ -55,7 +55,7 @@ const harnessKeys = (r: Roster | null) => (r?.harnesses ?? []).map((h) => `${h.m
 
 /** `harness settings`, as the person turns a switch: through the daemon to the account. */
 const settings = (d: IsolatedDaemon, body: Record<string, boolean>) => fetch(`http://127.0.0.1:${d.port}/api/agent-settings`, {
-  method: 'PATCH', headers: { 'x-adapter-local': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  method: 'PATCH', headers: d.localHeaders({ 'x-adapter-local': '1', 'content-type': 'application/json' }), body: JSON.stringify(body) })
 
 async function create(s: Side, folder: string): Promise<Record<string, any>> {
   const cwd = join(s.d.projectsDir, folder)
@@ -618,13 +618,13 @@ function prompts(s: Side, agent: Record<string, any>): string[] {
 /** A daemon started again: signed in and connected to the backend, with a new client. */
 async function connectedAgain(s: Side): Promise<void> {
   await until(`${s.who.name}: connected again`, async () => (await (await fetch(`http://127.0.0.1:${s.d.port}/api/status`,
-    { headers: { 'x-adapter-local': '1' } })).json()).connected === true, 60_000, 200)
+    { headers: s.d.localHeaders({ 'x-adapter-local': '1' }) })).json()).connected === true, 60_000, 200)
   s.client = await LocalClient.connect(s.d, { machineId: s.machineId })
 }
 
 /** The harnesses other accounts share with this one, as the daemon lists them (`GET /api/harness-shares`). */
 async function listing(s: Side): Promise<Array<{ id: string; agentId: string }>> {
-  const body = await (await fetch(`http://127.0.0.1:${s.d.port}/api/harness-shares`, { headers: { 'x-adapter-local': '1' } })).json()
+  const body = await (await fetch(`http://127.0.0.1:${s.d.port}/api/harness-shares`, { headers: s.d.localHeaders({ 'x-adapter-local': '1' }) })).json()
   return ((body?.data?.machines ?? []) as Array<{ shares: Array<{ id: string; agentId: string }> }>).flatMap((m) => m.shares)
 }
 

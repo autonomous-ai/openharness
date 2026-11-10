@@ -258,17 +258,15 @@ void main() {
     expect(computers.rechecking, isFalse);
   });
 
-  group("the person's agents, for Home's Agents tile and Search", () {
-    test('none known until the computers answer; then each agent that can '
-        'open, by computer and engine, and how many work', () async {
+  group("the person's agents, for the switcher's Agents row", () {
+    test('none known until the computers answer; then how many work', () async {
       final rig = viewerApp();
       addTearDown(rig.app.dispose);
       final computers = AppSwarmComputers(rig.app);
       addTearDown(computers.dispose);
       expect(computers, isA<SwarmAgentsSource>());
-      final agents = computers.agents;
+      final agents = computers.agents!;
       expect(agents.working, isNull, reason: 'not answered yet');
-      expect(agents.agents, isEmpty);
 
       rig.api.onMachines = () async => [remoteMachine('a', name: 'Studio')];
       rig.conn('a').answers['agents_list'] = (_) => {
@@ -284,22 +282,10 @@ void main() {
       await settle();
 
       expect(agents.working, 0);
-      expect(
-        [for (final a in agents.agents) (a.machineId, a.agentId, a.machine)],
-        unorderedEquals([('a', 'one', 'Studio'), ('a', 'two', 'Studio')]),
-        reason: 'one without a terminal cannot open',
-      );
-      final ivy = agents.agents.singleWhere((a) => a.agentId == 'two');
-      expect((ivy.name, ivy.engine), ('Ivy', 'codex'));
-      expect((ivy.working, ivy.waiting), (false, false));
 
       await push(rig, 'a', 'turn_started', {'agentId': 'two'});
 
       expect(agents.working, 1);
-      expect(
-        agents.agents.singleWhere((a) => a.agentId == 'two').working,
-        isTrue,
-      );
     });
 
     test('tells when how many work changes, not at every change of the app; '
@@ -312,7 +298,7 @@ void main() {
       final computers = AppSwarmComputers(rig.app);
       addTearDown(computers.dispose);
       var told = 0, computersTold = 0;
-      computers.agents.addListener(() => told++);
+      computers.agents!.addListener(() => told++);
       computers.addListener(() => computersTold++);
 
       await push(rig, 'a', 'turn_started', {'agentId': 'one'});
@@ -329,11 +315,7 @@ void main() {
         ],
       };
       await push(rig, 'a', 'commander_question', question());
-      expect(told, 2, reason: "one waits now: Search's dot");
-      expect(
-        computers.agents.agents.singleWhere((a) => a.agentId == 'two').waiting,
-        isTrue,
-      );
+      expect(told, 1, reason: 'one waits now; still one works');
 
       var appTold = 0;
       void counted() => appTold++;
@@ -344,40 +326,13 @@ void main() {
       await push(rig, 'a', 'turn_heartbeat', {'agentId': 'one'});
       await settle();
       expect(appTold, greaterThan(0), reason: 'the app did tell');
-      expect(told, 2, reason: 'still one working, one waiting');
+      expect(told, 1, reason: 'still one working');
 
       await push(rig, 'a', 'turn_ended', {'agentId': 'one'});
-      expect(told, 3);
-      expect(computers.agents.working, 0);
+      expect(told, 2);
+      expect(computers.agents!.working, 0);
       expect(computersTold, 0);
     });
-
-    test(
-      'tells when the agents themselves change, the count the same',
-      () async {
-        final rig = await signedInWith({
-          'a': ['one'],
-        });
-        addTearDown(rig.app.dispose);
-        final computers = AppSwarmComputers(rig.app);
-        addTearDown(computers.dispose);
-        var told = 0;
-        computers.agents.addListener(() => told++);
-
-        rig.conn('a').answers['agents_list'] = (_) => {
-          'agents': [agentJson('one'), agentJson('three')],
-        };
-        await rig.app.syncAgentsForTest('a');
-        await settle();
-
-        expect(told, 1);
-        expect(computers.agents.working, 0);
-        expect(
-          [for (final a in computers.agents.agents) a.agentId],
-          ['one', 'three'],
-        );
-      },
-    );
 
     test('gone with its computers: a change of the app after tells no one '
         'and throws nothing', () async {
@@ -386,8 +341,9 @@ void main() {
       });
       addTearDown(rig.app.dispose);
       final computers = AppSwarmComputers(rig.app);
-      final agents = computers.agents;
+      final agents = computers.agents!;
       computers.dispose();
+      expect(computers.agents, isNull, reason: 'none made after');
 
       await push(rig, 'a', 'turn_started', {'agentId': 'one'});
 
@@ -405,7 +361,7 @@ void main() {
         MaterialApp(
           home: Builder(
             builder: (context) => TextButton(
-              onPressed: () => computers.agents.openList(context),
+              onPressed: () => computers.agents!.openList(context),
               child: const Text('Agents'),
             ),
           ),

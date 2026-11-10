@@ -246,7 +246,7 @@ void main() {
   ];
 
   /// Opens the menu of its owner who may write on a phone of [size], with
-  /// [top] for its status bar: all eight rows, the most it ever has, each a
+  /// [top] for its status bar: all seven rows, the most it ever has, each a
   /// finger tall, inside the panel and the panel on the screen, with nothing
   /// to scroll; with [across], each label whole inside the panel too.
   Future<void> menuFits(
@@ -267,7 +267,6 @@ void main() {
     final rows = [
       for (final row in [
         'terminal',
-        'status',
         'leaderboard',
         'work',
         'team',
@@ -341,10 +340,10 @@ void main() {
       expect(find.textContaining('Delete'), findsNothing);
     });
 
-    // Tall enough for all eight, whatever the face: across is measured in
+    // Tall enough for all seven, whatever the face: across is measured in
     // the phone's faces, in the last group.
     for (final (phone, size, top) in phones) {
-      testWidgets('on $phone all eight rows fit the menu and the screen, '
+      testWidgets('on $phone all seven rows fit the menu and the screen, '
           'Project settings… included, with no scrolling', (tester) async {
         await menuFits(tester, size, top, across: false);
       });
@@ -1106,7 +1105,7 @@ void main() {
     setUpAll(loadRealFonts);
 
     for (final (phone, size, top) in phones) {
-      testWidgets('on $phone all eight rows fit across, every label whole', (
+      testWidgets('on $phone all seven rows fit across, every label whole', (
         tester,
       ) async {
         await menuFits(tester, size, top, across: true);

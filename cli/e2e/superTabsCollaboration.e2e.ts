@@ -8,7 +8,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { b64e, newIdentity } from '../src/lib/e2ee/core.js'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { LocalClient } from './harness/client.js'
-import { CLI_ROOT, until, type IsolatedDaemon } from './harness/daemon.js'
+import { CLI_ROOT, fakeEngineShim, until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon, writeE2ee } from './harness/fleet.js'
 import { overOldRoutes } from './harness/swarmReads.js'
@@ -38,6 +38,9 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
     writeFileSync(join(daemon.engineConfig.codexHome, 'models_cache.json'), readFileSync(join(CLI_ROOT, 'src/lib/__fixtures__/codex-home-0.160/models_cache.json')))
   }
   const [starter, member] = specs, [a, b] = daemons
+  // The member's Codex draws its composer unshaded, as in a pane no window shows: the lead's instruction reaches it in
+  // paragraphs all the same (engines/codex/composer.ts).
+  writeFileSync(join(b.root, 'bin', 'codex'), fakeEngineShim('codex', { ...b.engineConfig, unshadedComposer: true }), { mode: 0o755 })
   onTestFailed(() => daemons.forEach((daemon, i) => console.log(`Fixture machine ${i}:\n${daemon.log().split('\n').slice(-90).join('\n')}`)))
   const agents: Array<Record<string, any>> = [], messages: Array<Record<string, any>> = []
   const pending = new Map<string, Record<string, any>>()
@@ -81,6 +84,8 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
       if (method === 'GET') return { data: delivery[2] ? value : value && value.status !== 'delivered' ? [value] : [] }
       expect(body.claimId).toBe(value!.claimId ?? body.claimId)
       if (body.type === 'claim') { value!.claimId = body.claimId; return { data: { message: value!.message } } }
+      // The notice a delivery held 30 s posts (host.ts reportWithheld) is no acknowledgement.
+      if (body.type === 'hold') return { data: {} }
       value!.status = body.uncertain ? 'uncertain' : 'delivered'
       return { data: {} }
     }
