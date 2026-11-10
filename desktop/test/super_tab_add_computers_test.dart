@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
-import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
@@ -77,7 +76,6 @@ void main() {
     SuperTabController c,
     AppNotifier app, {
     void Function(Uri url)? openDownload,
-    Future<MachineResources?> Function(String id)? readResources,
     Brightness brightness = Brightness.dark,
     Size size = const Size(900, 1000),
   }) async {
@@ -96,7 +94,6 @@ void main() {
                 context,
                 c,
                 app,
-                readResources: readResources ?? (_) async => null,
                 openDownload: openDownload,
               ),
               child: const Text('open'),
@@ -604,25 +601,33 @@ void main() {
   );
 
   testWidgets(
-    'each computer is added with the agent count its own memory suggests',
+    'an add whose reply was lost is settled under its own receipt when Add is pressed again',
     (tester) async {
       final (:f, :c) = await swarm((_) {});
-      // 16 GiB total suggests four agents, whatever is free.
-      await openBox(
-        tester,
-        c,
-        f.app,
-        readResources: (_) async => const MachineResources(
-          memoryTotalBytes: 16 * 1024 * 1024 * 1024,
-          memoryUsedBytes: 8 * 1024 * 1024 * 1024,
-        ),
-      );
+      await openBox(tester, c, f.app);
+      // The add reaches the server and every reply to it is lost: the row
+      // fails and the attempt keeps its own receipt.
+      f.connection.server
+        ..loseReply = true
+        ..loseResentReplies = 100;
       await tester.tap(find.text('Add 1'));
       await settle(tester);
-      expect(
-        (f.connection.server.posts.single['command'] as Map)['maxAgents'],
-        4,
-      );
+      expect(inRow('m', 'failed'), findsOneWidget);
+      expect(c.pendingCommand?['type'], 'machine.contribute');
+
+      f.connection.server.loseResentReplies = 0;
+      await tester.tap(find.byKey(const ValueKey('add-computers')));
+      await settle(tester);
+      // That attempt is confirmed under its receipt: the machine is added once.
+      final receipts = [
+        for (final post in f.connection.server.posts)
+          if ((post['command'] as Map)['type'] == 'machine.contribute')
+            post['operationId'],
+      ];
+      expect(receipts[1], receipts[0]);
+      expect(c.pendingCommand, isNull);
+      expect(find.text('Add your computers'), findsNothing);
+      expect(tester.takeException(), isNull);
       await close(tester, f, c);
     },
   );

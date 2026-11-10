@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/channel_feed.dart';
 import 'package:harness/super_tabs/message_text.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/super_tabs/task_board.dart';
 
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
@@ -214,6 +215,51 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a task opened from a card is forgotten once Tasks closes: Tasks opens the list again',
+    (tester) async {
+      await openSwarmV4(
+        tester,
+        withPosts(),
+        github: lampos().github,
+        size: const Size(1440, 1300),
+      );
+      await tester.tap(find.text('Issue #12'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-issue-panel'), findsOneWidget);
+      await tester.tap(key('swarm-tasks-button'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-issue-panel'), findsNothing);
+      await tester.tap(key('swarm-tasks-button'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-issue-panel'), findsNothing);
+      expect(find.byType(SwarmTaskBoard), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'where the task takes the chat\'s place, Back to chat forgets it: Tasks opens the list again',
+    (tester) async {
+      await openSwarmV4(
+        tester,
+        withPosts(),
+        github: lampos().github,
+        size: const Size(700, 1300),
+      );
+      await tester.tap(find.text('Issue #12'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-issue-panel'), findsOneWidget);
+      await tester.tap(key('swarm-back-to-chat-button'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-issue-panel'), findsNothing);
+      expect(find.text('Issue #12'), findsOneWidget);
+      await tester.tap(key('swarm-tasks-button'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-issue-panel'), findsNothing);
+      expect(find.byType(SwarmTaskBoard), findsOneWidget);
+    },
+  );
+
   testWidgets('only what the project\'s agents wrote is shown', (tester) async {
     final github = FakeGitHubFeeds();
     github.comment(12, 'Pip, 07:05: Taking #12.', at: at('07:05'));
@@ -387,6 +433,43 @@ void main() {
     }
     return github;
   }
+
+  testWidgets(
+    'a repository unlinked from the project takes its cards with it, and nothing of it is read again',
+    (tester) async {
+      final server = withPosts();
+      final github = signed(120);
+      final c = await openSwarmV4(tester, server, github: github.github);
+      expect(key('swarm-github-row'), findsWidgets);
+      (server.state['projects'] as List)
+          .cast<Map<String, dynamic>>()
+          .first
+          .remove('repository');
+      await tester.runAsync(c.refresh);
+      await tester.pumpAndSettle();
+      expect(key('swarm-github-row'), findsNothing);
+      expect(find.textContaining('free: Pip'), findsOneWidget);
+      final calls = github.calls.length;
+      for (var i = 0; i < 5; i++) {
+        await tester.dragFrom(const Offset(900, 450), const Offset(0, 800));
+        await tester.pumpAndSettle();
+      }
+      await tester.pump(const Duration(minutes: 3));
+      expect(github.calls.length, calls);
+      // Linked again, it is read afresh, from its newest page.
+      (server.state['projects'] as List)
+          .cast<Map<String, dynamic>>()
+          .first['repository'] = {
+        'repositoryUrl': 'https://github.com/autonomous-ai/lampOS',
+      };
+      await tester.runAsync(c.refresh);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(github.reads('issues/comments', page: 1), 2);
+      expect(key('swarm-github-row'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   /// Where each card on screen is, by its first line.
   Map<String, double> placed(WidgetTester tester) => {
