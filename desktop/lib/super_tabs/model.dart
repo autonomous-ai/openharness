@@ -1241,7 +1241,7 @@ class SuperTabThread {
 }
 
 /// The source kinds of a task's root in the project chat.
-const _taskRootKinds = {'task-line'};
+const _taskRootKinds = {'task-line', 'buddy-proposal'};
 
 /// What a task's root posted before #2867 reads ahead of its title. Stored rows
 /// keep it, so this stays for as long as rows from before 2026-11-04 are kept.
