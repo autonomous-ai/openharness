@@ -12,6 +12,7 @@ import '../logging/app_log.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
+import 'foreground_refresh.dart';
 import 'github_issues.dart';
 import 'github_pulls.dart';
 import 'identity.dart';
@@ -105,7 +106,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
   Map<int, SwarmPull>? _pulls;
   String? _error;
   String? _repository;
-  Timer? _refresh;
+  SwarmForegroundRefresh? _refresh;
 
   /// The repository being read now: a refresh that comes while its read is still going waits for the next.
   String? _reading;
@@ -115,7 +116,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     super.initState();
     _read();
     if (widget.refreshEvery case final every?) {
-      _refresh = Timer.periodic(every, (_) => _read());
+      _refresh = SwarmForegroundRefresh(every, _read);
     }
   }
 
@@ -132,7 +133,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
 
   @override
   void dispose() {
-    _refresh?.cancel();
+    _refresh?.dispose();
     super.dispose();
   }
 

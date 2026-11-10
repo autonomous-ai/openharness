@@ -13,6 +13,7 @@ import '../shared/widgets/skeleton.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
 import 'controller.dart';
+import 'foreground_refresh.dart';
 import 'github_issues.dart';
 import 'github_pulls.dart';
 import 'message_row.dart';
@@ -73,14 +74,14 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
   String? _earlier;
   bool _showing = false;
   String? _error;
-  Timer? _refresh;
+  SwarmForegroundRefresh? _refresh;
 
   @override
   void initState() {
     super.initState();
     _open();
     if (widget.refreshEvery case final every?) {
-      _refresh = Timer.periodic(every, (_) => _read());
+      _refresh = SwarmForegroundRefresh(every, _read);
     }
   }
 
@@ -128,7 +129,7 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
 
   @override
   void dispose() {
-    _refresh?.cancel();
+    _refresh?.dispose();
     super.dispose();
   }
 

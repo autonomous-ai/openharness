@@ -517,7 +517,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   of them that fails keeps the last chips. The board shows what it last read at once
   and brings the rest: the newest hundred first, then the others, but only
   where nothing shows yet: a list already shown stays whole while a refresh is
-  read, one refresh at a time. A refresh that fails keeps the cards and says
+  read, one refresh at a time. While the app is hidden (minimized, behind another
+  app's window) the board, an open task and Your Team's states read nothing on their clocks; back in sight they read at once. A refresh that fails keeps the cards and says
   why in the bar, in 12 metadata grey on up to two lines, with a retry icon (`Try again`).
   A card opens its issue in the board's place (`SwarmIssuePanel`,
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
