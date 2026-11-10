@@ -378,11 +378,15 @@ class SwarmSwitcher extends StatefulWidget {
     required this.controller,
     required this.onNewSwarm,
     required this.row,
+    this.onRename,
   });
 
   final AppNotifier app;
   final SuperTabController controller;
   final VoidCallback onNewSwarm;
+
+  /// Rename, for the Swarm shown; none for Personal, or without it.
+  final VoidCallback? onRename;
   final Widget Function({
     required String label,
     required IconData icon,
@@ -484,6 +488,17 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
                       onPressed: () => _pick(choice.id),
                     ),
                   const AppMenuDivider(),
+                  if (widget.onRename case final rename?
+                      when current != null && !isPersonal)
+                    AppMenuItem(
+                      key: const ValueKey('swarm-switch-rename'),
+                      label: 'Rename',
+                      icon: AppIcons.pencil,
+                      onPressed: () {
+                        _menu.close();
+                        rename();
+                      },
+                    ),
                   AppMenuItem(
                     key: const ValueKey('swarm-switch-new'),
                     label: 'New Swarm',

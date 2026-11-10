@@ -56,7 +56,6 @@ ConversationServer _swarm(String id, String name) {
     ..['id'] = id
     ..['name'] = name
     ..['ownerId'] = 'ken15'
-    ..['swarmBuddy'] = true
     ..['people'] = [
       for (final person in _people)
         {

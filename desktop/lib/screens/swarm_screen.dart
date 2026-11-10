@@ -3122,6 +3122,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       context,
       workspaceTabNames(app)[id] ?? swarm.name,
       keymap: _keymap,
+      // A Swarm is renamed for everyone in it, not as this window's tab.
+      swarm: swarm.superTabId != null,
     );
     if (name == null) return;
     if (swarm.superTabId case final tabId?) {
@@ -6490,18 +6492,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
                   : 'Starts in ${groupTitle ?? 'Lead'}.',
               action: 'Add agent',
-              hidden: (row) =>
-                  app.superTabs
-                      .peek(superTabTarget.tabId)
-                      ?.snapshot
-                      ?.agents
-                      .any(
-                        (agent) =>
-                            agent.isBuddy &&
-                            agent.machineId == row.machineId &&
-                            agent.harnessId == row.agentId,
-                      ) ==
-                  true,
               unavailable: (row) {
                 final shared = app.superTabs
                     .peek(superTabTarget.tabId)
@@ -6526,8 +6516,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   return 'Only Claude Code or Codex can join this Swarm.';
                 }
                 if (agent != null) {
-                  // Buddies are personal; the picker does not list them either.
-                  if (agent.isBuddy) return 'Choose a running agent.';
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
                   }
@@ -6550,10 +6538,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       additionalDestinations: [
         if (superTabTarget != null && !attach)
           for (final agent
-              in app.superTabs
-                      .peek(superTabTarget.tabId)
-                      ?.snapshot
-                      ?.teamAgents ??
+              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.agents ??
                   [])
             SwarmDestination(
               id: agentDestinationId(agent.machineId, agent.harnessId),
@@ -8540,6 +8525,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           onAttachAgent: _attachAgent,
                                           onNewSwarm: () =>
                                               _newTab(superTab: true),
+                                          onRenameSwarm: () => unawaited(
+                                            _rename(app.activeSwarmId),
+                                          ),
                                           onAddAgent: (group) => unawaited(
                                             _addAgent(conversationId: group.id),
                                           ),

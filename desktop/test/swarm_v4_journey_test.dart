@@ -340,13 +340,10 @@ void main() {
     (tester) async {
       final (server, c, _) = await open(tester);
       // The person's Buddy chat in the project, unread, on a server that still offers thread sessions.
-      server.state['threadSessions'] = true;
-      server.state['sessionsFromChat'] = true;
       (server.state['conversations'] as List).add({
         ...conversationFixture('buddy-owner-lead', "owner's Buddy"),
         'projectId': 'lead',
-        'kind': 'buddy',
-        'buddyOwnerId': 'owner',
+        'kind': 'agent-chat',
       });
       server.append('Your Buddy is ready', conversationId: 'buddy-owner-lead');
       server.messages.last['author'] = {

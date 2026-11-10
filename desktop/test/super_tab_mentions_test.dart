@@ -228,8 +228,7 @@ ConversationServer swarm() {
     {
       ...conversationFixture('buddy-peer-lead', "ken.tran's Buddy"),
       'projectId': 'lead',
-      'kind': 'buddy',
-      'buddyOwnerId': 'peer',
+      'kind': 'agent-chat',
     },
   ];
   return server;
