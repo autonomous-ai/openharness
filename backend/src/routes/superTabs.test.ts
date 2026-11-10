@@ -54,7 +54,7 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
+import { REFUSED_TO_PEOPLE, RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
 import { counted, OLD_PAYLOADS } from '../superTabs/retired.test-support.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
@@ -119,8 +119,11 @@ describe('a command Swarm v4 no longer has, over HTTP', () => {
     const before = await counted(type, 'desktop')
     for (const asAgentId of [undefined, 'agent-1']) {
       const res = await send({ type, ...OLD_PAYLOADS[type] }, asAgentId)
-      expect(res.statusCode).toBe(200)
-      expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
+      // A person's that an older app would take as saved is refused in words it shows (REFUSED_TO_PEOPLE); an agent's is ignored.
+      const refused = asAgentId ? undefined : REFUSED_TO_PEOPLE[type]
+      expect({ status: res.statusCode, body: res.json() }).toEqual(refused
+        ? { status: refused.status, body: expect.objectContaining({ success: false, error: expect.objectContaining({ code: refused.code, message: refused.message }) }) }
+        : { status: 200, body: { success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } } })
     }
     expect(await counted(type, 'desktop')).toBe(before + 2)
     expect(queries).toEqual([])

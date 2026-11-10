@@ -95,34 +95,24 @@ async function swarm() {
   }
   const assign = async (id: string) => String((await execute({ type: 'work.assign', conversationId: id, agentId: worker(id), routeDecisionId: await route(id) } as Command,
     host, lead)).result.assignmentId)
-  /** The owner gives the review's verdict. */
-  const review = async (id: string, assignmentId: string, passed: boolean) => {
-    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === id)!.checks[0]!.id
-    await execute({ type: 'work.check', conversationId: id, assignmentId, checkId, passed, evidence: 'rev abc' } as Command)
-  }
   const done = (id: string, assignmentId: string, tokens?: TokensByModel) =>
     execute({ type: 'work.status', conversationId: id, assignmentId, status: 'done', result: 'Shipped.', ...(tokens ? { tokens } : {}) } as Command, host, worker(id))
-  const merged = (id: string, pr: string, extra: Record<string, unknown> = {}) =>
-    execute({ type: 'conversation.merged', conversationId: id, pullRequestUrl: pr, ...extra } as Command)
   const evidence = (since = T0 - DAY_MS) => readEvidence(db, tab, since)
-  return { store, tab, execute, lead, group, worker, beat, assign, review, done, merged, evidence,
+  return { store, tab, execute, lead, group, worker, beat, assign, done, evidence,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
 describe('a Swarm\'s evidence per model and kind of job', () => {
-  it('counts a finished attempt once under its model and kind: first review, rework, ship, tokens and cost', async () => {
+  it('counts a finished attempt once under its model and kind: ship, tokens and cost', async () => {
     const f = await swarm(), g = await f.group()
     await f.beat(opus(1_000, 0))
     const a = await f.assign(g)
-    await f.review(g, a, false)
-    await f.review(g, a, true)
     f.clock.now += 30 * MINUTE
     await f.done(g, a, opus(1_001_000, 100_000))
     const read = await f.evidence()
     expect(read.models).toHaveLength(1)
-    expect(read.models[0]).toMatchObject({ engine: 'claude', model: 'opus', kind: 'backend', attempts: 1, firstReviews: 1, firstReviewPassed: 0,
-      firstReviewPassRate: 0, reworkRounds: 1, shipped: 1, averageMinutesToShip: 30, tokensInput: 1_000_000, tokensOutput: 100_000,
-      tokensKnown: 1, costKnown: 1, costUnknown: 0, spend: 0, recent: [false] })
+    expect(read.models[0]).toMatchObject({ engine: 'claude', model: 'opus', kind: 'backend', attempts: 1, shipped: 1, averageMinutesToShip: 30, tokensInput: 1_000_000, tokensOutput: 100_000,
+      tokensKnown: 1, costKnown: 1, costUnknown: 0, spend: 0 })
     // 1,000,000 input at $4 and 100,000 output at $20 per million.
     expect(read.models[0]!.apiCost).toBeCloseTo(6, 6)
     expect(read.models[0]!.costPerShipped).toBeCloseTo(6, 6)
@@ -174,22 +164,6 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
     }
   })
 
-  it('moves the ship to the recorded merge and counts a fix after merge, without counting the attempt twice', async () => {
-    const f = await swarm(), g = await f.group()
-    await f.beat(opus(0, 0))
-    const a = await f.assign(g)
-    await f.review(g, a, true)
-    f.clock.now += 60 * MINUTE
-    await f.done(g, a, opus(10, 1))
-    // The merge recorded later, at 40 minutes: the request shipped then.
-    await f.merged(g, 'https://github.com/o/r/pull/1', { mergedAt: new Date(T0 + 40 * MINUTE).toISOString() })
-    expect((await f.evidence()).models[0]).toMatchObject({ attempts: 1, shipped: 1, averageMinutesToShip: 40, fixesAfterMerge: 0, recent: [true] })
-    const fix = await f.group('Follow-up')
-    f.clock.now += 3 * DAY_MS
-    await f.merged(fix, 'https://github.com/o/r/pull/2', { fixes: 'https://github.com/o/r/pull/1' })
-    expect((await f.evidence()).models[0]).toMatchObject({ attempts: 1, shipped: 1, fixesAfterMerge: 1 })
-  })
-
   it('counts a cancelled attempt\'s cost against its model, and ships only the attempt that shipped', async () => {
     const f = await swarm(), g = await f.group()
     await f.beat(opus(0, 0))
@@ -197,9 +171,8 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
     await f.beat(opus(1_000_000, 0))
     await f.execute({ type: 'work.cancel', conversationId: g, assignmentId: first, reason: 'Again.' } as Command, host, f.lead)
     const second = await f.assign(g)
-    await f.review(g, second, true)
     await f.done(g, second, opus(1_500_000, 0))
-    expect((await f.evidence()).models[0]).toMatchObject({ attempts: 2, shipped: 1, firstReviews: 1, costKnown: 2, costUnknown: 0 })
+    expect((await f.evidence()).models[0]).toMatchObject({ attempts: 2, shipped: 1, costKnown: 2, costUnknown: 0 })
     // Cost per shipped change is all attempts' cost over what shipped: $4 + $2.
     expect((await f.evidence()).models[0]!.costPerShipped).toBeCloseTo(6, 6)
   })
@@ -208,28 +181,9 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
     const f = await swarm(), groups = [await f.group(), await f.group(), await f.group()]
     await f.beat(opus(0, 0))
     const attempts = []
-    for (const g of groups) {
-      attempts.push(await f.assign(g))
-      await f.review(g, attempts.at(-1)!, true)
-    }
+    for (const g of groups) attempts.push(await f.assign(g))
     await Promise.all(groups.map((g, i) => f.done(g, attempts[i]!, opus(100, 10))))
     expect((await f.evidence()).models[0]).toMatchObject({ attempts: 3, shipped: 3 })
-  })
-
-  it('keeps the last ten first reviews, newest last', async () => {
-    const f = await swarm()
-    await f.beat(opus(0, 0))
-    for (let i = 0; i < 12; i++) {
-      const g = await f.group()
-      const a = await f.assign(g)
-      await f.review(g, a, i % 3 !== 0)
-      if (i % 3 === 0) await f.review(g, a, true)
-      f.clock.now += MINUTE
-      await f.done(g, a)
-      await f.execute({ type: 'agent.release', agentId: f.worker(g), decision: 'stop' } as Command)
-    }
-    // Attempts 0, 3, 6 and 9 failed; the last ten are attempts 2 to 11.
-    expect((await f.evidence()).models[0]!.recent).toEqual([true, false, true, true, false, true, true, false, true, true])
   })
 
   it('deletes rows older than 180 days on the next write, and reads only its own Swarm\'s rows', async () => {
@@ -244,7 +198,6 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
     const g = await f.group()
     await f.beat(opus(0, 0))
     const a = await f.assign(g)
-    await f.review(g, a, true)
     await f.done(g, a)
     expect(await db.superTabModelEvidence.count({ where: { id: `stale-${f.tab}` } })).toBe(0)
     expect(await db.superTabModelEvidence.count({ where: { id: `kept-${f.tab}` } })).toBe(1)
@@ -258,16 +211,13 @@ describe('a Swarm\'s evidence per model and kind of job', () => {
     const f = await swarm(), g = await f.group()
     await f.beat(opus(0, 0))
     const a = await f.assign(g)
-    await f.review(g, a, false)
-    await f.review(g, a, true)
     await f.done(g, a, opus(10, 1))
-    await f.merged(g, 'https://github.com/o/r/pull/9')
     const rows = JSON.stringify([...await db.superTabModelEvidence.findMany({ where: { tabId: f.tab } }), ...await db.superTabModelRecent.findMany({ where: { tabId: f.tab } }),
       ...(await db.superTabRouteDecision.findMany({ where: { tabId: f.tab } })).map(r => r.evidence)])
     expect(rows).toContain('"attempts":1')
     const state = (await f.store.read(owner, f.tab)).state
     const secrets = [TASK_TEXT, 'zebra', owner.email, host.email, owner.sub, host.sub, f.lead, f.worker(g), 'Worker 0', 'Lead Mac', 'Worker Mac',
-      ...state.agents.map(agent => agent.harnessId), 'ev-test-host', 'rev abc', 'Parser work']
+      ...state.agents.map(agent => agent.harnessId), 'ev-test-host', 'Parser work']
     for (const secret of secrets) expect(rows, secret).not.toContain(secret)
   })
 })

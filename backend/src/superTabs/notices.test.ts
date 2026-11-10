@@ -76,7 +76,7 @@ describe('the notices the Swarm writes into a chat', () => {
   const written = writtenKinds()
 
   it('finds the notices it is known to write, so a change in how they are written cannot empty this check', () => {
-    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'review-failed', 'work-lost', 'terminal-alert']))
+    expect([...written.keys()]).toEqual(expect.arrayContaining(['system', 'agent-only', 'work-lost', 'terminal-alert']))
   })
 
   it('classifies every kind it writes, and only those', () => {
@@ -94,9 +94,11 @@ describe('the notices the Swarm writes into a chat', () => {
     // Lead's built-in schedule wake, daily tidy and morning digest, gone the same day, the Lead; the release watch's steps and lines,
     // gone with it, people; the recorded terminal turns, gone with the recording, people; the crew's 2-hour nudge, gone with the crew
     // keeper (Swarm v4: the server runs no v3 job), the recipients; decisions' lines, gone with Decisions (anh Dee, 11-10), people
-    // and the PM.
+    // and the PM; a grid attempt's failed first review, a review capacity notice and an auto-archive line, gone with check verdicts,
+    // review steps and the archive pass (11-10), the PM and people.
     const retired = ['decision-delegated', 'decision-asked', 'decision-answered', 'decision-must-agree', 'idle-stop', 'idle', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request',
-      'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice', 'crew-nudge']
+      'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice', 'crew-nudge',
+      'review-failed', 'review-capacity', 'auto-archive']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })

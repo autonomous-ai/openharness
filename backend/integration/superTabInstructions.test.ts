@@ -607,8 +607,8 @@ describe('a rule moved into a code task', () => {
     await run(tab, save(1, doc(leo, 'Tests run first.')))
     const task = (await run(tab, { type: 'conversation.create', title: 'Stable fixes', brief: `Goal:\nSame-day fixes.\n\nChanges:\n- ${carried}`,
       checks: [] })).result.conversationId as string
-    // The PM records the merge with a link: its word alone frees nothing (River, review of #3220).
-    await run(tab, { type: 'conversation.merged', conversationId: task, pullRequestUrl: PR }, host, lead)
+    // The PM says the task merged, with a link: its word alone frees nothing (River, review of #3220).
+    await run(tab, { type: 'message.send', conversationId: task, text: `Merged ${PR}`, replyTo: null, recipientIds: [] }, host, lead)
     const briefAt = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: task } })).data as { briefAt?: number }
     const drop = (tasks?: string[]) => github.execute(owner, tab, { operationId: randomUUID(), command: { type: 'instructions.save', projectId: 'lead',
       baseRevision: 2, text: doc('Tests run first.'), summary: 'Moved the stable rule to its task', ...tasks ? { tasks } : {} } })

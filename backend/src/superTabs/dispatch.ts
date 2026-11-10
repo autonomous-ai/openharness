@@ -6,7 +6,7 @@
  */
 import { askedByAnother } from './members.js'
 import { SEED_RULES, type MachineRule, type ProjectRules } from './policy.js'
-import { firstMachines, isReview, machineRuleRefusal } from './machineRules.js'
+import { firstMachines, machineRuleRefusal } from './machineRules.js'
 import { isBuddy } from './buddies.js'
 import { sessionClosed } from './closedAgents.js'
 import { activeWork, handed, occupiesAgent, reviewsWanted, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
@@ -15,11 +15,8 @@ import { barredFromTeamWritten } from './teamWritten.js'
 import { DEFAULT_TIME_ZONE, localNow } from './localTime.js'
 import { queueOrder, queueSiblings } from './taskQueue.js'
 import { unavailableReason } from './liveness.js'
-import { FAILED, type PullRequestWatch } from './pullRequestEvents.js'
 import { modelMatches } from './rules.js'
 import { roleNameOf } from './instructions.js'
-import { stepCandidates } from './reviewerPick.js'
-import { ownMerge } from './mergedTasks.js'
 
 const HOUR_MS = 3_600_000
 
@@ -129,21 +126,13 @@ export function freeCrew(state: SuperTabState, projectId: string, rules: Dispatc
     .map(entry => entry.agent)
 }
 
-/** The open tasks of [projectId] a worker may be handed, plus lost review/test steps whose build is still active: never a
- *  chat or private chat. A brief, no active work, not finished, whose not-before day has come; P0 first, then the
+/** The open tasks of [projectId] a worker may be handed: never a step, a chat or a private chat. A brief, no active work, not finished, whose not-before day has come; P0 first, then the
  *  project's Next up. */
 export function openTasks(state: SuperTabState, projectId: string, now: number): Conversation[] {
   const project = projectOf(state, projectId)
   // The day people meant: Vietnam's, where the team works.
   const today = localNow(DEFAULT_TIME_ZONE, now).date
-  const lostSteps = state.conversations.filter(group => {
-    if (group.archived || group.kind || group.audience || !group.reviewOf || group.assignment?.status !== 'lost' || (group.projectId ?? 'lead') !== projectId) return false
-    const task = state.conversations.find(g => g.id === group.reviewOf)
-    // Never a step of a task whose own merge is recorded (mergedTasks.ts, task #4032): nothing is left to check.
-    return !!task && !task.archived && (task.projectId ?? 'lead') === projectId && activeWork(task) && !ownMerge(task)
-  })
-  // Nor a task whose own merge is recorded: finished work, which the sweep sets done (task #4032).
-  const open = [...queueSiblings(state, project).filter(group => !ownMerge(group)), ...lostSteps].filter(group => (group.task || group.brief.trim())
+  const open = queueSiblings(state, project).filter(group => (group.task || group.brief.trim())
     && !activeWork(group) && !['done', 'cancelled'].includes(group.assignment?.status ?? '') && !(group.notBefore && group.notBefore > today)
     // Paused by someone who steers its project (boardRights.ts, task #3819): until resumed.
     && !group.paused)
@@ -179,20 +168,16 @@ export function candidatesFor(state: SuperTabState, member: Agent, rules: Dispat
   const members = new Set(state.agents.filter(a => a.workDecision !== 'stop' && !moving(a)).map(a => a.id))
   const acceptsLane = takes(state, member, rules)
   // The project's machine rules (machineRules.ts): what its machine refuses now, it is not handed, pinned or not.
-  const refused = (review: boolean) => !!machineRuleRefusal(rules.machines, { machineId: member.machineId, engine: member.configuration.engine, review }, now)
-  const refusesWork = refused(false), refusesReview = refused(true)
-  // A step named for an OS goes to an agent of that OS only (task #3926), as it went when first opened.
-  const steps = open.filter(g => g.reviewOf && !lostByIt(g) && !(refusesReview && isReview(g))).filter(step => stepCandidates(state, step, now).some(a => a.id === member.id))
-  const lane = open.filter(g => (!g.lane || !!laneNamed(rules.lanes, g.lane)) && !g.reviewOf && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
+  const refusesWork = !!machineRuleRefusal(rules.machines, { machineId: member.machineId, engine: member.configuration.engine, review: false }, now)
+  const lane = open.filter(g => (!g.lane || !!laneNamed(rules.lanes, g.lane)) && !pinned.includes(g) && !(pinOf(g) && members.has(pinOf(g)!.agentId)) && !lostByIt(g)
     // Ordinary workers recover work; new tasks still need the PM's route or a standing crew lane.
     && (member.crew || (g.assignment?.status === 'lost' && g.lostAttempt))
     // Another person's ask goes to their own Member (members.ts, task #4697), never to this agent on its own.
     && !askedByAnother(state, g, member)
     && acceptsLane(laneOf(g, rules.lanes)) && (!needsStrongModel(g) || onStrongModel(member)))
   // Team-written code goes to Team accounts only (teamWritten.ts); a pick refused this round is not sent again (store.ts).
-  const allowed = (group: Conversation) => (group.reviewOf ? steps.includes(group) : !refusesWork) && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
-  return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })),
-    ...[...steps.filter(g => !pinned.includes(g)), ...lane].filter(allowed).map(group => ({ group, why: 'lane' as const }))]
+  const allowed = (group: Conversation) => !refusesWork && !barredFromTeamWritten(state, group, member) && !skip(group.id, member.id)
+  return [...pinned.filter(allowed).map(group => ({ group, why: 'pin' as const })), ...lane.filter(allowed).map(group => ({ group, why: 'lane' as const }))]
 }
 
 /** A pin never sends a lost task straight back to the failed agent; another free worker takes it. */
@@ -259,19 +244,4 @@ export function capacityLine(c: LaneCapacity, now: number): string {
   const age = c.oldestAt === null ? null : Math.max(0, now - c.oldestAt)
   const oldest = age === null ? '' : age >= HOUR_MS ? `, oldest ${Math.floor(age / HOUR_MS)} h` : `, oldest ${Math.floor(age / 60_000)} min`
   return `${c.lane}: ${c.waiting} waiting, ${c.busy} busy${oldest}`
-}
-
-/** What [watch] says its task's builder should come back for: a merge conflict, or a failed check run at its head. */
-export function pullRequestPin(watch: Pick<PullRequestWatch, 'mergeable' | 'checkRuns'>): 'ci' | 'conflict' | null {
-  if (watch.mergeable === false) return 'conflict'
-  return watch.checkRuns.some(run => !!run.conclusion && FAILED.has(run.conclusion)) ? 'ci' : null
-}
-
-/** Pins [group], a task with no active work, to its last attempt's agent for [why]: the dispatch hands it to that member
- *  first, while it is available (candidatesFor). A pin already there keeps its time; active work is never pinned. */
-export function pinBuilder(group: Conversation, why: NonNullable<Conversation['pin']>['why'], now: number): void {
-  // Its last round's agent: a stopped round's, not an older lost one's.
-  const builder = group.assignment?.agentId ?? group.lostAttempt?.agentId
-  if (!builder || activeWork(group) || group.pin) return
-  group.pin = { agentId: builder, why, at: now }
 }

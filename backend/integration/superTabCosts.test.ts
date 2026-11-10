@@ -89,8 +89,6 @@ async function swarm() {
   /** The worker marks its work done, sending its session's totals read as it finishes (cli superTabs/service.ts), or none
    *  like an older host; `by` the Lead finishes it instead. */
   const finish = async (assignmentId: string, tokens?: TokensByModel, by = worker) => {
-    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await execute({ type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'npm test, 0 failures' } as Command, host, worker)
     await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped.', ...(tokens ? { tokens } : {}) } as Command, host, by)
   }
   const decision = (id: string) => db.superTabRouteDecision.findUniqueOrThrow({ where: { id } })

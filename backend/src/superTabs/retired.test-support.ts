@@ -17,6 +17,10 @@ export const OLD_PAYLOADS = {
     unblocks: 'The release', defaultAt: '2026-11-11T09:00:00.000Z' }, { send: { text: 'Please review #12', projectId: 'lead' } }] },
   'decision.answer': { decisionId: 'decision-1', choice: 1, note: 'Not today', ownerMessageId: 'm-2' },
   'mention.done': { mentionId: 'mention-1' },
+  'work.check': { conversationId: 'task-1', assignmentId: 'a-1', checkId: 'c-1', passed: false, evidence: 'Fails on Windows.',
+    head: 'A'.repeat(40), base: 'main' },
+  'conversation.merged': { conversationId: 'task-1', pullRequestUrl: 'https://github.com/acme/app/pull/12', mergedAt: '2026-11-10T08:00:00.000Z',
+    fixes: 'https://github.com/acme/app/pull/9' },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

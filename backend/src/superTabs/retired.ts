@@ -18,11 +18,26 @@ export const RETIRED_COMMANDS = [
   'decision.ask', 'decision.answer',
   // Tags (2026-11-10): an older app's Done on a tag.
   'mention.done',
+  // Review steps, check verdicts and merge records (2026-11-10): a task is the project's GitHub issue, and its pull request is GitHub's.
+  'work.check', 'conversation.merged',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
 const retired: ReadonlySet<unknown> = new Set(RETIRED_COMMANDS)
 export const isRetiredCommand = (type: unknown): type is RetiredCommand => retired.has(type)
+
+/** A step or a linked task an older CLI's agent opens: conversation.create naming `reviewOf` or `step` (2026-11-10). It is answered
+ *  and counted as a retired command, under this type; the fields go from conversation.create's schema with this file. */
+export const RETIRED_STEP = 'conversation.create.step'
+export const opensRetiredStep = (command: { type?: unknown; reviewOf?: unknown; step?: unknown } | undefined): boolean =>
+  command?.type === 'conversation.create' && (command.reviewOf !== undefined || command.step !== undefined)
+
+/** A check verdict a person records in an older Desktop's work details (work.check) is refused in these words, which it shows
+ *  where the verdict was typed, rather than answered as ignored: the app takes an ok answer for a saved verdict and closes the
+ *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
+export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; status: number; message: string }>> = {
+  'work.check': { code: 'CHECKS_RETIRED', status: 410, message: 'Checks can’t be recorded any more.' },
+}
 
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or
  *  logged, and the route's body limit bounds it as it does every command. */

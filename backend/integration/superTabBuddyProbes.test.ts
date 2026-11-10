@@ -111,7 +111,6 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
   it('hands a Buddy an archived task in the dormant view the moment it is archived, with no report to wait for (#3593)', async () => {
     const f=await swarm(), {agentId}=await buddy(f)
     const group=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Archived at once',brief:'',checks:[]})).result.conversationId)
-    await f.execute({type:'conversation.merged',conversationId:group,pullRequestUrl:'https://github.com/example/app/pull/7'})
     await f.execute({type:'conversation.archive',conversationId:group,archived:true})
     const reads=new SwarmReads(f.store), active=await reads.firstLoad(peer,f.tab,agentId)
     expect(active.groups.some(g=>g.key===group)).toBe(false)

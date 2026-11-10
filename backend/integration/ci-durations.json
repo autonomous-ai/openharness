@@ -59,7 +59,6 @@
     "integration/superTabTeam.test.ts": 36400,
     "integration/superTabThreads.test.ts": 600,
     "integration/superTabTidy.test.ts": 24700,
-    "integration/superTabWorkflow.test.ts": 600,
     "integration/superTabWorkspaces.test.ts": 5300,
     "integration/superTabs.test.ts": 92400,
     "integration/swarmSweepPlans.test.ts": 100,

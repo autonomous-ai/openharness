@@ -374,7 +374,6 @@ describe('a Buddy through the store', () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Old task', brief: '', checks: [] })).result.conversationId)
-    await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     await f.execute({ type: 'conversation.archive', conversationId: group, archived: true } as Command)
     const reads = new SwarmReads(f.store)
     expect((await reads.firstLoad(peer, f.tab, agentId)).groups.some(g => g.key === group)).toBe(false)

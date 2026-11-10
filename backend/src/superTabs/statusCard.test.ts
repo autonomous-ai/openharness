@@ -37,11 +37,10 @@ describe('the status card the server writes (#3593)', () => {
     expect(f.line(second)!.text).toContain('to do. Waits on: an owner. Owner: none.')
   })
 
-  it('says review with its pull request and the steps it waits on, and blocked, needs a person and lost', () => {
+  it('says review with its pull request, and blocked, needs a person and lost', () => {
     const f = cardFixture()
-    f.step('Review')
     f.work('review', `Ready for review: ${PR} at abc1234`)
-    expect(f.line()!.text).toBe(`#1 "Fix login": in review (PR #7). Waits on: step Review. Owner: Andie.`)
+    expect(f.line()!.text).toBe(`#1 "Fix login": in review (PR #7). Waits on: a review. Owner: Andie.`)
     f.work('blocked', 'Needs the CI key.')
     expect(f.line()!.text).toContain('blocked. Waits on: the PM.')
     f.work('needs_human', 'Which API?')
@@ -68,7 +67,8 @@ describe('the status card the server writes (#3593)', () => {
   it('drops a task whose work ended, a merged one too, and shows a merged one its builder has not closed', () => {
     const f = cardFixture()
     f.work('review', `Ready for review: ${PR} at abc1234`)
-    f.run({ type: 'conversation.merged', conversationId: f.task, pullRequestUrl: PR }, f.as(f.lead))
+    // A merge recorded before Swarm v4, which records none.
+    f.group(f.task).ledger = { ...f.group(f.task).ledger, mergedAt: 1000 }
     expect(f.line()!.text).toBe('#1 "Fix login": merged (PR #7). Waits on: its builder to close it. Owner: Andie.')
     f.work('done', `Merged ${PR}`)
     expect(f.line()).toBeUndefined()

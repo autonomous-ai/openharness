@@ -259,17 +259,13 @@ describe('durable group pull request links', () => {
     expect(await links(tab)).toEqual([pr(41)])
   })
 
-  it('lists links from check evidence and a work result even when no message has those links', async () => {
+  it('lists links from a work result', async () => {
     const { tab, lead } = await fixture()
     await run(tab, { type: 'work.define', conversationId: 'lead', brief: 'Record work',
       checks: [{ description: 'Reviewed', independent: false }] })
     const assignmentId = String((await run(tab, { type: 'work.assign', conversationId: 'lead', agentId: lead })).result.assignmentId)
-    const checkId = (await store.read(owner, tab)).state.conversations[0]!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: 'lead', assignmentId, checkId, passed: true,
-      evidence: `Reviewed ${pr(42)} and ${pr(42)}` }, host, lead)
-    expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => row.text.includes(pr(42)))).toBe(false)
-    await run(tab, { type: 'work.status', conversationId: 'lead', assignmentId, status: 'working', result: `Built ${pr(43)}` }, host, lead)
-    expect(await links(tab)).toEqual([pr(42), pr(43)])
+    await run(tab, { type: 'work.status', conversationId: 'lead', assignmentId, status: 'working', result: `Built ${pr(43)} and ${pr(43)}` }, host, lead)
+    expect(await links(tab)).toEqual([pr(43)])
   })
 })
 
@@ -632,11 +628,10 @@ describe('private swarm projects on the real control API', () => {
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
     expect((await status())!.text).toContain('"Work": to do.')
     expect((await status())!.text.endsWith(card)).toBe(true)
-    // An ordinary message, a second task and a merge wake nobody.
+    // An ordinary message and a second task wake nobody.
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
     now += 3_600_000
     await execute({ type: 'conversation.create', title: 'Docs', brief: 'Write them', checks: [{ description: 'Read', independent: false }] })
-    await execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     now += 900_000
     expect(await updates()).toEqual([])
     const lines = (await status())!.text
@@ -767,9 +762,7 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await store.observeMachine(host, tab, 'default-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
       quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Fix', brief: 'Fix it.',
-      checks: [{ description: 'Independent review', independent: true }] })).result.conversationId)
-    const review = async () => String((await run(tab, { type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group,
+    const review = async () => String((await run(tab, { type: 'conversation.create', title: 'Review', brief: 'Review it.',
       checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
     const first = await review()
     const startId = String((await asHost(tab, { type: 'agent.start', request: { conversationId: first, role: 'reviewer', machineId: 'default-host', engine: 'codex',
@@ -2147,26 +2140,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
   })
 
-  // Project instructions, phase 4: nothing steps a task up; a grid attempt's failed first review is a notice (commands.test.ts).
-  it('steps nothing up on a failed verdict, on a task that stepped up before', async () => {
-    const { tab } = await fixture()
-    const group = (await run(tab, { type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [{ description: 'Reviewed', independent: true }] })).result.conversationId as string
-    const sonnet = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Sonnet',
-      configuration: { ...config, engine: 'claude', model: 'claude-sonnet-4-5' }, lead: false })).result.agentId as string
-    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: sonnet })).result.assignmentId as string
-    // The task stepped up to Sonnet before, on an older server.
-    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: group } })
-    await db.swarmGroup.update({ where: { id: part.id }, data: { version: part.version + 1,
-      data: { ...part.data as object, stepUp: { attempt: 2, floor: 2, reason: 'Its first review said Ready no.', at: 1, carry: '' } } } })
-    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: false, evidence: 'Ready: no.' })
-    const after = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
-    expect(after.assignment).toMatchObject({ id: assignmentId, status: 'working' })
-    expect(after.stepUp).toMatchObject({ attempt: 2 })
-  })
-
-  // Routing lives in each project's instructions (project instructions, phase 4): an older Desktop's account policy and tab
-  // override are answered and kept nowhere.
   it('keeps neither an account policy nor a tab override an older Desktop saves, and serves the default', async () => {
     const saved = await store.saveAccountPolicy(owner, 0, { ...DEFAULT_ROUTING_POLICY, quotaReserve: 30 })
     expect(saved).toMatchObject({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true, ignored: true })
@@ -2434,8 +2407,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     await run(tab, { type: 'agent.release', agentId: picked, decision: 'keep' }, host, lead)
     const second = (await run(tab, { type: 'work.assign', conversationId: group, agentId: chosen, routeDecisionId: id } as Command, host, lead)).result.assignmentId as string
     expect(await store.routeDecision(owner, tab, id)).toMatchObject({ outcome: null, assignmentId: second, final: { kind: 'member', agentId: chosen } })
-    const check = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId: second, checkId: check, passed: true, evidence: 'ok' } as Command, host, chosen)
     await run(tab, { type: 'work.status', conversationId: group, assignmentId: second, status: 'done', result: 'Built.' } as Command, host, chosen)
     expect(await store.routeDecision(owner, tab, id)).toMatchObject({ outcome: 'done', assignmentId: second })
   })
@@ -4507,8 +4478,6 @@ describe('Swarm sweeps', () => {
     const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
       name: 'Worker', configuration: config, lead: false })).result.agentId)
     const assignmentId = String((await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
-    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
-    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: true, evidence: 'Shown' }, host, lead)
     await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'done', result: 'Shipped' }, host, worker)
     return group
   }
@@ -4810,7 +4779,6 @@ describe('a migrated Swarm\'s kept old state (Stability 2.1)', () => {
     await db.superTab.update({ where: { id: own }, data: { legacyState: OLD_STATE } })
     expect((await measured('list', () => store.list(solo))).tabs).toEqual([expect.objectContaining({ id: own, name: 'Solo', ownerId: solo.sub })])
     expect(await measured('host grids', () => store.hostGrids(solo))).toEqual([expect.objectContaining({ tabId: own, enabled: true })])
-    expect(await measured('archive', () => store.archiveFinished(tab, group, {}))).toBe(false)
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker, scrollback: 20 }, host, lead)).result.requestId as string
     expect((await measured('terminal pickup', () => store.hostTerminal(host, 'test-host'))).filter(row => row.tabId === tab).map(row => row.request.id))
       .toEqual([requestId])
