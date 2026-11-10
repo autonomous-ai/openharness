@@ -154,7 +154,10 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
     }
     // Its pull request after its thread; a read of it that fails keeps the last one shown.
     try {
-      final pulls = await widget.github.pulls(repository);
+      final pulls = await widget.github.pulls(
+        repository,
+        team: SwarmPull.teamOf(widget.controller.snapshot, repository),
+      );
       if (mounted &&
           repository == widget.repository &&
           number == widget.number) {
@@ -371,7 +374,11 @@ class _SwarmIssuePanelState extends State<SwarmIssuePanel> {
             if (agent != null) ...[
               swarmAgentFace(widget.controller, agent),
               const SizedBox(width: 6),
-              Text(agent, style: DesktopChrome.metadata()),
+              // The agent's own name, not its label's: "First builder", not first-builder.
+              Text(switch (swarmAgentNamed(widget.controller, agent)) {
+                final named? => named.displayName ?? named.name,
+                null => agent,
+              }, style: DesktopChrome.metadata()),
               Text(' · ', style: DesktopChrome.metadata()),
             ],
             Text(

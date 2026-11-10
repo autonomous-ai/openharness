@@ -131,6 +131,27 @@ describe('the folders agents work in', () => {
     client.close()
   })
 
+  // What instructs most agents is the project's AGENTS.md and CLAUDE.md in its folder, with or without a file of its own (a
+  // Product Manager in a repository with no agents folder at all). The read shows them, read only, and no save touches them.
+  it('the files that instruct an agent besides its own are read with it, and no save touches them', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const folder = join(d.projectsDir, 'lampOS')
+    const agent = await create(client, 'claude', folder)
+    const ask = (type: string, payload: Record<string, unknown>) => client.request(type, { agentId: agent.id, name: 'Faye', ...payload }, 30_000)
+    writeFileSync(join(folder, 'AGENTS.md'), 'Ship it.\n')
+    writeFileSync(join(folder, 'CLAUDE.md'), '@AGENTS.md\n')
+    const shared = [{ name: 'AGENTS.md', text: 'Ship it.\n', truncated: false }, { name: 'CLAUDE.md', text: '@AGENTS.md\n', truncated: false }]
+    expect(existsSync(join(folder, 'agents'))).toBe(false)
+    expect(await ask('agent_instructions_read', {})).toMatchObject({ text: null, version: '', shared })
+    const saved = await ask('agent_instructions_write', { text: 'Be brief.\n', version: '' })
+    expect(saved).not.toHaveProperty('shared')
+    expect(await ask('agent_instructions_read', {})).toMatchObject({ text: 'Be brief.\n', version: saved.version, shared })
+    expect(readFileSync(join(folder, 'AGENTS.md'), 'utf8')).toBe('Ship it.\n')
+    expect(readFileSync(join(folder, 'CLAUDE.md'), 'utf8')).toBe('@AGENTS.md\n')
+    client.close()
+  })
+
   it('a folder deleted while the daemon is down: the restart restores the rest, and says why it could not restore that one', async () => {
     const d = await fresh()
     let client = await LocalClient.connect(d)

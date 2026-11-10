@@ -225,7 +225,8 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
             ),
             child: Row(
               children: [
-                Flexible(
+                // The title takes what the buttons leave, so they sit at the right edge.
+                Expanded(
                   child: Text(
                     'agents/$name.md',
                     maxLines: 1,
@@ -233,7 +234,6 @@ class _SwarmAgentInstructionsState extends State<SwarmAgentInstructions> {
                     style: DesktopChrome.text(medium: true),
                   ),
                 ),
-                const Spacer(),
                 if (_editing) ...[
                   DesktopPill(
                     key: const ValueKey('swarm-instructions-cancel'),

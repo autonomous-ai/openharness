@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { freeze } from './cache.js'
+import { applyCommand, postable, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -41,6 +42,16 @@ describe('a v4 agent in a project\'s channel', () => {
     expect(sent.messages.map(m => m.text)).toContain('free: pip')
     const asked = f.run(post('lead', 'Can you review #4?', [juno.agentId]), pip)
     expect(asked.messages.at(-1)!.recipients).toEqual([juno.agentId])
+  })
+
+  // An upload asks whether an agent may post, on the Swarm as the read cache holds it, which nothing may change (store.ts poster).
+  it('answers whether it may post in the channel on a state nobody may change, and that it would join', () => {
+    const f = swarm()
+    const pip = f.newAgent(owner, 'Pip')
+    const held = structuredClone(f.state)
+    freeze(held)
+    expect(postable(held, pip, 'lead').joining).toBe(pip.agentId)
+    expect(held.conversations.find(c => c.id === 'lead')!.agentIds).not.toContain(pip.agentId)
   })
 
   it('wakes another person\'s agent named by @Name though it never posted in the channel', () => {

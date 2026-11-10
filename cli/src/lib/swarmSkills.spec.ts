@@ -9,7 +9,8 @@ vi.mock('../team/config.js', async (original) => ({ ...await original<object>(),
 /** The owner the start recorded for a Buddy's folder (superTabs/start.ts); every Buddy here is started so, unless a test says. */
 const started = vi.hoisted(() => ({ owner: 'peer' as string | null }))
 vi.mock('./buddyGuard.js', async (original) => ({ ...await original<object>(), buddyOwnerOf: () => started.owner }))
-import { prepareSwarmSkill, parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, removeOlderSkills, PM_BASICS, SWARM_BASICS } from './swarmSkills.js'
+import { noteSwarmBasics, prepareSwarmSkill, parseSwarmSkill, recordBuddySkillNotice, refreshBuddySkill, removeOlderSkills, PM_BASICS, SWARM_BASICS,
+  swarmBasics, swarmBasicsSince } from './swarmSkills.js'
 import { buildLaunchOverrides } from './launchOverrides.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { buddyAccountFile, buddyLaunchOf, buddyReadsOf, grantBuddyWide, writeBuddyAccount } from './buddyGuard.js'
@@ -34,6 +35,19 @@ describe('Swarm sessions without skill files (task #4673)', () => {
       const workspace = fixture()
       expect(prepareSwarmSkill(workspace, saved).instructions).toBe(saved.role === 'coordinator' ? `${SWARM_BASICS}\n${PM_BASICS}` : SWARM_BASICS)
       expect(existsSync(join(realpathSync(workspace), '.harness', 'runtime', sha256(saved.key), 'swarm'))).toBe(false)
+    }
+  })
+
+  // Swarm v4 (anh Dee, 2026-11-09): the team's talk is visible to people only if agents post it. Harness labels who gets a task;
+  // the PM announces it once in the project's channel, as "Pip, you have #12", and the rest of that task's talk stays on its
+  // issue (the basics' own rule). No other agent is told to.
+  it('tells the PM to announce each hand-off once in the project\'s channel, and no other agent', () => {
+    const lead = prepareSwarmSkill(fixture(), { role: 'coordinator', key: 'lead' }).instructions
+    expect(lead.split('\n').filter(row => row.includes('hand-off'))).toHaveLength(1)
+    expect(lead).toMatch(/announce that hand-off once in your project's channel, as "Pip, you have #12"/)
+    expect(lead).toContain('the rest of that task\'s talk stays on its issue')
+    for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
+      expect(prepareSwarmSkill(fixture(), saved).instructions).not.toMatch(/hand-off|you have #/)
     }
   })
 
@@ -239,6 +253,40 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     symlinkSync(fixture(), join(cwd, '.harness'))
     const deps = { capabilities: async () => ({ sessionEnv: true }), installCodexHooks: () => true, machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused', swarm: SWARM }
     expect(await buildLaunchOverrides(deps, 'claude', { swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: expect.stringContaining('no saved workspace') })
+  })
+})
+
+describe('when this computer first ran the team\'s basics (noteSwarmBasics)', () => {
+  it('notes each text once, as the core starts, and keeps the first moment', () => {
+    const dir = fixture()
+    const agent = swarmBasics(false), pm = swarmBasics(true)
+    expect([agent.text, pm.text]).toEqual([SWARM_BASICS, `${SWARM_BASICS}\n${PM_BASICS}`])
+    expect(swarmBasicsSince(dir, agent.version)).toBeNull()
+    noteSwarmBasics(dir, 100)
+    // A restart of the same release changes nothing.
+    noteSwarmBasics(dir, 200)
+    expect([swarmBasicsSince(dir, agent.version), swarmBasicsSince(dir, pm.version)]).toEqual([100, 100])
+    expect(statSync(join(dir, 'super-tab-basics.json')).mode & 0o777).toBe(0o600)
+  })
+
+  it('keeps the last few texts, and reads a broken record as none', () => {
+    const dir = fixture()
+    const file = join(dir, 'super-tab-basics.json')
+    writeFileSync(file, JSON.stringify(Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`old-${i}`, i]))))
+    noteSwarmBasics(dir, 300)
+    const kept = JSON.parse(readFileSync(file, 'utf8')) as Record<string, number>
+    expect(Object.keys(kept)).toEqual(['old-2', 'old-3', 'old-4', 'old-5', swarmBasics(false).version, swarmBasics(true).version])
+    writeFileSync(file, '{ not json')
+    expect(swarmBasicsSince(dir, swarmBasics(false).version)).toBeNull()
+    noteSwarmBasics(dir, 400)
+    expect(swarmBasicsSince(dir, swarmBasics(false).version)).toBe(400)
+  })
+
+  it('says so when the record cannot be saved, and the launch goes on', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    noteSwarmBasics(join(fixture(), 'missing', 'folder'), 1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('The basics record was not saved'))
+    warn.mockRestore()
   })
 })
 
