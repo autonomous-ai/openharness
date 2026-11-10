@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -20,6 +21,7 @@ import 'model.dart';
 import 'personal_projects.dart' show PersonalProjects;
 import 'pull_chip.dart';
 import 'swarm_type.dart';
+import 'visible_tick.dart';
 
 /// A project's tasks (Swarm v4, anh Dee 2026-11-09): its repository's open GitHub issues, read with `gh` on this computer
 /// as its person ([SwarmGitHub]), as a board of three columns, newest activity first: To do (nobody has it), Assigned (its
@@ -113,14 +115,17 @@ class SwarmTaskBoard extends StatefulWidget {
   State<SwarmTaskBoard> createState() => _SwarmTaskBoardState();
 }
 
-class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
+class _SwarmTaskBoardState extends State<SwarmTaskBoard>
+    with WidgetsBindingObserver, VisibleTick<SwarmTaskBoard> {
   List<SwarmIssue>? _issues;
 
   /// The open pull requests by the task each is for, as last read.
   Map<int, SwarmPull>? _pulls;
   String? _error;
   String? _repository;
-  Timer? _refresh;
+
+  /// When the last read started: back in sight, the board reads only once its clock would have by now.
+  DateTime? _readAt;
 
   /// The repository being read now: a refresh that comes while its read is still going waits for the next.
   String? _reading;
@@ -142,8 +147,20 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
       PersonalProjects.of(app).addListener(_personalMoved);
     }
     _read();
-    if (widget.refreshEvery case final every?) {
-      _refresh = Timer.periodic(every, (_) => _read());
+    // Its clock runs only while it shows: hidden, it would spend the person's GitHub rate limit on nobody.
+    if (widget.refreshEvery case final every?) visibleTick(every);
+  }
+
+  @override
+  void onTick() => _read();
+
+  @override
+  void onScreenChanged(bool onScreen) {
+    final (every, readAt) = (widget.refreshEvery, _readAt);
+    if (onScreen &&
+        every != null &&
+        (readAt == null || clock.now().difference(readAt) >= every)) {
+      _read();
     }
   }
 
@@ -163,7 +180,6 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     if (widget.app case final app?) {
       PersonalProjects.of(app).removeListener(_personalMoved);
     }
-    _refresh?.cancel();
     super.dispose();
   }
 
@@ -176,6 +192,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
     if (repository != _repository) setState(() => _repository = repository);
     if (repository == null || _reading == repository) return;
     _reading = repository;
+    _readAt = clock.now();
     // What was read last shows at once; the read below only brings what changed.
     final kept = _issues == null ? widget.github.kept(repository) : null;
     if (kept != null) {
