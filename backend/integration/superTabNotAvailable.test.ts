@@ -126,6 +126,10 @@ function calls(tab: string, chat: string, project: string) {
     // A made-up agent: an outsider is answered as for any Swarm it cannot reach. Asked of the Lead's project, so a member's
     // in-Swarm refusal of an agent it does not run is not taken for the private project's answer.
     json('GET', 'GET /api/super-tabs/:tabId/projects/:projectId/ci-load', `${t}/projects/lead/ci-load?asAgentId=${MISSING}`),
+    // Which agent wrote a GitHub comment (superTabs/githubComments.ts): a made-up agent records nothing, and a reader of no project
+    // of the repository reads nothing.
+    json('POST', 'POST /api/super-tabs/:tabId/github-comments', `${t}/github-comments?asAgentId=${MISSING}`, { repository: 'acme/app', kind: 'issue', commentId: '1' }),
+    json('GET', 'GET /api/super-tabs/:tabId/github-comments', `${t}/github-comments?repository=acme/app&ids=issue:1`),
     json('GET', 'GET /api/super-tabs/:tabId/route-decisions/:decisionId', `${t}/route-decisions/${MISSING}`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal', `${t}/machines/${MISSING}/removal`),
     json('GET', 'GET /api/super-tabs/:tabId/machines/:machineId/removal/v2', `${t}/machines/${MISSING}/removal/v2`),
