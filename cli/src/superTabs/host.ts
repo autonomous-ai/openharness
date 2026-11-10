@@ -333,6 +333,10 @@ const LEAD_LIST_MS = 30_000
 const PUSH_LEASE_MS = 150_000
 /** How long a tick waits for the core to say whether a PM works (leadTurn, #3545) before its list read goes without it. */
 const LEAD_TURN_WAIT_MS = 200
+/** How long a delivery its busy agent's pane refused waits to be tried again when no end of the agent's turn is heard. It is tried
+ *  as the turn ends (`onEnd`); tried every tick (each second) instead, each try wrote and fsynced the journal twice, 120 times a
+ *  minute for one busy agent (Q3, 2026-11-10). */
+const BUSY_HOLD_MS = 30_000
 /** Spec 2026-11-02-poll-cost Part 3: a delivery the core refused to write (a running turn, a draft, a dialog) was claimed again
  *  every second for as long as it was held, up to a day (prod 2026-11-02: 414 claim POSTs a minute). The claimed message is
  *  kept and written again on each tick; the claim is renewed only this often, well inside the backend's 10-minute claim quiet
@@ -541,6 +545,8 @@ export class SuperTabHost {
    *  write (`refused`). A refused one is written again from this, and claimed again only after HELD_RECLAIM_MS. Freed once the
    *  delivery leaves its list or the journal, and once a write is no longer refused. */
   private readonly claims = new Map<string, { delivery: Json; result: Json; claimedAt: number; refused: boolean }>()
+  /** The deliveries a busy agent's pane refused, by id, and when each is tried again if no end of its turn is heard. */
+  private readonly heldBusy = new Map<string, number>()
   /** Each of this machine's thread sessions, by `tabId:agentId`: when it last did anything, since when its terminal is gone,
    *  and its end once asked of the backend. */
   private readonly threadSessions = new Map<string, { activeAt: number; seenAt: number; missingSince?: number; ending?: 'idle' | 'stopped'
@@ -695,7 +701,7 @@ export class SuperTabHost {
     this.replies = new AgentReplies(core, this.journal, { now: this.now, log: this.log, save: () => this.persist(), typedId: deliveryId => typedId({ deliveryId }), refused: receiptRefused })
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
-    this.stopEnds = core.turns.onEnd(event => { void this.replies.ended(event) })
+    this.stopEnds = core.turns.onEnd(event => { this.turnEnded(event.agentId); void this.replies.ended(event) })
     this.stopNotices = core.account.onNotice(notice => this.pushed(notice))
     if (existsSync(nativeJournalFile(core.dataDir, machineId))) {
       try { this.native = new NativeRecorder(core, machineId) } catch (error) { this.log(String(error)) }
@@ -2014,6 +2020,9 @@ export class SuperTabHost {
       await this.leases()
       return false
     }
+    // Its busy agent refused it: it waits for the agent's turn to end (`turnEnded`), or BUSY_HOLD_MS when no end is heard.
+    if ((this.heldBusy.get(deliveryId) ?? 0) > this.now()) return false
+    this.heldBusy.delete(deliveryId)
     // A write the pane refused is tried again with the claim it holds, and claimed again only every HELD_RECLAIM_MS.
     const kept = this.claims.get(deliveryId)
     const reuse = kept?.refused && this.now() - kept.claimedAt < HELD_RECLAIM_MS
@@ -2490,6 +2499,14 @@ export class SuperTabHost {
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */
+  /** [harnessId]'s turn ended: what its busy pane refused is tried at the next tick. */
+  private turnEnded(harnessId: string): void {
+    for (const deliveryId of this.heldBusy.keys()) {
+      const entry = this.journal.entries[deliveryId]
+      if (!entry || entry.harnessId === harnessId) this.heldBusy.delete(deliveryId)
+    }
+  }
+
   private reportWithheld(entry: Entry, reason: string): void {
     const now = this.now()
     const reading = this.withheld.record(entry.deliveryId, reason, now)
@@ -2517,6 +2534,8 @@ export class SuperTabHost {
       entry.stage = 'prepared'
       delete entry.receipt
       if (claim) claim.refused = true
+      // The pane is not idle: its agent works (engines/kit/screen.ts teamHold).
+      if (event.reason === 'team_waiting_idle') this.heldBusy.set(entry.deliveryId, this.now() + BUSY_HOLD_MS)
       this.reportWithheld(entry, event.reason)
     } else {
       this.claims.delete(entry.deliveryId)

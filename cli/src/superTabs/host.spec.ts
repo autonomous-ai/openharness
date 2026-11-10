@@ -3953,7 +3953,7 @@ describe('ending a Buddy\'s thread sessions', () => {
         }
         return backendOf(method, path, body)
       }
-      vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_busy'))
+      vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_idle'))
       t.push({ type: 'super_tab_deliveries' })
     }
 
