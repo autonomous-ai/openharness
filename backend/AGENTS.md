@@ -13,7 +13,7 @@ waiting on a permission, quietly, for five days.
 1. **Every collection names what removes it**, in its model's comment in `prisma/schema.prisma`: a TTL index, a sweep,
    a delete on write, or "kept forever" and why. A new model without that line is not done. Check the size of a row
    too: `SuperTabRouteDecision` doubled when the route started listing every engine on every machine. Keep what a reader
-   reads (`routeRecord.ts storedRecord`).
+   reads.
 2. **Receipt and log rows get a TTL index.** Declare it in Prisma with `map:` so `db push` keeps it, and make it with
    its expiry through `ensureIndex` (`src/lib/db/indexes.ts`). Production's app user may not run `collMod` (10-29), so a
    TTL index new to a collection that already exists is made *before* the push (`src/lib/db/schemaRelease.ts`,
