@@ -11,8 +11,8 @@ let source = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])
 let fixture = try JSONSerialization.jsonObject(with: source) as! [String: [String: Any]]
 let defaults = HarnessNativeKeymap(fixture["defaults"]!)!
 let changed = HarnessNativeKeymap(fixture["changed"]!)!
-try checkKeymap(defaults.match([stroke("cmd+k")], context: "swarmChat").binding?.command == "swarm.quick_switcher",
-  "Command-K switches conversations in Swarm chat")
+try checkKeymap(defaults.match([stroke("cmd+k")], context: "swarmChat").binding?.command == "pane.focus_above",
+  "Command-K keeps its pane shortcut in Swarm chat, which has no switcher")
 try checkKeymap(defaults.match([stroke("cmd+k")], context: "terminal").binding?.command == "pane.focus_above",
   "Command-K retains the existing terminal shortcut")
 for key in ["n", "o", "g", "1", "2", "3", "4", "5", "6", "7", "8", "9"] {

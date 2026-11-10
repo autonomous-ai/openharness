@@ -10,7 +10,7 @@ import { extracted } from './parts/write.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 import { stepEndedRows, stepSleeps } from './steps.js'
 import { reportedAs } from './projectUpdates.js'
-import { QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
+import { loseTasks, QUIET_RUNNING_MS } from './liveness.js'
 
 const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
 
@@ -182,7 +182,7 @@ describe('assigning a step', () => {
       expect(f.f.group(f.id).assignment!.changesRequestedAt).toBeUndefined()
       expect(f.f.group(f.id).assignment!.toldEngineerAt).toBeUndefined()
       expect(f.f.group(f.id).assignment).toMatchObject({ status: 'working', progressAt: f.f.now })
-      sweepLiveness(f.f.state, f.f.now + QUIET_RUNNING_MS + 5 * 60_000)
+      loseTasks(f.f.state, f.f.now + QUIET_RUNNING_MS + 5 * 60_000)
       expect(f.f.group(f.id).assignment).toMatchObject({ status: 'lost' })
     })
 
@@ -235,7 +235,7 @@ describe('assigning a step', () => {
     // The Engineer works on the fix (its own status renews only its own task), while the step stays quiet past 30 minutes.
     f.tick(QUIET_RUNNING_MS + 5 * 60_000)
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'working', result: 'Fixing the offline sign-in' } as Command, f.as(f.dev))
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(f.group(id).assignment).toMatchObject({ status: 'working' })
     f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: 'PR 7, fixed' } as Command, f.as(f.dev))
     expect(f.group(id).assignment!.changesRequestedAt).toBeUndefined()
@@ -685,14 +685,14 @@ describe('an Engineer waiting on its own steps', () => {
   it('keeps its task while a step is working, and is lost 30 minutes after the last step ends', () => {
     const { f, stepStatus, reviewFor, task } = reviewing()
     reviewFor(36)
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(task()).toMatchObject({ status: 'working' })
     stepStatus('done')
     f.tick(QUIET_RUNNING_MS - MIN)
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(task()).toMatchObject({ status: 'working' })
     f.tick(2 * MIN)
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(task()).toMatchObject({ status: 'lost' })
   })
 
@@ -701,10 +701,10 @@ describe('an Engineer waiting on its own steps', () => {
     reviewFor(36)
     stepStatus('review')
     f.tick(QUIET_RUNNING_MS - MIN)
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(task()).toMatchObject({ status: 'working' })
     f.tick(2 * MIN)
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(task()).toMatchObject({ status: 'lost' })
   })
 
@@ -717,10 +717,10 @@ describe('an Engineer waiting on its own steps', () => {
     f.run({ type: 'work.check', conversationId: f.task, assignmentId: task().id, checkId: f.group(f.task).checks[0]!.id, passed: false,
       evidence: 'One Important at x.ts:1' } as Command, f.as(rev))
     f.tick(QUIET_RUNNING_MS - MIN)
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(task()).toMatchObject({ status: 'working' })
     f.tick(2 * MIN)
-    sweepLiveness(f.state, f.now)
+    loseTasks(f.state, f.now)
     expect(task()).toMatchObject({ status: 'lost' })
   })
 

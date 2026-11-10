@@ -2,8 +2,7 @@
 // after PR #3384 merged and #3818 52 minutes after PR #3383, each time an agent spent only to set the task done, and their
 // steps were revived the same way. A task whose own merge is recorded is never handed out again: the server sets it done.
 import { describe, expect, it } from 'vitest'
-import { DISPATCH_RULES, openTasks } from './dispatch.js'
-import { sweepLiveness } from './liveness.js'
+import { openTasks } from './dispatch.js'
 import { appendPullRequestUrls } from './model.js'
 import { stepsOf } from './steps.js'
 import { stepsFixture } from './steps.test-support.js'
@@ -34,22 +33,13 @@ function fixture() {
 }
 
 describe('a task with a recorded merge', () => {
-  it('lost after its merge, is never handed out again, and the sweep sets it done', () => {
+  it('lost after its merge, is never handed out again', () => {
     const f = fixture()
     f.merge()
     // Its builder was alive at the merge, so it stayed in review; then it was lost.
     f.lose(f.task)
     expect(f.open()).not.toContain(f.task)
     expect(f.open()).not.toContain(f.test)
-    const rows = sweepLiveness(f.state, f.now, () => DISPATCH_RULES)
-    expect(f.group(f.task).assignment).toMatchObject({ id: f.assignment, status: 'done' })
-    expect(f.group(f.task).assignment!.result).toContain(PR)
-    expect(rows.some(r => r.conversationId === f.task && r.text.startsWith('Done'))).toBe(true)
-    // Its open steps close with the merge: the working Review and the lost Test.
-    for (const step of [f.review, f.test]) expect(f.group(step).assignment).toMatchObject({ status: 'cancelled', result: expect.stringContaining('merged') })
-    expect(rows.some(r => r.conversationId === f.review && /merged/i.test(r.text))).toBe(true)
-    // A second sweep finds nothing to do.
-    expect(sweepLiveness(f.state, f.now, () => DISPATCH_RULES).filter(r => r.conversationId === f.task)).toEqual([])
   })
 
   it('closes its open steps when the merge closes it', () => {
@@ -77,7 +67,6 @@ describe('a task with a recorded merge', () => {
     f.merge()
     f.lose(f.task)
     expect(f.open()).toContain(f.task)
-    sweepLiveness(f.state, f.now, () => DISPATCH_RULES)
     expect(f.group(f.task).assignment!.status).toBe('lost')
   })
 
@@ -86,7 +75,6 @@ describe('a task with a recorded merge', () => {
     expect(f.open()).toContain(f.test)
     f.lose(f.task)
     expect(f.open()).toContain(f.task)
-    sweepLiveness(f.state, f.now, () => DISPATCH_RULES)
     expect(f.group(f.task).assignment!.status).toBe('lost')
   })
 
@@ -95,7 +83,6 @@ describe('a task with a recorded merge', () => {
     f.merge(OTHER)
     f.lose(f.task)
     expect(f.open()).toContain(f.task)
-    sweepLiveness(f.state, f.now, () => DISPATCH_RULES)
     expect(f.group(f.task).assignment!.status).toBe('lost')
   })
 })
