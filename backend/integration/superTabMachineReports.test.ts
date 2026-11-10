@@ -67,7 +67,7 @@ async function swarm(memory?: (now: () => number) => ReportMemory, shared?: { cl
   const store = (with_: ReportMemory = reports) => new SuperTabStore(db, () => clock.now, null, { reports: with_, swarmChanged: change => pushes.push(change) })
   const timed = store()
   const tab = (await timed.create(owner, randomUUID(), 'Reports', 'public')).id
-  const execute = (command: Command, user = owner) => timed.execute(user, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
   const invitation = await execute({ type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
   await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
   for (const [machineId, name] of [['lead-host', 'Lead Mac'], ['test-host', 'Worker Mac']]) {
@@ -197,7 +197,8 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
         worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, host)
     }],
     ['a conversation an agent on it works in changed', async f => {
-      await f.execute({ type: 'message.send', conversationId: f.group, text: 'hi', replyTo: null, recipientIds: [] })
+      // The Lead's post: only agents post in a project's channel and its tasks' chats (agentsOnly.test.ts).
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'hi', replyTo: null, recipientIds: [] }, host, f.lead)
     }],
     ['the Swarm\'s people changed', async f => {
       await f.execute({ type: 'invite.create', email: 'third@example.com', role: 'collaborator', conversationId: 'lead' })
@@ -214,7 +215,7 @@ describe('every reason a report runs in full (DB 2.5 spec, Tests)', () => {
     ['a bump of its Swarm is owed here', async f => {
       const bump = stamps.bump.bind(stamps)
       stamps.bump = async () => { throw new Error('Redis is unreachable') }
-      await f.execute({ type: 'message.send', conversationId: 'lead', text: 'owed', replyTo: null, recipientIds: [] })
+      await f.execute({ type: 'message.send', conversationId: 'lead', text: 'owed', replyTo: null, recipientIds: [] }, host, f.lead)
       stamps.bump = bump
     }],
     ['an engine suspension ends with this reading', async f => {
@@ -434,7 +435,8 @@ describe('a busy Swarm\'s readings (task #3119)', () => {
     }
     return { store, during }
   }
-  const message = (f: Scene, text: string) => f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })
+  /** The Lead's post in its project's channel, where only agents post (agentsOnly.test.ts). */
+  const message = (f: Scene, text: string) => f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] }, host, f.lead)
 
   // Swarm v4 runs no v3 job on a report: it lost a task, nudged a crew member and kept a crew, so each full report read every
   // project's rules (one indexed read per project with a task assigned, and with crew) to judge them. Now none.

@@ -54,7 +54,11 @@ const once = { wait: () => Promise.reject(new Error('the job did not finish in i
 describe('the job that drops the collections Swarm v4 removed', () => {
   it('drops them whole, in-flight removals included, and leaves every row of every other collection and a v4 Swarm as they were', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Pilot')).id
-    await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'Kept by the drop', replyTo: null, recipientIds: [] } })
+    // Its coordinator's post, on the owner's own machine: only agents post in a project's channel (agentsOnly.test.ts).
+    await db.machine.create({ data: { machineId: 'drop-host', userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const lead = String((await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead', machineId: 'drop-host',
+      harnessId: randomUUID(), name: 'Lead', configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }, lead: true } })).result.agentId)
+    await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'Kept by the drop', replyTo: null, recipientIds: [] } }, lead)
     for (const name of REMOVED_COLLECTIONS) await fill(name, 3, name === 'SwarmWorkspaceRemoval' ? { finishedAt: null } : {})
     const shown = async () => { const { state } = await store.read(owner, tab); return { name: state.name, chats: state.conversations.map(c => c.id).sort(), projects: state.projects!.map(p => p.id) } }
     const swarm = await shown()

@@ -68,7 +68,6 @@ export default defineConfig({ test: {
     'integration/superTabRequestReads.test.ts',
     'integration/superTabVoiceMessages.test.ts',
     'integration/superTabThumbnails.test.ts',
-    'integration/superTabProjectChatWorkers.test.ts',
     'integration/prismaQueryTiming.test.ts',
     'integration/secondaryReads.test.ts',
     'integration/pushDevices.test.ts',

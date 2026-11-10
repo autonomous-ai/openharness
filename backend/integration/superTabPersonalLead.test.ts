@@ -35,9 +35,9 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-async function personal(operationId = PERSONAL_SWARM_OPERATION) {
+async function personal() {
   const store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
-  const tab = (await store.create(owner, operationId, 'Personal', 'private')).id
+  const tab = (await store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal', 'private')).id
   const execute = (command: Command) => store.execute(owner, tab, { operationId: randomUUID(), command })
   const games = (await execute({ type: 'project.create', name: 'Games', visibility: 'private', brief: '' })).result as { projectId: string; conversationId: string }
   const send = async (text: string) => String((await execute({ type: 'message.send', conversationId: games.conversationId, text, replyTo: null, recipientIds: [] }))
@@ -60,12 +60,5 @@ describe('a Personal Swarm project chat with no Lead', () => {
     // Once it leads, a message goes to it as to any Lead, and nothing waits any more.
     const third = await f.send('thanks')
     expect((await delivered(f.tab, lead)).sort()).toEqual([first, second, third].sort())
-  })
-
-  it('in a Team Swarm delivers nothing that was sent before its Lead joined', async () => {
-    const f = await personal(randomUUID())
-    await f.send('hello')
-    const lead = await f.join()
-    expect(await delivered(f.tab, lead)).toEqual([])
   })
 })

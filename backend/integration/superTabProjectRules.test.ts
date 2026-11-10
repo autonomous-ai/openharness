@@ -30,7 +30,15 @@ async function swarm() {
   await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
   const lead = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
     name: 'Lead', configuration: config, lead: true })).result.agentId as string
-  return { tab, lead }
+  /** [user]'s message in the project's channel from before only agents posted there (agentsOnly.test.ts), which the PM may still
+   *  quote. The PM cannot quote its person's message in their own chat with it (not a conversation of the project it reads). */
+  const before = async (user: AuthUser, text: string) => {
+    const messageId = randomUUID().replaceAll('-', '').slice(0, 24)
+    await db.superTabMessage.create({ data: { id: messageId, tabId: tab, conversationId: 'lead', sequence: 0, text, recipientIds: [], mentions: [],
+      author: { kind: 'person', id: user.sub, name: user.email, membershipGeneration: 'g' } } })
+    return { conversationId: 'lead', messageId }
+  }
+  return { tab, lead, before }
 }
 // No backend pause, so any start keeps the record valid (the pause must fall inside the window).
 const rules = (start: string): ProjectRules => ({ ...structuredClone(SEED_RULES), releaseWindow: { ...SEED_RULES.releaseWindow, start },
@@ -83,17 +91,15 @@ describe('a project\'s rules record', () => {
   })
 
   it('lets the PM save only with a person\'s own chat message, recording it', async () => {
-    const { tab, lead } = await swarm()
+    const { tab, lead, before } = await swarm()
     expect(await refusal(run(tab, set(0, rules('10:00')), host, lead))).toMatchObject({ code: 'RULES_ASKED_IN_REQUIRED', status: 400 })
     const own = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'The release is available.', replyTo: null, recipientIds: [] }, host, lead)
     const agentMessage = own.result.messageId as string
     expect(await refusal(run(tab, set(0, rules('10:00'), { askedIn: { conversationId: 'lead', messageId: agentMessage } }), host, lead)))
       .toMatchObject({ code: 'RULES_ASKED_IN_REQUIRED' })
-    const ask = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Start releases at 10, please.', replyTo: null, recipientIds: [] }, peer)
-    const messageId = ask.result.messageId as string
-    await run(tab, set(0, rules('10:00'), { askedIn: { conversationId: 'lead', messageId } }), host, lead)
-    expect((await get(peer, tab)).json().data.history[0]).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: peer.sub,
-      askedIn: { conversationId: 'lead', messageId } })
+    const askedIn = await before(peer, 'Start releases at 10, please.')
+    await run(tab, set(0, rules('10:00'), { askedIn }), host, lead)
+    expect((await get(peer, tab)).json().data.history[0]).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: peer.sub, askedIn })
     // The PM reads the record it saves on.
     expect((await get(host, tab, lead)).json().data).toMatchObject({ revision: 1 })
   })
@@ -182,12 +188,11 @@ describe('a project\'s rules record', () => {
   })
 
   it('protects approval authority changes but keeps ordinary edits and omitted fields compatible', async () => {
-    const { tab, lead } = await swarm()
+    const { tab, lead, before } = await swarm()
     const authority = { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub, peer.sub] }] }
     const configured = { ...rules('10:00'), instructionApprovals: authority }
     expect(await refusal(run(tab, set(0, configured), peer))).toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
-    const ask = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Make me the decider.', replyTo: null, recipientIds: [] }, peer)
-    expect(await refusal(run(tab, set(0, configured, { askedIn: { conversationId: 'lead', messageId: String(ask.result.messageId) } }), host, lead)))
+    expect(await refusal(run(tab, set(0, configured, { askedIn: await before(peer, 'Make me the decider.') }), host, lead)))
       .toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
     await run(tab, set(0, configured))
     // An old client's ordinary edit does not silently drop authority.
@@ -199,13 +204,12 @@ describe('a project\'s rules record', () => {
   })
 
   it('refuses authority changes from the PM even when quoting the owner or current decider', async () => {
-    const { tab, lead } = await swarm()
+    const { tab, lead, before } = await swarm()
     const authority = { topDeciderId: peer.sub, people: [{ name: 'Ken', accountIds: [owner.sub] }] }
     await run(tab, set(0, { ...rules('10:00'), instructionApprovals: authority }))
     for (const user of [owner, peer]) {
-      const ask = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'An ordinary project message.', replyTo: null, recipientIds: [] }, user)
-      expect(await refusal(run(tab, set(1, { ...rules('11:00'), instructionApprovals: null },
-        { askedIn: { conversationId: 'lead', messageId: String(ask.result.messageId) } }), host, lead)))
+      const askedIn = await before(user, 'An ordinary project message.')
+      expect(await refusal(run(tab, set(1, { ...rules('11:00'), instructionApprovals: null }, { askedIn }), host, lead)))
         .toMatchObject({ code: 'RULES_APPROVAL_EDITOR_REQUIRED' })
     }
     expect(await currentRules(db, tab, 'lead')).toMatchObject({ revision: 1, rules: { instructionApprovals: authority } })

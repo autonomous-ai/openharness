@@ -92,7 +92,9 @@ describe('a picture already set', () => {
     const objectKey = await keepPicture(pictures, tab)
     const row = await db.superTabAttachment.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: tab, conversationId: '', actorKey: `person:${owner.sub}`,
       name: 'avatar', mime: 'image/png', size: 64, objectKey, purpose: 'avatar' } })
-    await expect(run(tab, { type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [row.id] }))
+    // A person sends files in their own chat with their agent: only agents post in a project's channel (agentsOnly.test.ts).
+    const chat = String((await run(tab, { type: 'agent.new', kind: 'regular', machineId: 'host', engine: 'codex', name: 'Ada', local: true })).result.conversationId)
+    await expect(run(tab, { type: 'message.send', conversationId: chat, text: '', replyTo: null, recipientIds: [], attachmentIds: [row.id] }))
       .rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
   })
 
