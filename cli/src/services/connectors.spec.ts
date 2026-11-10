@@ -38,6 +38,26 @@ describe('the connectors service', () => {
     rmSync(home, { recursive: true, force: true })
     for (const made of shortHomes.splice(0)) rmSync(made, { recursive: true, force: true })
   })
+  /** A port held as another account holds it. */
+  const holdPort = async () => {
+    const holder = createServer()
+    await new Promise<void>(resolve => holder.listen(0, '127.0.0.1', resolve))
+    return holder
+  }
+
+  // Another process on this Mac can dial any port a test listens on: under load one dialed two holders of parallel runs at once, and
+  // a holder that kept what it accepted waited for it in close() until the test timed out at 30 s (Q3, 2026-11-10).
+  it('lets go of a held port at once, whatever an outsider left connected to it', async () => {
+    const holder = await holdPort()
+    const outsider = connect((holder.address() as { port: number }).port, '127.0.0.1')
+    await new Promise(resolve => outsider.once('connect', resolve))
+    try {
+      const closing = Date.now()
+      await new Promise<void>(resolve => holder.close(() => resolve()))
+      expect(Date.now() - closing).toBeLessThan(5_000)
+    } finally { outsider.destroy() }
+  }, 10_000)
+
   // A socket's path has a limit, and an agent's temporary folder can be past it on its own. These tests need the socket.
   const shortHomes: string[] = []
   const shortHome = () => { const made = mkdtempSync('/tmp/hc-'); shortHomes.push(made); return made }
