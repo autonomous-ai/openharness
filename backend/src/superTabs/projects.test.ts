@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { opensStep, storedStep } from './steps.test-support.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { occupiesAgent, agentOnly, awaitingWorkers, createSuperTab, fail, SuperTabError, visibleState, workerIndex, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState, type WorkStatus } from './model.js'
-import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, requestedByLine, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
+import { canReadAgent, canWatchAgent, confidentialSession, groupProject, ledProject, markConfidential, projectOf, projectsOf, readConversation, requireSingleRegistration, sessionKey, skillModeOf, skillSetOf, watchersLost, workRequesterId, STUCK_START_MS, type OtherRegistrations, type SwarmProject } from './projects.js'
 import { mayDrive } from './terminal.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -301,9 +302,7 @@ describe('projects inside an invite-only swarm', () => {
 
   it('keeps active work visible after its contributed agent is removed', () => {
     const f = setup(), p = f.project(), agentId = f.add(p.conversationId, 'worker', false), work = f.task(p.projectId)
-    f.run({ type: 'work.define', conversationId: work, brief: 'Finish the task',
-      checks: [{ description: 'Verified', independent: false }] })
-    f.run({ type: 'work.assign', conversationId: work, agentId })
+    storedAssignment(f.state, work, agentId, 1000)
     f.run({ type: 'agent.remove', agentId })
     expect(() => f.run({ type: 'project.delete', projectId: p.projectId })).toThrow('active work')
     expect(readConversation(f.state, owner, work).assignment?.status).toBe('reconciling')
@@ -419,7 +418,7 @@ describe('custom role sets', () => {
   })
 
   // An older client's role id is kept for older readers and names the agent; its kind decides nothing (project instructions, phase 4).
-  it('starts and assigns in any role id an older client sends, keeping it and naming the agent by it', () => {
+  it('starts in any role id an older client sends, keeping it and naming the agent by it', () => {
     const { f, p } = custom([...defaults(), role('abcdefabcdef', 'Docs writer', 'builder')])
     // The project's owner starts it on their own computer (task #4120: a start runs as the machine's own person).
     const work = f.task(p.projectId, peer)
@@ -431,10 +430,6 @@ describe('custom role sets', () => {
     const startId = start({ roleId: 'abcdefabcdef' })
     const worker = String(f.run({ type: 'agent.started', startId, harnessId: 'native', configuration }, peer, ownComputer(peer)).agentId)
     expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ roleId: 'abcdefabcdef', roleName: 'Docs writer' })
-    const group = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Work', brief: 'Do it', checks: [{ description: 'Done', independent: false }] }, peer).conversationId)
-    f.run({ type: 'work.assign', conversationId: group, agentId: worker, roleId: 'review' }, peer)
-    // Its role name stays the one it started in.
-    expect(f.state.agents.find(a => a.id === worker)).toMatchObject({ roleId: 'review', roleName: 'Docs writer' })
     const plain = f.project('public', peer)
     expect(f.run({ type: 'agent.start', request: request(f.task(plain.projectId), { roleId: 'dev' }) } as Command, owner, ownComputer(owner)).startId).toEqual(expect.any(String))
   })
@@ -466,21 +461,16 @@ describe('custom role sets', () => {
       harnessId: 'plain', name: 'Plain', configuration, lead: false, roleId: 'dev' })).agentId).toEqual(expect.any(String))
   })
 
-  it('refuses no work or review groups to an agent whose kind has no role in an older client\'s set', () => {
+  it('refuses no Reviewer\'s start, though its kind has no role in an older client\'s set', () => {
     const { f, p } = custom([role('lead', 'Product Manager', 'lead'), role('dev', 'Engineer', 'builder')])
     f.add(p.conversationId, 'app-lead')
-    const reviewer = f.add(p.conversationId, 'app-reviewer', false)
-    f.state.agents.find(a => a.id === reviewer)!.role = 'reviewer'
     const build = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Build', brief: 'Do it', checks: [{ description: 'Done', independent: false }] }, peer).conversationId)
     // Switching to Custom is kept nowhere, and tells no agent anything.
     f.run({ type: 'project.skills', projectId: p.projectId, mode: 'custom' }, peer)
     expect(f.messages).toEqual([])
     Object.assign(projectOf(f.state, p.projectId), { skillSet: 'custom' })
-    // A role set decides nothing (project instructions, phase 4): a review group, a Reviewer's start and its assignment are accepted.
-    const review = String(f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Review', brief: 'Check it', reviewOf: build, checks: [{ description: 'Read', independent: true }] }, peer).conversationId)
+    // A role set decides nothing (project instructions, phase 4): a Reviewer's start is accepted.
     expect(f.run({ type: 'agent.start', request: request(build, { role: 'reviewer' }) } as Command, owner, ownComputer(owner)).startId).toEqual(expect.any(String))
-    f.run({ type: 'work.assign', conversationId: review, agentId: reviewer }, peer)
-    expect(f.state.conversations.find(c => c.id === review)!.assignment).toMatchObject({ agentId: reviewer })
   })
 
   it('shows clients the set, the project\'s skillSet and each agent\'s role id, never a role text', () => {
@@ -645,53 +635,6 @@ describe('whom a group\'s work is for', () => {
   })
 })
 
-// Security review 2 of #2492: the line comes with each task, from that task's requester, never once at the agent's start.
-describe('whom a task\'s pull requests are for', () => {
-  // By name, never email (task #2954): agents copied the email into pull requests and a privacy hook stopped them.
-  const line = (name: string) => `Start each pull request body with: Requested by ${name} through Harness.`
-  it('ends each task\'s message with its own requester, for an Engineer reused across two people\'s tasks', () => {
-    const f = setup()
-    f.state.people.push({ id: 'third', email: 'third@example.com', role: 'collaborator', generation: 'first' })
-    f.add('lead', 'lead-harness')
-    const worker = f.add('lead', 'worker-harness', false)
-    expect(f.state.agents.find(a => a.id === worker)!.machineOwnerId).toBe('host')
-    const ask = (requesterId: string) => String(f.run({ type: 'conversation.create', title: requesterId, brief: `Work for ${requesterId}`,
-      checks: [{ description: 'Done', independent: false }], requesterId }).conversationId)
-    const first = ask('peer'), second = ask('third')
-    const assigned = (group: string) => {
-      f.run({ type: 'work.assign', conversationId: group, agentId: worker })
-      return f.messages.find(m => m.conversationId === group && m.recipients?.includes(worker))!.text
-    }
-    expect(assigned(first)).toBe(`Work for peer\n\nAcceptance checks:\n- Done\n\n${line('peer')}`)
-    f.run({ type: 'work.cancel', conversationId: first, assignmentId: f.state.conversations.find(c => c.id === first)!.assignment!.id, reason: 'Next one' })
-    const text = assigned(second)
-    expect(text.endsWith(line('third'))).toBe(true)
-    expect(text).not.toContain('peer')
-    expect(text).not.toContain('@')
-  })
-
-  it('is the owner\'s for a group nobody asked for, and absent on the owner\'s own machine and for a review', () => {
-    const f = setup()
-    const worker = f.add('lead', 'worker-harness', false)
-    const plain = String(f.run({ type: 'conversation.create', title: 'Plain', brief: '', checks: [] }).conversationId)
-    const review = String(f.run({ type: 'conversation.create', title: 'Review', brief: '', checks: [], reviewOf: plain }).conversationId)
-    const group = (id: string) => f.state.conversations.find(c => c.id === id)!
-    const project = projectOf(f.state, 'lead'), agentOf = (owner: string) => ({ ...f.state.agents.find(a => a.id === worker)!, machineOwnerId: owner })
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner'))
-    // The name they show, written as plain words (personNames.ts writtenNameOf).
-    f.state.people.find(p => p.id === 'owner')!.name = 'Ken *15*'
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('Ken \\*15\\*'))
-    // Never an email, even one they took as their name.
-    f.state.people.find(p => p.id === 'owner')!.name = 'owner@example.com'
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBe(line('owner'))
-    delete f.state.people.find(p => p.id === 'owner')!.name
-    expect(requestedByLine(f.state, project, group(plain), agentOf('owner'))).toBeNull()
-    expect(requestedByLine(f.state, project, group(review), agentOf('host'))).toBeNull()
-    // An owner with no email on their row: no line, as the start gave none.
-    f.state.people.find(p => p.id === 'owner')!.email = ''
-    expect(requestedByLine(f.state, project, group(plain), agentOf('host'))).toBeNull()
-  })
-})
 
 // The implementations before Part 5 (spec 2026-11-02, hot loops), kept here only to pin that the one-pass lookups answer
 // exactly as they did.
