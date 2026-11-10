@@ -388,3 +388,14 @@ describe('what a group stored before Swarm v4 still holds', () => {
     expect(view.pullRequestUrls).toEqual(['https://github.com/o/r/pull/1'])
   })
 })
+
+// Swarm v4 hands out no tasks (2026-11-10): a task's lane is neither worked out nor sent, and one stored before stays unsent.
+describe('a task\'s lane', () => {
+  it('is never sent, worked out or stored', () => {
+    const task = { id: 't', title: 'Server', projectId: 'lead', leadId: null, agentIds: [], archived: false, checks: [], assignment: null,
+      lastMessageSequence: 0, task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['backend/src/x.ts'] } } as unknown as Conversation
+    expect(groupView(task, new Set())).not.toHaveProperty('handOutLane')
+    expect(groupView({ ...task, handOutLane: 'Backend', lane: 'Backend' } as Conversation, new Set())).not.toHaveProperty('handOutLane')
+    expect(groupView({ ...task, handOutLane: 'Backend', lane: 'Backend' } as Conversation, new Set())).not.toHaveProperty('lane')
+  })
+})

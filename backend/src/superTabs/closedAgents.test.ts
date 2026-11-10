@@ -66,14 +66,10 @@ describe('closedAgents: which agents a report shows closed', () => {
     f.state.machines![0]!.observation!.runningHarnessIds = []
     expect(closedAgents(f.state, 'mac', f.report(['lead']), NOW)).toEqual([])
   })
-  // Task #3397: a crew member's host reopens it in place, so a report never removes one; the same agent off the crew goes.
-  it('never takes a crew member, and takes the same agent once it is off the crew', () => {
+  // Swarm v4 has no crew (2026-11-10): a crew mark an agent kept from before keeps it no more.
+  it('takes an agent with a crew mark from before as any other', () => {
     const f = fixture()
-    f.worker.crew = { role: 'Engineer', at: 1, by: 'owner' }
-    expect(closedAgents(f.state, 'mac', f.report(['lead'], ['worker']), NOW)).toEqual([])
-    f.worker.downSince = new Date(NOW - DOWN_REMOVE_MS).toISOString()
-    expect(closedAgents(f.state, 'mac', f.report(['lead']), NOW)).toEqual([])
-    delete f.worker.crew
+    Object.assign(f.worker, { crew: { role: 'Engineer', at: 1, by: 'owner' } })
     expect(ids(closedAgents(f.state, 'mac', f.report(['lead'], ['worker']), NOW))).toEqual(['worker'])
   })
   it('never takes a coordinator', () => {
