@@ -480,9 +480,12 @@ export interface Conversation {
   /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
    *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
   foldedInto?: string[]
-  /** A durable proposal on this card (#3817); retained when its accepted work becomes a task. */
-  proposal?: import('./proposalCards.js').ProposalRecord
-  /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
+  /** A proposal card, written until proposals went (2026-11-10), as its readers still take it: a card its PM did not accept or
+   *  reshape is no task to queue, start or approve (taskApproval.ts undecidedProposal), and a person's Tasks show it with its
+   *  senders, its decision and its merge (read/personalTasks.ts, read/feedIds.ts). Goes with the task records (slice S13). */
+  proposal?: { senders: Array<{ personId: string; generation: string }>; decision?: { kind: 'accept' | 'reshape' | 'later' | 'no'; reason: string }
+    mergedInto?: string }
+  /** A Buddy chat's owner messages its Buddy proposed for, written until proposals went (2026-11-10): never served (read/views.ts). */
   proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
    *  one added again takes it. Absent: the default, "<person>'s Buddy". */
@@ -816,7 +819,8 @@ export const NOTICE_READERS = {
   // A member removed one of the coordinator's notes: told to the coordinator alone (instructions.ts).
   'note-removed': 'recipients',
   'project-report': 'people', route: 'people', 'route-override': 'people', 'buddy-proposal': 'people', 'buddy-proposal-sent': 'people', 'buddy-session-ended': 'people',
-  // Proposal history, and the private Buddy notices stored before task #4558, are visible to the people who can read their card/chat.
+  // Proposal history, written until proposals went (2026-11-10), and the private Buddy notices stored before task #4558, are visible
+  // to the people who can read their card/chat. Delete them with the notice readers of v1-v3 (slice S18).
   'proposal-card': 'people', 'proposal-answer': 'people', 'proposal-notice': 'people', 'proposal-merged': 'people', 'proposal-overdue': 'people',
   'decision-delegated': 'people', 'machine-removed': 'people', ship: 'people',
   // Decisions, written until Swarm v4 removed them (2026-11-10), read still: an agent's question to a person in a switched
@@ -922,8 +926,6 @@ export interface CommandEffects {
   settles?: { messageId: string; agentId: string }
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
-  /** A Buddy's proposal closed by hand, written into the open proposals by the store (proposals.ts closeProposal). */
-  closedProposal?: { messageId: string; conversationId: string; reason: string }
   /** Deliveries of messages already stored: a Buddy thread session's first messages, sent while it started (buddySessions.ts). */
   /** `lead`: a project's Lead hearing its person's messages sent while the chat had none (leadStart.ts leadArrived). */
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>

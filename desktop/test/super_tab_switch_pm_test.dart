@@ -216,15 +216,18 @@ void main() {
   );
 
   testWidgets(
-    'the dialog says only offered accounts are listed on a machine the reader does not own',
+    'the dialog says a PM runs on its machine\'s default account, whoever owns the machine',
     (tester) async {
-      const line = 'Only accounts its owner offered are listed.';
-      for (final (account, shown) in [('owner', true), ('mac', false)]) {
+      for (final account in ['owner', 'mac']) {
         await mount(tester, swarm(), account);
         await openMenu(tester);
         await tester.tap(item);
         await tester.pumpAndSettle();
-        expect(find.text(line), shown ? findsOneWidget : findsNothing);
+        expect(
+          find.text('A PM runs on its machine’s default account.'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('offered'), findsNothing);
         await tester.tap(find.text('Cancel'));
         await finish(tester);
       }
