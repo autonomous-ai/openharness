@@ -15,6 +15,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import { AgentStopError, createStopAgentService, type StopAgentServiceDeps } from '../../lib/stopAgentService.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
+import type { AgentBrowserPort } from '../api.js'
 import type { ResumeAgent } from './launches.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
 
@@ -58,7 +59,8 @@ export interface LifecycleDeps {
   attachSession: ResumeAgentServiceDeps['attachSession']
   relaunchMarks?: ResumeAgentServiceDeps['relaunchMarks']
   /** An agent was stopped: closed (`agent_close`), Stop Harness, or purged. The harnesses it started close with it
-   *  (services/agentCleanup.ts `closed`). */
+   *  (services/agentCleanup.ts `closed`). Its browser hears it from the forget the stop ends with
+   *  (`createAgentBrowserLifecycle`), as for every other way an agent ends. */
   stopped?: (agentId: string) => void
   /** An agent was purged: its conversation is gone for good, and with it its agent browser's profile
    *  (services/agentBrowser.ts `deleted`). A stop keeps the profile, so the login survives a resume. */
@@ -136,6 +138,27 @@ export function createAgentLifecycle({
     : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
       ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode, launchArgs)
   return { stopJobs, stopAgent, purgeAgentService, resumeAgent }
+}
+
+/**
+ * The agent browser (services/agentBrowser.ts) as its agent starts and ends here. `ended` is reached from every
+ * way an agent stops running: a stop, a purge and every other forget (agents/forget.ts), and an engine that exits
+ * or crashes by itself (lib/retainExitedSession.ts). Only a stop used to tell the browser, so the 2 GB container of
+ * an agent whose engine exited on its own kept running and held a limit slot (review, 2026-11-10). One end is
+ * seen more than once (an exit, then the forget of the same id), so the browser is told once per start.
+ */
+export function createAgentBrowserLifecycle(browser: () => Pick<AgentBrowserPort, 'attached' | 'stopped'> | null) {
+  // Only agents with Browser that run here: bounded by them, not by every agent the daemon ever saw.
+  const running = new Set<string>()
+  return {
+    attached(session: RegisteredSession): void {
+      if (session.browser) running.add(session.agentId)
+      browser()?.attached(session)
+    },
+    ended(agentId: string): void {
+      if (running.delete(agentId)) browser()?.stopped(agentId)
+    },
+  }
 }
 
 /**

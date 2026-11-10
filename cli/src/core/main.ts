@@ -180,7 +180,7 @@ import { createPaneSwap } from './agents/swap.js'
 import { createAgentRetargeter } from './agents/retarget.js'
 import { createAgentRestarter } from './agents/restart.js'
 import { createHostMove, moveWaitingArgv } from './agents/hostMove.js'
-import { createAgentLifecycle, createPurgeRequest, createStopRequest } from './agents/lifecycle.js'
+import { createAgentBrowserLifecycle, createAgentLifecycle, createPurgeRequest, createStopRequest } from './agents/lifecycle.js'
 import { createAgentClosing, createCloseRequests } from './agents/close.js'
 import { answerConversationQuery, conversationReads } from './conversationQueries.js'
 import { createLaunchRequests } from './agents/launches.js'
@@ -1072,7 +1072,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Models (services/models.ts), started below: what an agent's frame says of its grid, from memory.
   gridAnnotationRef = (grid) => (ports.models ?? MODELS_OFF).annotation(grid)
   const attachDsh = (s: RegisteredSession): void => ports.viewers?.attach(s)
-  const detachDsh = (agentId: string): void => ports.viewers?.detach(agentId)
+  // Each agent's browser (services/agentBrowser.ts), told once however its agent ends (core/agents/lifecycle.ts).
+  const agentBrowsers = createAgentBrowserLifecycle(() => ports.agentBrowser)
+  // Every way an agent stops running here passes through this: a stop or other forget, and an engine's own exit.
+  const agentEnded = (agentId: string): void => { ports.viewers?.detach(agentId); agentBrowsers.ended(agentId) }
 
   // The folders agents work in: branch names and unused worktrees (services/workspaces.ts), started below.
   const syncTerminalTitles = async (): Promise<void> => {
@@ -1921,7 +1924,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopHeartbeat,
     input,
     deviceInput,
-    detachDsh,
+    ended: agentEnded,
     mirror,
     clients: backend,
     dataDir: env.ADAPTER_DATA_DIR,
@@ -1937,7 +1940,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
     forgetInput: agentId => { forgetRestartRevision(agentId); input.forget(agentId); deviceInput.forget(agentId) },
-    detachDsh,
+    ended: agentEnded,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
   })
@@ -2647,7 +2650,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
   // And every agent created with Browser gets its browser back.
-  for (const session of registry.list()) if (session.browser) ports.agentBrowser?.attached(session)
+  for (const session of registry.list()) if (session.browser) agentBrowsers.attached(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
   // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no
   // pending Cursor tasks this boot, not no daemon.
@@ -2809,7 +2812,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     watchNewPane,
     announceSession,
     attachDsh,
-    attachBrowser: (session) => ports.agentBrowser?.attached(session),
+    attachBrowser: agentBrowsers.attached,
     prepareApiTools,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
@@ -2916,12 +2919,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareSessionResume,
     refreshGridWebSearch,
     attachDsh,
-    attachBrowser: (session) => ports.agentBrowser?.attached(session),
+    attachBrowser: agentBrowsers.attached,
     attachSession: (session) => attachSession(session),
     relaunchMarks,
-    // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts), and its browser
-    // stops, its login kept (services/agentBrowser.ts).
-    stopped: (agentId) => { ports.agentCleanup?.closed(agentId); ports.agentBrowser?.stopped(agentId) },
+    // A harness closed or stopped: the harnesses it started close with it (services/agentCleanup.ts). Its browser stops,
+    // its login kept, through `agentEnded`, which the stop's forget reaches.
+    stopped: (agentId) => ports.agentCleanup?.closed(agentId),
     // Purged: its browser and its login go too.
     purged: (agentId) => ports.agentBrowser?.deleted(agentId),
     moveHeld: (agentId) => moveHeld.has(agentId),
