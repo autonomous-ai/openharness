@@ -63,6 +63,7 @@ const DEVICE_READ = "import { chromium } from 'playwright-core';"
   + 'for (const context of browser.contexts()) for (const page of context.pages()) {'
   + ' const { targetInfo } = await (await context.newCDPSession(page)).send(\'Target.getTargetInfo\');'
   + ' if (targetInfo.targetId !== process.argv[1]) continue;'
+  + ' await page.waitForLoadState(\'load\');'
   + ' console.log(JSON.stringify(await page.evaluate(() => { const gl = document.createElement(\'canvas\').getContext(\'webgl\');'
   + ' return { cores: String(navigator.hardwareConcurrency), memory: String(navigator.deviceMemory),'
   + ' vendor: gl ? String(gl.getParameter(0x9245)) : \'\', renderer: gl ? String(gl.getParameter(0x9246)) : \'\' } })));'
@@ -758,9 +759,10 @@ describe('the agent browser on real Podman', () => {
     await settled('the browser to be ready with Device on', START_MS, (found) => found.id !== before!.id)
     // Opened through Chrome's own DevTools HTTP endpoint, as a tab the person opens appears: no tool call, so only
     // device-inject.mjs's own connection can set the device. The ready marker waits for it to attach, so the first tab
-    // after ready has it. A blank tab: navigator.deviceMemory exists only in a secure context, which about:blank is and
-    // a page at this machine's network address is not, and the relay refuses the container's own loopback.
-    const opened = await inside(['curl', '-sf', '--max-time', '10', '-X', 'PUT', 'http://127.0.0.1:9222/json/new?about:blank'])
+    // after ready has it. A public HTTPS page: navigator.deviceMemory exists only in a secure context, which a page at
+    // this machine's network address is not, the relay refuses the container's own loopback, and a tab opened on
+    // about:blank had no deviceMemory on CI (2026-11-10). The proxy case already needs the runner to reach the internet.
+    const opened = await inside(['curl', '-sf', '--max-time', '10', '-X', 'PUT', 'http://127.0.0.1:9222/json/new?https://example.com/'])
     expect(opened.code, opened.stderr).toBe(0)
     const { id } = JSON.parse(opened.stdout) as { id: string }
     const read = await inside(['sh', '-c', `cd /opt/harness-browser && timeout 20 node --input-type=module -e ${quote(DEVICE_READ)} ${quote(id)}`])
