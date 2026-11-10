@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { stat } from 'node:fs/promises'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
-import { isInteractiveSource, readStoreSessionSource, storeSessionSource } from './storeSource.js'
+import { isInteractiveSource, readStoreSessionSource, rowSessionSource, storeSessionSource, storeSourceQuery } from './storeSource.js'
 
 vi.mock('node:fs/promises', () => ({ stat: vi.fn(async () => ({})) }))
 vi.mock('../../lib/sqliteRead.js', () => ({ sqliteReadAll: vi.fn() }))
@@ -43,5 +43,39 @@ describe('store source evidence', () => {
       vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: true, rows: [{ source }], via: 'builtin' })
       expect(await readStoreSessionSource(rule, '/fixture/store', 'session')).toEqual({ unavailable: true, reason: 'transient' })
     }
+  })
+
+  const surfaced = { ...rule, surface: { source: 'local', column: 'created_source', query: 'SELECT source, created_source FROM sessions WHERE id = ?',
+    probe: 'SELECT 1 AS present FROM columns', pending: ['', 'unknown'] } }
+  const rows = (...list: Array<Record<string, unknown>>) => ({ ok: true as const, rows: list, via: 'builtin' as const })
+
+  it('reads a surfaced row by its creator, and only a store that names creators', async () => {
+    expect(storeSourceQuery(surfaced, new Set(['source']))).toBe(rule.query)
+    expect(storeSourceQuery(surfaced, new Set(['source', 'created_source']))).toBe(surfaced.surface.query)
+    expect(storeSourceQuery(rule, new Set(['source', 'created_source']))).toBe(rule.query)
+    expect(rowSessionSource(surfaced, { source: 'local', created_source: 'cli' })).toBe('cli')
+    expect(rowSessionSource(surfaced, { source: 'local', created_source: 'unknown' })).toBeNull()
+    expect(rowSessionSource(surfaced, { source: 'local' })).toBe('local') // an older store's row
+    expect(rowSessionSource(surfaced, { source: 'cli', created_source: 'acp' })).toBe('cli') // only the label is surfaced
+    expect(rowSessionSource(surfaced, { source: 'local', created_source: null })).toEqual({ unavailable: true, reason: 'transient' })
+    expect(rowSessionSource(rule, { source: 'local', created_source: 'cli' })).toBe('local') // other engines unaffected
+
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce(rows({ source: 'local' })).mockResolvedValueOnce(rows({ present: 1 }))
+      .mockResolvedValueOnce(rows({ source: 'local', created_source: 'cli' }))
+    expect(await readStoreSessionSource(surfaced, '/fixture/store', 'session')).toBe('cli')
+    expect(vi.mocked(sqliteReadAll).mock.calls.map(call => call[1])).toEqual([rule.query, surfaced.surface.probe, surfaced.surface.query])
+    vi.mocked(sqliteReadAll).mockReset()
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce(rows({ source: 'local' })).mockResolvedValueOnce(rows())
+    expect(await readStoreSessionSource(surfaced, '/fixture/store', 'session')).toBe('local')
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce(rows({ source: 'local' })).mockResolvedValueOnce(rows({ present: 1 }))
+      .mockResolvedValueOnce(rows({ source: 'local', created_source: 'unknown' }))
+    expect(await readStoreSessionSource(surfaced, '/fixture/store', 'session')).toBeNull()
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce(rows({ source: 'local' })).mockResolvedValueOnce({ ok: false, reason: 'transient' })
+    expect(await readStoreSessionSource(surfaced, '/fixture/store', 'session')).toEqual({ unavailable: true, reason: 'transient' })
+    vi.mocked(sqliteReadAll).mockReset()
+    // A row that is not the label pays no further read.
+    vi.mocked(sqliteReadAll).mockResolvedValueOnce(rows({ source: 'subagent' }))
+    expect(await readStoreSessionSource(surfaced, '/fixture/store', 'session')).toBe('subagent')
+    expect(sqliteReadAll).toHaveBeenCalledOnce()
   })
 })

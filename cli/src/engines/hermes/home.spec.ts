@@ -82,6 +82,10 @@ d('hermes homes', () => {
     expect(await findHermesHomeForSession(acp, homes)).toBe(demo)
     // The one the old code could not see: its row is in the profile's store, not the default one.
     expect(await findHermesHomeForSession(PROFILE_SESSION, homes)).toBe(demo)
+    // Hermes 0.23's unified runtime: `local-<sha256>`, beside the old shapes in the same store.
+    const local = `local-${'ab'.repeat(32)}`
+    execFileSync('sqlite3', [hermesDbPath(demo), `INSERT INTO sessions VALUES ('${local}','local','/tmp/x');`])
+    expect(await findHermesHomeForSession(local, homes)).toBe(demo)
     // A session no store has yet — the caller falls back to the default rather than guessing.
     expect(await findHermesHomeForSession('20260101_000000_abcdef', homes)).toBeNull()
     // Not a Hermes id at all: refused without opening anything.

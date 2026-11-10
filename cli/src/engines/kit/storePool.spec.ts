@@ -122,6 +122,20 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
+it('builds each store\'s statement from that store\'s own columns', async () => {
+  // Hermes 0.23 reconciles created_source onto the stores it opens; a profile an older Hermes last ran may lack it.
+  store(home)
+  const profile = store(join(home, 'profiles', 'new'), [other])
+  update(profile, 'ALTER TABLE sessions ADD COLUMN created_source TEXT')
+  const seen: string[][] = []
+  const rows = await pool(declared, home, { ...query, sql: columns => {
+    seen.push([...columns].filter(name => name === 'created_source'))
+    return columns.has('created_source') ? "SELECT id, 'surfaced' AS kind FROM sessions WHERE cwd = ? LIMIT 2" : "SELECT id, 'plain' AS kind FROM sessions WHERE cwd = ? LIMIT 2"
+  } })
+  expect(seen).toEqual([[], ['created_source']])
+  expect(rows.map(({ row }) => [row.id, row.kind])).toEqual([[id, 'plain'], [other, 'surfaced']])
+})
+
 it('finds a newly created profile despite a warm optional home cache', async () => {
   store(home, [])
   const { listStoreHomes } = await import('./storeHomes.js')
