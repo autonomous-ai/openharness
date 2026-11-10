@@ -792,8 +792,8 @@ username (2026-11-09): an older app that still sends `member.status`,
 `member.timeZone`, `member.username` or `member.name` is answered as ignored,
 and a new picture, from `member.avatar`, `agent.avatar` or the upload before
 them (`POST /api/super-tabs/:tabId/avatars`), is refused in words
-(`AVATARS_RETIRED`). Clearing a picture still clears it. A picture, name or
-username someone set before stays and shows as before; a status or time zone
+(`AVATARS_RETIRED`). Clearing a picture still clears it. A name or username
+someone set before stays and shows as before; a picture, status or time zone
 set before is no longer read. Without a picture, a person
 shows their initial. An agent shows a pattern made from its name, the same on
 every computer, with a small Claude or Codex badge. Wherever an agent shows a
@@ -802,21 +802,13 @@ project's `coordinatorName`; the phone's coordinator avatar does not depend on
 the label. An upload not used within a day is removed, and so is a chat file
 attached but never sent: attach it again to send it.
 
-Avatars reach only the Swarm's members: only a member's read of the Swarm
-carries the link to a picture. Where the link points depends on the server:
-
-- With a private avatar bucket (`SUPER_TAB_AVATARS_BUCKET`), nobody can read a
-  picture directly. Each read carries signed links. A link stays the same for
-  half an hour, so pictures are not fetched on every poll, and stops opening
-  within an hour. A copied link expires, and someone removed from the Swarm
-  gets no new links.
-- Without one (production today, by the owner's choice on 2026-10-28),
-  pictures are kept in the chat files' bucket, in a folder of their own
-  (`avatars/`). They are linked like chat files (see Chat file links): signed
-  links that stop opening within an hour. Until the release step makes that
-  bucket private, a picture's old public address also still opens it. Chat
-  files never go in the avatar folder, and the server makes avatar links for
-  that folder alone.
+Pictures uploaded before are removed once, file and record, by the worker
+after the release that carries the job (`migration/avatarRemoval.ts`): a page
+of files at a time from the avatar folder, where they were kept, the chat
+files' bucket's `avatars/` in production, or a bucket of their own
+(`SUPER_TAB_AVATARS_BUCKET`). It logs `[avatar-removal] done` when none is
+left. The avatar store and that setting go in the pull request after it, on or
+after 2026-11-19.
 
 Swarm v4 has no reactions (2026-11-09): nothing stores, counts or shows one,
 and the server adds no 👀 or ✅ of its own. A person's reaction from an older
