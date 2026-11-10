@@ -12,6 +12,9 @@ abstract final class SwarmLayout {
     vertical: 6,
   );
 
+  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane.
+  static const double chatColumn = 720;
+
   /// The corners of a task card and of the agents-only line.
   static const double cardRadius = 12;
 

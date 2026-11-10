@@ -294,8 +294,17 @@ export function canReadProject(state: SuperTabState, actor: Actor, project: Swar
     return home === project.id
   }
   const member = state.people.find(p => p.id === actor.userId)
-  return !!member && (project.visibility === 'public' || ownsProject(state, member.id, project) ||
-    project.members.some(p => p.id === member.id && p.generation === member.generation))
+  return !!member && personReadsProject(member, project)
+}
+
+/** Whether a person in the Swarm, at membership [member], reads [project]: a public one; one they own at this membership (a
+ *  project from before the owner's generation was stored matches by id, as ownsProject); one they are listed in at it. Never by a
+ *  listing or an ownership from an earlier membership. canReadProject asks it with the Swarm's state; a read that has only the
+ *  project and the member row (shipping/service.ts) asks it alone. */
+export function personReadsProject(member: Pick<Person, 'id' | 'generation'>,
+  project: Pick<SwarmProject, 'visibility' | 'ownerId' | 'ownerGeneration' | 'members'>): boolean {
+  return project.visibility === 'public' || (!!member.id && project.ownerId === member.id && (project.ownerGeneration === undefined || project.ownerGeneration === member.generation))
+    || (project.members ?? []).some(p => p.id === member.id && p.generation === member.generation)
 }
 
 /** Whether [target] is an agent of [project]'s channel (Swarm v4, anh Dee 2026-11-08): one that reads the project as an agent

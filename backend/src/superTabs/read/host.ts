@@ -39,7 +39,7 @@ export class HostReads {
   private readonly db: PrismaClient
   private readonly now: () => number
   /** Reads the store's own database, on its clock unless given one (tests). */
-  constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
+  constructor(private readonly store: SuperTabStore, options: { now?: () => number } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
   }
@@ -141,7 +141,7 @@ export class HostReads {
   private async lookups(tx: Transaction, state: SuperTabState, grants: GrantReads): Promise<HostLookups> {
     const people = state.people.length ? await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } }) : []
     const confidential = await confidentialSessions(tx, state.agents.map(a => a.id), state.id)
-    return { people, confidential, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target, grants) }
+    return { people, confidential, agentGrant: target => this.store.agentGrant(tx, state, target, grants) }
   }
 
   /** Swarms whose record of this machine changed since the cursor and that no longer list it. */

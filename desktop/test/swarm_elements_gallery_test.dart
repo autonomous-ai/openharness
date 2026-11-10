@@ -11,7 +11,6 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/chat/chat_card.dart';
 import 'package:harness/super_tabs/chat/chat_time.dart';
 import 'package:harness/super_tabs/chat/composer_pill.dart';
-import 'package:harness/super_tabs/chat/fold.dart';
 import 'package:harness/super_tabs/chat/send_button.dart';
 import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -159,8 +158,6 @@ Future<List<SuperTabController>> _show(
       ),
     ),
   );
-  await tester.pump();
-  // A fold says More a frame after it measures what it holds.
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
@@ -316,15 +313,17 @@ const _faces = [
   'Nova',
 ];
 
-SuperTabAgent _agent(String name, {String? kind}) => SuperTabAgent.fromJson({
-  'id': 'id-$name',
-  'name': name,
-  'machineId': 'm',
-  'harnessId': 'h',
-  'contributorId': 'p',
-  'configuration': {'engine': 'claude'},
-  'kind': ?kind,
-});
+SuperTabAgent _agent(String name, {String? kind, bool offline = false}) =>
+    SuperTabAgent.fromJson({
+      'id': 'id-$name',
+      'name': name,
+      'machineId': 'm',
+      'harnessId': 'h',
+      'contributorId': 'p',
+      'configuration': {'engine': 'claude'},
+      'kind': ?kind,
+      if (offline) 'downSince': '2026-11-09T05:00:00Z',
+    });
 
 final _person = SuperTabPerson.fromJson({
   'id': 'p1',
@@ -418,19 +417,25 @@ class _Gallery extends StatelessWidget {
                           onAdd: () {},
                           addTooltip: 'New agent',
                         ),
-                        for (final (name, lead, unread, selected) in [
-                          ('River', true, false, false),
-                          ('Quinn', false, false, true),
-                          ('Kai', false, true, false),
+                        for (final (name, lead, unread, selected, state) in [
+                          ('River', true, false, false, null),
+                          ('Quinn', false, false, true, 'on #12'),
+                          ('Kai', false, true, false, 'free'),
+                          ('Wren', false, false, false, 'offline'),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
-                              _agent(name, kind: lead ? 'pm' : null),
+                              _agent(
+                                name,
+                                kind: lead ? 'pm' : null,
+                                offline: state == 'offline',
+                              ),
                               size: SuperTabQuietRow.faceSize,
                               engineBadge: false,
                               lead: lead,
                             ),
                             name: name,
+                            detail: state,
                             selected: selected,
                             unread: unread,
                             onTap: () {},
@@ -447,9 +452,20 @@ class _Gallery extends StatelessWidget {
                           detail: 'Mac Studio',
                           onTap: () {},
                         ),
+                        // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',
-                          collapsed: true,
+                          collapsed: false,
+                          onTap: () {},
+                        ),
+                        SuperTabQuietRow(
+                          leading: Icon(
+                            AppIcons.monitorOff,
+                            size: AppIcons.inlineSize,
+                            color: grid.SidebarInk.inkMuted,
+                          ),
+                          name: 'Old Rig',
+                          detail: 'offline',
                           onTap: () {},
                         ),
                         SuperTabQuietHeading(
@@ -487,7 +503,7 @@ class _Gallery extends StatelessWidget {
                   onClose: () {},
                 ),
               ),
-              title('Chat: bubbles, a time after a pause, cards, a fold'),
+              title('Chat: bubbles, a time after a pause, cards'),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -542,14 +558,6 @@ class _Gallery extends StatelessWidget {
                           title: 'Juno, 14:20, to Pip: READ-OK f6edb44',
                           action: 'Read',
                           details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
-                        SwarmFold(
-                          child: Text(
-                            [for (var i = 1; i <= 9; i++) 'Line $i of a plan.']
-                                .join('\n'),
-                            style: SwarmType.body(context),
-                          ),
                         ),
                       ],
                     ),

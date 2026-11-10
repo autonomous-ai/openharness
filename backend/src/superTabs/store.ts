@@ -10,13 +10,10 @@ import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { isRetiredCommand, retiredAnswer } from './retired.js'
 import { metrics } from '../lib/metrics.js'
-import { applyCrewKeep, crewMoveRequest, crewNeedsMachine, type CrewDeps } from './crewKeep.js'
-import { finishedWakes } from './crewTimes.js'
-import { isCrew } from './crew.js'
 import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
-import { admitMachineStart, accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
+import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
 import { authorForAgent, lazyUsernames, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
@@ -85,9 +82,10 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
-import { candidatesFor, dispatchRules, DISPATCH_RULES, dispatchPlan, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchLookup, type DispatchRules, type Skip } from './dispatch.js'
+import { candidatesFor, dispatchRules, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchRules, type Skip } from './dispatch.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
-import { failRefusedStarts, judgedMachines, loseTasks, nextLossAt, recordTaskState, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { finishedWakes } from './crewTimes.js'
+import { failRefusedStarts, judgedMachines, recordTaskState, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { groupsOf, archivable, archiveLine, archiveWaitsFor, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
@@ -2414,22 +2412,6 @@ export class SuperTabStore {
     }
   }
 
-  /** One indexed policy read per relevant project, reused by this pass's clocks and dispatch check. */
-  private async projectDispatch(tx: Transaction, state: SuperTabState, machineId?: string, dispatch = false): Promise<DispatchLookup> {
-    const workers = machineId ? new Set(state.agents.filter(a => a.machineId === machineId).map(a => a.id)) : null
-    const ids = new Set(state.conversations.filter(c => activeWork(c) && c.assignment && (!workers || workers.has(c.assignment.agentId)))
-      .map(c => groupProject(state, c).id))
-    if (dispatch) {
-      const pms = new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
-      for (const worker of state.agents) {
-        const projectId = !pms.has(worker.id) && !isBuddy(worker) && agentProjectId(state, worker)
-        if (projectId) ids.add(projectId)
-      }
-    }
-    const policies = new Map(await Promise.all([...ids].map(async id => [id, await this.dispatchPolicy(tx, state.id, id)] as const)))
-    return id => policies.has(id) ? policies.get(id)! : DISPATCH_RULES
-  }
-
   private readonly dispatchWaiting = new Map<string, { timer: ReturnType<typeof setTimeout>; periodic: boolean }>()
   /** Whether a write scheduled a dispatch pass for [tabId] that has not run yet (dispatchSoon). */
   dispatchScheduled(tabId: string): boolean { return this.dispatchWaiting.has(tabId) }
@@ -2589,35 +2571,6 @@ export class SuperTabStore {
         repositoryUrl: project.repository?.repositoryUrl ?? null,
         requester: { name: requester.name?.trim() || null, email: requester.email },
         agentName: agentDisplayName(state.agents, target.id) ?? target.displayName ?? target.name, machineName: machineName?.trim() || null }
-    })
-  }
-
-  /**
-   * What a contributed machine's host needs to prepare a queued start's folder before the agent exists (routes/superTabs.ts,
-   * a start's `github-token`): the start's project repository, whom the work is for, and whether it is the machine owner's
-   * own project. Only the host of that start, while nothing has started or failed yet, as `start()` reads it.
-   */
-  async githubStart(user: AuthUser, tabId: string, startId: string, machineId: string) {
-    return transaction(this.db, async tx => {
-      const { state } = await this.loadStart(tx, user, tabId, startId)
-      const actor = await this.poolHostActor(tx, user, state, machineId, startId)
-      const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
-      if (start.harnessId || start.error) fail('START_SETTLED', 'This start has already started or failed; its folder is not prepared again.', 409)
-      if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
-      // Its host acts as the agent that made the start (poolHostActor), which may carry it on whatever its role.
-      const group = readConversation(state, actor, start.request.conversationId)
-      if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
-      const grant = await this.contribution(tx, state, actor, start.request, true)
-      if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
-        fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
-      }
-      // A Swarm-wide Buddy's folder is made of checkouts already on its machine: there is no repository to fetch for it.
-      const project = startProject(state, start.request) ?? fail('NOT_FOUND', 'This start has no project folder to prepare.', 404)
-      const owner = await ownerAccount(tx.user, project)
-      const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
-      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(),
-        startId, own: ownsProject(state, start.machineOwnerId, project),
-        requester: { name: owner?.name?.trim() || null, email } }
     })
   }
 
@@ -3917,9 +3870,9 @@ export class SuperTabStore {
       others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
   }
 
-  /** A project's repository for the route's read of its running CI jobs (github/ciLoad.ts), by a person or an agent of the
-   *  project, as any read of the project: another project's, or one this reader cannot see, is unavailable alike. A Buddy
-   *  routes nothing, so it reads none. */
+  /** Who may read a project's CI load (routes/superTabs.ts `ci-load`, retired with Swarm v4, slice S6, and answered
+   *  "unavailable"): a person or an agent of the project, as any read of the project: another project's, or one this reader
+   *  cannot see, is unavailable alike. A Buddy routes nothing, so it reads none. */
   async ciRepository(user: AuthUser, tabId: string, projectId: string, asAgentId?: string): Promise<{ repositoryUrl: string | null }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
@@ -4020,23 +3973,6 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       return project.repositoryCreation
     })
-  }
-
-  /** What the crew keeper asks of the store (crewKeep.ts CrewDeps): whether a machine admits a crew member's move start now,
-   *  under the same checks an agent.start meets. */
-  private async crewDeps(tx: Transaction, state: SuperTabState, now: number): Promise<CrewDeps> {
-    // Each crew project's machine rules from its record (machineRules.ts): one indexed read per project with crew (at most
-    // the Swarm's 100), only in a sweep where a member needs a machine.
-    const rules = new Map<string, readonly MachineRule[]>()
-    for (const projectId of new Set(state.agents.filter(a => a.crew).map(a => agentProjectId(state, a)).filter(id => id !== undefined))) {
-      rules.set(projectId, await machineRulesOf(tx, state.id, projectId))
-    }
-    return { machineRules: projectId => rules.get(projectId) ?? [], admits: (machineId, agent) => {
-      const pool = state.machines?.find(m => m.machineId === machineId)
-      const request = pool && crewMoveRequest(state, agent, pool)
-      if (!request) return false
-      try { return !!admitMachineStart(state, request, now) } catch { return false }
-    } }
   }
 
   /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked
@@ -4215,11 +4151,6 @@ export class SuperTabStore {
           ...back.length ? await loadGroups(tx, tabId, 'key', { key: { $in: back.flatMap(r => [...r.groupIds, ...r.leadOf]) } }) : []]
         loaded = loadedFrom(row, { ...observed, groups: [...new Map([...observed.groups, ...more].map(g => [g.key, g])).values()] })
       }
-      // A task this report may lose says Stuck in its project chat's thread (taskLine.ts endedReply, task #2693): a chat the
-      // reads above left out is read too. None today: loadObserved reads every project chat.
-      const lines = taskLineChats(loaded.state)
-      if (lines.length) loaded = loadedFrom(row, { ...observed, groups: [...new Map([...loaded.parts.groups,
-        ...await loadGroups(tx, tabId, 'key', { key: { $in: lines } })].map(g => [g.key, g])).values()] })
       const idleBuddies = loaded.state.agents.filter(a => a.machineId === machineId && isBuddy(a) && !a.buddySession
         && observation.idleBuddyHarnessIds?.includes(a.harnessId)
         && !loaded.state.conversations.some(c => isBuddyChat(c) && c.agentIds.includes(a.id))).map(a => a.id)
@@ -4290,19 +4221,11 @@ export class SuperTabStore {
         await tx.superTabSessionScope.updateMany({ where: { id, closeLeaseGeneration: proof.generation },
           data: { closeLeaseId: null, closeLeaseUntil: null, closeLeaseGeneration: null } })
       }
-      // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
-      // they keep running when the Lead's own machine is the one that died.
-      // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441).
-      // The crew keeper with the Swarm's time checks (crewKeep.ts): sleep, move off a failing machine, drop folders. A move is
-      // placed only where a start would be admitted now, Team rules included.
-      // The Team facts are read only when a member needs another machine (review of #3229); sleeps and folders need none.
-      const crew = sweep && state.agents.some(isCrew)
-        ? crewNeedsMachine(state, now) ? await this.crewDeps(tx, state, now) : { admits: () => false } : null
-      const rulesFor = await this.projectDispatch(tx, state, sweep ? undefined : machineId, !!sweep && !!this.hooks.dispatch)
-      const checked = [...failRefusedStarts(state, machineId, now), ...loseTasks(state, now, worker => worker.machineId === machineId, undefined, rulesFor),
-        ...sweep ? sweepLiveness(state, now, rulesFor) : [], ...crew ? applyCrewKeep(state, now, crew) : [],
-        // A woken crew member this reading shows running again: its wake's timing row (crewTimes.ts, task #3462).
-        ...finishedWakes(state, now)]
+      // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441); every 30
+      // seconds it runs the Swarm's time checks too (liveness.ts sweepLiveness), so they keep running when the Lead's own machine is the
+      // one that died. A report loses no task, nudges no worker and keeps no crew now. A woken agent it shows running again clears its
+      // wake mark and has its wake's timing row (crewTimes.ts, task #3462): a Buddy wakes the same way.
+      const checked = [...failRefusedStarts(state, machineId, now), ...sweep ? sweepLiveness(state, now) : [], ...finishedWakes(state, now)]
       const sleepy = observation.idleBuddyHarnessIds?.length ? buddySleepCandidates(state, now).filter(a => a.machineId === machineId) : []
       const busy = new Set<string>()
       for (const agent of sleepy) {
@@ -4315,14 +4238,6 @@ export class SuperTabStore {
         // New input and work meet the agent write; home activity, membership and project switch meet these guards.
         buddyTouches.push({ kind: 'head', key: 'head' }, { kind: 'member', key: agent.buddyOf!.personId },
           ...groupsOf(state, agent).map(g => ({ kind: 'group' as const, key: g.id })))
-      }
-      // The 30-second sweep also hands out work when the Swarm, as loaded here, has a free crew member and a task for it.
-      if (sweep && this.hooks.dispatch && projectsOf(state).some(p => {
-        const rules = rulesFor(p.id)
-        return rules && !this.pmWaiting(tabId, state, p, now) && this.periodicDue(tabId, p.id, rules, now)
-          && dispatchPlan(state, p.id, rules, now, this.refusedSkip(tabId, state, now)).length
-      })) {
-        afterCommit(tx, () => this.dispatchSoon(tabId, true))
       }
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
@@ -4358,7 +4273,7 @@ export class SuperTabStore {
       const mine = state.machines?.find(m => m.machineId === machineId)
       return { ...written, ...mine ? { record: { lentCount: lentAgents(state, mine, mine.observation?.runningHarnessIds ?? []),
         lentProjects: lentProjects(state, mine, mine.observation?.runningHarnessIds ?? []),
-        removals: !!state.machines?.some(m => m.removal), deadline: Math.min(nextLossAt(state, machineId) ?? Infinity, nextRemovalAt(state, machineId, now) ?? Infinity, now + DEADLINE_CAP_MS),
+        removals: !!state.machines?.some(m => m.removal), deadline: Math.min(nextRemovalAt(state, machineId, now) ?? Infinity, now + DEADLINE_CAP_MS),
         team: teamByRecord(state, machineId), members: state.people.map(p => p.id),
         preparable: (state.starts ?? []).filter(s => preparableStart(s, machineId)).map(s => s.id), at: now } } : {} }
     })
