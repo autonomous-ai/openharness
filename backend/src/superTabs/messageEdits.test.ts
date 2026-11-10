@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
 import type { MessageChangeTarget } from './messageEdits.js'
+import { storedTask } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -22,7 +23,7 @@ function fixture() {
   const agent = () => run({ type: 'agent.add', conversationId: 'lead', machineId: 'machine', harnessId: 'h1', name: 'Worker', configuration,
     lead: false }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
   const lead = () => state.conversations.find(c => c.id === 'lead')!
-  return { run, invite, agent, lead }
+  return { run, invite, agent, lead, get state() { return state } }
 }
 
 const edit = (text = 'Fixed text'): Command => commandSchema.parse({ type: 'message.edit', conversationId: 'lead', messageId: 'm1', text })
@@ -79,7 +80,7 @@ describe('message edits', () => {
     const f = fixture()
     expect(() => f.run(edit('   '), owner, target())).toThrow(expect.objectContaining({ code: 'INVALID_MESSAGE' }))
     expect(f.run(edit(''), owner, target({ hasFiles: true })).result).toMatchObject({ changed: true })
-    const group = f.run({ type: 'conversation.create', title: 'Old', brief: 'Done.', checks: [] }).result.conversationId as string
+    const group = storedTask(f.state, { title: 'Old', brief: 'Done.' })
     f.run({ type: 'conversation.archive', conversationId: group, archived: true })
     expect(() => f.run(commandSchema.parse({ type: 'message.edit', conversationId: group, messageId: 'm1', text: 'x' }), owner, target()))
       .toThrow(expect.objectContaining({ code: 'ARCHIVED' }))

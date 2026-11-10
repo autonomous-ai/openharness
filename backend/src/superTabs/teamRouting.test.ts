@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { availableSlots, machineSlots, type ContributedMachine } from './machines.js'
+import { storedTask } from './storedWork.test-support.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 // Teammates' work on Swarm machines. Everything below runs with SWARM_TEAM_ACCOUNT_REQUIRED=1, except the block of a machine
@@ -44,8 +45,8 @@ function swarm() {
     pool('mate-mac', 'mate', 'MacBook Pro', reading()),
   ]
   const mine = String(run({ type: 'project.create', name: 'Mine', visibility: 'public', brief: '' }, mate).result.projectId)
-  const group = (projectId = 'lead', actor: Actor = owner) => String(run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Build it.',
-    checks: [{ description: 'Tests pass.', independent: false }] }, actor).result.conversationId)
+  const group = (projectId = 'lead', actor: Actor = owner) => storedTask(state, { projectId, title: 'Work', brief: 'Build it.',
+    checks: [{ description: 'Tests pass.' }], ...actor.kind === 'person' ? { requesterId: actor.userId } : { creatorId: actor.agentId } })
   /** An agent already in the Swarm on [machineId], run by [contributorId]'s grant there. */
   const member = (id: string, machineId: string, contributorId: string, projectId = 'lead', extra: Record<string, unknown> = {}) => {
     state.agents.push({ id, machineId, harnessId: `harness-${id}`, projectId, machineOwnerId: contributorId, contributorId,

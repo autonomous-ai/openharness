@@ -123,7 +123,18 @@ describe('what Swarm v1-v3 had, over HTTP', () => {
         dispatch: { everyMs: 30_000, maxHanded: 3, nudgeAfterMs: 7_200_000, returnAfterMs: 10_800_000 } } },
       ...[{ routeDecisionId: 'd1' }, { overrideReason: 'Faster' }].map(route => ({ type: 'agent.start', ...route, request: { conversationId: 'task-1',
         machineId: 'm1', engine: 'claude', name: 'Builder', cwd: '/work', worktree: false,
-        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 50, tools: [], devices: [], quotaRequired: false } } }))]) {
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 50, tools: [], devices: [], quotaRequired: false } } })),
+      // Swarm v4 keeps no custom role sets or role names, no conversations but its project channels and agents' chats, and no
+      // report watermarks (slice S18).
+      { type: 'conversation.create', title: 'Fix', brief: 'Fix it.', checks: [] },
+      { type: 'conversation.create', projectId: 'lead', title: 'Fix', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src'] }, priority: 'P2' },
+      ...[{ roleId: 'dev' }, { roleName: 'Tester' }].map(role => ({ type: 'agent.add', conversationId: 'c', machineId: 'm1', harnessId: 'h1', name: 'Builder',
+        lead: false, configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }, ...role })),
+      ...[{ roleId: 'dev' }, { roleName: 'Tester' }].map(role => ({ type: 'agent.start', request: { conversationId: 'task-1', machineId: 'm1',
+        engine: 'claude', name: 'Builder', cwd: '/work', worktree: false, ...role,
+        requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 50, tools: [], devices: [], quotaRequired: false } } })),
+      { type: 'project.report', projectId: 'lead', through: { 'task-1': 3 }, text: 'Status' },
+      { type: 'project.report', projectId: 'lead', throughRevision: 3, text: null }]) {
       for (const asAgentId of [undefined, 'agent-1']) {
         const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/commands', payload: { operationId: 'op-1', command, ...asAgentId ? { asAgentId } : {} } })
         expect(res.statusCode, JSON.stringify(command)).toBe(400)

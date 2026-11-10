@@ -23,7 +23,6 @@ ConversationServer swarm({bool status = true, String owner = 'owner'}) {
     {
       ...projectFixture('lead', 'openharness', 'lead'),
       'ownerId': owner,
-      'coordinatorName': 'Product Manager',
       if (status)
         'status': {
           'text': 'Three fixes are on main tonight.',

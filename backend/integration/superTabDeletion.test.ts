@@ -11,6 +11,8 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SwarmChanged } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore, type Attachments } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
+import { storeCreate } from './storedWork.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { machineSwarms } from '../src/superTabs/swarmRows.js'
 import { SuperTabError } from '../src/superTabs/model.js'
@@ -61,7 +63,8 @@ function world(start = 1_800_000_000_000) {
 /** A Swarm with a member, a pending invitation, a message, a file, and a host's machine running its Product Manager and a worker. */
 async function swarm(w: ReturnType<typeof world>, name = 'Lampos') {
   const tab = (await w.store.create(owner, randomUUID(), name, 'public')).id
-  const execute = (command: Command, as = owner) => w.store.execute(as, tab, { operationId: randomUUID(), command })
+  const execute = (command: Command | StoredCreate, as = owner) => command.type === 'conversation.create' ? storeCreate(db, tab, command, as)
+    : w.store.execute(as, tab, { operationId: randomUUID(), command })
   for (const u of [member, host]) {
     const invitation = await execute({ type: 'invite.create', email: u.email, role: 'collaborator', conversationId: 'lead' })
     await execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, u)
@@ -291,8 +294,8 @@ describe('while a Swarm is deleted', () => {
     const w = world(), tab = (await w.store.create(owner, randomUUID(), 'Racing', 'public')).id
     const invitation = await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' } })
     await w.store.execute(member, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    // The member's new task read the Swarm before the delete committed, and writes after it. (A person's write: a person posts
-    // in no project channel, agentsOnly.test.ts.)
+    // The member's new project read the Swarm before the delete committed, and writes after it. (A person's write: a person posts
+    // in no project channel, agentsOnly.test.ts, and no command opens a task in v4.)
     const groups = await db.swarmGroup.count({ where: { tabId: tab } })
     let deleted = false
     const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
@@ -301,7 +304,7 @@ describe('while a Swarm is deleted', () => {
       await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Racing' } })
     }), () => w.clock.now)
     expect(await refusal(() => racing.execute(member, tab, { operationId: randomUUID(),
-      command: { type: 'conversation.create', title: 'After the delete', brief: '', checks: [] } }))).toEqual(MISSING)
+      command: { type: 'project.create', name: 'After the delete', visibility: 'public', brief: '' } }))).toEqual(MISSING)
     expect(deleted).toBe(true)
     expect(await db.swarmGroup.count({ where: { tabId: tab } })).toBe(groups)
   })

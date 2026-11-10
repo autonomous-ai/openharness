@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
+import { storedTask } from './storedWork.test-support.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 const NOW = 50_000_000
@@ -40,18 +41,18 @@ function swarm() {
     paused: false, observation: reading as never })
   state.machines = [pool('owner-mac', 'owner', 'Owner Mac'), pool('mate-mac', 'mate', 'MacBook Pro')]
   /** An agent already in the Swarm on [machineId], under [contributorId]'s grant there. */
-  const member = (id: string, machineId: string, contributorId: string, roleName = 'Engineer') => {
+  const member = (id: string, machineId: string, contributorId: string) => {
     state.agents.push({ id, machineId, harnessId: `harness-${id}`, projectId: 'lead', machineOwnerId: contributorId, contributorId,
-      membershipGeneration: generation(contributorId), hostGrant: null, name: id, configuration: config, roleName } as never)
+      membershipGeneration: generation(contributorId), hostGrant: null, name: id, configuration: config })
     return id
   }
-  const pm = member('pm', 'owner-mac', 'owner', 'PM')
+  const pm = member('pm', 'owner-mac', 'owner')
   const chat = state.conversations.find(c => c.id === 'lead')!
   chat.leadId = pm
   chat.agentIds = [...chat.agentIds, pm]
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: state.agents.find(a => a.id === agentId)!.machineOwnerId })
-  const task = String(run({ type: 'conversation.create', projectId: 'lead', title: 'Work', brief: 'Build it.', priority: 'P2', requesterId: 'owner',
-    checks: [{ description: 'Tests pass.', independent: false }] } as Command, as(pm)).result.conversationId)
+  const task = storedTask(state, { projectId: 'lead', title: 'Work', brief: 'Build it.', requesterId: 'owner', checks: [{ description: 'Tests pass.' }],
+    creatorId: pm })
   const machine = (machineId: string) => state.machines!.find(m => m.machineId === machineId)!
   const start = (machineId: string, actor: Actor) => run({ type: 'agent.start', request: { conversationId: task, machineId, engine: 'claude', name: 'Builder',
     cwd: '/swarm/lead', worktree: true, requirements } } as Command, actor, { contribution: { machineOwnerId: machine(machineId).contributorId,

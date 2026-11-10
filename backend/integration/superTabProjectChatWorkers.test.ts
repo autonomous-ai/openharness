@@ -5,8 +5,9 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import type { StoredCreate } from '../src/superTabs/steps.test-support.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
-import { storeAssignment, storeStatus } from './storedWork.test-support.js'
+import { storeAssignment, storeCreate, storeStatus } from './storedWork.test-support.js'
 import { PERSONAL_SWARM_OPERATION } from '../src/superTabs/deletion.js'
 
 // Task #2924 (Dee and River, 2026-11-04): an agent with a task in the project talks in its project chat without joining it, and a
@@ -21,8 +22,8 @@ const other: AuthUser = { sub: '100000000000000000000002', email: 'other@example
 const host: AuthUser = { sub: '100000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 let person = owner
-const run = (tab: string, command: Command, user = person, asAgentId?: string) =>
-  store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
+const run = (tab: string, command: Command | StoredCreate, user = person, asAgentId?: string) => command.type === 'conversation.create'
+  ? storeCreate(db, tab, command, user, asAgentId) : store.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
 const post = (text: string, replyTo: string | null = null): Command => ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [] })
 
 beforeAll(async () => {

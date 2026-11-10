@@ -4,7 +4,7 @@ import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, typ
 import type { ContributedMachine } from './machines.js'
 import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT } from './projects.js'
 import { closedAgents, STOPPED_REMOVE_MS } from './closedAgents.js'
-import { storedAssignment, storedStatus } from './storedWork.test-support.js'
+import { storedAssignment, storedStatus, storedTask } from './storedWork.test-support.js'
 
 // Task #4116 (Swarm v3, anh Dee 11-07): "A Regular agent isn't tied to a project; the task decides where it works." While it
 // works on a task it is that task's project's, and it is in none again once the task ends.
@@ -44,8 +44,7 @@ function swarm() {
     const created = run({ type: 'project.create', name, visibility, brief: '' }).result as { projectId: string; conversationId: string }
     const pm = run({ type: 'agent.add', conversationId: created.conversationId, machineId: `${name}-mac`, harnessId: `h-pm-${name}`, name: `PM ${name}`,
       configuration: config, lead: true }, owner, own('owner')).result.agentId as string
-    const task = run({ type: 'conversation.create', projectId: created.projectId, title: `${name} task`, brief: 'Do it.', checks: [] } as Command)
-      .result.conversationId as string
+    const task = storedTask(state, { projectId: created.projectId as string, title: `${name} task`, brief: 'Do it.', requesterId: 'owner' })
     return { ...created, pm, task, asPm: { kind: 'agent', agentId: pm, machineOwnerId: 'owner' } as Actor }
   }
   const agent = (id: string) => state.agents.find(a => a.id === id)!
