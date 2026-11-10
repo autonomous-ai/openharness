@@ -58,7 +58,8 @@ describe('the old Swarm state, rebuilt from parts', () => {
     expect(list(reassemble(storeOf(plain)).agents)[0]).not.toHaveProperty('roleId')
   })
 
-  // Backend S11 (#3827): tags are gone, and nothing here read their count; an older backend's is left out.
+  // Backend S11 (#3827): the count of a person's waiting tags is gone (a message still names whom it tags), and nothing
+  // here read it; an older backend's is left out.
   it('gives no count of waiting tags, and a Swarm from before projects no progress', () => {
     const first = readFixture<FirstLoad>('parts-builder')
     Object.assign(first.derived, { mentionsWaiting: 2 })
