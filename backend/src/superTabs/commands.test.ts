@@ -10,8 +10,6 @@ import { agentOnly, agentRole, createSuperTab, visibleState, type Actor, type Ag
 import type { RouteDecision } from './routeRecord.js'
 import { startFinished } from './parts/write.js'
 import { modelMatches } from './rules.js'
-import { appendRouting, instructionsHash } from './instructions.js'
-import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 import { LEAD_CAPABILITY, leadHost } from './leadStart.js'
 import { NOW, owner as richOwner, peer as richPeer, richSwarm } from './read/fixture.test-support.js'
@@ -22,7 +20,6 @@ import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 /** What an older client's routing, policy, skill-set or role save answers (project instructions, phase 4). */
-const IGNORED_NOTE = 'Routing and roles live in each project\'s instructions now. Update Harness to edit them there.'
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 function fixture() {
@@ -855,68 +852,6 @@ describe('agent.start on the Swarm\'s listed machines', () => {
   })
 })
 
-describe('tab.routingPolicy', () => {
-  // Routing lives in each project's instructions (project instructions, phase 4): an older Desktop's override is accepted
-  // and kept nowhere; one saved before stays, unread.
-  it('takes the owner\'s override and keeps it nowhere, and still refuses anyone else', () => {
-    const f = fixture()
-    f.state.routingPolicy = { notes: 'Saved before.' }
-    for (const policy of [{ quotaReserve: 25 }, null]) {
-      const effects = f.run({ type: 'tab.routingPolicy', policy })
-      expect(effects.result).toMatchObject({ ignored: true, note: IGNORED_NOTE })
-      expect(effects.messages).toEqual([])
-    }
-    expect(f.state.routingPolicy).toEqual({ notes: 'Saved before.' })
-    f.invite('collaborator')
-    expect(() => f.run({ type: 'tab.routingPolicy', policy: { notes: 'x' } }, peer)).toThrow('Only the Super Tab owner')
-  })
-  it('refuses an invalid override', () => {
-    const f = fixture()
-    expect(() => commandSchema.parse({ type: 'tab.routingPolicy', policy: { quotaReserve: 99 } })).toThrow()
-    expect(() => f.run({ type: 'tab.routingPolicy', policy: { quotaReserve: 99 } } as never)).toThrow()
-  })
-  it('counts a second row for a built-in model against the 40 (reviews of #2271 and #2314)', () => {
-    const sol = DEFAULT_ROUTING_POLICY.models.find(m => m.model === 'gpt-6.1-sol')!
-    const own = Array.from({ length: 40 }, (_, i) => ({ engine: 'claude' as const, model: `model-${i}`, effort: 'high', quality: 2, cost: 2, enabled: true }))
-    expect(() => commandSchema.parse({ type: 'tab.routingPolicy', policy: { models: [...own, sol, { ...sol, enabled: false }] } }))
-      .toThrow('At most 40 rows of your own.')
-    expect(commandSchema.parse({ type: 'tab.routingPolicy', policy: { models: [sol, { ...sol, enabled: false }] } })).toBeTruthy()
-    expect(commandSchema.parse({ type: 'tab.routingPolicy', policy: { models: [...own, sol] } })).toBeTruthy()
-  })
-})
-
-describe('tab.tidy', () => {
-  it('is on until the Swarm owner turns it off, and back on', () => {
-    const f = fixture()
-    expect(f.state.tidy).toBeUndefined()
-    f.run({ type: 'tab.tidy', enabled: false })
-    expect(f.state.tidy).toBe(false)
-    f.run({ type: 'tab.tidy', enabled: true })
-    expect(f.state.tidy).toBeUndefined()
-  })
-  it('refuses a collaborator and a Lead that quotes no message of the owner', () => {
-    const f = fixture()
-    f.invite('collaborator')
-    expect(() => f.run({ type: 'tab.tidy', enabled: false }, peer)).toThrow('Only the Swarm owner')
-    const lead = f.add('lead-harness', 'owner', 'lead', true)
-    expect(() => f.run({ type: 'tab.tidy', enabled: false }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })).toThrow('Only the Swarm owner')
-    expect(f.state.tidy).toBeUndefined()
-  })
-  it('lets a Lead pass on a chat message the owner wrote in the last day, and no older one', () => {
-    const f = fixture()
-    const lead = f.add('lead-harness', 'owner', 'lead', true)
-    const asLead: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    const ownerAuthor = { kind: 'person' as const, id: 'owner', name: 'owner', membershipGeneration: f.state.people[0]!.generation }
-    const askedIn = { conversationId: 'lead', messageId: 'm1' }
-    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
-      { askedIn: { author: ownerAuthor, source: false, createdAt: 1000 - 25 * 3_600_000 } })).toThrow('Only the Swarm owner')
-    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
-      { askedIn: { author: { ...ownerAuthor, kind: 'agent', id: lead }, source: false, createdAt: 900 } })).toThrow('Only the Swarm owner')
-    f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead, { askedIn: { author: ownerAuthor, source: false, createdAt: 900 } })
-    expect(f.state.tidy).toBe(false)
-  })
-})
-
 const candidate = (id: string, patch: Record<string, unknown> = {}) => ({ id, kind: 'new', machineId: 'machine', engine: 'claude',
   model: 'opus', effort: 'high', quality: 3, cost: 3, title: `Title ${id}`, label: `Label ${id}`, ...patch })
 const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.' },
@@ -1429,32 +1364,6 @@ describe('the route is advice', () => {
     const followed = f.run({ type: 'agent.start', request: request({ conversationId: group, effort: 'high' }), routeDecisionId: 'd4' }, as(engineer),
       { routeDecision: decision('d4'), contribution: f.contribution })
     expect(followed.routeDecisions).toEqual([expect.not.objectContaining({ override: expect.anything() })])
-  })
-
-  it('records the instructions revision a route relied on', () => {
-    const f = routed()
-    const route = (patch: Record<string, unknown> = {}) =>
-      f.run({ type: 'route.record', conversationId: 'lead', decision: record(patch) } as Command, f.leadActor, {}).routeDecisions[0] as { record: Record<string, unknown> }
-    f.state.projects![0]!.instructionsRevision = 3
-    expect(route().record.instructionsRevision).toBe(3)
-    delete f.state.projects![0]!.instructionsRevision
-    expect(route().record.instructionsRevision).toBe(0)
-    // Stamped by the server, never taken from the route: the revision, and the task's own step up (a grid attempt's failed first
-    // review, goals piece 4), which the costs report counts.
-    f.state.projects![0]!.instructionsRevision = 5
-    expect(route({ stepUp: { attempt: 3, reason: 'Mine.' } }).record).not.toHaveProperty('stepUp')
-    const lead = () => f.state.conversations.find(c => c.id === 'lead')!
-    lead().stepUp = { attempt: 2, floor: 3, reason: `Its first review failed on ${'m'.repeat(300)}.`, at: 1, carry: '' }
-    const sent = route({ instructionsRevision: 1, stepUp: { attempt: 3, reason: 'Mine.' } })
-    expect(sent.record.instructionsRevision).toBe(5)
-    expect(sent.record.stepUp).toEqual({ attempt: 2, reason: `Its first review failed on ${'m'.repeat(300)}.`.slice(0, 200) })
-    // Only the first route after it carries it: the costs report counts one step up per task, however often it is routed.
-    expect(lead().stepUp).toMatchObject({ attempt: 2, recorded: true })
-    expect(route().record).not.toHaveProperty('stepUp')
-    // A step up from before project instructions, past the third attempt, is kept at the record's last attempt.
-    lead().stepUp = { attempt: 4, floor: 3, reason: 'Old.', at: 1, carry: '' }
-    expect(route().record.stepUp).toEqual({ attempt: 3, reason: 'Old.' })
-    expect(route().record).not.toHaveProperty('stepUp')
   })
 
   it('starts with no role default', () => {
@@ -2471,104 +2380,6 @@ describe('Reviewer role', () => {
   })
 })
 
-describe('the owner\'s rules', () => {
-  const asked = { askedIn: { conversationId: 'lead', messageId: 'm1' } }
-  const said = (patch: Record<string, unknown> = {}) => ({ askedIn: { author: { kind: 'person', id: 'owner', name: owner.email, membershipGeneration: 'tab' },
-    source: false, createdAt: 1000, ...patch } }) as Partial<CommandContext>
-  const ownerSaid = said()
-  const quoting = (messageId: string) => ({ askedIn: { conversationId: 'lead', messageId } })
-  const set = (rule: Record<string, unknown>, text = 'No Haiku.') => ({ type: 'rule.set', rule, text } as Command)
-  const startBy = (f: ReturnType<typeof routed>, actor: Actor, patch: Record<string, unknown> = {}) => f.run({ type: 'agent.start', request: { conversationId: 'lead', machineId: 'machine',
-    engine: 'claude', model: 'opus', effort: 'high', name: 'Builder', cwd: '/repo', worktree: true,
-    requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false }, ...patch }, ...via } as Command, actor, { contribution: f.contribution, ...decisionIn() })
-
-  /** The document the store reads for a project at revision 1, as the Lead's rule.set needs it (store.ts). */
-  const doc = '# Project instructions\n\n## Workflow\n\nWork.\n\n## Routing\n\n- Opus builds.\n\n## Notes\n\nNone.'
-  const stored = { instructions: { revision: 1, text: doc } }
-
-  it('writes an old CLI\'s rule into the instructions\' Routing', () => {
-    const f = routed()
-    const effects = f.run({ ...set({ kind: 'forbidModel', model: 'haiku' }), ...asked } as Command, f.leadActor, { ...ownerSaid, ...stored })
-    const text = appendRouting(doc, 'No Haiku.')
-    expect(effects.instructions).toEqual({ projectId: 'lead', revision: 2, hash: instructionsHash(text), text, summary: 'Routing: No Haiku.',
-      writtenBy: { kind: 'agent', id: f.lead }, askedBy: 'owner', at: 1000 })
-    expect(f.state.projects![0]).toMatchObject({ instructionsRevision: 2, instructionsHash: instructionsHash(text) })
-    // A save posts no line in any chat (#3132); the revision is in the history.
-    expect(effects.messages).toEqual([])
-    expect(f.state).not.toHaveProperty('rules')
-    // A project at revision 0 runs on the template: the rule lands in its copy, as revision 1. A person asks for themselves.
-    delete f.state.projects![0]!.instructionsRevision
-    const first = f.run(set({ kind: 'preferIdle' }, 'Idle agents first.'))
-    expect(first.instructions).toMatchObject({ revision: 1, text: appendRouting(INSTRUCTIONS_TEMPLATE, 'Idle agents first.'), askedBy: 'owner',
-      writtenBy: { kind: 'person', id: 'owner' } })
-    expect(first.messages).toEqual([])
-    // The stored document must be the revision the state names, or nothing is written.
-    expect(() => f.run(set({ kind: 'preferIdle' }), owner, { instructions: { revision: 7, text: doc } }))
-      .toThrow(expect.objectContaining({ code: 'INSTRUCTIONS_UNAVAILABLE' }))
-  })
-
-  it('needs a person behind an agent\'s rule', () => {
-    const f = routed()
-    const relay = (context: Partial<CommandContext>, quote = true) =>
-      f.run({ ...set({ kind: 'preferIdle' }), ...(quote ? asked : {}) } as Command, f.leadActor, { ...stored, ...context })
-    const needs = expect.objectContaining({ code: 'ASKED_BY_REQUIRED' })
-    expect(() => relay(ownerSaid, false)).toThrow(needs)
-    expect(() => relay({})).toThrow(needs)
-    // A system row or an agent's message has no person behind it.
-    expect(() => relay(said({ source: true }))).toThrow(needs)
-    expect(() => relay(said({ author: { kind: 'agent', id: f.worker } }))).toThrow(needs)
-    // Any member who reads the project may ask, at any age: the instructions record who.
-    f.invite()
-    expect(relay(said({ author: { kind: 'person', id: 'peer' }, createdAt: 1000 - 30 * 86_400_000 })).instructions).toMatchObject({ askedBy: 'peer' })
-    // Only the coordinator saves for someone, as instructions.save: another agent of the project does not.
-    expect(() => f.run({ ...set({ kind: 'preferIdle' }), ...asked } as Command, f.workerActor, { ...ownerSaid, ...stored }))
-      .toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
-    expect(f.state).not.toHaveProperty('rules')
-  })
-
-  it('accepts a rule removal and changes nothing', () => {
-    const f = routed()
-    const kept = [{ id: 'r1', projectId: 'lead', rule: { kind: 'preferIdle' as const }, text: 'Idle first.', askedBy: 'owner', askedIn: null,
-      addedBy: 'person:owner', createdAt: '' }]
-    f.state.rules = structuredClone(kept)
-    for (const [actor, context] of [[owner, {}], [f.leadActor, ownerSaid]] as const) {
-      const effects = f.run({ type: 'rule.remove', ruleId: 'r1', ...asked }, actor, context)
-      expect(effects.result).toMatchObject({ ignored: true, note: IGNORED_NOTE })
-      expect(effects.messages).toEqual([])
-      expect(effects.instructions).toBeUndefined()
-    }
-    expect(f.state.rules).toEqual(kept)
-  })
-
-  it('ignores old policy, skill-set and role saves with a note', () => {
-    const f = routed()
-    const roles = [{ id: 'lead', name: 'PM', kind: 'lead' as const, version: 'v1' }]
-    Object.assign(f.state.projects![0]!, { roles: structuredClone(roles) })
-    f.state.routingPolicy = { notes: 'Saved before.' }
-    const before = structuredClone(f.state.projects![0]!)
-    for (const command of [
-      { type: 'tab.routingPolicy', policy: { quotaReserve: 25 } },
-      { type: 'project.skills', projectId: 'lead', mode: 'custom' },
-      { type: 'project.skills', projectId: 'lead', mode: 'orchestration' },
-      { type: 'project.roles.create', projectId: 'lead', roles: [{ id: 'lead', name: 'Coordinator', kind: 'lead', text: 'Lead.' }] },
-      { type: 'project.role.set', projectId: 'lead', role: { id: 'dev', name: 'Builder', kind: 'builder', text: 'Build.' } },
-      { type: 'project.role.remove', projectId: 'lead', roleId: 'lead' },
-      { type: 'project.roles.reset', projectId: 'lead', roles: [{ id: 'dev', name: 'Builder', kind: 'builder', text: 'Build.' }] },
-    ] as Command[]) {
-      const effects = f.run(command)
-      expect(effects.result, command.type).toMatchObject({ ignored: true, note: IGNORED_NOTE })
-      expect(effects.messages, command.type).toEqual([])
-    }
-    expect(f.state.projects![0]).toEqual(before)
-    expect(f.state.routingPolicy).toEqual({ notes: 'Saved before.' })
-    // Access stays: a project the actor cannot read is unavailable, and only its owner manages a project's old role set.
-    expect(() => f.run({ type: 'project.skills', projectId: 'nowhere', mode: 'custom' })).toThrow('unavailable')
-    f.invite()
-    expect(() => f.run({ type: 'project.role.set', projectId: 'lead', role: { id: 'dev', name: 'Builder', kind: 'builder', text: 'Build.' } }, peer))
-      .toThrow('Only the project owner')
-  })
-})
-
 describe('a task that requires a machine or a device', () => {
   // 2026-10-27: a task to check a device plugged into one person's Mac was routed to another machine by policy order.
   const task = { goal: 'Check the round device', changes: 'None', constraints: 'On the Mac it is plugged into', owns: ['devices'] }
@@ -2631,65 +2442,10 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     return { ...f, get state() { return f.state }, app, site, lead: agentActor(f.add('app-lead', 'owner', app, true)),
       worker: agentActor(f.add('app-worker', 'owner', app)), siteLead: agentActor(f.add('site-lead', 'owner', site, true)) }
   }
-  const machines = (conversationId: string, messageId = 'm1') => ({ type: 'rule.set', rule: { kind: 'machines', machineIds: ['m1'] }, text: 'Only m1.',
-    askedIn: { conversationId, messageId } }) as Command
-
-  /** The new projects' documents: a project at revision 1 reads its stored text (store.ts). */
-  const doc = (text = '# Doc\n\n## Routing\n\n- Opus.') => ({ instructions: { revision: 1, text } })
   const projectOfChat = (f: ReturnType<typeof projects>, chat: string) => f.state.projects!.find(p => p.leadConversationId === chat)!
 
-  it('lets a project\'s Lead write a rule into that project\'s instructions by quoting a person in its chat, and posts no line', () => {
-    const f = projects()
-    const added = f.run(machines(f.app), f.lead, { ...said(), ...doc() })
-    expect(added.instructions).toMatchObject({ projectId: projectOfChat(f, f.app).id, revision: 2, text: appendRouting('# Doc\n\n## Routing\n\n- Opus.', 'Only m1.'),
-      askedBy: 'owner', summary: 'Routing: Only m1.' })
-    expect(added.messages).toEqual([])
-    expect(f.state).not.toHaveProperty('rules')
-    expect(f.run({ type: 'rule.remove', ruleId: 'any', askedIn: { conversationId: f.app, messageId: 'm2' } }, f.lead, said()).result).toMatchObject({ ignored: true })
-  })
-  it('writes a person\'s rule into the quoted project, or else the project of a remaining Lead chat', () => {
-    const f = projects()
-    expect(f.run(machines(f.site), owner, doc()).instructions!.projectId).toBe(projectOfChat(f, f.site).id)
-    expect(f.run({ type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' }, owner, doc()).instructions!.projectId).toBe(projectOfChat(f, f.app).id)
-  })
-  it('refuses another project\'s Lead and a worker, and takes a member\'s rule as their own save', () => {
-    const f = projects()
-    expect(() => f.run(machines(f.app), f.siteLead, { ...said(), ...doc() })).toThrow('unavailable')
-    expect(() => f.run(machines(f.app), f.worker, { ...said(), ...doc() })).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
-    expect(() => f.run(machines(f.app), f.lead, { ...said({ source: true }), ...doc() })).toThrow(expect.objectContaining({ code: 'ASKED_BY_REQUIRED' }))
-    // A collaborator who reads the project changes its instructions, as they may by hand.
-    expect(f.run(machines(f.app), peer, doc()).instructions).toMatchObject({ askedBy: 'peer', writtenBy: { kind: 'person', id: 'peer' } })
-    expect(f.state).not.toHaveProperty('rules')
-  })
   const projectIdOf = (f: ReturnType<typeof projects>, conversationId: string) => f.state.conversations.find(c => c.id === conversationId)!.projectId!
-  const forbid = (projectId: string, model: string) => ({ type: 'rule.set', projectId, rule: { kind: 'forbidModel', model }, text: `No ${model}.` }) as Command
 
-  it('moves Swarm-level rules to the project they were asked in, else to the Lead chat\'s project', () => {
-    const f = projects(), app = projectIdOf(f, f.app), site = projectIdOf(f, f.site)
-    const old = (id: string, askedIn: { conversationId: string; messageId: string } | null) =>
-      ({ id, rule: { kind: 'preferIdle' } as const, text: id, askedBy: 'owner', askedIn, addedBy: 'person:owner', createdAt: '' })
-    f.state.rules = [old('site', { conversationId: f.site, messageId: 'm1' }), old('direct', null), old('gone', { conversationId: 'deleted', messageId: 'm2' })]
-    expect(visibleState(f.state, owner).rules!.map(r => r.projectId)).toEqual([site, app, app])
-    f.run({ type: 'project.cadence', projectId: app, minutes: 1 })
-    expect(f.state.rules!.map(r => r.projectId)).toEqual([site, app, app])
-    f.run({ type: 'project.delete', projectId: site })
-    expect(f.state.rules!.map(r => r.id)).toEqual(['direct', 'gone'])
-  })
-  it('writes a rule into the project named, read by who may read it, and never another project\'s from a Lead', () => {
-    const f = projects()
-    const mine = f.run({ type: 'project.create', name: 'Peer', visibility: 'private', brief: '' }, peer).result as { projectId: string; conversationId: string }
-    const added = f.run(forbid(mine.projectId, 'haiku'), peer, doc())
-    expect(added.instructions).toMatchObject({ projectId: mine.projectId, askedBy: 'peer' })
-    expect(added.messages).toEqual([])
-    expect(() => f.run(forbid(mine.projectId, 'opus'), owner, doc())).toThrow('unavailable')
-    // Public, any member who reads it writes its instructions, the Swarm owner too.
-    f.run({ type: 'project.sharing', projectId: mine.projectId, visibility: 'public', memberIds: [] }, peer)
-    expect(f.run(forbid(mine.projectId, 'opus'), owner, { instructions: { revision: 2, text: added.instructions!.text } }).instructions)
-      .toMatchObject({ projectId: mine.projectId, revision: 3, askedBy: 'owner' })
-    expect(() => f.run({ ...forbid(projectIdOf(f, f.site), 'opus'), askedIn: { conversationId: f.app, messageId: 'm1' } } as Command, f.lead, { ...said(), ...doc() }))
-      .toThrow('unavailable')
-    expect(f.state).not.toHaveProperty('rules')
-  })
   it('tells each project\'s Lead chat which of its starts were abandoned when the machine joins', () => {
     const f = projects()
     const start = (id: string, conversationId: string, name: string) => ({ id, request: { conversationId, machineId: 'mac', name }, error: null })
@@ -2812,7 +2568,6 @@ describe('a failed start\'s reason', () => {
 })
 
 describe('the owner\'s rules, after review', () => {
-  const set = (rule: Record<string, unknown>, text = 'Rule.') => ({ type: 'rule.set', rule, text } as Command)
   const request = (patch: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'machine', engine: 'claude', model: 'opus', effort: 'high', name: 'Builder',
     cwd: '/repo', worktree: true, requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false }, ...patch })
   // The server enforces no old rule (project instructions, phase 4).
@@ -2827,14 +2582,6 @@ describe('the owner\'s rules, after review', () => {
     expect(byHand.messages.map(m => m.text)).toEqual(['owner added "worker".'])
     expect(f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: f.worker, present: false, lead: false }, f.leadActor).messages.map(m => m.text))
       .toEqual([`"${f.state.agents.find(a => a.id === f.lead)!.displayName}" removed "worker".`])
-  })
-  it('takes the owner\'s opt-out from grid models first into the instructions, and refuses no start', () => {
-    const f = routed(), task = f.group()
-    delete f.state.projects![0]!.instructionsRevision
-    expect(f.run(set({ kind: 'noGridFirst' }, 'Subscriptions first.')).instructions!.text).toBe(appendRouting(INSTRUCTIONS_TEMPLATE, 'Subscriptions first.'))
-    expect(f.state).not.toHaveProperty('rules')
-    expect(f.run({ type: 'agent.start', request: request({ conversationId: task }), ...via } as Command, f.leadActor, { contribution: f.contribution, ...decisionIn(task) }).result.startId).toEqual(expect.any(String))
-    expect(() => f.run(set({ kind: 'noGridFirst', engine: 'claude' }))).toThrow()
   })
   it('launches a start recorded before a rule', () => {
     const f = routed(), task = f.group()
