@@ -7,7 +7,7 @@ import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -134,46 +134,15 @@ describe('Swarm permission mode', () => {
     }
   })
 
-  // Swarm v3 (task #4307): no Team machine is left, and the server sends Team-written work only to the project owner's own
-  // computer with project settings off (backend superTabs/teamWritten.ts, ruling #4120). It launches there as on a Team daemon.
-  it('starts Team-written Claude Code work on the owner\'s own computer with project settings off', async () => {
+  // Backend #3872: the Team-written guard went with Team accounts, and no start carries `projectSettings: 'off'`. One that does
+  // starts as any other: on Codex, in the folder it names, in its owner's own permission mode.
+  it('starts work as any other whatever projectSettings a start carries', async () => {
     const f = fixture()
-    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
+    Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', worktree: false, cwd: '/repo' })
     expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
     const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-    expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
-    expect(payload).not.toHaveProperty('codexHome')
+    expect(payload).not.toHaveProperty('permissionMode')
     expect(f.start.error).toBeNull()
-  })
-
-  // Review of #3485: another account's agent wrote this code, and it runs as the owner on their own computer, not in a Team
-  // account's own OS user, so it gets the owner's own permission checks and sandbox: no flag that skips them.
-  it.each(['claude', 'codex'] as const)('launches Team-written %s work with no flag that skips permissions or the sandbox', async engine => {
-    const argv = buildEngineCommandArgv(engine, { permissionMode: 'teamWritten', bypassPermission: false,
-      ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
-    expect(argv).not.toContain('--dangerously-skip-permissions')
-    expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
-    expect(argv.join(' ')).not.toMatch(/--permission-mode|--approve-for-me|--sandbox|bypass/)
-  })
-
-  // Codex keeps the branch's settings out only in an engine home of its own, which here has no sign-in, and Harness never reads
-  // or links one (loginReads.spec.ts, security review 2 of #3485).
-  it('refuses Team-written Codex work on the owner\'s own computer before anything is made, naming Claude Code', async () => {
-    const f = fixture()
-    Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
-    expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_CLAUDE_ONLY })
-    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
-    expect(f.start.error).toContain('Claude Code')
-  })
-
-  // Task #4353: its Claude trust is saved for the folder it runs in and cleared with the worktree Harness made for it. The
-  // owner's main checkout is neither Harness's to trust for it nor to delete, so it never runs there.
-  it('refuses Team-written work that names no worktree, the owner\'s main checkout, before anything is made', async () => {
-    const f = fixture()
-    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off', worktree: false, cwd: '/repo' })
-    expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_WORKTREE_ONLY })
-    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
-    expect(f.start.error).toContain('worktree')
   })
 
   it('gives a normal Codex start no engine home of its own', async () => {
@@ -296,19 +265,14 @@ it.each([
   ['Swarm', { buddyScope: 'swarm' }],
   ['thread', { buddySession: { thread: 'root-1', from: 1 } }],
   ['project session', { buddySession: { thread: 'root-1', from: 1, projectId: 'project' } }],
-])('tells the %s Buddy to offer ready ideas once and wait for consent (task #3865)', async (_name, context) => {
+])('tells the %s Buddy nothing of proposals, which the Swarm no longer takes (backend S9)', async (_name, context) => {
   const f = fixture()
   Object.assign(f.start.request, { buddyOf: { personId: 'peer', generation: 'g' }, ...context })
   ownMachine(f)
   await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never, f.scoped, where, f.open)
   const prompt = String(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt)
-  expect(prompt).toContain('clear goal, why it matters and how to know it is done')
-  expect(prompt).toContain('check the project for an existing proposal or task')
-  expect(prompt).toContain('point to a match instead of duplicating it')
-  expect(prompt).toContain('offer without waiting to be asked: "Want me to propose this to <project>?"')
-  expect(prompt).toContain('show the exact proposal')
-  expect(prompt).toContain('Send only after your owner says yes to that proposal')
-  expect(prompt).toContain('One offer per idea; never repeat an ignored or declined offer')
+  expect(prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
+  expect(prompt).not.toMatch(/propos|to a project's PM|to this project's PM/i)
 })
 
 it('admits a person\'s one Buddy by the disk its folder is made on, as the folder its start names is never made', async () => {
@@ -1447,31 +1411,15 @@ describe('neutral start prompts', () => {
   })
 })
 
-// Task #4698: a Member sets its project up once on its person's computer; a helper starts from that ready setup.
-describe('a Member and its helpers', () => {
-
-  it('readies a helper\'s folder from its Member\'s setup before it joins', async () => {
-    const f = fixture()
-    f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } as typeof f.start.request
-    const order: string[] = []
-    const scoped = vi.fn(async (payload: Record<string, unknown>) => {
-      if ((payload.command as { type?: string } | undefined)?.type === 'agent.started') order.push('joined')
-      return f.scoped(payload)
-    })
-    const beforeJoin = vi.fn(async (harnessId: string) => { order.push(`readied ${harnessId}`) })
-    await startAgent({ tabId: 'tab', startId: 'start', beforeJoin }, scoped, where, f.open)
-    expect(order).toEqual(['readied native', 'joined'])
-  })
-
-  it('starts a helper whose folder could not be readied, as a helper still', async () => {
-    const f = fixture()
-    f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } as typeof f.start.request
-    const beforeJoin = vi.fn(async () => { throw new Error('gone') })
-    const result = await startAgent({ tabId: 'tab', startId: 'start', beforeJoin }, f.scoped, where, f.open)
-    expect(beforeJoin).toHaveBeenCalledWith('native')
-    expect(f.scoped.mock.calls.some(([payload]) => (payload.command as { type?: string } | undefined)?.type === 'agent.started')).toBe(true)
-    expect(result).not.toHaveProperty('error')
-  })
+// Backend S14 (#3877): no Member sets its project up for its helpers. A helper starts as any other agent: nothing is run
+// before it joins, whatever a caller hands in.
+it('starts a helper as any other, running nothing before it joins', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, helperOf: { agentId: 'member', harnessId: 'member-harness' } } as typeof f.start.request
+  const beforeJoin = vi.fn(async () => {})
+  expect(await startAgent({ tabId: 'tab', startId: 'start', beforeJoin }, f.scoped, where, f.open)).not.toHaveProperty('error')
+  expect(beforeJoin).not.toHaveBeenCalled()
+  expect(f.scoped.mock.calls.some(([payload]) => (payload.command as { type?: string } | undefined)?.type === 'agent.started')).toBe(true)
 })
 
 describe('only a host runs a start', () => {
