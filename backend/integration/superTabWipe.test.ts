@@ -251,6 +251,18 @@ describe('the wipe of every Swarm from before Swarm v4', () => {
     expect((await f.execute({ type: 'swarm.restore' })).result).toEqual({ restored: true })
   })
 
+  it('never lets an owner\'s wiped Swarms waiting for their purge take Recently deleted\'s places from one they can restore', async () => {
+    const w = world(), f = await swarm(w, 'Restorable', WIPE_CUTOFF + 1)
+    await f.execute({ type: 'swarm.delete', name: 'Restorable' })
+    // More old deleted Swarms than the list reads, all before it in id order.
+    const old = new Date(WIPE_CUTOFF - DAY).toISOString(), purge = new Date(w.clock.now + DAY).toISOString()
+    await db.$runCommandRaw({ insert: 'SuperTab', documents: Array.from({ length: 101 }, (_, i) => ({ _id: `0wiped${String(i).padStart(4, '0')}`,
+      ownerId: owner.sub, autonomousEnv: 'prod', memberIds: [], invitedEmails: [], machineIds: ['m'], format: 2, state: { version: 2 },
+      createdAt: { $date: old }, deletedAt: { $date: old }, purgeAt: { $date: purge } })) } as never)
+    expect((await w.store.deletedList(owner)).tabs.map(t => t.id)).toContain(f.tab)
+    await db.$runCommandRaw({ delete: 'SuperTab', deletes: [{ q: { _id: { $regex: '^0wiped' } }, limit: 0 }] } as never)
+  })
+
   it('run by two workers at once, deletes and removes each Swarm once and fails nowhere', async () => {
     const w = world(), second = new SuperTabStore(db, () => w.clock.now, w.attachments)
     const old = await Promise.all(['One', 'Two', 'Three'].map(name => swarm(w, name)))

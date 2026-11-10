@@ -73,7 +73,7 @@ import { tasksHoldingMoves } from './ruleGuard.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { finishedWakes } from './crewTimes.js'
 import { teamMachineIds } from './migration/teamMachinesJob.js'
-import { beforeCutoff } from './migration/wipeJob.js'
+import { beforeCutoff, WIPE_CUTOFF } from './migration/wipeJob.js'
 import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
 import { groupsOf } from './tidy.js'
@@ -921,9 +921,10 @@ export class SuperTabStore {
    *  index, at most 100. None from before Swarm v4, which the wipe removes for good (migration/wipeJob.ts). */
   async deletedList(user: AuthUser) {
     const now = this.now()
-    const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: { $ne: null } } },
-      { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { deletedAt: 1, purgeAt: 1, createdAt: 1 } }]))
-      .filter(row => !beforeCutoff(row.createdAt == null ? null : ms(row.createdAt)))
+    // Before the limit, so the wiped ones never take the places of those an owner can restore.
+    const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2, deletedAt: { $ne: null },
+      createdAt: { $gte: { $date: new Date(WIPE_CUTOFF).toISOString() } } } },
+      { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { deletedAt: 1, purgeAt: 1 } }]))
       .map(row => ({ id: row._id as string, deletedAt: ms(row.deletedAt), purgeAt: ms(row.purgeAt) })).filter(row => row.purgeAt > now)
     const heads = await this.heads(rows.map(row => ({ id: row.id, format: 2 })))
     return { tabs: rows.flatMap(row => {
