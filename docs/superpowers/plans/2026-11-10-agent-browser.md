@@ -1178,6 +1178,8 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - Modify: `desktop/lib/super_tabs/view.dart`: `_agentHeader` (`:3896-3955`), adding the button after Terminal, and a `_browserOpen` flag that closes Instructions and Terminal and is closed by them; the right-pane
   choice (`:6319-6380`), adding the browser branch.
 - Modify: `desktop/lib/measurement/product_measurement.dart`: report `agent_browser_opened` when a stream opens.
+- Modify: `desktop/test/asset_paths_test.dart`: take `assets/browser/browser_viewer.html` off the pinned list of
+  bundled-but-not-drawn assets, now that `browser_view.dart` loads it. Task 15 put it there.
 - Modify: `desktop/design/desktop-design-system.md:427-433` (Top bar: Browser icon) and the gallery test and goldens
   (the header button, the setup progress, a failed state).
 - Test: `desktop/test/browser/browser_panel_test.dart`, `desktop/test/browser/browser_bridge_test.dart`, and a

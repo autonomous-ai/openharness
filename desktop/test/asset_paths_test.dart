@@ -129,6 +129,9 @@ void main() {
     // remove — 16 KB between them. Pinned rather than skipped so the day one
     // is drawn again, or a fourth joins them, this test says so.
     expect(orphans..sort(), [
+      // The Agent Browser page: Task 18 of docs/superpowers/plans/2026-11-10-agent-browser.md draws it and takes it off
+      // this list, in the same pull request.
+      'assets/browser/browser_viewer.html',
       'assets/harnesses.png',
       'assets/harnesses.svg',
       'assets/machines.svg',
