@@ -1115,7 +1115,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!machineId) fail('MACHINE_REQUIRED', `Choose the machine the ${name} runs on.`, 400)
       // Its person named no model: the coordinator's built-in default for this engine (Claude Opus 5.5 at xhigh), since the
       // project's instructions cannot choose a model before any agent reads them (project instructions, design call).
-      const asked = leadEffort(withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead), name)
+      const asked = leadEffort(withRoleDefaults(request, BUILT_IN_ROLE_DEFAULTS.lead))
       const start = placeLead(state, project, person(state, actor.userId), machineId, asked, operationId, context)
       Object.assign(result, { startId: start.id, machineId: start.request.machineId })
       break
@@ -1159,7 +1159,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // At high effort or above (leadStart.ts leadEffort), before anything is placed. Its person named no model (Switch
       // PM's "Default"): the coordinator's built-in default on its engine, as lead.start gives, never the engine's own
       // last-used model (task #3395, anh Dee 11-05: a PM came back on Sonnet medium).
-      const { type: _type, projectId: _projectId, ...asked } = leadEffort(withRoleDefaults(command, BUILT_IN_ROLE_DEFAULTS.lead), name)
+      const { type: _type, projectId: _projectId, ...asked } = leadEffort(withRoleDefaults(command, BUILT_IN_ROLE_DEFAULTS.lead))
       let destination = pool
       if (command.machineId && command.machineId !== pool.machineId) {
         const previousPlacement = project.lead
@@ -1736,7 +1736,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
       // run the model its role asked for.
-      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused, COORDINATOR_NAME), [], null, SYSTEM_ROW,
+      if (command.lead && command.launchRefused) message(group.id, launchRefusedLine(command.launchRefused), [], null, SYSTEM_ROW,
         undefined, undefined, stableId(operationId, 'launch-refused'))
       break
     }
@@ -1835,7 +1835,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         const projectName = command.projectName ?? fail('PROJECT_NAME_REQUIRED', 'Name the project its PM starts.', 400)
         const project = createProject(me.id, projectName, 'public', '', 'full')
         const asked = leadEffort(withRoleDefaults({ engine: command.engine, ...(command.model ? { model: command.model } : {}),
-          ...(command.repositoryUrl ? { repositoryUrl: command.repositoryUrl } : {}) }, BUILT_IN_ROLE_DEFAULTS.lead), COORDINATOR_NAME)
+          ...(command.repositoryUrl ? { repositoryUrl: command.repositoryUrl } : {}) }, BUILT_IN_ROLE_DEFAULTS.lead))
         const start = placeLead(state, project, me, pool.machineId, asked, operationId, context)
         Object.assign(result, { projectId: project.id, conversationId: project.leadConversationId, startId: start.id })
         break
@@ -1957,7 +1957,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         // a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
         // The failure that suspends its engine there says so once, and tags the machine's owner (engineHealth.ts).
-        const failed = `${failureNotice(start.request.name, command.error, askedModel(start), COORDINATOR_NAME)}${suspended ? `\n\n${suspended}` : ''}`
+        const failed = `${failureNotice(start.request.name, command.error, askedModel(start))}${suspended ? `\n\n${suspended}` : ''}`
         const told = failureRecipients(start, group)
         message(group.id, failed, told, null, SYSTEM_ROW, undefined, suspended && start.machineOwnerId ? [start.machineOwnerId] : undefined)
         // A task with no lead, or one its lead left: its coordinator hears it in its own chat (final review).

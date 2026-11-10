@@ -708,6 +708,13 @@ describe('the push for a new delivery', () => {
       await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
       expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
       expect(waiting.filter(w => w.agentId === f.lead)).toHaveLength(0)
+      // A post naming the Lead reaches the Lead's machine at once (no digest holds it since Swarm v4), to wait there for its
+      // turn to end (turnEnd.ts).
+      waiting.length = 0
+      const named = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Lead, it is merged.', replyTo: null, recipientIds: [f.lead] }, host, f.worker)
+      expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
+      expect(await db.superTabDelivery.findFirst({ where: { messageId: String(named.result.messageId), agentId: f.lead } }))
+        .toMatchObject({ status: 'queued', waitsUntil: expect.any(Date) })
     })
 
     /** A conversation with no task in it, so its agent may leave and it may be archived, with a claimed delivery of the worker's. */

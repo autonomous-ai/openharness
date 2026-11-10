@@ -67,7 +67,7 @@ export function pmsToDefaultAccount(state: SuperTabState, now: number): MessageD
     const id = stableId('account-return', pm.id, String(now))
     const { model, effort } = pm.configuration
     const asked = leadEffort(withRoleDefaults({ engine, ...model ? { model } : {},
-      ...effort && !BELOW_LEAD_EFFORT.has(effort.toLowerCase()) ? { effort } : {} }, BUILT_IN_ROLE_DEFAULTS.lead), 'PM')
+      ...effort && !BELOW_LEAD_EFFORT.has(effort.toLowerCase()) ? { effort } : {} }, BUILT_IN_ROLE_DEFAULTS.lead))
     pm.switchRequest = { id, ...asked, profileId: defaultProfileId(pm.machineId, engine), requestedBy: pm.machineOwnerId, at: new Date(now).toISOString() }
     pm.accountReturn = { tries: tries + 1, at: now, asking: true, ...returning?.gaveUp ? { gaveUp: true as const } : {} }
     logger.info('[swarm] a PM is asked to move to its default account', { agentId: pm.id, machineId: pm.machineId, tries: tries + 1 })

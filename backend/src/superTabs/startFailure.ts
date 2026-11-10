@@ -55,12 +55,12 @@ export function publicReason(error: string): string {
 }
 
 /** The group's notice of a failed start, with the model it asked for (project instructions, phase 4, decision 18): what
- *  happened, never what to do next. Whoever made it, its coordinator ([coordinator], as its project calls it) and its machine's
- *  owner read the raw reason on the start (readsRawReason). */
-export function failureNotice(name: string, error: string, model?: string, coordinator = COORDINATOR_NAME): string {
+ *  happened, never what to do next. Whoever made it, its coordinator and its machine's owner read the raw reason on the start
+ *  (readsRawReason). */
+export function failureNotice(name: string, error: string, model?: string): string {
   const reason = publicReason(error)
   return `Could not start ${name}${model ? ` on ${model}` : ''}: ${reason[0]!.toLowerCase()}${reason.slice(1)}`
-    + (reason === MACHINE_FAILED ? ` Whoever started it, the ${coordinator} and the machine owner can read why.` : '')
+    + (reason === MACHINE_FAILED ? ` Whoever started it, the ${COORDINATOR_NAME} and the machine owner can read why.` : '')
 }
 
 /** The model a start asked for: its grid model, else its model; none when it runs its engine's own. */

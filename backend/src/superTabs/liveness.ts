@@ -10,7 +10,6 @@ import { leadStartFailed } from './leadStart.js'
 import { staleSwitches } from './tidy.js'
 import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
-import { COORDINATOR_NAME } from './roleNames.js'
 import { waitedOn } from './leaderboard/record.js'
 import { handed, pickUp, unclaimedReason } from './handed.js'
 
@@ -385,7 +384,7 @@ function failedStartNotices(state: SuperTabState, start: AgentStart, now: number
   if (!group) return []
   // Told to the coordinator and the agent that made it, with the model it asked for; nothing is started elsewhere (project
   // instructions, phase 4, decision 18).
-  const text = `${failureNotice(start.request.name, start.error!, askedModel(start), COORDINATOR_NAME)}${suspended ? `\n\n${suspended}` : ''}`
+  const text = `${failureNotice(start.request.name, start.error!, askedModel(start))}${suspended ? `\n\n${suspended}` : ''}`
   const source = { kind: 'start-timeout', startId: start.id }
   const author = failureAuthor(state, start, group)
   if (!author) return []

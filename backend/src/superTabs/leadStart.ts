@@ -39,9 +39,9 @@ export const LEAD_EFFORT = 'high'
 /** [request] for a Product Manager at high effort or above: an effort named below it is refused, and a model named with no
  *  effort gets the coordinator's own default effort for that model (Claude Opus at xhigh, as its start; review of #3066, 3),
  *  else high. With no model it keeps its engine's own model and effort, which its host sets only together. */
-export function leadEffort<T extends { engine: string; model?: string; effort?: string }>(request: T, name: string): T {
+export function leadEffort<T extends { engine: string; model?: string; effort?: string }>(request: T): T {
   if (request.effort && BELOW_LEAD_EFFORT.has(request.effort.toLowerCase())) {
-    fail('EFFORT_TOO_LOW', `A ${name} runs at high effort or above, so it keeps what people teach it. Choose high, xhigh or max.`, 400)
+    fail('EFFORT_TOO_LOW', `A ${COORDINATOR_NAME} runs at high effort or above, so it keeps what people teach it. Choose high, xhigh or max.`, 400)
   }
   if (!request.model || request.effort) return request
   const defaults = BUILT_IN_ROLE_DEFAULTS.lead
@@ -143,9 +143,9 @@ export function leadJoined(state: SuperTabState, start: AgentStart, home: Conver
 }
 
 /** A Product Manager's start line when its machine could not launch it with the model and effort it asked for, so it runs its
- *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined). [name]: what its project calls it. */
-export const launchRefusedLine = (asked: { model: string; effort?: string }, name: string) =>
-  `${name} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
+ *  engine's own model (Desktop's own-machine start; the Swarm's start says it in leadJoined). */
+export const launchRefusedLine = (asked: { model: string; effort?: string }) =>
+  `${COORDINATOR_NAME} started. It asked for ${asked.effort ? `${asked.model} at ${asked.effort}` : asked.model} and runs its engine\u2019s own model there: this machine could not launch it with them.`
 
 /** A Claude id by its family (`claude-opus-5-5[1m]` is opus), as the CLI's route rates it. */
 const family = (model: string) => /haiku|sonnet|opus|fable/.exec(model.toLowerCase())?.[0] ?? model.toLowerCase()

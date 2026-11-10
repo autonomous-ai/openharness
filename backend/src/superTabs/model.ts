@@ -488,8 +488,6 @@ export interface SuperTabState {
   /** Its owner deleted it (deletion.ts): nobody reads or writes it, its row lists no member, and its owner may restore it until
    *  `purgeAt` (ISO times). Absent on a live Swarm. */
   deletion?: { at: string; by: string; purgeAt: string }
-  /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
-  tidy?: false
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
