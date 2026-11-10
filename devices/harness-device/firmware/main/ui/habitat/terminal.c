@@ -344,6 +344,23 @@ static bool plookup(const ht_pfont_t *f, uint32_t cp, pglyph_t *out)
         *out = (pglyph_t){f->fallback, &f->fallback->glyphs[i], i};
         return true;
     }
+    // A letter the face was cut without (Latin Extended-A outside Vietnamese): its ASCII base letter, when
+    // the display fallback table has exactly one and the face carries it.
+    if (cp >= 0x80) {
+        char base[12];
+        // Strokes the display table (a decomposition) has no entry for: L-stroke, H-stroke, dotless i, T-stroke.
+        static const struct { uint16_t cp; char ch; } stroked[] = {
+            {0x126,'H'},{0x127,'h'},{0x131,'i'},{0x141,'L'},{0x142,'l'},{0x166,'T'},{0x167,'t'}};
+        const char *text = NULL;
+        for (unsigned k = 0; k < sizeof stroked / sizeof *stroked && !text; k++)
+            if (stroked[k].cp == cp) { base[0] = stroked[k].ch; base[1] = 0; text = base; }
+        if (!text) text = display_fallback(cp, base);
+        if (text[0] && !text[1] && (unsigned char)text[0] < 0x80) {
+            const ht_pfont_t *face = f;
+            if ((i = pindex(f, (unsigned char)text[0])) < 0 && f->fallback) { face = f->fallback; i = pindex(face, (unsigned char)text[0]); }
+            if (i >= 0) { *out = (pglyph_t){face, &face->glyphs[i], i}; return true; }
+        }
+    }
     if (cp != '?' && (i = pindex(f, '?')) >= 0) { *out = (pglyph_t){f, &f->glyphs[i], i}; return true; }
     return false;
 }

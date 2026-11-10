@@ -43,8 +43,8 @@ for index in (0, 1, 11):
 import os
 import subprocess
 
-BEFORE_SHA = '9d32ed1e8'   # focus_faces.c before the Inter faces shared their tables
-before_file = Path(os.environ.get('FOCUS_FACES_BEFORE', '/tmp/dialres-build/focus_faces.before.c'))
+BEFORE_SHA = 'eb511fb19'   # focus_faces.c before Latin Extended-A was cut to Vietnamese (tables already shared)
+before_file = Path(os.environ.get('FOCUS_FACES_BEFORE', '/nonexistent/focus_faces.before.c'))
 if before_file.exists():
     before_text = before_file.read_text()
 else:
@@ -75,13 +75,37 @@ def pkern(face, a, b):   # terminal.c pkern for two glyph indices of one face
 
 old, new = faces(before_text), faces((habitat / 'focus_faces.c').read_text())
 assert set(old) == set(new) and len(old) == 8, sorted(new)
+def glyph(face, i):   # (advance, ink box, bitmap bytes) of glyph i, independent of where the bitmap sits
+    offset, adv, w, h, ox, oy = face['glyphs'][i * 6:i * 6 + 6]
+    return adv, w, h, ox, oy, face['px'][offset:offset + (w * h + 1) // 2]
+
+
 for name in old:
     o, n = old[name], new[name]
-    for field in ('head', 'px', 'glyphs', 'codes', 'count', 'ascent', 'fallback'):
+    assert o['head'].rsplit(',', 1)[0] == n['head'].rsplit(',', 1)[0], name   # the bitmap array's name may differ
+    for field in ('ascent', 'fallback'):
         assert o[field] == n[field], (name, field)
-    if name != 'ht_lv_inter_bold_48':   # the Inter faces' kerning tables are unchanged, only shared
-        for field in ('kl', 'kr', 'kv', 'rcnt'):
+    if o['codes'] == n['codes']:
+        for field in ('px', 'glyphs', 'codes', 'count'):
             assert o[field] == n[field], (name, field)
+        if name != 'ht_lv_inter_bold_48':   # the Inter faces' kerning tables are unchanged, only shared
+            for field in ('kl', 'kr', 'kv', 'rcnt'):
+                assert o[field] == n[field], (name, field)
+    else:
+        # Latin Extended-A cut to Vietnamese: only that block may go, and every kept letter draws and kerns as before.
+        assert set(n['codes']) < set(o['codes']) and name.startswith('ht_lv_inter'), name
+        assert {c for c in o['codes'] if c not in n['codes']} <= set(range(0x100, 0x180)), name
+        assert {c for c in o['codes'] if 0x100 <= c < 0x180} - set(n['codes']) == {c for c in o['codes'] if c not in n['codes']}
+        assert {c for c in n['codes'] if 0x100 <= c < 0x180} == {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169}, name
+        oi = {c: i for i, c in enumerate(o['codes'])}
+        ni = {c: i for i, c in enumerate(n['codes'])}
+        assert n['count'] == len(n['codes'])
+        for c in ni:
+            assert glyph(o, oi[c]) == glyph(n, ni[c]), (name, hex(c))
+        if name != 'ht_lv_inter_bold_48':
+            for a in ni:
+                for b in ni:
+                    assert pkern(o, oi[a], oi[b]) == pkern(n, ni[a], ni[b]), (name, hex(a), hex(b))
 
 # The wordmark: tables sized for its own seven glyphs, and every ordered pair kerns by the same amount as before.
 word_old, word_new = old['ht_lv_inter_bold_48'], new['ht_lv_inter_bold_48']

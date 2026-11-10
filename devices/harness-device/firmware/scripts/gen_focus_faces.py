@@ -39,7 +39,8 @@ FONTS = root / 'fonts'
 # Inter has no check / cross marks; they come from Noto Sans Symbols 2 (OFL, vendored), so recaps keep showing them.
 MARKS = {0x2713, 0x2717}
 MARKS_FONT = FONTS / 'NotoSansSymbols2-Regular.ttf'   # github.com/google/fonts ofl/notosanssymbols2
-KEEP = base.TEXT
+# Latin Extended-A is cut to the eight letters Vietnamese needs; terminal.c's plookup draws the base letter of the rest.
+KEEP = (base.TEXT - set(range(0x100, 0x180))) | {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169}
 assert MARKS <= KEEP
 
 # name -> (font file in fonts/, px, fallback face).
