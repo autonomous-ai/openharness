@@ -28,7 +28,6 @@ import { stableId, type Agent, type SuperTabState } from '../src/superTabs/model
 import { agentDisplayName } from '../src/superTabs/agentNames.js'
 import { roleVersion } from '../src/superTabs/projects.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS, TERMINAL_RECHECK_MS } from '../src/superTabs/terminal.js'
-import { ensureMentionExpiry } from '../src/superTabs/mentions.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
@@ -4053,7 +4052,6 @@ describe('machine removal', () => {
 })
 
 describe('Lead mentions', () => {
-  const DAY = 24 * 60 * 60_000
   async function tagged() {
     const { tab, lead } = await fixture()
     await invite(tab)
@@ -4065,20 +4063,16 @@ describe('Lead mentions', () => {
     return { tab, group, messageId }
   }
   // Swarm v4 keeps no tag list (anh Dee, 2026-11-10): a tag stays on its message, as its readers see it, and nothing else is written
-  // or counted. The rows written before still expire by their TTL index.
+  // or counted.
   it('keeps a tag on its message alone: no tag row, no count on the person\'s read or the Swarm list', async () => {
     const { tab, group, messageId } = await tagged()
     expect((await store.messages(peer, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
-    expect(await db.superTabMention.count({ where: { tabId: tab } })).toBe(0)
     expect((await store.read(peer, tab)).state).not.toHaveProperty('mentionsWaiting')
     const read = await app.inject({ url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } })
     expect(read.json().data.derived).not.toHaveProperty('mentionsWaiting')
     const listed = await app.inject({ url: '/api/super-tabs/list?mentions=1', headers: { authorization: `Bearer ${peer.sub}` } })
     expect(listed.statusCode).toBe(200)
     expect(listed.json().data.tabs.find((t: { id: string }) => t.id === tab)).not.toHaveProperty('mentionsWaiting')
-    await ensureMentionExpiry(db)
-    const indexes = await db.$runCommandRaw({ listIndexes: 'SuperTabMention' }) as { cursor: { firstBatch: Array<{ key: object; expireAfterSeconds?: number }> } }
-    expect(indexes.cursor.firstBatch).toContainEqual(expect.objectContaining({ key: { createdAt: 1 }, expireAfterSeconds: 30 * DAY / 1000 }))
   })
 
   it('keeps the stored tab and older messages as the previous backend reads and writes them', async () => {

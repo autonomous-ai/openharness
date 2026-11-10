@@ -24,7 +24,6 @@ const SCHEMA = join(process.cwd(), 'prisma/schema.prisma')
 /** Every index Prisma cannot describe, as the worker has always made it: collection, name, key, seconds to expiry. */
 const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
   ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, 'part_purge', { purgeAt: 1 }, 0] as [string, string, Record<string, number>, number]),
-  ['SuperTabMention', 'mention_expiry', { createdAt: 1 }, 30 * DAY],
   ['SuperTabOperation', 'operation_expiry', { createdAt: 1 }, 30 * DAY],
   ['SuperTabTerminalRequest', 'terminal_request_expiry', { createdAt: 1 }, 120],
   ['product_usage_receipts', 'product_usage_expiry', { expiresAt: 1 }, 0],
@@ -134,10 +133,10 @@ describe('a release\'s schema step', () => {
   it('gives an expiry index whose time changed its new time, without a rebuild', async () => {
     const { db, target } = await database()
     await releaseSchema(db, target)
-    await db.$runCommandRaw({ collMod: 'SuperTabMention', index: { name: 'mention_expiry', expireAfterSeconds: 7 * DAY } })
+    await db.$runCommandRaw({ collMod: 'SuperTabOperation', index: { name: 'operation_expiry', expireAfterSeconds: 7 * DAY } })
     const since = new Date()
     await releaseSchema(db, target)
-    expect(await indexChanges(db, since)).toEqual(['collMod SuperTabMention mention_expiry'])
+    expect(await indexChanges(db, since)).toEqual(['collMod SuperTabOperation operation_expiry'])
     expect(await expiryIndexes(db)).toEqual(EXPIRY)
     await db.$disconnect()
   }, 240_000)

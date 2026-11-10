@@ -21,6 +21,8 @@ export const REMOVED_COLLECTIONS = [
   'SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceInvitation', 'SwarmWorkspaceRemoval',
   // The nightly scorecard's rows (removed in #3629) and the terminal recording's receipts (removed in #3631).
   'SuperTabScorecard', 'SuperTabNativeContext',
+  // Decisions (removed in #3805), and tags, Activity and reminders (removed in #3827): an agent reaches its person in their 1:1 chat.
+  'SuperTabDecision', 'SuperTabMention', 'SuperTabActivity', 'SuperTabReminder',
 ] as const
 
 /** Rows removed by one write: a few megabytes at most. */
