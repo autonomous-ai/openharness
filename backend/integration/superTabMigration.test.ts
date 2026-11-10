@@ -212,14 +212,6 @@ describe('link lists rebuilt from history (moved from the store, design R8)', ()
     await migrateSwarm(db, tabId, { now: () => NOW })
     expect(await links(tabId, s.done)).toEqual([link(21), link(22)])
   })
-
-  it('finds links in earlier attempts of the group', async () => {
-    const { s, tabId } = await legacySwarm(legacyDone)
-    await db.superTabAttempt.create({ data: { id: `${tabId}-attempt`, tabId, conversationId: s.done,
-      snapshot: { checks: [{ evidence: `Tried ${link(31)}` }], assignment: { result: `Abandoned ${link(32)}` } } } })
-    await migrateSwarm(db, tabId, { now: () => NOW })
-    expect(await links(tabId, s.done)).toEqual([link(31), link(32)])
-  })
 })
 
 describe('rolling back (design 6.4)', () => {

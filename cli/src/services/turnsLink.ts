@@ -64,7 +64,7 @@ export function turnsLink(query: (query: string, payload: Payload) => Promise<Pa
     (await query('cancel_delivery', { deliveryId }).catch((): Payload => ({}))).cancelled === true
   const turns: DeliveryTurns = {
     deliver: (agentId, text, deliveryId, options) => {
-      void query('deliver', { agentId, text, deliveryId, ...(options?.answersQuestion ? { answersQuestion: true, writtenAt: options.writtenAt } : {}) }).then(
+      void query('deliver', { agentId, text, deliveryId, ...(options?.answersQuestion ? { answersQuestion: true, writtenAt: options.writtenAt } : {}), ...(options?.personsOwn ? { personsOwn: true } : {}) }).then(
         (answer) => { if (typeof answer.error === 'string') tell({ deliveryId, sessionId: agentId, state: 'rejected', reason: answer.error }) },
         () => tell({ deliveryId, sessionId: agentId, state: 'unknown', reason: 'The core did not confirm this delivery.' }),
       )

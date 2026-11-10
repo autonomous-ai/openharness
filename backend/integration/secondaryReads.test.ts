@@ -88,7 +88,7 @@ describe('older history pages', () => {
     expect(pageBatches(s.secondary).length).toBeGreaterThan(0)
     expect(pageBatches(s.primary)).toEqual([])
     // What decides what this reader may see: the Swarm and its parts, read on the primary only.
-    expect(models(s.secondary).filter(m => !['SuperTabDelivery', 'SuperTabMessage', 'SuperTabReaction', 'SuperTabReceipt', 'SuperTabThread'].includes(m))).toEqual([])
+    expect(models(s.secondary).filter(m => !['SuperTabDelivery', 'SuperTabMessage', 'SuperTabReceipt', 'SuperTabThread'].includes(m))).toEqual([])
     expect(models(s.primary).length).toBeGreaterThan(0)
 
     // The oldest page, which reaches the end, and a thread's older page read the same way.

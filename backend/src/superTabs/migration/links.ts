@@ -8,18 +8,11 @@ export async function restorePullRequestUrls(tx: Prisma.TransactionClient, tabId
   const missing = state.conversations.filter(group => group.pullRequestUrls === undefined)
   if (!missing.length) return
   const conversationIds = missing.map(group => group.id)
-  const [messages, attempts] = await Promise.all([
-    tx.superTabMessage.findMany({ where: { tabId, conversationId: { in: conversationIds }, text: { contains: 'https://github.com/' } },
-      select: { conversationId: true, text: true }, orderBy: { sequence: 'asc' } }),
-    tx.superTabAttempt.findMany({ where: { tabId, conversationId: { in: conversationIds } },
-      select: { conversationId: true, snapshot: true }, orderBy: { createdAt: 'asc' } }),
-  ])
+  const messages = await tx.superTabMessage.findMany({ where: { tabId, conversationId: { in: conversationIds }, text: { contains: 'https://github.com/' } },
+    select: { conversationId: true, text: true }, orderBy: { sequence: 'asc' } })
   for (const group of missing) {
-    const prior = attempts.filter(attempt => attempt.conversationId === group.id)
-      .map(attempt => attempt.snapshot as unknown as { checks?: Array<{ evidence?: string | null }>; assignment?: { result?: string | null } })
     appendPullRequestUrls(group, [
       ...messages.filter(message => message.conversationId === group.id).map(message => message.text),
-      ...prior.flatMap(attempt => [...(attempt.checks ?? []).map(check => check.evidence), attempt.assignment?.result]),
       ...group.checks.map(check => check.evidence), group.assignment?.result,
     ], groupRepositoryUrl(state, group))
   }

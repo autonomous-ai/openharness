@@ -19714,10 +19714,9 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == harnessId)
         .firstOrNull;
     if (existing != null) {
-      existing.inputContext = null;
       existing.watchOnly = true;
-      existing.session?.stageInputContext(null, watchOnly: true);
-      unawaited(existing.session?.setInputContext(null, watchOnly: true));
+      existing.session?.stageWatchOnly(true);
+      unawaited(existing.session?.setWatchOnly(true));
       return;
     }
     if (tab.panes.length >= maxPanes) return;
@@ -19821,7 +19820,6 @@ class AppNotifier extends ChangeNotifier {
     PaneSplitRequest? split,
     bool autoTile = false,
     bool focus = true,
-    String? inputContext,
     bool watchOnly = false,
 
     /// A rail click, a drag, a picker — a person. The device's own doors pass
@@ -19869,12 +19867,8 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == agentId)
         .firstOrNull;
     if (paneId == null && existing != null) {
-      existing.inputContext = inputContext;
       existing.watchOnly = watchOnly;
-      await existing.session?.setInputContext(
-        inputContext,
-        watchOnly: watchOnly,
-      );
+      await existing.session?.setWatchOnly(watchOnly);
       if (existing.session == null && target == activeSwarm) {
         await _attachSession(existing, intent: intent);
       }
@@ -19899,9 +19893,8 @@ class AppNotifier extends ChangeNotifier {
     }
     final replaced = targetPanes.where((p) => p.id == paneId).firstOrNull;
     if (replaced == shared && shared != null) {
-      shared.inputContext = inputContext;
       shared.watchOnly = watchOnly;
-      await shared.session?.setInputContext(inputContext, watchOnly: watchOnly);
+      await shared.session?.setWatchOnly(watchOnly);
       if (focus && target == activeSwarm) focusPane(shared.id);
       return;
     }
@@ -19954,9 +19947,8 @@ class AppNotifier extends ChangeNotifier {
     final pane =
         shared ??
         TerminalPane(id: _nextPaneId++, machineId: machineId, agentId: agentId);
-    pane.inputContext = inputContext;
     pane.watchOnly = watchOnly;
-    pane.session?.stageInputContext(inputContext, watchOnly: watchOnly);
+    pane.session?.stageWatchOnly(watchOnly);
     final firstAgent = targetPanes.every((pane) => pane.agentId == null);
     if (machine.machine.isShared) {
       pane.sharedHarness = machine.machine.sharedHarnesses
@@ -20084,7 +20076,7 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
     if (target == activeSwarm || pane.session != null) {
       if (pane.session case final session?) {
-        await session.setInputContext(inputContext, watchOnly: watchOnly);
+        await session.setWatchOnly(watchOnly);
       }
       await _attachSession(pane, intent: intent);
     }
@@ -20150,7 +20142,6 @@ class AppNotifier extends ChangeNotifier {
       agentName: agent.displayName,
       engineId: agent.engine,
       client: localClientDescriptor(),
-      inputContext: pane.inputContext,
       watchOnly: pane.watchOnly,
       // Only a person at this window may take the terminal from whoever holds
       // it; everything else opens as a watcher. See [AttachIntent].

@@ -7,7 +7,8 @@
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
 //     500 ms deadline and its offline registry writes, and the daemon's pane/process binding is
 //     exercised for real;
-//   - draws a composer, turns on bracketed paste, and treats Enter as submit;
+//   - draws a composer, turns on bracketed paste, and treats Enter as submit; Codex shades its composer as 0.162 does on
+//     a dark pane, or not with `unshadedComposer` in its config, as in a pane that answers no background query;
 //   - writes its conversation to a transcript in the engine's real record shapes, so the daemon's
 //     normalizers, turn lifecycle, chips and attach read are exercised for real.
 //
@@ -101,6 +102,8 @@ const matcherTakes = (matcher, value) => {
 
 /** What the npm wrapper hands its child, the Codex engine itself: this module, run as a script. */
 const CODEX_NATIVE = 'HARNESS_FAKE_CODEX_NATIVE'
+/** The shade Codex 0.162 draws its composer in on a dark pane (lib/composerScreen.spec.ts). */
+const CODEX_SHADE = '\x1b[48;2;51;51;51m'
 const heldHookUrl = new URL('./heldHook.mjs', import.meta.url).href
 
 /**
@@ -688,7 +691,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const input = bottom?.dim ? '\x1b[2m› Ask Codex to do anything\x1b[0m'
       : text ? `\x1b[1m›\x1b[0m ${first}` : '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m'
     const popup = suggestions(text)
-    return [...(popup ? popupRows(popup) : ['']), input, ...rest, '', bottom?.footer ?? statusLine()]
+    const footer = bottom?.footer ?? statusLine()
+    // Codex 0.162 shades its composer, from the row above `›` to the one under the draft, in a shade of the terminal's own
+    // background; a pane that answers no background query (`unshadedComposer`: one no window shows) gets none.
+    if (config.unshadedComposer || bottom?.dim) return [...(popup ? popupRows(popup) : ['']), input, ...rest, '', footer]
+    const shaded = (row) => `${CODEX_SHADE}${row.replace(/\x1b\[0m/g, `\x1b[0m${CODEX_SHADE}`)}\x1b[K`
+    return [...(popup ? popupRows(popup) : ['']), shaded(''), shaded(input), ...rest.map(shaded), shaded(''), `\x1b[0m${footer}`]
   }
   /** Clears the composer and what is drawn under it, leaving the cursor where it began. */
   const eraseComposer = () => {

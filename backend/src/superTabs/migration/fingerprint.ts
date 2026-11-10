@@ -7,20 +7,20 @@ export interface Fingerprint {
   /** sha256 of the ordered (conversationId, sequence, id) list. */
   order: string
   conversationIds: Set<string>
-  rows: { deliveries: number; routeDecisions: number; attempts: number; operations: number }
+  rows: { deliveries: number; operations: number }
 }
 
 export async function fingerprint(tx: Prisma.TransactionClient, tabId: string): Promise<Fingerprint> {
   const where = { tabId }
-  const [messages, deliveries, routeDecisions, attempts, operations] = await Promise.all([
+  const [messages, deliveries, operations] = await Promise.all([
     tx.superTabMessage.findMany({ where, select: { conversationId: true, sequence: true, id: true },
       orderBy: [{ conversationId: 'asc' }, { sequence: 'asc' }, { id: 'asc' }] }),
-    tx.superTabDelivery.count({ where }), tx.superTabRouteDecision.count({ where }), tx.superTabAttempt.count({ where }), tx.superTabOperation.count({ where }),
+    tx.superTabDelivery.count({ where }), tx.superTabOperation.count({ where }),
   ])
   const order = createHash('sha256')
   for (const m of messages) order.update(`${m.conversationId}\t${m.sequence}\t${m.id}\n`)
   return { messages: messages.length, order: order.digest('hex'), conversationIds: new Set(messages.map(m => m.conversationId)),
-    rows: { deliveries, routeDecisions, attempts, operations } }
+    rows: { deliveries, operations } }
 }
 
 /** Where a fingerprint taken after the migration differs from the one before it, or null. */
