@@ -410,6 +410,37 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.carried()).toEqual([[4, 5, 6], [4, 6]])
   })
 
+  // A member that only waits is still read and still at its head: its own check runs again, or GitHub has not yet said whether
+  // it merges (it works that out anew each time main moves). After a daemon restart every member's checks wait three minutes to
+  // hold still, as the train's own do, and whichever is looked at first decided whether a green run was thrown away.
+  it.each<[string, (f: ReturnType<typeof setup>) => void, (f: ReturnType<typeof setup>) => void]>([
+    ['whose own check runs again', f => f.state.runs.set(f.state.pulls.get(5)!.head.sha, RUNNING), f => f.state.runs.set(f.state.pulls.get(5)!.head.sha, PASSED)],
+    ['GitHub has not yet said it can merge', f => { f.state.pulls.get(5)!.mergeable_state = 'unknown' }, f => { f.state.pulls.get(5)!.mergeable_state = 'clean' }],
+  ])('keeps a green train while a member %s, and lands it once the member is ready again', async (_case, waits, ready) => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const built = f.state.sent.length
+    waits(f)
+    await f.ends(PASSED)
+    expect(f.writes(built)).toEqual([])
+    expect(f.train().state).toBe('open')
+    ready(f)
+    await f.settle()
+    expect(f.writes(built)[0]).toBe('PUT /pulls/900/merge')
+  })
+
+  it('closes a green train whose member still waits 90 minutes after it was built', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    f.state.pulls.get(5)!.mergeable_state = 'unknown'
+    await f.ends(PASSED)
+    await f.tick(90 * 60_000)
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: a pull request it carries is no longer ready at its head')
+  })
+
   it('lands as it is when main gained only documentation the train does not change', async () => {
     const f = setup()
     f.add(4); f.add(5, { files: ['cli/src/f5.ts', 'docs/five.md'] })
