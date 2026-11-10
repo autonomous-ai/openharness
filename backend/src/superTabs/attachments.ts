@@ -28,6 +28,8 @@ export const MAX_FORM_ATTACHMENT_BYTES = 10 * 1024 * 1024
 export const MAX_ATTACHMENTS = 10
 /** How long an upload link may be started: storage checks it when a request begins, so a long transfer that started in time finishes. */
 export const UPLOAD_LINK_MS = 10 * 60_000
+/** The longest a finished upload's check and its picture's read-back may wait on the bucket, whose client retries for minutes. */
+export const UPLOAD_CHECK_MS = 20_000
 /** The `purpose` of an upload whose link was handed out and whose bytes the server has not yet checked. Servers before this
  *  one refuse a row with any purpose as a message's file, so a rollout never sends a file that has not arrived. */
 export const PENDING_UPLOAD_PURPOSE = 'pending-upload'
@@ -72,10 +74,10 @@ export interface DirectUploads {
   uploadLink(objectKey: string, file: { name: string }, size: number, expiresAt: number): Promise<UploadLink>
   /** The stored object's size, or null while nothing is there. */
   stored(objectKey: string): Promise<{ size: number } | null>
-  /** Its first `bytes` bytes. */
-  head(objectKey: string, bytes: number): Promise<Buffer>
-  /** The whole object, for a picture to be thumbnailed once its upload is complete; `size` is what `stored` answered. */
-  read(objectKey: string): Promise<Buffer>
+  /** Its first `bytes` bytes; `signal` stops the download. */
+  head(objectKey: string, bytes: number, signal?: AbortSignal): Promise<Buffer>
+  /** The whole object, for a picture to be thumbnailed once its upload is complete; `signal` stops the download. */
+  read(objectKey: string, signal?: AbortSignal): Promise<Buffer>
   /** Removes it; an object already gone counts as removed. */
   delete(objectKey: string): Promise<void>
 }
@@ -235,6 +237,12 @@ export function serviceAccountFrom(raw: string): ServiceAccount | null {
     credentials: { client_email: key.client_email as string, private_key: key.private_key as string } }
 }
 
+/** All of [stream], or its error. Aborting [signal] destroys the stream, which ends its request, so a download its caller gave up on
+ *  holds no memory and no connection. */
+async function downloaded(stream: Readable, signal?: AbortSignal): Promise<Buffer> {
+  return Buffer.concat(await stream.toArray({ signal }) as Buffer[])
+}
+
 export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
   private bucket: Promise<import('@google-cloud/storage').Bucket> | null = null
   constructor(private readonly name: string, private readonly account: ServiceAccount | null = null,
@@ -266,13 +274,11 @@ export class GcsAttachmentStore implements AttachmentStore, DirectUploads {
       throw error
     }
   }
-  async head(objectKey: string, bytes: number) {
-    const [content] = await (await this.files()).file(objectKey).download({ start: 0, end: bytes - 1 })
-    return content
+  async head(objectKey: string, bytes: number, signal?: AbortSignal) {
+    return downloaded((await this.files()).file(objectKey).createReadStream({ start: 0, end: bytes - 1 }), signal)
   }
-  async read(objectKey: string) {
-    const [content] = await (await this.files()).file(objectKey).download()
-    return content
+  async read(objectKey: string, signal?: AbortSignal) {
+    return downloaded((await this.files()).file(objectKey).createReadStream(), signal)
   }
   async delete(objectKey: string) {
     await (await this.files()).file(objectKey).delete({ ignoreNotFound: true })
@@ -353,8 +359,8 @@ export class MemoryAttachmentStore implements AttachmentStore, DirectUploads {
     return 200
   }
   async stored(objectKey: string) { const object = this.objects.get(objectKey); return object ? { size: object.bytes.byteLength } : null }
-  async head(objectKey: string, bytes: number) { return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
-  async read(objectKey: string) { return this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0) }
+  async head(objectKey: string, bytes: number, signal?: AbortSignal) { signal?.throwIfAborted(); return (this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes) }
+  async read(objectKey: string, signal?: AbortSignal) { signal?.throwIfAborted(); return this.objects.get(objectKey)?.bytes ?? Buffer.alloc(0) }
   async delete(objectKey: string) { this.objects.delete(objectKey) }
 }
 

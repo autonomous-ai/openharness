@@ -126,25 +126,29 @@ describe('reading a voice file', () => {
 
   // The bucket's own client retries for minutes. Meanwhile the call held the file's claim and its share of the voice memory, so a
   // silent bucket made every voice message of the server answer busy. The read ends in VOICE_READ_MS, as a failed read does.
-  it('gives up a read from a silent bucket, frees the file and the memory, and tries again on the next call', async () => {
+  it('gives up a read from a silent bucket, stops its download, frees the file and the memory, and tries again on the next call', async () => {
     const f = await swarm()
     const file = await f.upload(wav(2))
-    let asked = false
-    const head = vi.spyOn(f.files, 'head').mockImplementationOnce(() => {
+    let download: AbortSignal | undefined
+    // The bucket never answers: the read waits until its signal stops it. Fake timers only from the read on, so the database's are real.
+    const head = vi.spyOn(f.files, 'head').mockImplementationOnce((_key, _bytes, signal) => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-      asked = true
-      return new Promise<Buffer>(() => {})
+      download = signal
+      return new Promise<Buffer>((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
     })
     try {
       const reading = f.store.readVoice(owner, f.tab, file.id, 'en').then(() => null, (error: unknown) => error)
-      await vi.waitFor(() => expect(asked).toBe(true), { interval: 5 })
+      await vi.waitFor(() => expect(download).toBeDefined(), { interval: 5 })
       await vi.advanceTimersByTimeAsync(VOICE_READ_MS)
       vi.useRealTimers()
       expect(await reading).toMatchObject({ code: 'ATTACHMENTS_UNAVAILABLE', status: 503 })
-    } finally { vi.useRealTimers() }
+    } finally {
+      vi.useRealTimers()
+      head.mockRestore()
+    }
+    expect(download!.aborted).toBe(true)
     expect(voiceInflightBytes()).toBe(0)
     expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: file.id } })).voiceSince).toBeNull()
-    head.mockRestore()
     expect((await f.store.readVoice(owner, f.tab, file.id, 'en')).voice.transcribed).toBe(true)
   })
 

@@ -35,7 +35,7 @@ export function apnsSender(keys: ApnsKeys, options: { transport?: ApnsTransport;
     return value
   }
   const noSandboxKey: SendResult = { outcome: 'unconfigured', reason: 'no APNs sandbox key' }
-  const ask = async (device: PushDevice, notice: PhoneNotice, sandbox: boolean): Promise<ApnsAnswer> => withTimeout(transport({
+  const ask = async (device: PushDevice, notice: PhoneNotice, sandbox: boolean): Promise<ApnsAnswer> => withTimeout(() => transport({
     sandbox, path: `/3/device/${device.token}`,
     // The collapse id is the app's own notice id for the slot (task #3248): a newer push for it, or the app's notice, replaces
     // the one shown instead of adding a second.

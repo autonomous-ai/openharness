@@ -19,7 +19,7 @@ type GoogleError = { error?: { status?: string; details?: Array<{ errorCode?: st
 export function fcmSender(account: FcmAccount, options: { fetcher?: typeof fetch; now?: () => number; timeoutMs?: number } = {}): Sender {
   const fetcher = options.fetcher ?? fetch, now = options.now ?? Date.now, timeoutMs = options.timeoutMs ?? SEND_TIMEOUT_MS
   let access: { token: string; until: number } | null = null
-  const call = (url: string, init: RequestInit) => withTimeout(fetcher(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }), timeoutMs)
+  const call = (url: string, init: RequestInit) => withTimeout(() => fetcher(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }), timeoutMs)
   const accessToken = async () => {
     const at = now()
     if (access && at < access.until - RENEW_BEFORE_MS) return access.token
