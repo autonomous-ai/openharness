@@ -829,6 +829,64 @@ void main() {
   });
 
   testWidgets(
+    'Instructions show the agent\'s folder too, read only under its own file: Edit and Save change the agent\'s own file alone',
+    (tester) async {
+      // As lampOS's Faye is: no file of its own yet, and an AGENTS.md and a CLAUDE.md in its folder.
+      final computer = SwarmV4Computer()
+        ..shared = [
+          {'name': 'AGENTS.md', 'text': 'Ship small.\nSay what you checked.'},
+          {
+            'name': 'CLAUDE.md',
+            'text': 'Read AGENTS.md first.',
+            'truncated': true,
+          },
+        ]
+        ..skipped = [
+          {'name': 'CLAUDE.local.md', 'why': 'not_text'},
+        ];
+      await show(tester, computer: computer);
+      await openInstructions(tester);
+      expect(find.text('agents/first builder.md'), findsOneWidget);
+      // Nothing of its own, so no empty words: its folder's files are what there is to read.
+      expect(find.textContaining('No instructions yet'), findsNothing);
+      expect(find.text('AGENTS.md'), findsOneWidget);
+      expect(find.text('Ship small.\nSay what you checked.'), findsOneWidget);
+      expect(find.text('CLAUDE.md'), findsOneWidget);
+      expect(find.text('Cut at 64 KB.'), findsOneWidget);
+      expect(find.text('CLAUDE.local.md isn\'t text.'), findsOneWidget);
+      // Read only: there is nothing to type into until Edit.
+      final inPane = find.descendant(
+        of: find.byType(SwarmAgentInstructions),
+        matching: find.byType(TextField),
+      );
+      expect(inPane, findsNothing);
+      await tester.tap(key('swarm-instructions-edit'));
+      await tester.pumpAndSettle();
+      expect(find.text('AGENTS.md'), findsNothing);
+      await tester.enterText(key('swarm-instructions-field'), 'Be brief.');
+      await tester.pump();
+      await tester.tap(key('swarm-instructions-save'));
+      await tester.pumpAndSettle();
+      // Its own file was made, and only it: the request carries its text and no folder file.
+      final write = computer.requests.last;
+      expect(write.$2, 'agent_instructions_write');
+      expect(write.$3.keys.toSet(), {'agentId', 'name', 'text', 'version'});
+      expect(computer.files[fileKey], 'Be brief.');
+      // Its file above, its folder's under it, as before.
+      expect(find.text('Be brief.'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('Be brief.')).dy,
+        lessThan(tester.getTopLeft(find.text('AGENTS.md')).dy),
+      );
+      expect(find.text('CLAUDE.md'), findsOneWidget);
+      await tester.tap(key('swarm-instructions-close'));
+      await tester.pumpAndSettle();
+      expect(find.text('agents/first builder.md'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'Nothing is sent when a daemon on the way would send it unsealed, and a path that is not a plain file is said',
     (tester) async {
       final computer = SwarmV4Computer(files: {fileKey: 'Be brief.'})

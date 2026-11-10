@@ -442,6 +442,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const parsed = parseAccountName(req.body?.name)
     if (!parsed.ok) return sendError(reply, parsed.message, parsed.code, 400)
     // A row gone since sign-in answers 404 (UserService.update's NotFoundError).
+    // The person's name in each of their Swarms follows it (UserService.update, superTabs/personNames.ts).
     const user = await userService.update(req.user!.sub, { name: parsed.name })
     return sendSuccess(reply, { user: userService.toPublic(user), avatarUrl: null, description: null })
   })

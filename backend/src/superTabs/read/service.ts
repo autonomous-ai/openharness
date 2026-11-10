@@ -445,7 +445,7 @@ export class SwarmReads {
     return { notify: await writeChatSetting(this.db, { tabId, personId: user.sub, conversationId, notify, now: this.now() }) }
   }
 
-  /** The person's Activity in this Swarm (activity.ts): replies to their messages and reactions to them, those they can read
+  /** The person's Activity in this Swarm (activity.ts): replies to their messages, those they can read
    *  now. A person reading as themselves only. */
   async activity(user: AuthUser, tabId: string): Promise<{ items: ActivityItem[]; more: boolean }> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)

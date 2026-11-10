@@ -438,9 +438,23 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Dee, 2026-11-09: some people keep it out of git). Its person reads it in
   `AppType.mono` and changes it here: `Edit` (a compact `DesktopPill`) turns
   the text into a field, and `Save` and `Cancel` take its place; Save waits for
-  a change. A save names the version it read, so a change the agent made
+  a change. Under the agent's own file, read only, is what else instructs it
+  in its folder (anh Dee, 2026-11-10: Faye's, in lampOS): the project's
+  `AGENTS.md` and `CLAUDE.md`, as that computer sends them, each with its name
+  in 13 medium (its path when it sends one), its text in `AppType.mono`,
+  selectable, and `Cut at 64 KB.` in metadata grey after a text it cut, a
+  hairline between them. A file with the text of one above it (a `CLAUDE.md`
+  linked to `AGENTS.md`) says `Same as AGENTS.md.` instead of repeating it. A
+  file it did not show gets one metadata line (`CLAUDE.md is a link.`,
+  `CLAUDE.md isn't text.`, `../AGENTS.md isn't shown: too much text.`). An older computer sends
+  none: the agent's own file alone. Edit, Save and the 64 KB limit are for the
+  agent's own file: while it is typed it has the pane to itself, and the
+  others are back after Save or Cancel. A read the computer refuses for the
+  agent's own file still shows them, under its one line. A save names the
+  version it read, so a change the agent made
   meanwhile is refused (`It changed on Mac 3. Close it and open it again.`)
-  and the typed text stays. No file yet: `No instructions yet. Tell Faye how
+  and the typed text stays. Nothing to show (no file of its own, and none of
+  the others has text): `No instructions yet. Tell Faye how
   you want it to work, and it writes them here.` A computer that cannot be
   asked says what to do in one line, with a retry icon: `Update Harness on
   Mac 3.`, `Update Harness on this computer.`, `Mac 3 is offline.`, `Faye isn't
@@ -579,7 +593,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   Line, New task · #13), its first line or a review's verdict, and Read for
   the rest and Open in GitHub.
 - **Long messages.** Every message shows whole: nothing folds behind More
-  (anh Dee, 2026-11-09).
+  (anh Dee, 2026-11-09). So does a code block in it: every line, a line wider
+  than the column wrapped, never a scroll inside the chat, with its language
+  and Copy over it; a clipboard that refuses says `Couldn't copy it.`
 - **No reactions.** A message has no reaction chips under it and no reaction
   button in its actions, whatever the server sends with it (anh Dee,
   2026-11-09).
