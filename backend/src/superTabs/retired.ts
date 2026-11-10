@@ -25,6 +25,9 @@ export const RETIRED_COMMANDS = [
   'member.start', 'member.helper',
   // A task's pull request taken off it (2026-11-10): a task is the project's GitHub issue, which links its own.
   'conversation.unlink',
+  // The Board way of working and task approval (2026-11-10): an older Desktop's Board settings, Accept and Decline, and its PM's
+  // suggestion. A project switched before keeps its stored settings, read where they apply (boardRights.ts).
+  'project.process', 'project.boardMode', 'project.canChat', 'project.decider', 'member.approvalMode', 'task.suggest', 'task.approve', 'task.reject',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
@@ -38,13 +41,18 @@ export const opensRetiredStep = (command: { type?: unknown; reviewOf?: unknown; 
   command?.type === 'conversation.create' && (command.reviewOf !== undefined || command.step !== undefined)
 
 const TASKS_RETIRED = { code: 'TASKS_RETIRED', status: 410, message: 'Tasks are GitHub issues now.' }
+const BOARD_RETIRED = { code: 'BOARD_RETIRED', status: 410, message: 'Board settings can’t be changed any more.' }
 /** A check verdict a person records in an older Desktop's work details (work.check) is refused in these words, which it shows
  *  where the verdict was typed, rather than answered as ignored: the app takes an ok answer for a saved verdict and closes the
  *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
 export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; status: number; message: string }>> = {
   'work.check': { code: 'CHECKS_RETIRED', status: 410, message: 'Checks can’t be recorded any more.' },
-  // An older Desktop's Next up, priority and pause on a task: its tasks are the project's GitHub issues now.
+  // An older Desktop's Next up, priority and pause on a task, its Accept and Decline and its approval mode: its tasks are the
+  // project's GitHub issues now.
   'work.queue': TASKS_RETIRED, 'work.priority': TASKS_RETIRED, 'work.pause': TASKS_RETIRED,
+  'task.approve': TASKS_RETIRED, 'task.reject': TASKS_RETIRED, 'member.approvalMode': TASKS_RETIRED,
+  // An older Desktop's Board settings: it takes an ok answer for a setting saved.
+  'project.process': BOARD_RETIRED, 'project.boardMode': BOARD_RETIRED, 'project.canChat': BOARD_RETIRED, 'project.decider': BOARD_RETIRED,
 }
 
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or
@@ -65,6 +73,8 @@ export const RETIRED_READS: Readonly<Record<string, object>> = {
   '/api/super-tabs/:tabId/reminders': { due: [], next: null },
   '/api/super-tabs/:tabId/threads': { unread: [], read: [], more: false },
   '/api/super-tabs/:tabId/inbox': { threads: [], latest: [], more: false },
+  // Personal tasks (2026-11-10): an older Desktop's and phone's own tasks, now the project's GitHub issues.
+  '/api/super-tabs/:tabId/personal-tasks': { approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null },
 }
 
 /** An older Desktop's catch-up of a chat since its mark (GET .../conversations/:conversationId/catch-up?after=N): nothing missed,
