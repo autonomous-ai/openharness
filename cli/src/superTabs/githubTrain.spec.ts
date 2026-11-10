@@ -14,7 +14,7 @@ const REPO = '/repos/acme/app'
 
 interface FakePull { number: number; state: 'open' | 'closed'; draft: boolean; title: string; body: string; created_at: string; updated: number; merged_at: string | null
   merge_commit_sha: string | null; head: { sha: string; ref: string; repo: { full_name: string } }; base: { ref: string }; labels: Array<{ name: string }>
-  mergeable_state: string }
+  mergeable_state: string; user: { login: string } }
 
 /**
  * One repository in memory, as GitHub's REST API answers for it and takes writes to it: main as a line of commits, each with the
@@ -29,6 +29,8 @@ function fakeRepo(now: () => number) {
     runs: new Map<string, Json[]>(),
     /** What each pull request's head and each train commit holds: the commit of main it stands on, and the files it changes. */
     commits: new Map<string, { on: string; files: string[] }>(),
+    /** A train commit's parents: what it was merged onto, and the member's head. */
+    parents: new Map<string, string[]>(),
     branches: new Map<string, string>(),
     /** Heads that conflict when merged into a train, and heads main holds already. */
     conflicts: new Set<string>(),
@@ -61,6 +63,9 @@ function fakeRepo(now: () => number) {
     const commit = /^\/commits\/([0-9a-f]+)\//.exec(p)?.[1] ?? '', compared = /^\/compare\/(.+)\.\.\.(.+)$/.exec(p)
     const per = Number(url.searchParams.get('per_page') ?? 30), page = Number(url.searchParams.get('page') ?? 1)
     state.asked.push(path.slice(REPO.length))
+    // This computer's gh login, which opens the trains.
+    if (path === '/user') return { status: 200, etag: null, body: { login: 'Octocat' }, resetAt: null }
+    const made = /^\/git\/commits\/([0-9a-f]+)$/.exec(p)?.[1]
     const body = p === '' ? { default_branch: 'main', ...state.settings }
       // A page of the list, the most recently updated first, as GitHub pages it.
       : p === '/pulls' ? [...state.pulls.values()].filter(pull => pull.state === url.searchParams.get('state')).sort((a, b) => b.updated - a.updated).slice((page - 1) * per, page * per)
@@ -71,6 +76,7 @@ function fakeRepo(now: () => number) {
       : p.endsWith('/check-runs') ? { check_runs: state.runs.get(commit) ?? [] }
       : p.endsWith('/status') ? { statuses: [] }
       : compared ? compare(compared[1]!, compared[2]!)
+      : made ? (state.parents.has(made) ? { sha: made, parents: state.parents.get(made)!.map(parent => ({ sha: parent })) } : null)
       : p === '/git/ref/heads/main' ? { ref: 'refs/heads/main', object: { type: 'commit', sha: tip() } }
       // Every branch whose name starts so, as GitHub matches.
       : p === '/git/matching-refs/heads/harness-train' ? [...state.branches].filter(([name]) => name.startsWith('harness-train')).map(([name, at]) => ({ ref: `refs/heads/${name}`, object: { sha: at } }))
@@ -99,12 +105,13 @@ function fakeRepo(now: () => number) {
       const merged = sha(`${before}+${head}`), under = state.commits.get(before)
       state.commits.set(merged, { on: under?.on ?? before, files: [...under?.files ?? [], ...state.commits.get(head)!.files] })
       state.branches.set(branch, merged)
+      state.parents.set(merged, [before, head])
       return reply(201, { sha: merged, parents: [{ sha: before }, { sha: head }] })
     }
     if (method === 'POST' && p === '/pulls') {
       const opened: FakePull = { number: state.next++, state: 'open', draft: false, title: String(body.title), body: String(body.body), created_at: iso(), updated: ++state.edits,
         merged_at: null, merge_commit_sha: null, head: { sha: state.branches.get(String(body.head))!, ref: String(body.head), repo: { full_name: 'acme/app' } },
-        base: { ref: String(body.base) }, labels: [], mergeable_state: 'clean' }
+        base: { ref: String(body.base) }, labels: [], mergeable_state: 'clean', user: { login: 'octocat' } }
       state.pulls.set(opened.number, opened)
       // CI starts on the new pull request.
       state.runs.set(opened.head.sha, RUNNING)
@@ -152,7 +159,7 @@ function setup() {
       const head = sha(`head-${number}`)
       const pull: FakePull = { number, state: 'open', draft: false, title: `Change ${number}`, body: over.body ?? '', created_at: new Date(clock.now).toISOString(), updated: ++state.edits,
         merged_at: null, merge_commit_sha: null, head: { sha: head, ref: `pip/${number}`, repo: { full_name: over.fork ? 'pip/app' : 'acme/app' } }, base: { ref: 'main' },
-        labels: [{ name: 'builder:pip' }], mergeable_state: 'clean' }
+        labels: [{ name: 'builder:pip' }], mergeable_state: 'clean', user: { login: 'pips-person' } }
       state.pulls.set(number, pull)
       state.commits.set(head, { on: repo.tip(), files: over.files ?? [`cli/src/f${number}.ts`] })
       state.runs.set(head, PASSED)
@@ -441,27 +448,95 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: a pull request it carries is no longer ready at its head')
   })
 
-  it('lands as it is when main gained only documentation the train does not change', async () => {
+  // The review of #3909. A train is its branch: what it carries is what was merged into it, one merge for each member on the
+  // base's tip. Its pull request's body is anyone's to write who can write to the repository: a member's line taken out lands
+  // that member under a HOLD, and a line put in closes a pull request as landed that never was.
+  it.each<[string, (f: ReturnType<typeof setup>, body: string) => string]>([
+    ['loses a member', (_f, body) => body.split('\n').filter(line => !line.startsWith('#5 ')).join('\n')],
+    ['gains one the branch does not carry', (f, body) => `${body}\n#6 at ${f.state.pulls.get(6)!.head.sha}, READ-OK by Juno`],
+  ])('lands nothing when its body %s after it was built', async (_case, edit) => {
     const f = setup()
-    f.add(4); f.add(5, { files: ['cli/src/f5.ts', 'docs/five.md'] })
+    f.add(4); f.add(5)
     await f.settle()
-    f.moveMain(['docs/plans/a.md', 'README.md'])
+    f.add(6)
+    f.train().body = edit(f, f.train().body)
+    await f.ends(PASSED)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its branch does not hold what its body names')
+    expect([5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open'])
+  })
+
+  it('takes for its train only a pull request this computer\'s login opened', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    // A builder's own branch under the train's prefix and its pull request written as a train's, its checks green.
+    const forged = sha('forged')
+    f.state.commits.set(forged, { on: f.state.main[0]!.sha, files: ['cli/src/unread.ts'] })
+    f.state.runs.set(forged, PASSED)
+    Object.assign(f.add(60), { title: 'Train: #5', head: { sha: forged, ref: 'harness-train/1', repo: { full_name: 'acme/app' } },
+      body: trainBody('main', forged, [{ number: 5, head: f.state.pulls.get(5)!.head.sha, readers: 'Juno' }]) })
+    await f.settle()
+    f.state.runs.set(f.state.pulls.get(900)!.head.sha, PASSED)
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+    expect(f.state.pulls.get(60)).toMatchObject({ state: 'open', merged_at: null })
+  })
+
+  // Actions can take minutes to make a run, and a branch no workflow runs on gets none: no check at all read as passed.
+  it('does not land a train that has no check of its own while its members had theirs', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    f.state.runs.delete(f.train().head.sha)
+    await f.settle()
+    await f.tick(10 * 60_000)
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     await f.ends(PASSED)
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
   })
 
+  // A rule of the repository the train cannot meet (a required review, a merge method) refused it every 15 minutes for good,
+  // nothing else landed, and only the log said so.
+  it('says once on the train that GitHub refuses its merge, and leaves it open for a person', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    const built = f.state.sent.length
+    f.state.answer = (method, path) => method === 'PUT' && path === '/pulls/900/merge' ? { status: 405 } : undefined
+    await f.ends(PASSED)
+    expect(f.writes(built)).toEqual(['PUT /pulls/900/merge', 'POST /issues/900/comments'])
+    expect(f.said(900)).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d: GitHub refuses to merge this train \(405\)\. Nothing else lands in main while it is open: lift what blocks it, or close it and the next is built\.$/)])
+    expect(f.logged()).toContainEqual(expect.stringContaining('TRAIN_REFUSED acme/app: GitHub answered PUT /pulls/900/merge with 405. (again in 30 s)'))
+    await f.tick()
+    expect(f.writes(built).filter(w => w.startsWith('PUT'))).toHaveLength(2)
+    expect(f.said(900)).toHaveLength(1)
+    expect(f.train().state).toBe('open')
+  })
+
+  // AGENTS.md: "add the `hold` label to keep a PR out".
+  it('carries no pull request labelled hold', async () => {
+    const f = setup()
+    f.add(4); f.add(5).labels.push({ name: 'hold' }); f.add(6)
+    await f.settle()
+    expect(f.carried()).toEqual([[4, 6]])
+  })
+
   it.each([
     ['code', ['docs/a.md', 'cli/src/other.ts']],
-    ['a document the train changes too', ['docs/five.md']],
+    // Documentation too: suites read some of it (scripts/ci-plan.py: docs/contracts/, docs/naming-system.md, THIRD_PARTY_NOTICES.md).
+    ['only documentation', ['docs/plans/a.md', 'README.md']],
   ])('lands nothing it did not test: main gained %s, so the train is closed and built again on the new tip', async (_case, gained) => {
     const f = setup()
     f.add(4); f.add(5, { files: ['cli/src/f5.ts', 'docs/five.md'] })
     await f.settle()
+    const built = f.state.sent.length
     f.moveMain(gained)
-    await f.ends(PASSED)
+    // At once, and not when its run ends: a run on a base that moved lands nothing.
+    await f.tick()
+    expect(f.writes(built)).toEqual(['PATCH /pulls/900', expect.stringMatching(/^DELETE /)])
+    await f.settle()
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: main moved under it')
-    await f.tick()
     expect(f.carried()).toEqual([[4, 5], [4, 5]])
     expect(f.state.commits.get(f.train().head.sha)!.on).toBe(f.state.main.at(-1)!.sha)
   })
@@ -497,7 +572,6 @@ describe('a train waits for its own checks, then lands or is closed', () => {
   })
 
   it.each([
-    ['refuses the merge', { status: 405 }, 'TRAIN_REFUSED acme/app: GitHub answered PUT /pulls/900/merge with 405.'],
     ['answers it with something else than merged', { status: 200, body: { merged: false } }, 'TRAIN_UNREADABLE acme/app: GitHub\'s answer to the merge of #900 is not one the train reads.'],
   ])('writes nothing more when GitHub %s, and tries again after the merger\'s wait', async (_case, answer, line) => {
     const f = setup()
@@ -616,7 +690,7 @@ describe('what the train never does', () => {
     const f = setup()
     for (const number of [4, 5, 6]) f.add(number)
     // A builder's branch, and one that only begins like the train's.
-    for (const other of ['pip/4', 'harness-trains']) f.state.branches.set(other, f.state.pulls.get(4)!.head.sha)
+    for (const other of ['pip/4', 'harness-trains', 'harness-train/%2e%2e/pip/4']) f.state.branches.set(other, f.state.pulls.get(4)!.head.sha)
     await f.settle()
     await f.ends(FAILED)
     await f.tick()
