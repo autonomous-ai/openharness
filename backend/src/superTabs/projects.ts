@@ -42,8 +42,6 @@ export interface SwarmProject {
   /** The status card at the top of the project chat (Dee, 2026-10-31): the coordinator's last project.report text, which
    *  replaces the one before and posts nothing. Read exactly by those who read the project chat (model.ts visibleState). */
   status?: ProjectStatus | null
-  /** Report watermark per conversation, moved by reports before Swarm v4; kept in its own part (store by parts). */
-  progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
   /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
   lead?: import('./leadStart.js').LeadPlacement

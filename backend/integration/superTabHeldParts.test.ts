@@ -58,12 +58,12 @@ async function write(tabId: string, pick: (all: parts.SwarmParts) => parts.PartW
 
 const liveOf = <T>(list: parts.Part<T>[]) => list.filter(p => !p.deleted)
 const observed = (tabId: string, held: HeldParts) => db.$transaction(tx => parts.loadObserved(tx, tabId, 'host', held))
-/** A command's load (store.ts loadRow), naming one quiet conversation as a command naming it does. Agents, machines, members
- *  and progress in key order: a whole read comes in its plan's order, which no reader depends on (shape.ts orders by ordinal). */
+/** A command's load (store.ts loadRow), naming one quiet conversation as a command naming it does. Agents, machines and
+ *  members in key order: a whole read comes in its plan's order, which no reader depends on (shape.ts orders by ordinal). */
 const commanded = async (tabId: string, held: HeldParts | null, groupIds: string[] = []) => {
   const loaded = await db.$transaction(tx => parts.loadActive(tx, tabId, { groupIds }, held))
   const sorted = <T extends { key: string }>(list: T[]) => [...list].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
-  return { ...loaded, agents: sorted(loaded.agents), machines: sorted(loaded.machines), members: sorted(loaded.members), progress: sorted(loaded.progress) }
+  return { ...loaded, agents: sorted(loaded.agents), machines: sorted(loaded.machines), members: sorted(loaded.members) }
 }
 
 describe('a full report\'s held parts (B3, #2597)', () => {
@@ -187,11 +187,11 @@ describe('a command\'s held conversations (#3146)', () => {
   })
 })
 
-// Ken's prod scan, 2026-11-07 (task #4368): every command read each live agent, machine, member and progress part of its
-// Swarm whole, ~85% of what a post read. A command lists them from an index that holds every column it compares, and reads
-// whole only those that changed since this server last read them.
-describe('a command\'s held agents, machines, members and progress (#4368)', () => {
-  const KINDS = [['agent', 'SwarmAgent'], ['machine', 'SwarmMachine'], ['member', 'SwarmMember'], ['progress', 'SwarmProgress']] as const
+// Ken's prod scan, 2026-11-07 (task #4368): every command read each live agent, machine and member part of its Swarm whole,
+// ~85% of what a post read. A command lists them from an index that holds every column it compares, and reads whole only
+// those that changed since this server last read them.
+describe('a command\'s held agents, machines and members (#4368)', () => {
+  const KINDS = [['agent', 'SwarmAgent'], ['machine', 'SwarmMachine'], ['member', 'SwarmMember']] as const
 
   it('load what a server holding nothing loads, after every kind of write', { timeout: 120_000 }, async () => {
     const tabId = await scene()
@@ -210,7 +210,6 @@ describe('a command\'s held agents, machines, members and progress (#4368)', () 
         return { op: 'insert', kind: 'agent', key: a.key, ordinal: a.ordinal, data: a.data } }, at())],
       ['a member changed', () => write(tabId, all => { const m = some(all.members)
         return { op: 'update', kind: 'member', key: m.key, seen: m.version, data: { ...m.data!, ordinalNote: n } as never } }, at())],
-      ['a progress part added', () => write(tabId, () => ({ op: 'insert', kind: 'progress', key: `p-${n}`, ordinal: 900 + n, data: { note: n } as never }), at())],
       ['a machine\'s reading alone (dated readAt)', () => write(tabId, all => { const m = some(all.machines)
         return { op: 'update', kind: 'machine', key: m.key, seen: m.version, data: { ...m.data!, ordinalNote: n } as never } }, at())],
       ['an agent rewritten at the version it had, under a new date (purged, then added again)', async () => {
@@ -242,6 +241,6 @@ describe('a command\'s held agents, machines, members and progress (#4368)', () 
     }
     // The one agent that changed, by id; nothing else of any kind.
     expect(read('SwarmAgent').slice(1)).toEqual([[expect.stringMatching(/IDHACK|EXPRESS|IXSCAN \{ _id: 1 \}/), 1]])
-    for (const collection of ['SwarmMachine', 'SwarmMember', 'SwarmProgress']) expect([collection, read(collection).length]).toEqual([collection, 1])
+    for (const collection of ['SwarmMachine', 'SwarmMember']) expect([collection, read(collection).length]).toEqual([collection, 1])
   })
 })

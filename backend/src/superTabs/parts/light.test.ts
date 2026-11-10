@@ -58,7 +58,6 @@ const conversation: Required<Conversation> = {
   pullRequestUrls: [],
   reactionSeq: 0,
   released: { at: 1, tags: [] },
-  reportSeq: 0,
   requesterId: 'p',
   reviewOf: 'r',
   reviewStamp: { assignmentId: 'w', handoff: 1 },

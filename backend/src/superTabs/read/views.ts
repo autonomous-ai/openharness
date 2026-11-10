@@ -13,7 +13,7 @@ import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
 import { personView } from '../profile.js'
 import { swarmUsernames } from '../usernames.js'
-import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
+import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, StartView } from './contract.js'
 
 export interface ReaderParts {
   head: LivePart<HeadView>
@@ -22,7 +22,6 @@ export interface ReaderParts {
   groups: LivePart<GroupView>[]
   machines: LivePart<MachineView>[]
   starts: LivePart<StartView>[]
-  progress: LivePart<ProgressView>[]
 }
 export interface ReaderView {
   /** The reassembled stored state the view was made from, for the read checks of changed parts. */
@@ -44,7 +43,7 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. */
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, talkedAt: _talkedAt, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, lastActivityAt: _activity, ledger, talkedAt: _talkedAt, dormant, audience, ...rest } = withSeenRequirement(group, seenMachines)
   const readers = audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)
@@ -78,10 +77,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const part = <T>(list: Part<T>[]) => { const keyed = new Map(list.map(p => [p.key, p])); return (key: string) => keyed.get(key)! }
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
-  // The progress is the server's bookkeeping: no reader shows it.
-  if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => project)
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
-  const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
+  const seen = seenMachineIds(visible), names = swarmUsernames(state)
   return {
     state,
     parts: {
@@ -93,14 +90,10 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       groups: groups.map(g => envelope(groupPart(g.id), groupView(g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
       starts: (visible.starts ?? []).filter(s => readable.has(s.request.conversationId)).map(s => envelope(startPart(s.id), s)),
-      progress: parts.progress.filter(p => !p.deleted && projects.has(p.key)).map(p => envelope(p, progressView(p.data!))),
     },
     derived: derive(state, visible, actor, now, extras),
   }
 }
-
-export const progressView = (data: NonNullable<SwarmParts['progress'][number]['data']>): ProgressView =>
-  ({ ...data, requestedAt: data.requestedAt ?? null })
 
 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {

@@ -164,7 +164,7 @@ async function postingScene() {
 const groupKeys = (read: { groups: Array<{ key: string }> }) => read.groups.map(g => g.key)
 
 /** The part collections' reads MongoDB served while `run` ran (its profiler, every operation). */
-const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
+const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start)$/, run)
 
 describe('reads through the cache', () => {
   it('reuses row metadata per pod and observes deletion when the short hold expires', async () => {
@@ -345,13 +345,11 @@ describe('a change poll\'s shared light read (DB 2.3)', () => {
     await warm(cache!, tabId)
     const first = await partReads(poll)
     expect(first.byCollection.SwarmHead).toBe(1)
-    expect(first.byCollection.SwarmProgress ?? 0).toBe(0)
     await store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
       command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } }, agentId)
     await warm(cache!, tabId)
     const after = await partReads(poll)
     expect(after.byCollection.SwarmHead).toBe(1)
-    expect(after.byCollection.SwarmProgress ?? 0).toBe(0)
   })
 
 })

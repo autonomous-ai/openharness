@@ -127,8 +127,9 @@ describe('first load (design 4.3)', () => {
     expect(status).toBe(200)
     expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'derivedEtag', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
       'machines', 'members', 'progress', 'serverTime', 'starts', 'tabId'].sort())
+    // Always empty since the progress part went: released CLIs still require the list (read/contract.ts).
     expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED,
-      head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
+      head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } }, progress: [] })
     expect(JSON.parse(Buffer.from(body.data.cursor, 'base64url').toString())).toEqual({ v: 2, t: NOW - 30_000, e: 1 })
     expect(keys(body.data.members)).toEqual([owner.sub, peer.sub, outsider.sub])
     expect(keys(body.data.groups)).toEqual(['lead', s.web, s.peerChat])
@@ -184,7 +185,7 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
   it('sends only what changed, whole, to the readers who may see it', async () => {
     const s = await scene()
     const [peerCursor, outsiderCursor] = [await firstLoad(s.tabId, peer, NOW), await firstLoad(s.tabId, outsider, NOW)]
-    expect((await changes(s.tabId, peerCursor, peer, NOW + 1_000)).body.data).toMatchObject({ reload: false, head: null, groups: [], agents: [] })
+    expect((await changes(s.tabId, peerCursor, peer, NOW + 1_000)).body.data).toMatchObject({ reload: false, head: null, groups: [], agents: [], progress: [] })
     await writeGroup(s.tabId, s.web, NOW + 2_000, g => { g.title = 'Web 2' })
     await writeGroup(s.tabId, s.peerChat, NOW + 2_000, g => { g.title = 'Private 2' })
     await writeGroup(s.tabId, s.privateId, NOW + 2_000, g => { g.title = 'Closed 2' })
@@ -826,7 +827,7 @@ describe('what a read costs the database (group 3b)', () => {
   /** The whole Swarm as stored: what a read that reassembles it loads. */
   const swarmBytes = async (tabId: string) => {
     const all = await db.$transaction(tx => parts.loadAll(tx, tabId))
-    return [all.head, ...all.members, ...all.agents, ...all.groups, ...all.machines, ...all.starts, ...all.progress].reduce((n, p) => n + JSON.stringify(p.data).length, 0)
+    return [all.head, ...all.members, ...all.agents, ...all.groups, ...all.machines, ...all.starts].reduce((n, p) => n + JSON.stringify(p.data).length, 0)
   }
   /** Sixty more conversations with long briefs, as a busy Swarm's history makes them (about half a megabyte). */
   const bulky = (s: ReturnType<typeof swarm>) => {
@@ -955,9 +956,9 @@ describe('what a read costs the database (group 3b)', () => {
     const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
     clock = Date.now()
     // The newest change is one Mongo `$group` per part kind, and never a Prisma groupBy.
-    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\.aggregateRaw:newest$/.test(op))
+    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start)\.aggregateRaw:newest$/.test(op))
     const first = await hosts.changes(owner, machineId, { full: true })
-    expect(newestReads()).toHaveLength(7)
+    expect(newestReads()).toHaveLength(6)
     expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])
     ops.length = 0
     clock = Date.now()
@@ -1210,8 +1211,8 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         cursors.set(name, first.body.data.cursor)
       }
 
-      // After the cursor: a post, a start changed and one removed in the quiet conversation, a machine report, a progress
-      // part, and both people's read marks moved in a quiet conversation.
+      // After the cursor: a post, a start changed and one removed in the quiet conversation, a machine report, and both
+      // people's read marks moved in a quiet conversation.
       const at = Date.now()
       await writeGroup(tabId, s.web, at, g => { g.title = 'Web, renamed' })
       await swarmTransaction(db, async tx => {
@@ -1224,10 +1225,6 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         const data = structuredClone(machine.data) as { contribution: { observation: { receivedAt: number } } }
         data.contribution.observation.receivedAt = at
         await guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: 'host', seen: machine.version, data: data as never }, at)
-        const progress = { since: at, summarizedFloor: 0, summarized: {}, requestedFloor: 0, requested: {} }
-        const held = await tx.swarmProgress.findUnique({ where: { id: `${tabId}:lead` } })
-        await guardedWrite(tx, tabId, held ? { op: 'update', kind: 'progress', key: 'lead', seen: held.version, data: progress }
-          : { op: 'insert', kind: 'progress', key: 'lead', data: progress, ordinal: 1 }, at)
       })
       for (const personId of [owner.sub, peer.sub]) await writeReadMark(db, { tabId, personId, conversationId: s.done, sequence: 5, now: at })
 
@@ -1242,7 +1239,6 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         expect(changes.machines, name).toEqual(full.machines.filter((p: { key: string }) => p.key === 'host'))
         // A quiet conversation is in no first load, so neither its starts nor their harnesses are, the private one's included.
         expect(JSON.stringify(changes), name).not.toMatch(/quiet-secret|changing-harness/)
-        expect(changes.progress, name).toEqual(full.progress.filter((p: { key: string }) => p.key === 'lead'))
         // Its project is the private one, read from its conversation: only the owner and the agent itself see it.
         expect(Object.keys(changes.derived.agents).includes(more.legacy), name).toBe(name === 'owner' || name === 'legacy agent')
         if (name === 'owner') expect(changes.derived.agents[more.member].workDecision).toBe('awaiting')

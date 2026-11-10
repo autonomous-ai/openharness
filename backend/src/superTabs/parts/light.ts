@@ -82,7 +82,6 @@ export const GROUP_FIELDS = {
     'reactionSeq',
     'released',
     'releasing',
-    'reportSeq',
     'requesterId',
     'reviewStamp',
     'step',
@@ -171,7 +170,7 @@ export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds
   const groups = [...new Map([...named, ...linked, ...worked].map(row => [row.key, lightGroup(row)])).values()]
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow),
     members: members.map(row => toPart('member', row)), agents: agents.map(row => toPart('agent', row)),
-    groups, machines: [], starts: [], progress: [],
+    groups, machines: [], starts: [],
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }
 
@@ -232,6 +231,6 @@ export async function loadLight(tx: Transaction, tabId: string,
     const held = new Set(groups.map(g => g.key))
     groups.push(...unique([undecided, ofLegacy, ofLeads]).filter(g => !held.has(g.key)))
   }
-  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress: [],
+  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts,
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }

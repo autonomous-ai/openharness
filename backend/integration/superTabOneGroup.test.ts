@@ -153,7 +153,7 @@ async function profiled<T>(run: () => Promise<T>): Promise<{ value: T; rows: Pro
 }
 
 /** The Swarm's change feeds the incident named: a read of groups or progress by changedAt, or of machines by readAt. */
-const FEEDS = /\.(SwarmGroup|SwarmProgress|SwarmMachine)$/
+const FEEDS = /\.(SwarmGroup|SwarmMachine)$/
 function feedReads(rows: ProfileEntry[]): ProfileEntry[] {
   return rows.filter(r => FEEDS.test(r.ns) && r.op !== 'getmore' && (() => {
     const match = JSON.stringify((r.command?.pipeline as Array<{ $match?: unknown }> | undefined)?.[0]?.$match ?? r.command?.filter ?? {})

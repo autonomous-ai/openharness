@@ -30,7 +30,6 @@ import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
-import { ServedTops } from './servedTops.js'
 import { memberSwarms } from '../swarmRows.js'
 import { isPersonalSwarm } from '../deletion.js'
 
@@ -102,10 +101,7 @@ export class SwarmReads {
   constructor(private readonly store: SuperTabStore, options: { now?: () => number } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
-    this.servedTops = new ServedTops(store.db)
   }
-  /** Each project chat's newest main row people read, as readers are served it (servedTops.ts, #2742). */
-  private readonly servedTops: ServedTops
   /** The machine lookups of each Swarm read in the last MACHINE_READS_MS, oldest first, keyed by what they depend on. */
   private readonly machineReads = new Map<string, { at: number; read: Promise<MachineReads> }>()
   /** The small format/deletion row for each Swarm, held briefly per process. */
@@ -117,7 +113,7 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, { includeRecentStarts: true })
       const { parts: loaded, view, lastChangedAt } = read
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
-        ...view.parts,
+        ...view.parts, progress: [],
         ...stamped({ ...view.derived, ...readableMarks(read, await this.marksOf(tx, tabId, read.actor),
           await this.threadMarksOf(tx, tabId, read.actor), await this.settingsOf(tx, tabId, read.actor)) }) }
     })
@@ -166,7 +162,7 @@ export class SwarmReads {
     return this.read(user, tabId, async (tx, cached) => {
       // Light (parts/light.ts): changed parts come whole from the change feed; the rest is read only to check visibility and
       // derive values. The base is one per Swarm and stamp, whoever reads: the Lead conversations, running work, unfinished
-      // starts and the like, and no progress parts (the feed sends changed ones).
+      // starts and the like.
       const base = await readLight(tx, cached, tabId, LIGHT)
       const from = readCursor(cursor, base.visibilityEpoch, t0)
       // Reloading readers still pass the access check first, as every read does.
@@ -188,10 +184,8 @@ export class SwarmReads {
       const read = await this.load(tx, cached, user, tabId, asAgentId, t0, {},
         async () => withStarts(withGroups(base, await readLightGroups(tx, cached, tabId, named)), extra))
       const sent = changesFor(read.view, changed, read.actor, options.lightMachines ? { since: from.since } : undefined)
-      // A changed project chat comes whole from the change feed, with its stored newest main row (servedTops.ts).
-      if (!asAgentId) sent.groups = await this.servedTops.served(tabId, read.view.state, sent.groups)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...sent,
+        epoch: read.parts.visibilityEpoch, ...sent, progress: [],
         ...stamped({ ...read.view.derived, ...readableMarks(read, marks, threadMarks, settings) }, options.derivedEtag) }
     })
   }
@@ -270,13 +264,13 @@ export class SwarmReads {
       // An awake group stored without a number (111 on prod, 11-04) is numbered by a whole read after every other one
       // (model.ts numberConversations, in visibleState): the whole read answers it. A project's chat and Leads have none.
       if (found && !found.dormant && found.data!.number == null && !isLeads(found.data!)
-        && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [], progress: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
+        && !projectsOf(parts.reassemble({ ...access, groups: [], machines: [], starts: [] }, { share: true })).some(p => p.leadConversationId === found.key)) return null
       const target = asAgentId ? access.agents.find(a => a.key === asAgentId && !a.deleted)?.data : undefined
       const context = target && !target.projectId ? await parts.loadLightGroups(tx, tabId, 'agents', { agentIds: { $in: [target.id] }, dormant: false }) : []
       // The conversation itself whole; another only as the light row the checks read, once.
       const held = new Set(found ? [found.key] : [])
       const groups = [...found ? [found] : [], ...context.filter(g => !held.has(g.key) && !!held.add(g.key))]
-      const state = parts.reassemble({ ...access, groups, machines: [], starts: [], progress: [] }, { share: true })
+      const state = parts.reassemble({ ...access, groups, machines: [], starts: [] }, { share: true })
       const actor = await this.store.actor(tx, user, state, asAgentId)
       author(state, actor)
       const unavailable = (): never => fail('NOT_FOUND', 'This conversation is unavailable.', 404)
@@ -290,8 +284,7 @@ export class SwarmReads {
       // An awake one as a whole-Swarm read lists it (views.ts readerView): a kind this release knows, never the removed Leads.
       const group = state.conversations.find(c => c.id === conversationId)
       if (!group || isLeads(group) || !canReadGroup(state, actor, group)) return unavailable()
-      const one = envelope(found, groupView(group, new Set()))
-      return { group: actor.kind === 'person' ? (await this.servedTops.served(tabId, state, [one]))[0]! : one }
+      return { group: envelope(found, groupView(group, new Set())) }
     })
     return answer ?? { group: (await this.readGroup(user, tabId, conversationId, asAgentId)).group }
   }
@@ -480,8 +473,6 @@ export class SwarmReads {
     const actor = await this.store.actor(tx, user, state, asAgentId)
     const [machineVersions, newest] = await Promise.all([this.machineLookups(state), readLastChangedAt(tx, cached, tabId)])
     const view = readerView(loaded, actor, t0, { machineVersions }, state)
-    // People count a chat unread by its newest main row; agents keep no read marks.
-    if (actor.kind === 'person') view.parts.groups = await this.servedTops.served(tabId, state, view.parts.groups)
     return { parts: loaded, actor, lastChangedAt: newest, view }
   }
 

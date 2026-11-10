@@ -44,7 +44,7 @@ afterAll(async () => {
 })
 
 /** The Swarm part collections' reads MongoDB served while `run` ran, by collection. */
-const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/, run)
+const partReads = <T>(run: () => Promise<T>) => profiledReads(db, /\.Swarm(Head|Member|Agent|Group|Machine|Start)$/, run)
 
 /** A Swarm in parts: requests of peer's shipped this week and two weeks ago (dormant since), a third shipped last week and
  *  still active, a worker waiting on the owner, and three tags of the owner's, one a reply in a thread. */

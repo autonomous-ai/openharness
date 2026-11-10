@@ -121,8 +121,8 @@ async function saveState(tab: string, state: SuperTabState) {
   await swarmTransaction(db, async tx => {
     const current = await parts.loadAll(tx, tab)
     const version = Math.max(current.head.version, ...[...current.members, ...current.agents, ...current.groups, ...current.machines,
-      ...current.starts, ...current.progress].map(p => p.version)) + 1
-    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart, tx.swarmProgress] as unknown as
+      ...current.starts].map(p => p.version)) + 1
+    for (const model of [tx.swarmHead, tx.swarmMember, tx.swarmAgent, tx.swarmGroup, tx.swarmMachine, tx.swarmStart] as unknown as
       Array<{ deleteMany(args: unknown): Promise<unknown> }>) await model.deleteMany({ where: { tabId: tab } })
     await parts.insertParts(tx, { ...parts.split(state, { tabId: tab, version, now: Date.now(), visibilityEpoch: current.visibilityEpoch }),
       sequenceBase: current.sequenceBase })
@@ -3865,7 +3865,7 @@ describe('Swarm sweeps', () => {
       // Keys that sort before any generated id, so they come first in the store's natural order as well as by age.
       const key = `-idle-${String(i).padStart(3, '0')}`
       return { id: `${tab}:${key}`, tabId: tab, key, version: 1, changedAt: old, deleted: false, ordinal: 1000 + i, projectId: 'lead', kind: null,
-        archived: false, dormant: false, agentIds: [], executionMachineId: null, messageSeq: 0, reportSeq: 0, lastActivityAt: old,
+        archived: false, dormant: false, agentIds: [], executionMachineId: null, messageSeq: 0, lastActivityAt: old,
         data: { id: key, projectId: 'lead', title: key, leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 } }
     }) })
     await sweepSwarms(db, Date.now() + day + 60_000)

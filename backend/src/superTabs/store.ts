@@ -2055,7 +2055,7 @@ export class SuperTabStore {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
         deliveries.push({ id: stableId(message.id, recipient), tabId,
-          conversationId: message.conversationId, messageId: message.id, inputPriority: 1, agentId: recipient, machineId: target.machineId,
+          conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
