@@ -15,16 +15,16 @@ import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
 import { isStep } from './steps.js'
 import { endedReply } from './taskLine.js'
-import { crewClock, DISPATCH_RULES, laneOf, nudgeLine, returnReason, type DispatchLookup } from './dispatch.js'
-import { handed, pickUp, unclaimedAt, unclaimedReason } from './handed.js'
-import { isBuddy } from './buddies.js'
-import { closeMergedLost } from './mergedTasks.js'
+import { crewClock, DISPATCH_RULES, laneOf, returnReason } from './dispatch.js'
+import { handed, pickUp, unclaimedReason } from './handed.js'
 import { stepCandidates } from './reviewerPick.js'
 import { noTesterFree, stepOs } from './reviewTable.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
-// lost, its agent is fenced off, and the Lead is woken to hand it on. Leads are not covered here.
+// lost, its agent is fenced off, and the Lead is woken to hand it on. Leads are not covered here. Since Swarm v4 (anh Dee,
+// 2026-11-09: the server runs no v3 job on its own) no report or sweep loses a task: loseTasks runs only for the command that
+// hands in a usage limit, and the lease code goes with the task records (slice S13).
 //
 // The agent's own status, checks and posts renew the lease stored on the assignment. Its machine's reports renew it too,
 // but are read from the report its machine part keeps (written on every report anyway), never written into the group: a
@@ -297,21 +297,6 @@ function limitReason(worker: Agent, now: number): string | null {
     ? `it hit a usage limit until ${worker.limitedUntil.slice(11, 16)} UTC` : null
 }
 
-/** The earliest time a task held by a worker on [machineId] may be lost to its lease running out, as lostReason reads it now,
- *  or undefined when none can. Reports that keep its session running with progress no older can only move it later. */
-export function nextLossAt(state: SuperTabState, machineId: string): number | undefined {
-  const steps = stepIndex(state)
-  const mine = workerTasks(state).filter(({ worker }) => worker.machineId === machineId)
-  const ends = [...mine
-    .filter(({ group, worker, assignment }) => !waitingForReview(assignment) && !waitingForRevision(state, group)
-      && !waitingOnSteps(state, group, steps) && !waitingOnPerson(state, group, worker, assignment))
-    .map(({ group, assignment, worker }) => leaseEnd(group, assignment, reportRenewedAt(state, worker))),
-  // A task back with its Engineer and not picked up leaves it then, whatever it waits on (handed.ts).
-  ...mine.map(({ assignment }) => unclaimedAt(assignment))]
-    .filter((end): end is number => end !== undefined)
-  return ends.length ? Math.min(...ends) : undefined
-}
-
 /** A crew member whose session went down less than CREW_REOPEN_GRACE_MS ago, which its host is reopening: never one asleep
  *  (closed on purpose) or moved to another machine (task #3398 adds both marks), which its host leaves closed. */
 const reopening = (worker: Agent, now: number): boolean => {
@@ -336,7 +321,7 @@ export function unavailableReason(state: SuperTabState, worker: Agent, now: numb
 }
 
 /** Why a worker has lost its task now, or null while it still holds it. */
-function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex, rulesFor: DispatchLookup): string | null {
+function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number, steps: StepIndex): string | null {
   // A handed task waits on its Reviewers and CI, not on its Engineer, which may be down or at work elsewhere (task #3399).
   if (handed(group)) return null
   // A crew member its host is reopening keeps its task for the reopen's grace (crew.ts).
@@ -347,8 +332,7 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
   if (unclaimed) return unclaimed
   if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return null
   // A crew member 3 hours without progress of its own puts its task back in its lane (task #3400), however busy its screen.
-  const rules = rulesFor(group.projectId ?? 'lead')
-  if (!rules) return null
+  const rules = DISPATCH_RULES
   if (crewClock(group, worker, assignment, now, rules) === 'return') return returnReason(laneOf(group, rules.lanes), rules)
   const end = leaseEnd(group, assignment, reportRenewedAt(state, worker))
   if (end !== undefined && now > end) {
@@ -394,36 +378,15 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
 }
 
-/** Every worker 2 hours without progress hears it once in its task, without waiting for the PM (dispatch.ts crewClock). */
-function crewNudges(state: SuperTabState, now: number, rulesFor: DispatchLookup): MessageDraft[] {
-  const workers = new Map(state.agents.filter(a => !isBuddy(a)).map(a => [a.id, a]))
-  let leaders: Set<string> | undefined, steps: StepIndex | undefined
-  return state.conversations.flatMap(group => {
-    const assignment = group.assignment, worker = assignment && workers.get(assignment.agentId)
-    if (!worker || !activeWork(group)) return []
-    const rules = rulesFor(group.projectId ?? 'lead')
-    if (!rules) return []
-    if (crewClock(group, worker, assignment, now, rules) !== 'nudge') return []
-    leaders ??= new Set(state.conversations.flatMap(c => c.leadId ? [c.leadId] : []))
-    if (leaders.has(worker.id)) return []
-    steps ??= stepIndex(state)
-    // Waiting on others is no lack of progress: the waits that stop a loss stop the line too (lostReason).
-    if (waitingForReview(assignment) || waitingForRevision(state, group) || waitingOnSteps(state, group, steps) || waitingOnPerson(state, group, worker, assignment)) return []
-    assignment.nudgedAt = now
-    return [reachable(state, { id: stableId('crew-nudge', assignment.id, String(now)), conversationId: group.id, author: writtenBy(state, leadOf(state, worker) ?? worker),
-      replyTo: null, recipients: [worker.id], text: nudgeLine(laneOf(group, rules.lanes), rules), source: { kind: 'crew-nudge', assignmentId: assignment.id } })]
-  })
-}
-
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
  *  the agents of a machine that just reported. A task lost to that limit resumes at `resumeAt` when its screen said when the
  *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
-export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
+export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string): MessageDraft[] {
   const steps = stepIndex(state)
   return workerTasks(state).filter(t => which(t.worker)).flatMap(({ group, assignment, worker }) => {
     // A step that ended with no write to its task, or was lost earlier in this same pass, ends its Engineer's wait first.
     stepsEnded(state, group, now, steps)
-    const reason = lostReason(state, group, worker, assignment, now, steps, rulesFor)
+    const reason = lostReason(state, group, worker, assignment, now, steps)
     return reason ? loseTask(state, group, worker, reason, now, resumeAt && reason === limitReason(worker, now) ? resumeAt : undefined) : []
   })
 }
@@ -460,15 +423,11 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
     text, source: { kind: 'system' } }]
 }
 
-/** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
- *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
-export function sweepLiveness(state: SuperTabState, now: number, rulesFor: DispatchLookup = () => DISPATCH_RULES): MessageDraft[] {
-  const drafts = [...loseTasks(state, now, undefined, undefined, rulesFor), ...crewNudges(state, now, rulesFor), ...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now),
-    // A lost task whose own merge is recorded is done, never handed out again (mergedTasks.ts, task #4032); written as its PM.
-    ...closeMergedLost(state, now, task => {
-      const pm = projectChatOf(state, task)?.leadId, writer = state.agents.find(a => a.id === pm)
-      return writer ? writtenBy(state, writer) : null
-    })]
+/** The time checks, run on any machine's report once per Swarm sweep: every start dispatched over 3 minutes ago that is not running
+ *  fails, unless its machine is still preparing it; a Product Manager switch nobody answered, a model request nobody answered and a
+ *  removed confidential session whose data is not deleted say so once. Swarm v4 loses no task and nudges no worker. */
+export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
+  const drafts = [...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts

@@ -4,8 +4,7 @@ import { dirname, join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { nativeTurnCursorIn, type NativeTurnCursor, type NativeTurnObservation } from '../lib/nativeTurnObservations.js'
 import { REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
-import { backend, SuperTabHostError } from './host.js'
-import { identifier, object } from './wire.js'
+import { backend, identifier, object, SuperTabHostError } from './wire.js'
 
 interface Context {
   tabId: string; baseline: NativeTurnCursor; until: number; head: string | null; blocked?: string
