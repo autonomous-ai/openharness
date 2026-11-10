@@ -933,7 +933,7 @@ class ProjectSidebar extends StatelessWidget {
             ],
           );
           if (choice == 'delete' && context.mounted) {
-            await deleteSwarmAgent(context, controller, agent, name);
+            await deleteSwarmAgent(context, controller, agent, name, app: app);
           }
         },
         child: row,
