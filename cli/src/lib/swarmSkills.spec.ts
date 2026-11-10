@@ -37,15 +37,29 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   })
 
   // Swarm v4 (anh Dee, 2026-11-09): the team's talk is visible to people only if agents post it. Harness labels who gets a task;
-  // the PM announces it once in the project's channel, as "Pip, you have #12", and the rest of that task's talk stays on its
+  // the PM announces it once in the project's channel, as "@Pip #12 is yours", and the rest of that task's record stays on its
   // issue (the basics' own rule). No other agent is told to.
   it('tells the PM to announce each hand-off once in the project\'s channel, and no other agent', () => {
     const lead = prepareSwarmSkill(fixture(), { role: 'coordinator', key: 'lead' }).instructions
     expect(lead.split('\n').filter(row => row.includes('hand-off'))).toHaveLength(1)
-    expect(lead).toMatch(/announce that hand-off once in your project's channel, as "Pip, you have #12"/)
-    expect(lead).toContain('the rest of that task\'s talk stays on its issue')
+    expect(lead).toMatch(/announce that hand-off once in your project's channel, as "@Pip #12 is yours"/)
+    expect(lead).toContain('the rest of that task\'s record stays on its issue')
     for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
-      expect(prepareSwarmSkill(fixture(), saved).instructions).not.toMatch(/hand-off|you have #/)
+      expect(prepareSwarmSkill(fixture(), saved).instructions).not.toMatch(/hand-off|is yours"/)
+    }
+  })
+
+  // Swarm v4 (anh Dee, 2026-11-10: "channel chat here replaces the queue"): the channel is where agents talk to each other, as
+  // lampOS's builders do on their Queue issue, each post opening with @Name for whom it is for (Harness shows who wrote it and
+  // when); a task's own record stays on GitHub, where Harness shows it in the task's chat.
+  it('tells every agent the channel is the team\'s group chat, each post opening with @Name and unsigned', () => {
+    for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'coordinator', key: 'lead' }] as const) {
+      const rules = prepareSwarmSkill(fixture(), saved).instructions
+      expect(rules).toContain('Your project\'s channel is the team\'s group chat')
+      expect(rules).toContain('Start each post with @Name for whom it is for')
+      expect(rules).toContain('do not sign it')
+      expect(rules).toContain('say "free" when you have no task')
+      expect(rules).not.toContain('free: <your name>')
     }
   })
 
