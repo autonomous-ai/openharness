@@ -378,7 +378,15 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
           padding: SwarmLayout.columnHeadPadding,
           child: Row(
             children: [
-              Text(name, style: DesktopChrome.text(medium: true)),
+              // A column at its least (140) with a larger text size: the name gives way, never the count.
+              Flexible(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: DesktopChrome.text(medium: true),
+                ),
+              ),
               const SizedBox(width: 8),
               Text('${issues.length}', style: DesktopChrome.metadata()),
             ],
