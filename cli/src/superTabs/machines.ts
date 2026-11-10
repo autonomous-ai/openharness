@@ -1232,7 +1232,7 @@ export class ContributedMachines {
     // record, for its person, as a worktree with uncommitted changes is.
     if (!agentFolderEmpty(record.path)) { this.log('Kept an agent folder: AGENT_FOLDER_HAS_WORK'); return }
     try { rmSync(record.path, { recursive: true, force: true }) } catch { this.log('Kept an agent folder: AGENT_FOLDER_REMOVAL_FAILED'); return }
-    writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
+    this.removed(file, mine)
   }
 
   /** A removal deletes only what is provably the Swarm's: the record says which worktree, or agent folder, each start made. */
