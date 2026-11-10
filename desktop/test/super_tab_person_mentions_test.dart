@@ -172,9 +172,7 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       grid.AppTheme.brightness.value = brightness;
       addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-      final server = swarm()
-        ..tag('message-1', text: '@river can you try it?', leadId: 'dee');
-      server.mentions.last['leadName'] = 'dee';
+      final server = swarm();
       await show(tester, server, brightness: brightness);
       await tester.tap(composer);
       await tester.enterText(composer, 'Please check @');
