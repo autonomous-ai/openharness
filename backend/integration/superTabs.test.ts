@@ -4067,6 +4067,8 @@ describe('Lead mentions', () => {
   it('keeps a tag on its message alone: no tag row, no count on the person\'s read or the Swarm list', async () => {
     const { tab, group, messageId } = await tagged()
     expect((await store.messages(peer, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
+    // The tag list's collection is dropped and has no model: a raw count still sees any row written to it.
+    expect(Number((await db.$runCommandRaw({ count: 'SuperTabMention', query: { tabId: tab } }) as { n: unknown }).n)).toBe(0)
     expect((await store.read(peer, tab)).state).not.toHaveProperty('mentionsWaiting')
     const read = await app.inject({ url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } })
     expect(read.json().data.derived).not.toHaveProperty('mentionsWaiting')

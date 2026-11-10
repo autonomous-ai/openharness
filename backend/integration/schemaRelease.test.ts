@@ -133,10 +133,10 @@ describe('a release\'s schema step', () => {
   it('gives an expiry index whose time changed its new time, without a rebuild', async () => {
     const { db, target } = await database()
     await releaseSchema(db, target)
-    await db.$runCommandRaw({ collMod: 'SuperTabOperation', index: { name: 'operation_expiry', expireAfterSeconds: 7 * DAY } })
+    await db.$runCommandRaw({ collMod: 'SuperTabTerminalRequest', index: { name: 'terminal_request_expiry', expireAfterSeconds: 7 * DAY } })
     const since = new Date()
     await releaseSchema(db, target)
-    expect(await indexChanges(db, since)).toEqual(['collMod SuperTabOperation operation_expiry'])
+    expect(await indexChanges(db, since)).toEqual(['collMod SuperTabTerminalRequest terminal_request_expiry'])
     expect(await expiryIndexes(db)).toEqual(EXPIRY)
     await db.$disconnect()
   }, 240_000)

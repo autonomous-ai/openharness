@@ -9,7 +9,8 @@
  *
  * Only whole collections that nothing reads or writes are listed. A row of a collection that v4 still uses (Swarms, chats,
  * agents, machines, the leaderboard's records) is never removed here: those go by a strict row filter in their own jobs.
- * Delete this list, its job and its test 30 days after the release that carries it, and not before 2026-12-09.
+ * Delete this list, its job and its test 30 days after the release that carries its newest entries: for the Decision, tag,
+ * Activity and reminder collections, not before 2026-12-11.
  */
 import type { PrismaClient } from '@prisma/client'
 import { removeChunk } from '../../lib/chunkSweep.js'
