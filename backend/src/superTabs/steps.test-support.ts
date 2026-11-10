@@ -12,7 +12,7 @@ export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userI
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
 /** [command], a step or linked task an agent or person opened before Swarm v4, stored in [state] as conversation.create stored it
- *  then: in its task's project, with its task's Team-written mark, its opener in it and, for a named step, in its task too. Its
+ *  then: in its task's project, its opener in it and, for a named step, in its task too. Its
  *  answer as that command's was: the new step's id. */
 export function storedStep(state: SuperTabState, command: Extract<Command, { type: 'conversation.create' }>, actor: Actor): CommandEffects {
   const task = state.conversations.find(c => c.id === command.reviewOf)!
@@ -25,8 +25,7 @@ export function storedStep(state: SuperTabState, command: Extract<Command, { typ
   state.conversations.push({ id, ...(state.projects ? { projectId: project.id } : {}), number, title: command.title, leadId,
     agentIds: [...leadId ? [leadId] : [], ...creator], archived: false, brief: command.brief ?? '', reviewOf: task.id,
     ...(command.step ? { step: command.step } : {}),
-    ...(task.teamWritten ? { teamWritten: true as const, ...task.teamWrittenBy ? { teamWrittenBy: structuredClone(task.teamWrittenBy) } : {} } : {}),
-    assignment: null, lastMessageSequence: 0, codePullRequestUrls: [],
+    assignment: null, lastMessageSequence: 0,
     checks: command.checks.map((check, i) => ({ id: `${id}-check-${i}`, description: check.description, independent: check.independent ?? false, evidence: null, passedBy: null })) })
   if (command.step) for (const agentId of creator) if (!task.agentIds.includes(agentId)) task.agentIds.push(agentId)
   return { state, result: { conversationId: id, number }, messages: [] } as unknown as CommandEffects
