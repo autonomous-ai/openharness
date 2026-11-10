@@ -28,12 +28,9 @@ void main() {
 
   ConversationServer buddyChat() {
     final server = ConversationServer()..threads = true;
-    server.state['threadSessions'] = true;
-    server.state['sessionsFromChat'] = true;
     final chat = (server.state['conversations'] as List)[1] as Map;
     chat
-      ..['kind'] = 'buddy'
-      ..['buddyOwnerId'] = 'owner'
+      ..['kind'] = 'agent-chat'
       ..['title'] = 'Wren'
       ..['agentIds'] = ['buddy-main'];
     (server.state['agents'] as List).add({
@@ -43,7 +40,6 @@ void main() {
       'machineId': 'mac',
       'harnessId': 'h-main',
       'contributorId': 'owner',
-      'buddyOf': {'personId': 'owner', 'generation': 'g1'},
       'configuration': {'engine': 'claude'},
     });
     server.append(

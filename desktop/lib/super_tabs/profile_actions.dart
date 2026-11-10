@@ -20,9 +20,6 @@ extension SuperTabProfileActions on SuperTabController {
         !message.deleted;
   }
 
-  /// Whether the reader may delete [message]: as [canChange].
-  bool canDelete(SuperTabMessage message) => canChange(message);
-
   /// Replaces [message]'s text with [text], trimmed. The same text sends
   /// nothing; empty text only goes for a message with files.
   Future<String?> editMessage(SuperTabMessage message, String text) async {

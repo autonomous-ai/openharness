@@ -320,12 +320,11 @@ void main() {
     Future<dynamic> mount(
       WidgetTester tester,
       int agents, {
-      int buddies = 0,
       Duration age = Duration.zero,
     }) async {
       final server = ConversationServer();
       server.state['agents'] = [
-        for (var i = 0; i < agents + buddies; i++)
+        for (var i = 0; i < agents; i++)
           {
             'id': 'a$i',
             'name': 'Agent $i',
@@ -334,11 +333,6 @@ void main() {
             'harnessId': 'native-a$i',
             'contributorId': 'owner',
             'configuration': {'engine': 'codex'},
-            if (i >= agents)
-              'buddyOf': {
-                'personId': ['owner', 'maya', 'sam'][(i - agents) % 3],
-                'generation': 'fixture',
-              },
           },
       ];
       server.state['machines'] = [

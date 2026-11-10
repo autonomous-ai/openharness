@@ -1226,8 +1226,8 @@ class SuperTabThread {
   final int replies, lastSequence;
   final DateTime? lastAt;
 
-  /// What its root's row says after the time: a Buddy's proposal nobody has
-  /// answered yet; null for any other message. A task's state is no tag: its
+  /// What its root's row says after the time: a proposal nobody has answered
+  /// yet; null for any other message. A task's state is no tag: its
   /// agent reacts 👀 and ✅ on the row instead (anh Dee, 11-04, task #2925),
   /// so an older server's On it and Shipped draw nothing.
   String? get askTag => ask == 'proposal' ? '✋ Proposal' : null;
@@ -1241,7 +1241,7 @@ class SuperTabThread {
 }
 
 /// The source kinds of a task's root in the project chat.
-const _taskRootKinds = {'task-line', 'buddy-proposal'};
+const _taskRootKinds = {'task-line'};
 
 /// What a task's root posted before #2867 reads ahead of its title. Stored rows
 /// keep it, so this stays for as long as rows from before 2026-11-04 are kept.
