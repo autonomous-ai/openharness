@@ -368,11 +368,7 @@ function startMasterHere(): void {
 const coreLink = connectToMaster()
 /** When the devices' process starts: once there is a device, a dial's port, a Wi-Fi device or a request for one
  *  (core/devicesWake.ts). Asked of the master through the channel above. */
-/** An old Harness Team account's daemon runs no devices, the Wi-Fi device's service or the dials': it shares its Mac with
- *  the owner's daemon, and runs only to stop itself (superTabs/inCore/teamRetire.ts). Set as it starts (runForeground),
- *  before anything is wired to them. */
-let devicesOff = false
-const devicesWake = createDevicesWake({ want: (service) => { if (!devicesOff) coreLink.want(service) }, dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: harnessdEnv().HARNESSD_TEST_DIAL_PORT })
+const devicesWake = createDevicesWake({ want: (service) => coreLink.want(service), dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: harnessdEnv().HARNESSD_TEST_DIAL_PORT })
 
 const daemonBoot: {
   /** Stops the updater this core runs beside itself under a master too old to run it (core/updaterBeside.ts). */
@@ -708,10 +704,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Swarm switch (harnessd/services.ts `HARNESS_SWARM`, on unless set off): its code in this process comes from one
   // entry, loaded only while it is on (superTabs/inCore.ts), and its service is left off with it.
   const swarm = swarmOn(harnessd) ? await import('../superTabs/inCore.js') : null
-  // Decided once, as it starts: whether this daemon is an old Harness Team account's, which runs only to stop itself and
-  // leaves the Mac owner's dial and Wi-Fi device to the owner's daemon (team/config.ts isTeamAccount; goes with teamRetire).
-  const teamAccount = !!swarm?.isTeamAccount()
-  devicesOff = teamAccount
   const knownServices = servicesOn(harnessd, KNOWN_SERVICES)
   const outOfProcess = servicesTheMasterRuns(harnessd, knownServices)
   // The viewers' process (the viewers and the Store) runs once something needs it (core/viewersWake.ts).
@@ -820,12 +812,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A read-only view of agents' terminals for an experiment's viewers, told to its process (core/terminalWatch.ts).
   const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)), moveGate,
     tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
+  let holdOfRef: ((agentId: string, deliveryId: string) => Promise<string | null>) | null = null
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
     tell: (service, event) => { serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }, { untilDelivered: true }) },
     // The experiments' turns (the orchestrator's first), and Agent Messages' typed messages (core/api.ts).
     deliverers: new Set(TURN_DELIVERERS),
+    // Built further down: read when a service asks, never now.
+    hold: (agentId, deliveryId) => holdOfRef?.(agentId, deliveryId) ?? Promise.resolve(null),
   })
   // Each live turn's end, for the services in this process and the Swarm's in its own, and what each turn answered
   // (core/turns/ends.ts), all said by the event funnel as the turn goes.
@@ -1155,8 +1150,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     machines: ({ body }) => ports.models?.machines(body, computerId()),
   })
   backend.useGateway(gateway.port)
-  // An old Harness Team account's daemon serves no Wi-Fi device: the Mac owner's daemon does (devicesOff).
-  if (teamAccount) backend.disableWifi()
   backend.useWifi(wifiCore.fromGateway)
   const gatewayOps = gateway.ops
   daemonBoot.openRequests = () => backend.openRequests()
@@ -1410,6 +1403,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
   const input = inputs.input
+  holdOfRef = inputs.holdOf
   // A window that connects while a message waits for its engine reads it off the agent's frame, pushed or listed. A message is
   // sent by an agent's id, or by its session's.
   waitingForRef = (s) => input.waitingFor(s.agentId) ?? input.waitingFor(s.sessionId)
@@ -1955,6 +1949,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopHeartbeat,
     retainExitedSession,
     stoppedAgents,
+    send: frame => backend.send(frame),
     restoreDegraded: (agentId) => restoreFailed || restoreUnsurveyed.has(agentId),
     terminals,
   })
@@ -1964,8 +1959,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const slowProbeMs = Number(harnessd.HARNESSD_TEST_SLOW_PROBE_MS) || 0
   const gridAssignments = createGridAssignments({ models: () => ports.models ?? MODELS_OFF, registry,
     revision: (id) => restartJobs.revision(id), announce: announceSession })
-  // Set once the stop below exists: a Harness Team account's daemon stops for good once no agent runs in it.
-  let afterAgentsPass = (): void => {}
   const agentReconciler = new TerminalAgentReconciler({
     // The hook server starts before restore. Its early SessionStart hints must not run a full
     // discovery scan over rows whose panes have not been recreated yet (and archive those rows).
@@ -1984,7 +1977,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ...discovery,
     onReconciled: (agents) => {
       gridAssignments.observe(agents)
-      afterAgentsPass()
       if (ptyDrain) {
         void ptyDrain.step().catch((error) => {
           console.error('[terminal] ptyhost: drain failed:', error instanceof Error ? error.message : error)
@@ -2128,8 +2120,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Until the pieces below are built; after, a piece that could not be is refused by the requests
       // that need it, and the rest (list, status, revoke) answer from the pairings.
       if (!devicePartsBuilt) return { status: 503, body: { error: { code: 'UNAVAILABLE', message: 'Autonomous device service is starting' } } }
-      // An old Harness Team account's daemon pairs no Wi-Fi device and serves none (backendSocket.ts disableWifi).
-      if (teamAccount) return { status: 403, body: { error: { code: 'TEAM_ACCOUNT', message: 'A Harness Team account does not serve a Wi-Fi device.' } } }
       // The Wi-Fi device's pairings and direct links are the gateway's (gateway/start.ts); its receipts its
       // service's, with the dials (services/wifi.ts).
       const viaGateway = async (request: Parameters<GatewayOps['wifi']>[0]): Promise<Record<string, unknown>> => {
@@ -3225,13 +3215,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.stopHere = (why) => void shutdown(why)
   process.on('SIGINT', () => void shutdown('SIGINT'))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
-  // Swarm v3 has no Team accounts: a Team account's daemon stops for good after a pass finds no agent running in it, an
-  // engine or a pane (superTabs/inCore/teamRetire.ts).
-  if (swarm) {
-    afterAgentsPass = swarm.teamRetirement({ teamAccount, log: (line) => console.log(line),
-      live: () => registry.list().filter((session) => session.active || registry.terminalAvailable(session.agentId)).length,
-      stop: (reason) => void shutdown(reason) })
-  }
   // A core whose master is gone stops, so nothing is left holding the port for a master that is not
   // there to restart it.
   coreLink.onMasterGone(() => void shutdown('the harnessd master is gone'))
@@ -3280,8 +3263,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // In their own process they are told everything the windows said as they connect (core/devicesLink.ts):
   // said here too, it reached a dial still opening its port, before its greeting.
   // The Swarm cards the Super Tab service sent before this line had no devices to reach: they are shown now.
-  // An old Harness Team account's daemon runs neither the dials nor the Wi-Fi device (devicesOff).
-  if (teamAccount) { /* no devices */ } else if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; swarmDoors?.cards.replay() }
+  if (outOfProcess.has('devices')) { ports.devices = devicesLink.port; swarmDoors?.cards.replay() }
   else {
     serviceHost.start('devices', (core, started) => inline!.startDevices(core, started, {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,
@@ -3294,7 +3276,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // The Wi-Fi device (services/wifi.ts), with the dials: in their process by default (core/wifiLink.ts,
   // resumed there as its link connects), or here.
-  if (!teamAccount && !outOfProcess.has('wifi')) {
+  if (!outOfProcess.has('wifi')) {
     serviceHost.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS)
     if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
@@ -3312,8 +3294,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // site: a new kind of card reaches the dial the day it reaches the socket. The tee runs before the frame
   // is queued for the Wi-Fi device (BackendSocket.sendCommander): a device fault here must cost neither
   // that frame nor whoever is sending it, which the guards and the devices' port see to.
-  // Not on an old Harness Team account's daemon, which runs no devices.
-  if (!teamAccount) backend.onOutboundCommander = (frame) => {
+  backend.onOutboundCommander = (frame) => {
     const card = frame as Record<string, unknown>
     // The Pro's extras ride to the devices alone: the Wi-Fi device gets the card as it always did, and a
     // summary reaches the dial with the turn's whole answer, as it does the Wi-Fi device.

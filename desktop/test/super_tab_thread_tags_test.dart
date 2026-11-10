@@ -122,7 +122,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -380,101 +379,6 @@ void main() {
     expect(c.threadMentions('lead', 'message-1'), isEmpty);
     expect(picker, findsNothing);
     expect(find.text('ken15'), findsNothing);
-  });
-
-  group('Buddy threads', () {
-    /// The reader's own Buddy chat ('offline') with its main Buddy, and a
-    /// thread at its first message.
-    ConversationServer buddyChat() {
-      final server = swarm();
-      server.state['threadSessions'] = true;
-      final chat = (server.state['conversations'] as List)[1] as Map
-        ..['kind'] = 'buddy'
-        ..['buddyOwnerId'] = 'owner'
-        ..['title'] = 'Wren';
-      (server.state['agents'] as List).add({
-        'id': 'buddy-main',
-        'name': 'Wren',
-        'displayName': 'Wren',
-        'machineId': 'mac',
-        'harnessId': 'h-main',
-        'contributorId': 'owner',
-        'buddyOf': {'personId': 'owner', 'generation': 'g1'},
-        'configuration': {'engine': 'claude'},
-      });
-      chat['agentIds'] = ['buddy-main'];
-      server.append('Measure prod CPU', conversationId: 'offline');
-      server.append('Another question', conversationId: 'offline');
-      return server;
-    }
-
-    Future<SuperTabController> showBuddy(
-      WidgetTester tester,
-      ConversationServer server,
-      String root,
-    ) async {
-      final c = await show(tester, server);
-      c.select('offline');
-      await tester.pumpAndSettle();
-      c.openThread(root);
-      await tester.pumpAndSettle();
-      return c;
-    }
-
-    testTags('a Buddy thread offers its Buddy, as the chat does', (
-      tester,
-    ) async {
-      final server = buddyChat();
-      await showBuddy(tester, server, 'message-4');
-      await type(tester, '@');
-      expect(choices(tester), ['Wren']);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      final command = lastCommand(server);
-      expect(command['conversationId'], 'offline');
-      expect(command['replyTo'], 'message-4');
-      expect(command['recipientIds'], ['buddy-main']);
-    });
-
-    testTags(
-      'a thread its own session answers offers no agent: only the session '
-      'hears it',
-      (tester) async {
-        final server = buddyChat();
-        final chat = (server.state['conversations'] as List)[1] as Map;
-        chat['buddySessions'] = [
-          {
-            'thread': 'message-4',
-            'startId': 'start',
-            'agentId': 'session-1',
-            'at': 1,
-          },
-        ];
-        (server.state['agents'] as List).add({
-          'id': 'session-1',
-          'name': 'Wren',
-          'displayName': 'Wren',
-          'machineId': 'mac',
-          'harnessId': 'h-session',
-          'contributorId': 'owner',
-          'buddyOf': {'personId': 'owner', 'generation': 'g1'},
-          'buddySession': {'thread': 'message-4', 'from': 1},
-          'configuration': {'engine': 'claude'},
-        });
-        chat['agentIds'] = ['buddy-main', 'session-1'];
-        final c = await showBuddy(tester, server, 'message-4');
-        expect(c.threadSession('message-4'), isNotNull);
-        await type(tester, '@');
-        expect(picker, findsNothing);
-        // In another thread of the chat, the Buddy is offered again.
-        c.openThread('message-5');
-        await tester.pumpAndSettle();
-        await type(tester, '@');
-        expect(choices(tester), ['Wren']);
-      },
-    );
   });
 
   for (final brightness in Brightness.values) {

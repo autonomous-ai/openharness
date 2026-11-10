@@ -9,7 +9,6 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_icon_button.dart';
 import '../state/harness_attachments.dart';
 import '../widgets/desktop_chrome.dart';
-import 'buddy_sessions.dart';
 import 'chat_find.dart';
 import 'composer_tags.dart';
 import 'composer_toggle.dart';
@@ -34,7 +33,6 @@ class SuperTabThreadPanel extends StatefulWidget {
     required this.root,
     required this.row,
     required this.outgoing,
-    this.sessionActivity,
     this.machineName,
     this.onScroll,
     this.voice,
@@ -49,10 +47,6 @@ class SuperTabThreadPanel extends StatefulWidget {
 
   /// Draws a reply on its way.
   final Widget Function(SuperTabOutgoing sent) outgoing;
-
-  /// What a thread's own Buddy session is doing, as this computer reads it;
-  /// without it, what the Swarm alone says.
-  final SuperTabSessionActivity? sessionActivity;
 
   /// A machine's name, said beside an agent `@` offers.
   final String Function(String machineId)? machineName;
@@ -80,8 +74,6 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   // Opens at the newest reply and follows it until the reader scrolls up.
   final _scroll = SuperTabThreadScroll();
   bool _alsoSend = false;
-  // The reply starts this thread's own Buddy session (reader's Buddy chat).
-  bool _newSession = false;
   // Whether the list is scrolled away from its newest reply, the replies
   // there were when the thread opened or was last read to its end (set once
   // the thread's replies are known), and the latest replies and rows (replies
@@ -256,7 +248,6 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       // Each thread keeps its own draft.
       _composer.text = c.threadDraft(widget.root);
       _alsoSend = false;
-      _newSession = false;
       _tagIndex.value = 0;
       _tagDismissed.value = null;
       _closeFind(refocus: false);
@@ -338,31 +329,22 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       c.canWrite &&
       c.selected?.archived == false &&
       !c.hasPendingAction &&
-      !c.isEarlierBuddyChat(c.selected);
+      !_keptToRead;
 
-  /// The thread's last session ended: a reply here must start a new one.
-  bool get _sessionLocked =>
-      c.offersThreadSessions(widget.root) &&
-      c.threadSessionEnded(widget.root) != null;
+  /// A Buddy session answers this thread (one started before Desktop dropped
+  /// New session): only it hears a reply, which stays in the thread (backend
+  /// routeBuddySession).
+  bool get _inSession =>
+      c.selected?.buddySessions.any((s) => s.thread == widget.root) ?? false;
 
-  /// Whether the composer offers New session: the reader's own Buddy chat,
-  /// with their Buddy running, in a thread no session answers now.
-  bool get _offersSession =>
-      c.offersThreadSessions(widget.root) &&
-      c.threadSession(widget.root) == null;
+  /// A thread whose Buddy session ended: the server takes a reply there only
+  /// as a new session, which Desktop no longer starts.
+  bool get _sessionEnded =>
+      !_inSession && c.threadMessages(widget.root).any((m) => m.buddySession);
 
-  /// Whether this reply starts a session.
-  bool get _startsSession =>
-      _offersSession &&
-      (_sessionLocked || (_newSession && c.threadSessionBlocked == null));
-
-  /// A session's thread stays in the thread: Also send is not offered there,
-  /// nor for a reply that starts one.
-  bool get _offersAlsoSend => !_startsSession && _alsoSendPossible;
-
-  /// Whether this thread offers Also send whenever New session is off: its
-  /// place is laid out for it, so turning New session on never moves the box.
-  bool get _alsoSendPossible => c.threadSession(widget.root) == null;
+  /// The box takes no reply: an earlier Buddy chat, or an ended session's
+  /// thread.
+  bool get _keptToRead => c.isEarlierBuddyChat(c.selected) || _sessionEnded;
 
   /// The files waiting to go with this thread's next reply.
   HarnessAttachments get _files =>
@@ -387,8 +369,7 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     tags: c.threadMentions(_conversationId, widget.root).values,
   );
 
-  /// Who `@` offers in this reply: whom the chat's box offers, except agents
-  /// where the thread's own Buddy session alone hears the reply.
+  /// Who `@` offers in this reply: whom the chat's box offers.
   List<SuperTabComposerChoice> get _tagChoices {
     final group = c.selected;
     if (!_writable || group == null) return const [];
@@ -400,7 +381,7 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       at.query,
       machineName: widget.machineName ?? (_) => '',
       choose: _chooseTag,
-      agents: !_startsSession && c.threadSession(widget.root) == null,
+      agents: !_inSession,
     );
   }
 
@@ -434,32 +415,17 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     final root = widget.root;
     c.setThreadDraft(root, _composer.text);
     await c.sendThreadReply(
-      alsoSend: _offersAlsoSend && _alsoSend,
-      newSession: _startsSession,
+      alsoSend: _alsoSend,
       // The reply is on its way (its files have gone up): the box is free for
       // the next one, unless another thread is shown by now.
       onSending: () {
         if (!mounted || widget.root != root) return;
         if (c.threadDraft(root).isEmpty) {
           _composer.clear();
-          setState(() {
-            _alsoSend = false;
-            _newSession = false;
-          });
+          setState(() => _alsoSend = false);
         }
       },
     );
-    // Refused for New session, the reply's text is back as this thread's
-    // draft: it shows in the box, ready to send without it, unless another
-    // thread is shown or something was typed meanwhile.
-    if (!mounted || widget.root != root || _composer.text.isNotEmpty) return;
-    final restored = c.threadDraft(root);
-    if (restored.isEmpty) return;
-    _composer.value = TextEditingValue(
-      text: restored,
-      selection: TextSelection.collapsed(offset: restored.length),
-    );
-    setState(() {});
   }
 
   @override
@@ -542,14 +508,6 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                 focus: _findFocus,
                 onClose: _closeFind,
               ),
-            SuperTabThreadSessionLine(
-              key: ValueKey('super-thread-session-${widget.root}'),
-              controller: c,
-              root: widget.root,
-              activityOf:
-                  widget.sessionActivity ??
-                  (session) => superTabSessionActivity(c, null, session),
-            ),
             Expanded(
               child: Stack(
                 children: [
@@ -738,19 +696,17 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     text: _composer,
     focus: _focus,
     files: _files,
-    enabled:
-        c.canWrite &&
-        c.selected?.archived == false &&
-        !c.isEarlierBuddyChat(c.selected),
+    enabled: c.canWrite && c.selected?.archived == false && !_keptToRead,
     writable: _writable,
     busy: _busy,
     error: c.threadComposerError(c.selectedId, widget.root),
     hint: c.isEarlierBuddyChat(c.selected)
         ? 'This is an earlier chat, kept to read.'
+        : _sessionEnded
+        ? "This thread's session ended."
         : 'Reply',
     onEdited: _edited,
     onSend: () => unawaited(_send()),
-    options: _choices(_writable),
     onMic: switch (widget.voice) {
       final voice? => () => voice.start(
         conversationId: _conversationId,
@@ -802,60 +758,21 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   );
 
   /// What sits under the box: Also send, a small checkbox on its own line as
-  /// in Slack (Huy and Scholes, 11-04), and the muted note while the reply
-  /// starts a session. They never show together, so they share one place;
-  /// each keeps its place while hidden, so the box never moves as New session
-  /// is toggled.
-  Widget? _underBox() {
-    final note = _offersSession
-        ? Padding(
-            padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
-            child: Visibility(
-              visible: _startsSession,
-              maintainSize: true,
-              maintainAnimation: true,
-              maintainState: true,
-              child: Text(
-                'Your reply starts a new Buddy session',
-                key: const ValueKey('super-thread-session-note'),
-                style: DesktopChrome.metadata(color: DesktopChrome.muted),
-              ),
-            ),
-          )
-        : null;
-    if (!_alsoSendPossible) return note;
-    // Its square under the row's first button: the box's inset.
-    final line = Visibility(
-      visible: _offersAlsoSend,
-      maintainSize: true,
-      maintainAnimation: true,
-      maintainState: true,
-      child: Padding(
-        key: const ValueKey('super-thread-also-line'),
-        padding: const EdgeInsets.only(
-          top: grid.AppDesktop.controlGap,
-          left: grid.AppDesktop.groupGap,
-        ),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: _alsoSendChoice(_writable),
-        ),
-      ),
-    );
-    return note == null ? line : Stack(children: [line, note]);
-  }
-
-  /// The row's options, between @ Tag and the mic: New session, ending in "…"
-  /// in a pane narrower than the app allows.
-  Widget? _choices(bool writable) => _offersSession
-      ? Align(
-          alignment: Alignment.centerLeft,
-          child: FocusTraversalOrder(
-            order: const NumericFocusOrder(SuperTabReplyBox.optionsOrder),
-            child: _sessionChoice(writable),
+  /// in Slack (Huy and Scholes, 11-04), its square under the row's first
+  /// button: the box's inset.
+  Widget? _underBox() => _inSession
+      ? null
+      : Padding(
+          key: const ValueKey('super-thread-also-line'),
+          padding: const EdgeInsets.only(
+            top: grid.AppDesktop.controlGap,
+            left: grid.AppDesktop.groupGap,
           ),
-        )
-      : null;
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: _alsoSendChoice(_writable),
+          ),
+        );
 
   /// Also send, on its own line under the box: after send in the Tab order.
   Widget _alsoSendChoice(bool writable) => FocusTraversalOrder(
@@ -868,28 +785,4 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       onChanged: writable ? (on) => setState(() => _alsoSend = on) : null,
     ),
   );
-
-  static const _sessionLabel = 'New session';
-
-  /// New session, left of Also send: on and locked once the thread's session
-  /// ended; greyed while it can't start, its hover saying why.
-  Widget _sessionChoice(bool writable) {
-    final locked = _sessionLocked;
-    // What the server would refuse is said before sending: paused, no Buddy,
-    // an older host.
-    final blocked = c.threadSessionBlocked;
-    return SuperTabComposerToggle(
-      key: const ValueKey('super-thread-new-session'),
-      on: locked || (_newSession && blocked == null),
-      label: _sessionLabel,
-      hint:
-          blocked ??
-          (locked
-              ? 'This thread\'s session ended. Your reply starts a new one.'
-              : 'Starts a separate Buddy session for this thread'),
-      onChanged: writable && !locked && blocked == null
-          ? (on) => setState(() => _newSession = on)
-          : null,
-    );
-  }
 }

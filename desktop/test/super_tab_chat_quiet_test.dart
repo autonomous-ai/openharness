@@ -186,5 +186,7 @@ void main() {
       expect(find.textContaining('Discuss the plan'), findsNothing);
       expect(find.textContaining('Say what you want to build'), findsNothing);
     }
+    // The view saves its read mark 200 ms after the change: let it land.
+    await tester.pump(const Duration(milliseconds: 250));
   });
 }

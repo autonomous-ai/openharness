@@ -116,32 +116,6 @@ void main() {
     });
   });
 
-  group('a decision', () {
-    testWidgets('is a card: Decision, its question, and View for the rest', (
-      tester,
-    ) async {
-      final server = ConversationServer.chat();
-      server.append(
-        'River asks owner (#12): Ship it tonight?\n\nOptions: Yes, No\n',
-        agent: true,
-      );
-      server.messages.last['source'] = {
-        'kind': 'decision-asked',
-        'decisionId': 'd1',
-      };
-      await showView(tester, server);
-      final row = find.byType(SuperTabMessageRow);
-      Finder inRow(String text) =>
-          find.descendant(of: row, matching: find.textContaining(text));
-      expect(inRow('Decision'), findsOneWidget);
-      expect(inRow('Ship it tonight?'), findsOneWidget);
-      expect(inRow('Options: Yes, No'), findsNothing);
-      await tester.tap(inRow('View'));
-      await tester.pumpAndSettle();
-      expect(inRow('Options: Yes, No'), findsOneWidget);
-    });
-  });
-
   group('by keyboard', () {
     /// Focuses the control drawing [label] and presses Enter on it.
     Future<void> press(WidgetTester tester, String label) async {

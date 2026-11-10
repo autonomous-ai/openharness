@@ -82,7 +82,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -160,7 +159,7 @@ void main() {
     expect(find.text('Delete message'), findsOneWidget);
     expect(find.byType(AppMenuDivider), findsOneWidget);
     final rule = tester.getTopLeft(find.byType(AppMenuDivider)).dy;
-    expect(rule, greaterThan(tester.getTopLeft(find.text('Remind me')).dy));
+    expect(rule, greaterThan(tester.getTopLeft(find.text('Mark unread')).dy));
     expect(rule, lessThan(tester.getTopLeft(find.text('Edit message')).dy));
     expect(
       tester.getTopLeft(find.text('Edit message')).dy,

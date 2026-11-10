@@ -5,7 +5,7 @@ import 'package:harness/super_tabs/github_issues.dart';
 import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/ws/ws_conn.dart';
 
-import '../super_tab_activity_lists_test.dart' show swarm;
+import 'super_tab_swarm.dart' show swarm;
 import 'super_tab_fixture.dart';
 
 /// Swarm v4's review data: lampOS's agents and real posts from the week of 26 October 2026, laid out the v4 way. The

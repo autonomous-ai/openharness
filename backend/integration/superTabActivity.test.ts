@@ -26,6 +26,7 @@ import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { swarmNoticeId, type PhoneNotice } from '../src/push/sender.js'
 import { generateKeyPairSync } from 'node:crypto'
 import { sendPhoneNotices } from '../src/push/send.js'
+import { localRingMemory } from '../src/push/rings.js'
 import { dropMuted } from '../src/push/muted.js'
 import { apnsSender, type ApnsRequest } from '../src/push/apns.js'
 import { fcmSender } from '../src/push/fcm.js'
@@ -239,7 +240,7 @@ describe('Phone push end to end on the server: a write, its phones, and what App
     const senders = { ios: apnsSender(apnsKeys, { transport: async request => { apple.push(request); return { status: 200, reason: null } } }),
       android: fcmSender(fcmAccount, { fetcher }) }
     const sending: Array<Promise<void>> = []
-    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices)) } })
+    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices, localRingMemory())) } })
     const s = await scene()
     const iphone = `${'a1'.repeat(32)}`, android = 'fcm:owner-android', authors = `${'b2'.repeat(32)}`
     await registerPushDevice(db, owner.sub, { platform: 'ios', token: iphone }, Date.now())
@@ -271,7 +272,7 @@ describe('Phone push end to end on the server: a write, its phones, and what App
     const apple: ApnsRequest[] = []
     const senders = { ios: apnsSender(apnsKeys, { transport: async request => { apple.push(request); return { status: 200, reason: null } } }), android: null }
     const sending: Array<Promise<void>> = []
-    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices)) } })
+    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices, localRingMemory())) } })
     const s = await scene()
     const token = 'c3'.repeat(32)
     await registerPushDevice(db, peer.sub, { platform: 'ios', token }, Date.now())
@@ -294,7 +295,7 @@ describe('Phone push end to end on the server: a write, its phones, and what App
     const apple: ApnsRequest[] = []
     const senders = { ios: apnsSender(apnsKeys, { transport: async request => { apple.push(request); return { status: 200, reason: null } } }), android: null }
     const sending: Array<Promise<void>> = []
-    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices)) } })
+    const pushing = new SuperTabStore(db, Date.now, null, { phoneNotices: notices => { sending.push(sendPhoneNotices(db, senders, notices, localRingMemory())) } })
     const s = await scene()
     const token = 'd4'.repeat(32)
     await registerPushDevice(db, peer.sub, { platform: 'ios', token }, Date.now())

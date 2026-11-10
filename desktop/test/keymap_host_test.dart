@@ -365,11 +365,12 @@ void main() {
       ('cmd+w', 'swarm.close'),
       ('cmd+shift+w', 'pane.close'),
       ('ctrl+tab', 'swarm.next'),
-      // Move Pane Up until it was retired; Chat with PM since.
-      ('cmd+shift+k', 'swarm.chat_with_pm'),
     ]) {
       expect(command(keys), expected, reason: keys);
     }
+    // Chat with PM opened the Buddy chat, which v4 has not: its key is free.
+    expect(command('cmd+shift+k'), isNull);
+    expect(harnessCommandById['swarm.chat_with_pm'], isNull);
     // Parity with the table that handles real workspace input, including all
     // alternate directions and tab/history keys.
     for (final shortcut in appShortcuts()) {
