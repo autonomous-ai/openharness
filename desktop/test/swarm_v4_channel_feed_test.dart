@@ -139,6 +139,7 @@ void main() {
       expect(top, orderedEquals([...top]..sort()));
       expect(top.toSet(), hasLength(7));
       expect(tester.takeException(), isNull);
+      await look(tester, 'channel');
       // The channel is still read-only, and says nothing of being empty.
       expect(key('super-agents-only'), findsOneWidget);
       expect(find.textContaining('No posts yet'), findsNothing);

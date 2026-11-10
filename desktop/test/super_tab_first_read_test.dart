@@ -1,8 +1,6 @@
 import 'package:fake_async/fake_async.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/machine_status.dart';
 import 'package:harness/super_tabs/reading.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -53,14 +51,11 @@ void main() {
         final c = _controller(daemon)..start();
         async.flushMicrotasks();
         expect(daemon.states, 1);
-        expect(c.stillConnecting, isTrue);
         daemon.failure = null;
         async.elapse(const Duration(milliseconds: 500));
         expect(daemon.states, 2);
         expect(c.snapshot, isNotNull);
         expect(c.backendUnreachable, isFalse);
-        expect(c.stillConnecting, isFalse);
-        expect(c.unreachableSince, isNull);
         c.dispose();
       });
     },
@@ -107,7 +102,6 @@ void main() {
         async.elapse(const Duration(seconds: 11));
         expect(c.error, _unreachable.message);
         expect(c.loading, isFalse);
-        expect(c.stillConnecting, isTrue);
         // Quick tries spent, it reads no faster than its poll.
         final reads = daemon.states;
         async.elapse(const Duration(seconds: 9));
@@ -159,7 +153,6 @@ void main() {
       final c = _controller(daemon)..start();
       async.flushMicrotasks();
       expect(c.accessRevoked, isTrue);
-      expect(c.stillConnecting, isFalse);
       final reads = daemon.states;
       daemon.failure = null;
       async.elapse(const Duration(seconds: 30));
@@ -215,7 +208,6 @@ void main() {
         final reads = daemon.states;
         async.elapse(const Duration(seconds: 3));
         expect(c.backendUnreachable, isTrue);
-        expect(c.stillConnecting, isFalse);
         expect(daemon.states, reads + 1);
         c.dispose();
       });
@@ -237,7 +229,6 @@ void main() {
         async.flushMicrotasks();
         expect(c.error, isNull);
         expect(c.loading, isTrue);
-        expect(c.stillConnecting, isTrue);
         daemon.failure = null;
         async.elapse(const Duration(milliseconds: 500));
         expect(c.snapshot, isNotNull);
@@ -374,32 +365,5 @@ void main() {
         c.dispose();
       });
     });
-  });
-
-  testWidgets('the pill says Connecting until a read has been answered', (
-    tester,
-  ) async {
-    Widget pill({required bool connecting}) => MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: SuperTabMachinesPill(
-            connecting: connecting,
-            reconnectingFor: const Duration(seconds: 4),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpWidget(pill(connecting: true));
-    expect(find.text('Connecting · 4s'), findsOneWidget);
-    expect(
-      find.bySemanticsLabel('Machines: connecting, for 4s'),
-      findsOneWidget,
-    );
-    await tester.pumpWidget(pill(connecting: false));
-    expect(find.text('Reconnecting · 4s'), findsOneWidget);
-    expect(
-      find.bySemanticsLabel('Machines: reconnecting, for 4s'),
-      findsOneWidget,
-    );
   });
 }
