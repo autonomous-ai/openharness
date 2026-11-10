@@ -416,20 +416,19 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     expect(refusal(() => start(g, other))).toBeNull()
   })
 
-  it('keeps an owner\'s own At most N, from a new client or an older one', () => {
+  // The lead, 2026-11-10: the owner deleted capacity settings, so a count an owner saved before, At most N from a new client or a
+  // plain number from an older one, holds no start back. Free memory still does.
+  it('takes agents as memory allows, whatever count its owner saved before', () => {
     const f = swarm(), group = f.group()
     Object.assign(f.machine('owner-mac'), { maxAgents: 16, agents: 'atMost' })
     measured(f, 'owner-mac', 128, 60)
     fill(f, 'owner-mac', 16)
-    const full = refusal(() => start(f, group))
-    expect(full?.code).toBe('MACHINE_FULL')
-    expect(full?.message).toBe('Owner Mac is set to run at most 16 agents and runs 16. Its owner can change that in its settings, or try again when one finishes.')
-    // An older client's At most 3 on a 128 GiB Mac (suggestion 16, maximum 64) is the owner's.
+    expect(refusal(() => start(f, group))).toBeNull()
     const g = swarm(), other = g.group()
     Object.assign(g.machine('owner-mac'), { maxAgents: 3 })
     measured(g, 'owner-mac', 128, 60)
     fill(g, 'owner-mac', 3)
-    expect(refusal(() => start(g, other))?.code).toBe('MACHINE_FULL')
+    expect(refusal(() => start(g, other))).toBeNull()
   })
 
   it('a start refused for memory says so plainly', () => {
@@ -449,8 +448,9 @@ describe('machines take agents as memory allows (Dee, 11-04: "remove the limit")
     fill(f, 'owner-mac', 16)
     // 16 running and 21 GiB free: ten more of 2 GiB, not the zero a count of 16 left.
     expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(10)
+    // A count its owner saved before is no limit.
     Object.assign(f.machine('owner-mac'), { agents: 'atMost', maxAgents: 18 })
-    expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(2)
+    expect(availableSlots(f.state, f.machine('owner-mac'), machineSlots(f.state, f.machine('owner-mac')))).toBe(10)
   })
 
   // Review of #3001: the reading shows no memory for starts not launched yet.
