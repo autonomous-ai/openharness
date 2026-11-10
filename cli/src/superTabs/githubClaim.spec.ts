@@ -10,7 +10,7 @@ const NOW = new Date(2026, 10, 11, 14, 5).getTime()
 function setup() {
   const repo = { issues: new Map<number, Json>([[34, { number: 34, state: 'open', labels: [{ name: 'builder:pip' }, { name: 'size:s' }], html_url: 'https://github.com/acme/app/issues/34' }]]),
     comments: new Map<number, Json[]>(), status: 0, down: false, next: 9001, fail: null as null | { method: string; path: RegExp; status: number },
-    /** The builder's label the assigner moves the task to while the claim's label is put on. */
+    /** The builder's label the assigner moves the task to while the claim's label is put on; '' takes it from the builder for nobody. */
     regiven: null as null | string }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   const names = (issue: Json) => (issue.labels as Json[]).map(label => String(label.name))
@@ -48,7 +48,7 @@ function setup() {
     }
     if (labels && method === 'POST') {
       const issue = repo.issues.get(Number(labels[1]))!
-      if (repo.regiven) issue.labels = [...(issue.labels as Json[]).filter(label => !String(label.name).startsWith('builder:')), { name: repo.regiven }]
+      if (repo.regiven !== null) issue.labels = [...(issue.labels as Json[]).filter(label => !String(label.name).startsWith('builder:')), ...(repo.regiven ? [{ name: repo.regiven }] : [])]
       for (const name of (body as { labels: string[] }).labels) if (!names(issue).includes(name)) (issue.labels as Json[]).push({ name })
       return { status: 200, etag: null, body: issue.labels, resetAt: null }
     }
@@ -155,6 +155,10 @@ describe('a task\'s claim, made by command', () => {
     u.repo.regiven = 'builder:atlas'
     u.repo.fail = { method: 'DELETE', path: /\/labels\//, status: 502 }
     expect((await refusal(u.take()))?.message).toBe('acme/app#34 was given to another builder (builder:atlas) as you took it, and GitHub answered 502 when status:taken was taken off it. Take that label off.')
+    u.repo.issues.set(35, { number: 35, state: 'open', labels: [{ name: 'builder:pip' }] })
+    u.repo.regiven = ''
+    u.repo.fail = { method: 'DELETE', path: /\/labels\//, status: 0 }
+    expect((await refusal(u.take(35)))?.message).toBe('acme/app#35 was taken back from you as you took it, and GitHub did not answer when status:taken was taken off it. Take that label off.')
   })
 
   it('finds its own claim among the newest comments of a long issue, and never takes another login\'s comment that reads the same for it', async () => {

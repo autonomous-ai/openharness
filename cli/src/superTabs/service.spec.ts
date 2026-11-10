@@ -1049,7 +1049,7 @@ describe('a verdict by command', () => {
     const sent: Array<{ path: string; body: unknown }> = []
     const github = { get: vi.fn(async (path: string): Promise<{ status: number; etag: null; resetAt: null; body: unknown }> => ({ status: 200, etag: null, resetAt: null,
       body: path === '/user' ? { login: 'reader-login' } : path.includes('/comments') ? [] : { state: 'open', head: { sha: HEAD, ref: 'pip/12' }, labels: [{ name: 'builder:pip' }] } })),
-      send: vi.fn(async (_method: string, path: string, body?: unknown) => { sent.push({ path, body })
+      send: vi.fn(async (_method: string, path: string, body?: unknown): Promise<{ status: number; etag: null; resetAt: null; body: unknown }> => { sent.push({ path, body })
         return { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } }) }
     const service = superTabService(core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, github: () => github })
     const read = (extra: Record<string, unknown> = {}) => service.requests.super_tabs({ action: 'read', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 27,

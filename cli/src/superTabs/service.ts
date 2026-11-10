@@ -163,7 +163,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
   const github = (options.github ?? githubRest)()
-  // This computer's GitHub login, asked once: a verdict made by command looks for its own earlier comment by it (githubVerdict.ts).
+  // This computer's GitHub login, asked once: a verdict or a claim made by command looks for its own earlier comment by it
+  // (githubVerdict.ts, githubClaim.ts).
   let githubLogin: Promise<string> | null = null
   const loginOf = () => githubLogin ??= github.get('/user', null).then(reply => {
     const login = object(reply.body).login
@@ -452,7 +453,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
           const record = async (repository: string, commentId: string) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) }
           return { ok: true, value: verdict ? await postVerdict({ get: github.get, send: github.send, login: loginOf, record }, { name, repositories }, verdict)
-            : await takeTask({ get: github.get, send: github.send, record }, { name, repositories }, claim!) }
+            : await takeTask({ get: github.get, send: github.send, login: loginOf, record }, { name, repositories }, claim!) }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {
