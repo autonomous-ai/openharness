@@ -52,7 +52,7 @@ void main() {
       saved: 'lead',
       size: size,
       github: swarmV4GitHub(),
-      onOpenGroupTerminals: (c) => terminals.add(c.selectedId),
+      onOpenGroupTerminals: (view) => terminals.add(view.selectedId),
     );
     return (server, c, terminals);
   }
@@ -146,9 +146,11 @@ void main() {
       ..state['projects'] = <dynamic>[]
       ..state['conversations'] = <dynamic>[];
     var started = 0;
+    // At the test window's own size, 800 wide, near where the left pane becomes a drawer.
     await openSwarmV4(
       tester,
       empty,
+      size: const Size(800, 600),
       onNewAgent: () => started++,
       onNewProject: () => started++,
     );
@@ -161,7 +163,9 @@ void main() {
 
     // A server that cannot be read: the view stays up and nothing throws.
     final down = swarmV4Server()..failReads = true;
-    final offline = await openSwarmV4(tester, down);
+    // A Swarm of its own, as the workspace opens each: not the empty one's view given another controller.
+    await tester.pumpWidget(const SizedBox());
+    final offline = await openSwarmV4(tester, down, size: const Size(800, 600));
     expect(tester.takeException(), isNull);
     expect(offline.error, isNotNull);
     expect(find.text(offline.error!), findsWidgets);

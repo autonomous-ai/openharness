@@ -168,11 +168,7 @@ Future<SuperTabController> openSwarmV4(
               ? null
               : () => onOpenGroupTerminals(c),
           machineName: (id) =>
-              shown.machines
-                  .where((m) => m.machineId == id)
-                  .firstOrNull
-                  ?.displayName ??
-              id,
+              shown.machines.firstWhere((m) => m.machineId == id).displayName,
           github: github,
           instructions: instructions,
           board: true,
