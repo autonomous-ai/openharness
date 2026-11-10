@@ -2088,69 +2088,19 @@ describe('removed machine cleanup', () => {
     writeFileSync(file, JSON.stringify({ ...saved, worktrees: [...saved.worktrees, row] }))
   }
 
-  // Task #4353: a Team-written start saved Claude trust for its worktree in the person's own settings, so it did not stall at
-  // the trust question. That trust goes with the worktree, and nothing else in the file does: the person's own answer for
-  // the repository stays.
-  describe('the trust a Team-written start saved', () => {
-    const trustFile = (m: ReturnType<typeof machine>) => join(m.home, '.claude.json')
-    const saveTrust = (m: ReturnType<typeof machine>, folders: string[]) => writeFileSync(trustFile(m), JSON.stringify({ userID: 'u',
-      projects: Object.fromEntries(folders.map(folder => [folder, { hasTrustDialogAccepted: true, allowedTools: [] }])) }, null, 2))
-    const trusted = (m: ReturnType<typeof machine>) => Object.entries(JSON.parse(readFileSync(trustFile(m), 'utf8')).projects as Record<string, { hasTrustDialogAccepted?: boolean }>)
-      .filter(([, entry]) => entry.hasTrustDialogAccepted === true).map(([folder]) => folder).sort()
-    const markTeamWritten = (m: ReturnType<typeof machine>) => {
-      const file = swarmWorktreesFile(m.data, 'host'), saved = JSON.parse(readFileSync(file, 'utf8'))
-      writeFileSync(file, JSON.stringify({ ...saved, worktrees: saved.worktrees.map((w: { startId: string }) => w.startId === 'recorded' ? { ...w, teamWritten: true } : w) }))
-    }
-    const removable = (m: ReturnType<typeof machine>) => {
-      m.setLive([])
-      rmSync(join(m.recorded, 'unpushed.txt'))
-      git(m.clone, 'config', 'branch.super-tab/recorded.harness', 'placeholder')
-    }
-
-    it('is cleared when its stopped worker\'s worktree goes, and kept while the worktree stays', async () => {
-      const m = machine()
-      markTeamWritten(m)
-      saveTrust(m, [m.recorded, m.clone])
-      const host = m.open()
-      // Its session still runs there: the worktree stays, and so does its trust.
-      await host.removeStoppedWorktree('tab', 'h-recorded')
-      expect(trusted(m)).toEqual([m.clone, m.recorded].sort())
-      removable(m)
-      await host.removeStoppedWorktree('tab', 'h-recorded')
-      expect(existsSync(m.recorded)).toBe(false)
-      expect(trusted(m)).toEqual([m.clone])
-      const saved = JSON.parse(readFileSync(trustFile(m), 'utf8'))
-      expect(saved.userID).toBe('u')
-      expect(saved.projects[m.recorded]).toEqual({ allowedTools: [] })
-    })
-
-    it('is cleared when its worktree folder is already gone', async () => {
-      const m = machine()
-      markTeamWritten(m)
-      saveTrust(m, [m.recorded, m.clone])
-      m.setLive([])
-      rmSync(m.recorded, { recursive: true, force: true })
-      await m.open().removeStoppedWorktree('tab', 'h-recorded')
-      expect(trusted(m)).toEqual([m.clone])
-    })
-
-    it('is cleared when the machine leaves the Swarm, for a recorded worktree and one known from its start', async () => {
-      const m = machine()
-      markTeamWritten(m)
-      Object.assign(m.starts[0].request, { projectSettings: 'off' })
-      saveTrust(m, [m.recorded, m.earlier, m.unproven, m.own])
-      await m.open().clean('tab', 'removal')
-      expect(trusted(m)).toEqual([m.own, m.unproven].sort())
-    })
-
-    it('leaves a normal start\'s trust as it was', async () => {
-      const m = machine()
-      saveTrust(m, [m.recorded])
-      removable(m)
-      await m.open().removeStoppedWorktree('tab', 'h-recorded')
-      expect(existsSync(m.recorded)).toBe(false)
-      expect(trusted(m)).toEqual([m.recorded])
-    })
+  // Backend #3872: the Team-written guard went with Team accounts. A worktree's removal never touches the person's folder trust,
+  // whatever its record or its start says.
+  it('leaves the person\'s folder trust as it was when a worktree goes', async () => {
+    const m = machine()
+    const trustFile = join(m.home, '.claude.json')
+    const folders = [m.recorded, m.clone]
+    writeFileSync(trustFile, JSON.stringify({ userID: 'u', projects: Object.fromEntries(folders.map(folder => [folder, { hasTrustDialogAccepted: true }])) }))
+    const file = swarmWorktreesFile(m.data, 'host'), saved = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...saved, worktrees: saved.worktrees.map((w: { startId: string }) => w.startId === 'recorded' ? { ...w, teamWritten: true } : w) }))
+    m.setLive([])
+    rmSync(m.recorded, { recursive: true, force: true })
+    await m.open().removeStoppedWorktree('tab', 'h-recorded')
+    expect(JSON.parse(readFileSync(trustFile, 'utf8')).projects[m.recorded]).toEqual({ hasTrustDialogAccepted: true })
   })
 
   // Diego, 10-30: a worktree folder deleted by hand kept its record for good, so every later stop tried it again.
@@ -2690,8 +2640,8 @@ describe('removed machine cleanup', () => {
     expect(start.mock.calls[0]![0]).not.toHaveProperty('beforeJoin')
   })
 
-  // Task #4353: its removal clears the trust a Team-written start saved, so the record says which start it was.
-  it('marks the worktree of a Team-written start', async () => {
+  // Backend #3872: no start is Team-written now. One that carries `projectSettings: 'off'` is recorded as any other.
+  it('records the worktree of a start as any other, whatever projectSettings it carries', async () => {
     const root = mkdtempSync(join(tmpdir(), 'swarm-record-')); roots.push(root)
     const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
     const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['claude'], paused: false },
@@ -2702,7 +2652,7 @@ describe('removed machine cleanup', () => {
     await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,
       capabilities: vi.fn(async () => ({ ok: true, resources: {}, tools: {} })) } as never).tick()
     expect(JSON.parse(readFileSync(swarmWorktreesFile(root, 'host'), 'utf8')).worktrees).toEqual([
-      { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new', teamWritten: true }])
+      { tabId: 'tab', startId: 'new', harnessId: 'h-new', source: '/clone', path: '/worktrees/project/new' }])
   })
 
   // Scholes, 2026-10-30: work is assigned only after the settle, so the settle carries the model the start saw.

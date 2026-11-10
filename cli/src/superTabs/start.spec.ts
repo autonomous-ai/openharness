@@ -7,7 +7,7 @@ import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -134,46 +134,15 @@ describe('Swarm permission mode', () => {
     }
   })
 
-  // Swarm v3 (task #4307): no Team machine is left, and the server sends Team-written work only to the project owner's own
-  // computer with project settings off (backend superTabs/teamWritten.ts, ruling #4120). It launches there as on a Team daemon.
-  it('starts Team-written Claude Code work on the owner\'s own computer with project settings off', async () => {
+  // Backend #3872: the Team-written guard went with Team accounts, and no start carries `projectSettings: 'off'`. One that does
+  // starts as any other: on Codex, in the folder it names, in its owner's own permission mode.
+  it('starts work as any other whatever projectSettings a start carries', async () => {
     const f = fixture()
-    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off' })
+    Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off', worktree: false, cwd: '/repo' })
     expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ ok: true })
     const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
-    expect(payload).toMatchObject({ permissionMode: 'teamWritten', bypassPermission: false })
-    expect(payload).not.toHaveProperty('codexHome')
+    expect(payload).not.toHaveProperty('permissionMode')
     expect(f.start.error).toBeNull()
-  })
-
-  // Review of #3485: another account's agent wrote this code, and it runs as the owner on their own computer, not in a Team
-  // account's own OS user, so it gets the owner's own permission checks and sandbox: no flag that skips them.
-  it.each(['claude', 'codex'] as const)('launches Team-written %s work with no flag that skips permissions or the sandbox', async engine => {
-    const argv = buildEngineCommandArgv(engine, { permissionMode: 'teamWritten', bypassPermission: false,
-      ...(process.platform === 'win32' ? { native: { startupArgs: [] } as never } : {}) })
-    expect(argv).not.toContain('--dangerously-skip-permissions')
-    expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
-    expect(argv.join(' ')).not.toMatch(/--permission-mode|--approve-for-me|--sandbox|bypass/)
-  })
-
-  // Codex keeps the branch's settings out only in an engine home of its own, which here has no sign-in, and Harness never reads
-  // or links one (loginReads.spec.ts, security review 2 of #3485).
-  it('refuses Team-written Codex work on the owner\'s own computer before anything is made, naming Claude Code', async () => {
-    const f = fixture()
-    Object.assign(f.start.request, { engine: 'codex', projectSettings: 'off' })
-    expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_CLAUDE_ONLY })
-    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
-    expect(f.start.error).toContain('Claude Code')
-  })
-
-  // Task #4353: its Claude trust is saved for the folder it runs in and cleared with the worktree Harness made for it. The
-  // owner's main checkout is neither Harness's to trust for it nor to delete, so it never runs there.
-  it('refuses Team-written work that names no worktree, the owner\'s main checkout, before anything is made', async () => {
-    const f = fixture()
-    Object.assign(f.start.request, { engine: 'claude', projectSettings: 'off', worktree: false, cwd: '/repo' })
-    expect(await startAgent({ tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toMatchObject({ error: 'START_FAILED', detail: TEAM_WRITTEN_WORKTREE_ONLY })
-    expect(f.request.mock.calls.some(c => c[0] === 'agent_create')).toBe(false)
-    expect(f.start.error).toContain('worktree')
   })
 
   it('gives a normal Codex start no engine home of its own', async () => {

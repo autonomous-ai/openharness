@@ -668,7 +668,6 @@ describe('registry remote display names', () => {
       at('old-codex-buddy', '%53', { permissionMode: 'readOnlyAsk', bypassPermission: true }),
       at('own-full', '%54', { permissionMode: 'full', bypassPermission: true }),
       at('swarm-ask', '%55', { swarmSkill, permissionMode: 'ask' }),
-      at('team-written', '%56', { swarmSkill, permissionMode: 'teamWritten', bypassPermission: true }),
     ]
     writeFileSync(join(dataDir, 'registry.json'), JSON.stringify(saved), { mode: 0o600 })
     // As a machine upgrading from a build before the sweep: no marker yet.
@@ -683,7 +682,6 @@ describe('registry remote display names', () => {
     }
     expect([reloaded.byAgent('own-full')?.permissionMode, reloaded.byAgent('own-full')?.bypassPermission]).toEqual(['full', true])
     expect(reloaded.byAgent('swarm-ask')?.permissionMode).toBe('ask')
-    expect(reloaded.byAgent('team-written')?.permissionMode).toBe('teamWritten')
     const persisted = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8')) as Array<Record<string, unknown>>
     expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('permissionMode')
     expect(persisted.find(entry => entry.agentId === 'swarm-full')).not.toHaveProperty('bypassPermission')
