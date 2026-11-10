@@ -12,7 +12,6 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { join as joinPath } from 'node:path'
 import { markBuddyOwner } from '../lib/buddyGuard.js'
 import { engineAccount } from '../lib/engineAccount.js'
-import { isTeamAccount } from '../team/config.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -121,13 +120,11 @@ export const BUDDY_CLAUDE_SIGNED_OUT = 'Sign in to Claude Code on this computer 
  * Whether this machine may launch the Buddy a start names (Ken, 11-04, task #2832): a Buddy runs with its owner's full rights,
  * like their own Claude Code or Codex session, so it launches only where those rights are its owner's own. The Swarm starts a
  * Buddy only on its owner's own machine (backend commands.ts buddy.create, BUDDY_OWN_MACHINE); here the machine checks again,
- * by what it knows itself: it is not an old Harness Team account (whose launch refuses a Buddy too, lib/swarmSkills.ts), and the
- * account signed in to Harness here is the Buddy's owner. The
- * start's record must say the same: the machine is its owner's, contributed by them, and not lent to them. Anything missing refuses.
+ * by what it knows itself: the account signed in to Harness here is the Buddy's owner. The start's record must say the same: the machine is its owner's, contributed by them, and not lent to them. Anything missing refuses.
  */
 export function buddyOnOwnMachine(input: Json, start: Json, buddyOf: Json): boolean {
   const owner = buddyOf.personId
-  return identifier(owner) && !isTeamAccount() && input.signedIn === owner
+  return identifier(owner) && input.signedIn === owner
     && start.machineOwnerId === owner && start.contributorId === owner && !start.hostGrant
 }
 
@@ -163,12 +160,6 @@ export async function inspectCapacity(target: Daemon, request: Json) {
   const quota = quotaOf(usage.status === 'fulfilled' ? usage.value : {}, String(request.engine), !!request.codexHome || !!request.gridModel)
   return { capacity, engine, quota, ...admission(capacity, engine, quota, requirements, !!request.codexHome || !!request.gridModel) }
 }
-
-/** What an agent doing another person's project work is told about git and gh. It names nobody: each task's message says
- *  whom that task's pull requests are for (backend projects.ts `requestedByLine`), so an agent reused for another person's
- *  task never names the one before (security review 2 of #2492). */
-export const githubPromptLine = () => `git and gh here use a Harness GitHub App token for this project's repository while you `
-  + `have a task, not this computer's own GitHub login. Each task's message ends with the line to start its pull request bodies with.`
 
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
  *  before the flags does not name the field, and agent_create would silently drop a model it does not know. */
@@ -355,10 +346,6 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       // CLI takes (lead, dev, buddy, and review for an older client's Reviewer, which keeps its swarm-review file).
       const role = wireRole({ role: buddy ? 'buddy' : lead ? 'coordinator' : 'agent', ...(reviewer ? { fallback: 'review' as const } : {}) })
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : 'orchestration'
-      // A Buddy is its owner's right hand (Ken, 11-04, task #2832): on their own machine it launches like their own session and
-      // uses their own git and gh. It never gets the Harness GitHub App's token, which is for a task's agents.
-      const requester = object(input.github).requester
-      const github = buddy || typeof requester !== 'string' || !requester ? null : { requester }
       // Swarm v3 (task #4215): a PM, an agent and a Buddy start with their owner's own permission settings: no mode, so the
       // engine opens in the person's own default. Forced full mode turned off every check on people's own computers, where
       // Anthropic says to use it only in isolated environments. Team-written work keeps its barrier against the branch's own
@@ -366,13 +353,12 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: false,
         ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
-        ...(github ? { swarmGitHub: true } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).
         prompt: buddy ? (session ? projectSession ? projectSessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
           : buddySessionPrompt(String(input.tabId), String(request.conversationId), session, mode)
           : home ? swarmBuddyPrompt(String(input.tabId), String(request.conversationId), home, mode)
           : buddyPrompt(String(input.tabId), String(request.conversationId), mode))
-          : `${[startNote(request.name), github ? githubPromptLine() : ''].filter(Boolean).join(' ')}${handoffPrompt}`.trim(),
+          : `${startNote(request.name)}${handoffPrompt}`.trim(),
         ...(homeFolder ? { cwd: homeFolder } : agentFolder ? { cwd: agentFolder } : request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
           // No branch named: the repository's default branch, fetched, not the host checkout's old HEAD.
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),

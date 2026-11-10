@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, sameChange, verdicts, type LedProject } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -66,6 +66,8 @@ export class GitHubAssign {
   private readonly asks = new Set<string>()
   /** The tasks nobody could start whose PM was told why, by task and reason (sayBlocked), forgotten as the others are. */
   private readonly blocked = new Set<string>()
+  /** What commits change, as the merger reads it (sameChange), so a verdict both count is one neither asks again. */
+  private readonly patches = new Map<string, string | null>()
   /** What was said of one task (a label refused, no builder able to do it), so each is said once, not every pass. */
   private readonly said = new Set<string>()
   /** Each quiet taken task its builder was asked about: since when it was quiet, and when it was asked. */
@@ -257,7 +259,10 @@ export class GitHubAssign {
       const comments = await pullTalk(this.reads, repo, number)
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
-      const onHead = (sha: string) => head.startsWith(sha)
+      // A verdict on an earlier head whose change is the head's is one on it, a HOLD as much as a READ-OK (sameChange): its author
+      // has changed nothing to read again.
+      const same = await sameChange(this.reads, this.patches, repo, base, head, [...readers.values()].map(r => r.sha))
+      const onHead = (sha: string) => head.startsWith(sha) || same.has(sha)
       if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
       for (const task of tasksOf(pull)) withReaders.add(task)
       // Who Harness asked, for which heads, and when.

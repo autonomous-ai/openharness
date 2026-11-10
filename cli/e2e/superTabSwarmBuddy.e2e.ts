@@ -10,7 +10,6 @@ import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon } from './harness/fleet.js'
-import { isTeamAccount } from '../src/team/config.js'
 import { overOldRoutes } from './harness/swarmReads.js'
 
 const TAB = 'buddy-tab'
@@ -22,8 +21,7 @@ afterEach(async () => {
   await relay?.close(); relay = undefined
 })
 
-// A Team OS account must refuse every real Buddy launch; approved CI runs this flow on an isolated runner account.
-it.skipIf(isTeamAccount())('starts and switches its engine in the same folder and private chat, with one Buddy and no app token', async () => {
+it('starts and switches its engine in the same folder and private chat, with one Buddy and no app token', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
   backend.me = { id: 'person', email: ME.email }
@@ -130,8 +128,7 @@ it.skipIf(isTeamAccount())('starts and switches its engine in the same folder an
   expect(asked).toEqual([])
 })
 
-// A Buddy is forbidden on a Team OS account even in an isolated daemon; this native flow needs an owner's account.
-it.skipIf(isTeamAccount())('releases an idle Buddy session and wakes the same conversation on its person’s message', async () => {
+it('releases an idle Buddy session and wakes the same conversation on its person’s message', async () => {
   const backend = await FakeBackend.start(); relay = backend
   backend.addMachine(ME)
   backend.me = { id: ME.account, email: ME.email }
