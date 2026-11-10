@@ -78,9 +78,11 @@ export const PRODUCT_USAGE_PHONE_SCREEN_METRICS = PRODUCT_USAGE_PHONE_SCREENS.fl
  * `phone_offer_after_work` is the same card offered once to a computer that never showed it (a computer that
  * opened signed in was marked offered without it), after one of its own harnesses finished a turn; vocabulary 4.
  * `phone_offer_away_waited` / `_finished`: the card for a person back after five minutes or more away, to a harness
- * that waited on them or finished meanwhile; vocabulary 4. docs/design/2026-10-20-desktop-phone-conversion.md. */
+ * that waited on them or finished meanwhile; vocabulary 4. docs/design/2026-10-20-desktop-phone-conversion.md.
+ * `team_account_removal`: how a Team account's removal from the computer ended (anh Dee, 2026-11-10: every Team account
+ * goes): ok removed or already gone, failed when the system refused or kept it, cancelled at the admin prompt; vocabulary 8. */
 export const PRODUCT_USAGE_DESKTOP_FLOWS = ['phone_offer_returning', 'phone_offer', 'phone_offer_after_work', 'phone_offer_away_waited',
-  'phone_offer_away_finished', 'share_invite', 'share_accept', 'agent_import'] as const
+  'phone_offer_away_finished', 'share_invite', 'share_accept', 'agent_import', 'team_account_removal'] as const
 /** Each time Add Phone opens on a computer, by its way in: that card (`offer`), the title bar's phone, Harness ▸
  * Add Phone… (`menu`, or a key bound to it on macOS), the account menu, the Machines picker, or the command
  * (`> add phone`, a key bound to it elsewhere). Which way in, nothing else. */
