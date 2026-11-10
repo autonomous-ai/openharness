@@ -82,8 +82,7 @@ const POOLS_FRESH_MS = 2_000
 /** The worktrees this machine's Swarm starts made, by tab: what a removal may delete besides the tab's Swarm folders. */
 export const swarmWorktreesFile = (dataDir: string, machineId: string) => join(dataDir, 'super-tabs', `swarm-worktrees-${machineId}.json`)
 /** `kind: 'agent-folder'`: a folder Harness made for an agent whose start named a temporary one (agentFolder.ts, #3713). */
-/** `teamWritten`: a Team-written start's (task #4353), whose removal also clears the folder trust it saved. */
-type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string; kind?: 'agent-folder'; teamWritten?: true }
+type SwarmWorktree = { tabId: string; startId: string; harnessId: string; source: string; path: string; kind?: 'agent-folder' }
 function readWorktrees(file: string): SwarmWorktree[] {
   let saved: unknown
   try { saved = JSON.parse(readFileSync(file, 'utf8')) } catch { return [] }
@@ -1217,21 +1216,9 @@ export class ContributedMachines {
     this.removed(file, record, mine)
   }
 
-  /** A worktree gone: its record goes, and so does the folder trust a Team-written start saved for it. */
+  /** A worktree gone: its record goes. */
   private removed(file: string, record: SwarmWorktree, mine: (w: SwarmWorktree) => boolean) {
-    if (record.teamWritten) this.forgetTrust(record.path)
     writeWorktrees(file, readWorktrees(file).filter(w => !mine(w)))
-  }
-
-  /**
-   * Clears the Claude folder trust a Team-written start saved for its worktree (core/agents/launches.ts `swarmCheckout`),
-   * now that the worktree is gone (task #4353). Left, the person's later Claude sessions in that folder would load the
-   * branch's own settings and hooks without asking. The folder was new at that start, so its flag was saved in its life; the
-   * person's own answers (its repository, a folder above it) are other keys and stay. The same home the start saved it in.
-   */
-  private forgetTrust(path: string) {
-    try { folderTrust('claude')?.forget(path) }
-    catch (error) { this.log(`Could not clear the folder trust of a Team-written worktree: ${(error as NodeJS.ErrnoException).code ?? 'TRUST_WRITE_FAILED'}`) }
   }
 
   /** An agent's own folder (#3713), only when it is still the one Harness made and marked in its agent-home folder, and no
@@ -1257,7 +1244,7 @@ export class ContributedMachines {
     try {
       const file = swarmWorktreesFile(this.core.dataDir, this.machineId), worktrees = readWorktrees(file)
       if (!worktrees.some(w => w.tabId === tabId && w.startId === startId)) writeWorktrees(file, [...worktrees, { tabId, startId, harnessId,
-        source: request.cwd, path, ...(agentFolder ? { kind: 'agent-folder' as const } : {}), ...(request.projectSettings === 'off' ? { teamWritten: true as const } : {}) }])
+        source: request.cwd, path, ...(agentFolder ? { kind: 'agent-folder' as const } : {}) }])
     } catch (error) { this.log(`Could not record the worktree of Swarm start ${startId}: ${error instanceof Error ? error.message : String(error)}`) }
   }
   private log(message: string) { (this.deps.log ?? (line => console.warn(`[super-tabs] ${line}`)))(message) }
@@ -1338,7 +1325,7 @@ export class ContributedMachines {
     const swarm = new Set(recorded.map(w => w.harnessId))
     /** Each Swarm start's receipt on this machine, by the agent it names: what lets the core close one its host no longer retains. */
     const receipts = new Map<string, string>()
-    const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true, teamWritten: w.teamWritten === true }))
+    const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true }))
     for (const start of starts) {
       const request = object(start.request)
       if (request.machineId !== this.machineId || !identifier(start.id) || !identifier(start.harnessId) || !identifier(start.creationId)) continue
@@ -1347,8 +1334,7 @@ export class ContributedMachines {
       if (proven) { swarm.add(start.harnessId); receipts.set(start.harnessId, start.creationId) }
       const agent = this.core.agents.all().find(a => a.agentId === start.harnessId)
       if (request.worktree === true && typeof request.cwd === 'string' && agent?.cwd && !candidates.some(c => c.path === agent.cwd)) {
-        candidates.push({ source: request.cwd, path: agent.cwd, startId: start.id, proven: proven && agent.startedBy === 'agent',
-          teamWritten: request.projectSettings === 'off' })
+        candidates.push({ source: request.cwd, path: agent.cwd, startId: start.id, proven: proven && agent.startedBy === 'agent' })
       }
     }
     const worktrees: string[] = []
@@ -1386,7 +1372,6 @@ export class ContributedMachines {
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
       if (candidate) await git(candidate.source, ['worktree', 'remove', '--force', target]).catch(() => null)
       await rm(target, { recursive: true, force: true })
-      if (candidate?.teamWritten) this.forgetTrust(target)
     }
     // Diego 10-29: a folder kept for a live session was confirmed cleaned anyway and its records dropped, so nothing ever
     // tried it again. Unconfirmed, the cleanup row stays and the next try comes on clean()'s backoff.
