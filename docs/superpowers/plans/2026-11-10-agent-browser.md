@@ -7,7 +7,9 @@
 Harness installs when it is missing. The agent drives the browser through Harness's own tools on `playwright-core`.
 Its person opens the browser's screen with noVNC from Desktop, over the terminal's end-to-end encrypted transport.
 
-**Scope:** Desktop only (macOS, Windows, Linux). The web and the phone are not in this plan; the spec's last section
+**Scope:** Desktop on macOS and Linux. Windows is not in v1 (spec § Later: Windows): the daemon on Windows answers
+`agent_browser_available` with `unsupported`, and Windows Desktop draws neither the pill nor the button.
+Task 3's Windows steps and the restart step are removed by Task 3c. The web and the phone are not in this plan; the spec's last section
 keeps what was decided for them.
 
 **Architecture:**
@@ -416,6 +418,31 @@ Added after the macOS spike. On the spike's Mac the only Podman machine was list
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the same files. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(cli): Harness's own Podman machine when the person's cannot start`.
+
+### Task 3c: Take Windows out of v1
+
+Added 2026-11-10: Windows cannot be tested in v1 (no WSL 2 on GitHub's Windows runners or the M2 Mac's VM). Code no
+user can reach is dead code (standard 2), so the Windows paths go, and the spec's "Later: Windows" keeps the design.
+
+**Files:**
+- Modify: `cli/src/services/agentBrowser/setup.ts`, `podmanRelease.ts`, `podman.ts`, `browsers.ts`, `stateFile.ts`,
+  `cli/src/services/agentBrowser.ts`, `cli/src/core/api.ts` (`AGENT_BROWSER_REQUESTS` loses `agent_browser_restart`),
+  `cli/src/lib/e2ee/applicationFrames.ts` if it lists it, and their specs.
+
+**Interfaces:**
+- On `win32`, `agent_browser_available` answers `{state: 'unsupported'}` and every other request answers
+  `{error: 'UNSUPPORTED'}`. Nothing calls `podman`, `wsl`, `msiexec` or `shutdown`.
+- Removed: the Windows install script, the WSL 2 step, the `restart_needed` step and boot-time check, the
+  `agent_browser_restart` request, the `restart` field of `needs_setup`, the Windows MSI artifacts in
+  `PODMAN_RELEASE`, the Windows `podman.exe` path, and the `harness-root` connection.
+
+- [ ] **Step 1: Write the failing tests:** `on win32 availability is unsupported and no process starts`;
+  `on win32 every other request answers UNSUPPORTED`; and remove the Windows cases from setup.spec, podman.spec and
+  browsers.spec in the same change.
+- [ ] **Step 2: Run** the changed spec files. Expected: FAIL on the new cases.
+- [ ] **Step 3: Implement** by deleting the Windows paths.
+- [ ] **Step 4: Run** the same files. Expected: PASS.
+- [ ] **Step 5: Commit** `refactor(cli): agent browser is macOS and Linux only in v1`.
 
 ### Task 4: Image build
 

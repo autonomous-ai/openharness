@@ -3,7 +3,7 @@
 **Status:** design, not built. Reviewed independently nine times on 2026-11-10; rewritten after the fifth and
 corrected after each later one.
 **Date:** 2026-11-10
-**Scope of v1:** Desktop (macOS, Windows, Linux). The web and the phone come later; see the last section.
+**Scope of v1:** Desktop on macOS and Linux. Windows, the web and the phone come later; see the last section.
 
 ## Intent
 
@@ -42,7 +42,8 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 
 ## Non-goals
 
-- The web client and the phone app in v1. Their design is kept in the last section.
+- Windows (as the agent's machine and as the viewing Desktop), the web client and the phone app in v1. Their design
+  is kept in the last section.
 - Running the agent (Claude Code or Codex) inside the container.
 - Docker. Harness calls `podman` and nothing else, so there is one runtime and one code path.
 - Installing Podman without the person's consent, at Harness setup, or on a machine the person is not sitting at.
@@ -210,7 +211,6 @@ The agent's machine is another of the person's computers, and it has no Podman:
 │  Installs Podman on this computer to run     │
 │  the agent's Chrome. Asks for your password  │
 │  once. About 15 minutes, 3 GB.               │
-│  Windows restarts once.     ← only when WSL 2 is missing
 │                                              │
 │                    ( Cancel )  ( Install )   │
 └──────────────────────────────────────────────┘
@@ -225,11 +225,11 @@ After Install the agent is created at once, and the Browser panel shows progress
 │   · Starting browser                │
 └─────────────────────────────────────┘
 
-Windows after WSL 2 is enabled:        Install failed or was cancelled:
-┌───────────────────────────────┐     ┌───────────────────────────────┐
-│  Restart Windows to finish    │     │  Podman didn't install        │
-│  ( Later )  ( Restart )       │     │  ( Retry )                    │
-└───────────────────────────────┘     └───────────────────────────────┘
+Install failed or was cancelled:
+┌───────────────────────────────┐
+│  Podman didn't install        │
+│  ( Retry )                    │
+└───────────────────────────────┘
 ```
 
 **3. Desktop agent chat: Browser after Terminal; the screen in a side panel**
@@ -323,14 +323,14 @@ Saving a change that needs it restarts the browser; the login stays.
 
 - **One runtime** *(decided)*: Harness runs the `podman` command. It never runs `docker`.
 - **Finding it** *(call)*: `resolveViaLoginShell('podman')`, then the installers' fixed locations:
-  `/opt/podman/bin/podman` (macOS pkg), and `%ProgramFiles%\RedHat\Podman\podman.exe` (Windows MSI).
+  `/opt/podman/bin/podman` (macOS pkg).
 - **Version** *(call)*: Podman 4.6 or newer. An older one gives the state `podman_old`. Setup never replaces a Podman
   the person installed.
 - **Memory** *(call)*: read from `podman info` on every OS. Less than 3 GB gives the state `podman_memory`: one
   browser is capped at 2 GB, and Podman needs room beside it.
   - This happens only with a machine the person made themselves, since Podman's own default is 2 GB. Harness does
     not change that machine. The message names what to do, and the person does it in Podman.
-- **The Podman machine** (macOS and Windows, where Podman runs a Linux VM):
+- **The Podman machine** (macOS, where Podman runs a Linux VM):
   - If the person already has a machine, Harness uses it as it is and changes none of its settings.
   - **A machine that cannot start** *(measured on the spike's Mac: its files had been deleted by another app, and
     `podman machine start` failed after 31 s every time)*: Harness does not repair or remove it. Setup creates a
@@ -346,7 +346,7 @@ Saving a change that needs it restarts the browser; the login stays.
 - **Availability request** *(call)*: `agent_browser_available` replies with one of:
   - `{state: 'ready'}`: `podman info` succeeds (5 s timeout, cached 60 s), and the version and memory are enough.
   - `{state: 'stopped'}`: Podman is installed and its machine is stopped. The form treats it as ready.
-  - `{state: 'needs_setup', restart: boolean}`: there is no Podman. `restart` is true on Windows without WSL 2.
+  - `{state: 'needs_setup', ownMachine: boolean}`: there is no usable Podman.
   - `{state: 'podman_old'}` or `{state: 'podman_memory'}`. The form treats these as ready too: the agent is created,
     and its Browser panel shows the failure with what to do.
   - An older CLI does not know the request. The client reads that as "not available".
@@ -360,35 +360,21 @@ Saving a change that needs it restarts the browser; the login stays.
 - **From where** *(call)*: the official Podman release files, at one pinned version, with the SHA-256 of each file
   pinned in the CLI. A file that fails its checksum is deleted and setup fails. Downloads have a timeout.
 - **Steps** *(call; prior art: `electron/sandbox-runtime/installer.ts`)*. The service records the current step in its
-  state file, so setup resumes after a daemon restart or a Windows restart.
+  state file, so setup resumes after a daemon restart.
   1. **Install Podman** (step `installing`).
      - **macOS:** run the `.pkg` with `installer`, through `osascript … with administrator privileges`. That shows
        the system password dialog once (`installer.ts:846`).
-     - **Windows:** one elevated script, behind one UAC prompt, does both things: it enables WSL 2 when it is missing
-       (`wsl --install --no-distribution`), and installs the Podman MSI with `msiexec /qn /norestart`
-       (`installer.ts:253-320, 853-856`). Both happen before any restart, so nothing asks for elevation afterwards.
-       Every process starts hidden; the UAC prompt is the only window, and the person asked for it.
      - **Linux:** the distro's package through `pkexec` (`apt-get install -y podman uidmap slirp4netns`, or `dnf`,
        `pacman`, `zypper`; `installer.ts:863-886`). No VM is needed.
-  2. **Start Podman** (step `starting_podman`; macOS and Windows): `podman machine init`, then `podman machine start`.
+  2. **Start Podman** (step `starting_podman`; macOS): `podman machine init`, then `podman machine start`.
      - macOS: memory is half the host's RAM, at most 16 GB; CPUs are half the host's cores, at least 2.
-     - Windows: no size is given, because a WSL machine ignores it. The machine is created `--rootful`, because a
-       rootless machine on current WSL cannot apply memory, CPU or process limits (`installer.ts:938-973`).
   3. **Build the browser image** (step `building`; see The container).
   4. **Start the browser** (state `starting`).
   - **A first start on a machine that already has Podman** runs no setup, but it still has to build the image, which
     takes minutes. That browser shows `setup` with the step `building` until the image exists.
-  - **The service resumes setup by itself**, but only where no password is needed: from `starting_podman` on, and
-    from `restart_needed` once the machine has restarted. If it starts and finds the step `installing`, the install
+  - **The service resumes setup by itself**, but only where no password is needed: from `starting_podman` on. If it starts and finds the step `installing`, the install
     was cut off. It does not raise the password dialog on its own; the state becomes `podman_install_failed`, and the
     person presses Retry.
-- **Windows restart.** Enabling WSL 2 may need a restart. The step becomes `restart_needed`. It is a step of setup,
-  not a failure.
-  - The service records the machine's boot time with the step. It goes on to step 2 only once the boot time has
-    changed, so a daemon restart alone does not resume early.
-  - **Restart** asks the daemon (`agent_browser_restart`, local askers only) to run `shutdown /r /t 10`, with the
-    comment "Harness is restarting Windows to finish setting up Browser". **Later** leaves the step as it is.
-  - After the restart, the daemon continues by itself. Nothing asks for elevation again.
 - **The agent does not wait.** It is created as soon as the person presses Install. Its browser tools answer "Browser
   is being set up" until the browser is ready.
 - **A browser agent on a machine with no Podman and no setup running** (the person cancelled, or the agent was
@@ -832,7 +818,8 @@ Saving a change that needs it restarts the browser; the login stays.
 
 ### The spike (before anything else is built)
 
-Unknowns that decide whether this design holds. One throwaway spike measures them first, on macOS, Linux and Windows:
+Unknowns that decide whether this design holds. Two throwaway spikes measured them on macOS (reports beside this spec);
+Linux is measured by Task 20's real-Podman run on CI:
 
 - **The bridge.** How many bytes per second pass through a JavaScript channel as base64 JSON, on each Desktop
   webview, and what it costs the UI thread. Also that `loadHtmlString` loads the page on each.
@@ -876,7 +863,7 @@ design changes first and this spec is revised.
 - **The agent frame** gains `browser: {state, step?, error?}`, sent only when it changes. It never carries
   settings.
   - `state` is `setup`, `starting`, `ready` or `failed`.
-  - `step` (during `setup`) is `installing`, `starting_podman`, `building` or `restart_needed`.
+  - `step` (during `setup`) is `installing`, `starting_podman` or `building`.
   - `error` (during `failed`) is a named state from the Failures table.
 - **Naming.** `docs/naming-system.md` gains one line: an agent's Browser is that agent's own Chrome; a web pane shows
   one address.
@@ -961,7 +948,7 @@ workload, over a direct link and over the relay:
 - terminal echo p95 while a browser panel is open and Gmail is scrolling: it stays within 50 ms and is no slower than
   with no panel;
 - browser stream throughput and frame latency at the chosen encoding;
-- the bridge's throughput and UI-thread cost on Windows, macOS and Linux;
+- the bridge's throughput and UI-thread cost on macOS and Linux;
 - daemon and Desktop CPU at rest, with a browser agent running and its panel closed: within the at-rest limits. A
   closed panel streams nothing.
 
@@ -1001,13 +988,10 @@ workload, over a direct link and over the relay:
 - **Identity:** the container runs on the agent's own person's machine, as that person.
 - **Failure:** see Failures.
 - **Platforms:**
-  - **Container hosts:** macOS (Podman with its machine), Linux (rootless Podman), Windows (Podman with a rootful
-    machine on WSL 2).
+  - **Container hosts:** macOS (Podman with its machine) and Linux (rootless Podman).
     - The daemon's `podman` calls use `ownProcessGroup()`.
-    - The engine starts the relay `harness browser-mcp`. Whether a console window flashes there, and during setup,
-      must be checked by recording the person's session on the signed build (Windows rules).
   - **Image:** amd64 and arm64.
-  - **Client:** Desktop on macOS, Windows and Linux.
+  - **Client:** Desktop on macOS and Linux. On Windows the Browser pill and button are not drawn in v1.
 
 ## Testing
 
@@ -1022,9 +1006,8 @@ workload, over a direct link and over the relay:
   - exits restart at most 3 times in a row, the count resets, and asked-for exits are not counted;
   - a reconnecting event stream reconciles with one `podman ps`;
   - failures are named.
-- **Setup:** each OS's steps run in order against fakes; Windows asks for elevation once; a bad checksum fails; a
-  non-local asker is refused; setup resumes from the recorded step, and after a Windows restart only when the boot
-  time changed.
+- **Setup:** each OS's steps run in order against fakes; a bad checksum fails; a non-local asker is refused; setup
+  resumes from the recorded step.
 - **Tool server:** pure tests for the snapshot refs, the retries, the timeouts, human input and challenge detection,
   with injected inputs. Its tests against a real browser run inside the real image, by hand.
 - **Proxy:** the relay adds the login for HTTP and SOCKS5; it never connects anywhere but the proxy; a refused login
@@ -1047,8 +1030,8 @@ workload, over a direct link and over the relay:
   - Gallery goldens for the pill, the setup dialog, the header button, the settings page and the banner, light and
     dark, in the same PR as the design doc.
 - **By hand, recorded in the PR:**
-  - set up from nothing on a clean macOS, Windows (with the restart) and Linux machine;
-  - log in to a test Gmail through the panel on macOS and on a Windows host;
+  - set up from nothing on a clean macOS machine and a clean Linux machine;
+  - log in to a test Gmail through the panel on macOS and on Linux;
   - ask the agent to list the newest mail and draft a reply;
   - open the same browser from a second Desktop;
   - set a proxy, press Test, and confirm a "what is my IP" page shows the proxy's address and never the machine's;
@@ -1063,6 +1046,20 @@ workload, over a direct link and over the relay:
 - How the per-agent `browser` flag is stored on the registry row.
 - The binary frame layout for the browser kind.
 - The failure copy, if a shorter form reads better under the naming rules.
+
+## Later: Windows
+
+Not in v1 (decided 2026-11-10: GitHub's Windows runners and the M2 Mac's Windows VM cannot run WSL 2, so it could not
+be tested). What was designed for it, so the next spec starts from it:
+
+- Setup: one elevated script behind one UAC prompt enables WSL 2 when missing (`wsl --install --no-distribution`) and
+  installs the Podman MSI (`msiexec /qn /norestart`); a restart step (`restart_needed`, the machine's boot time
+  recorded, **Restart** running `shutdown /r /t 10`); the machine created `--rootful`, reached as `harness-root`, since
+  a rootless machine on current WSL cannot apply limits.
+- Every process starts hidden with `ownProcessGroup()`, and the person's session is recorded on the signed build to
+  prove no window opens.
+- The Desktop bridge on `webview_win_floating` (`loadHtmlString` and its JavaScript channel) is measured first.
+- It needs real x64 hardware with nested virtualization.
 
 ## Later: the web and the phone
 
