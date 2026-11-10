@@ -44,6 +44,8 @@ describe('an agent\'s words in its 1:1 chat ring its person', () => {
     const run = (command: Command, asAgentId?: string) => store.execute(owner, tab, { operationId: randomUUID(), command }, asAgentId)
     const agentId = (await run({ type: 'agent.add', conversationId: 'lead', machineId: 'own-mac', harnessId: randomUUID(), name: 'Oak',
       configuration: config, lead: false })).result.agentId as string
+    // Its 1:1 chat with its person, as the time checks give every agent one (agentChats.ts).
+    await store.runTimeChecks(tab)
     const chat = (await store.read(owner, tab)).state.conversations.find(c => c.kind === 'agent-chat' && c.agentIds.includes(agentId))!.id
     const say = (text: string, asAgentId?: string) => run({ type: 'message.send', conversationId: chat, text, replyTo: null, recipientIds: [] }, asAgentId)
 
