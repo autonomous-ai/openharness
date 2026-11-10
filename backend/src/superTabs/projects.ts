@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { activeWork, agent, agentRole, author, conversation, fail, isLeads, leadsRemoved, nextConversationNumber, person, type Actor, type Agent, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
 import { buddyReads, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat } from './buddies.js'
-import { agentWrittenNameOf } from './personNames.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
@@ -331,29 +330,6 @@ export function workRequesterId(state: SuperTabState, project: SwarmProject, gro
   return member?.email && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project) ? member.id : project.ownerId
 }
 
-/** The line a task's message ends with, telling its Engineer whom the task's pull requests are for. It comes with each
- *  task, from that task's requester, so a reused Engineer never names the one before; the start prompt names nobody
- *  (security review 2 of #2492). Given where the start prompt gave it before: another person's project work, where the
- *  project's owner is not the machine's (cli/src/superTabs/start.ts `githubPromptLine`). A review opens no pull request.
- *  The name is the one the Swarm shows them (personNames.ts writtenNameOf). */
-export function requestedByLine(state: SuperTabState, project: SwarmProject, group: Conversation, worker: Agent): string | null {
-  if (group.reviewOf || project.ownerId === worker.machineOwnerId) return null
-  const requester = state.people.find(p => p.id === workRequesterId(state, project, group))
-  // By name, never email: agents pasted the email into pull requests and a machine's privacy hook stopped them (task #2954).
-  return requester?.email ? `Start each pull request body with: Requested by ${agentWrittenNameOf(state, requester.id)} through Harness.` : null
-}
-
-/** Where Regular agent [worker] finds [project]'s code, for its task's message. It starts in its own empty folder, in no project
- *  (task #4116), and nothing prepares a checkout when it is given a task, so the message says where the code is (task #4218):
- *  the GitHub repository to clone with its own person's git, or the checkout on its own computer. A checkout's folder is
- *  named only on that computer, its person's own. */
-export function regularCodeLine(project: SwarmProject, worker: Agent): string {
-  const repository = project.repository
-  if (repository?.repositoryUrl) return `This project's code is ${repository.repositoryUrl}. Clone it into a folder inside your own folder and work on a branch there, with the git and gh signed in on this computer.`
-  if (repository && repository.machineId === worker.machineId) return `This project's code is checked out at ${repository.cwd} on this computer. Make a git worktree of it inside your own folder and work on a branch there.`
-  return 'This project has no code this computer can reach: it has no GitHub repository. Ask its PM before changing code.'
-}
-
 export function readProject(state: SuperTabState, actor: Actor, projectId: string): SwarmProject {
   author(state, actor)
   const project = projectOf(state, projectId)
@@ -465,17 +441,6 @@ export function buddyInstructionsProject(state: SuperTabState, actor: Actor, bud
   return project
 }
 
-/** A private conversation's audience: each person a member who reads its project, captured at their generation. */
-export function audienceOf(state: SuperTabState, project: SwarmProject, personIds: string[]): NonNullable<Conversation['audience']> {
-  return { people: [...new Set(personIds)].map(id => {
-    const member = state.people.find(p => p.id === id) ?? fail('INVALID_AUDIENCE', 'List people in this Swarm.', 400)
-    if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
-      fail('INVALID_AUDIENCE', `${member.email} cannot read this project.`, 400)
-    }
-    return { id: member.id, generation: member.generation }
-  }) }
-}
-
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
   // A Swarm-wide Buddy belongs to no project and writes only in its person's chat: its person reads it, and so does it.
   if (isSwarmBuddy(target)) return actor.kind === 'person' ? actor.userId === target.buddyOf!.personId : actor.agentId === target.id
@@ -560,25 +525,8 @@ export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = fal
  *  `isConfidential` alone (terminal.ts mayDrive). Any other agent: every reader of its project, as before. */
 export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets): boolean {
   if (!canReadAgent(state, actor, target)) return false
-  const team = teamSessionAccess(state, actor, target, elsewhere, sets)
-  if (team) return team !== 'none'
   return !watchClosed(state, target, elsewhere, sets) || ownSession(actor, target)
 }
-
-/** Whether [pool] is a Harness Team account: a Mac's (it names its Mac) or a machine used only for agents (its reading came
- *  from a team session). */
-export const teamAccountPool = (pool: import('./machines.js').ContributedMachine | null | undefined): boolean =>
-  !!pool && (!!pool.hostMachineId || pool.observation?.sessionKind === 'team')
-
-/** Whether [target] runs in a Harness Team account: read from its machine, whichever way it joined (security review 1 of
- *  #2089), and kept from when it joined one, so a machine row that went never brings back the old rules (its re-review). */
-export const onTeamAccount = (state: SuperTabState, target: Agent): boolean =>
-  !!target.teamAccount || teamAccountPool(state.machines?.find(m => m.machineId === target.machineId))
-
-/** Which account [agent] acts as (audit M3, task #2021): its machine owner's own on any of their machines, or, [onTeam], that
- *  one machine's Harness Team account. */
-export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, onTeam: boolean): string =>
-  onTeam ? `team:${agent.machineOwnerId}:${agent.machineId}` : `own:${agent.machineOwnerId}`
 
 /** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
  *  titles and names aside. */
@@ -597,20 +545,6 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
     return typeof buddyId === 'string' ? { agentId: buddyId } : 'unknown'
   }
   return 'author'
-}
-
-/**
- * A confidential session in a Harness Team account (#895 R2): every teammate's work there runs as one macOS user whose
- * folders hold other projects' clones, so typing in it is a shell that reads them. Nobody drives it through the Swarm. Its
- * project's owner may watch it; its machine's owner neither watches nor drives it, as a member or as its machine's person.
- * Other members watch it as they watch any confidential session (watchClosed). Null for every other session, and for
- * agents, which keep their own rules (mayDrive).
- */
-export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets): 'watch' | 'none' | 'member' | null {
-  if (!onTeamAccount(state, target) || actor.kind !== 'person' || !isConfidential(state, target, elsewhere, sets)) return null
-  if (ownsProject(state, actor.userId, projectOf(state, agentProjectId(state, target)))) return 'watch'
-  if (actor.userId === target.machineOwnerId) return 'none'
-  return watchClosed(state, target, elsewhere, sets) ? 'none' : 'member'
 }
 
 /** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay
@@ -669,7 +603,7 @@ export function readAgent(state: SuperTabState, actor: Actor, agentId: string): 
 /** Whether Regular agent [target] may take a task in [project]: its person reads it (it works only where they could read it
  *  themselves), and, once it has worked in a private project, it is that one: its one conversation holds that project's
  *  content, which no other project's members may hear from it (security review 2 of #4116). Public work moves on freely. */
-export function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
+function regularMayWorkIn(state: SuperTabState, target: Agent, project: SwarmProject): boolean {
   const member = state.people.find(p => p.id === target.contributorId)
   return !!member && canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)
     && (!target.privateProjectId || target.privateProjectId === project.id)

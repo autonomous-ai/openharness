@@ -25,6 +25,7 @@ import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 import { RETIRED_NOTE } from '../src/superTabs/retired.js'
 
@@ -81,7 +82,7 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const done = s.group('Done work')
   const secretGroup = s.group('Secret work', secret)
   // peer's Chat with PM from before Buddies replaced it (closed: nobody reads it), and peer's Buddy chat.
@@ -343,22 +344,18 @@ describe('dormant groups on demand (design 4.5)', () => {
 })
 
 describe('what a reader can tell of a task\'s merge (task #2558)', () => {
-  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser, asAgentId: string) => {
-    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
-      payload: { operationId: randomUUID(), command, asAgentId } })
-    return { status: response.statusCode, body: response.json() as unknown }
-  }
   // Backlog sorts on these: shippedAt says only that the task reached Done; a pull request card's mergedAt says it merged.
   it('a Done task with an open pull request reads as shipped with no merge', async () => {
-    const s = await scene()
-    clock = Date.now()
     const pullRequest = 'https://github.com/example/app/pull/7'
-    const read = async () => (await get(`/api/super-tabs/${s.tabId}/groups/${s.web}`)).body.data.group.data
-    const { assignment } = await read()
-    const done = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId: assignment.id, status: 'done',
-      result: `Ready: ${pullRequest}` }, owner, s.worker)
-    expect(done.status, JSON.stringify(done.body)).toBe(200)
-    const unmerged = await read()
+    // Done with its pull request open, as its worker's Done left it before Swarm v4 (work.status answers as retired, 2026-11-10).
+    const s = await scene((f, ids) => f.edit(state => {
+      const task = state.conversations.find(c => c.id === ids.web)!
+      storedStatus(state, ids.web, 'done', `Ready: ${pullRequest}`)
+      task.pullRequestUrls = [pullRequest]
+      task.ledger = { ...task.ledger, shippedAt: MIGRATED }
+    }))
+    clock = Date.now()
+    const unmerged = (await get(`/api/super-tabs/${s.tabId}/groups/${s.web}`)).body.data.group.data
     expect(unmerged.shippedAt).toEqual(expect.any(Number))
     expect(unmerged.pullRequestUrls).toEqual([pullRequest])
     expect(unmerged.cards?.pullRequests?.some((card: { mergedAt?: number }) => card.mergedAt !== undefined) ?? false).toBe(false)
@@ -1095,7 +1092,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
     f.edit(state => {
       const generation = state.people.find(p => p.id === owner.sub)!.generation
       const pool = state.machines!.find(m => m.machineId === 'host')!
-      pool.observation = { generation: pool.generation, receivedAt: MIGRATED, sessionKind: 'computer',
+      pool.observation = { generation: pool.generation, receivedAt: MIGRATED,
         resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
           deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [],
         runningHarnessIds: ['worker-harness'], stoppedHarnessIds: ['ghost-harness', 'secret-harness', 'stale-harness'] } as never
@@ -1238,8 +1235,8 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
       const s = await scene((f, ids) => {
         const alone = f.group('Finished alone')
         const member = f.add('member-harness', alone, false, ownerActor, 'host', owner.sub)
-        f.run({ type: 'work.assign', conversationId: alone, agentId: member })
         f.edit(state => {
+          storedAssignment(state, alone, member, MIGRATED)
           const group = state.conversations.find(c => c.id === alone)!
           group.assignment = { ...group.assignment!, status: 'done', result: 'Shipped' }
           state.conversations.find(c => c.id === ids.web)!.agentIds.push(member)
@@ -1279,10 +1276,10 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
         const legacy = f.add('legacy-harness', secretTalk, false, ownerActor, 'host', owner.sub)
         // No stored decision below: finished work alone, and a member (not the worker) of running work.
         const member = f.add('member-harness', alone, false, ownerActor, 'host', owner.sub)
-        f.run({ type: 'work.assign', conversationId: alone, agentId: member })
         // peer's Buddy, in the project chat; read here by the machine's owner.
         const buddy = f.add('buddy-harness', 'lead', false, ownerActor, 'host', owner.sub)
         f.edit(state => {
+          storedAssignment(state, alone, member, MIGRATED)
           const group = state.conversations.find(c => c.id === alone)!
           group.assignment = { ...group.assignment!, status: 'done', result: 'Shipped' }
           state.conversations.find(c => c.id === ids.web)!.agentIds.push(member)
@@ -1290,7 +1287,7 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
           state.agents.find(a => a.id === buddy)!.buddyOf = { personId: peer.sub, generation: peerGeneration }
           const generation = state.people.find(p => p.id === owner.sub)!.generation
           const pool = state.machines!.find(m => m.machineId === 'host')!
-          pool.observation = { generation: pool.generation, receivedAt: MIGRATED, sessionKind: 'computer',
+          pool.observation = { generation: pool.generation, receivedAt: MIGRATED,
             resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
               deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [],
             runningHarnessIds: ['worker-harness'], stoppedHarnessIds: ['listed-harness', 'quiet-secret-harness'] } as never

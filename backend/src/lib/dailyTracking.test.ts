@@ -235,7 +235,7 @@ describe('a machine row read at a connect', () => {
   })
 
   it('leaves out a fact the connect did not send', () => {
-    expect(machineConnectChanges({ hostname: 'mac' }, { hostname: undefined, sessionKind: 'team' })).toEqual({ sessionKind: 'team' })
+    expect(machineConnectChanges({ hostname: 'mac' }, { hostname: undefined, sessionKind: 'computer' })).toEqual({ sessionKind: 'computer' })
   })
 })
 
@@ -267,12 +267,6 @@ describe('a turn is marked by who started it', () => {
     expect(swarmAgentFind.mock.calls[0]![0].pipeline[0]).toEqual({ $match: { machineId: 'mac', deleted: false, 'data.harnessId': 'swarm-session' } })
   })
 
-  it('marks a Team account\'s turn as hosting without reading anything: it runs only Swarm agents', async () => {
-    await recordTurnStarted('owner', 'team-mac', 'any', now, true)
-    expect(mark.mock.calls).toEqual([['owner', now, { hosting: true }]])
-    expect(swarmAgentFind).not.toHaveBeenCalled()
-  })
-
   it('marks neither when it cannot tell, says so without ids, and still counts the turn', async () => {
     swarmAgentFind.mockRejectedValue(new Error('down'))
     await expect(recordTurnStarted('PRIVATE_OWNER', 'PRIVATE_MACHINE', 'PRIVATE_AGENT', now)).resolves.toBeUndefined()
@@ -285,7 +279,8 @@ describe('a turn is marked by who started it', () => {
   it('counts the turn in the relay total whichever mark it gets', async () => {
     swarmAgentFind.mockResolvedValue([{ _id: 'row' }])
     await recordTurnStarted('owner', 'mac', 'swarm-session', now)
-    await recordTurnStarted('owner', 'team-mac', 'any', now, true)
+    swarmAgentFind.mockResolvedValue([])
+    await recordTurnStarted('owner', 'mac', 'own-session', now)
     expect(record.mock.calls.map(c => c[2])).toEqual(['relay_turns_started', 'relay_turns_started'])
   })
 })

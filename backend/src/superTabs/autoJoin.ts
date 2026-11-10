@@ -4,7 +4,6 @@
  */
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { emailDomain, isPublicEmailDomain } from '../lib/publicEmailDomains.js'
-import { isTeamSession } from '../lib/teamSession.js'
 import { logger } from '../utils/logger.js'
 
 /** How often one person is tried: list reads are polled every few seconds, so a join can take up to this long (spec, my call). */
@@ -32,7 +31,7 @@ export interface AutoJoinDeps {
  *  anyway. Returns the Swarms joined now. */
 export async function autoJoin(deps: AutoJoinDeps, user: AuthUser): Promise<string[]> {
   const domain = emailDomain(user.email)
-  if (!domain || isPublicEmailDomain(domain) || isTeamSession(user)) return []
+  if (!domain || isPublicEmailDomain(domain)) return []
   const due = await deps.memory.claim(`${user.autonomousEnv}:${user.sub}`).catch(error => {
     logger.warn('[super-tab] auto-join memory unavailable', { error: error instanceof Error ? error.message : String(error) })
     return true

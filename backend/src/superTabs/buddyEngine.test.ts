@@ -14,7 +14,7 @@ function setup() {
   state.people.push({ id: 'peer', email: 'peer@example.com', role: 'collaborator', generation: 'first' })
   state.machines = [{ machineId: 'mac', name: 'My computer', contributorId: 'peer', membershipGeneration: 'first', generation: 'g1',
     cwd: '/swarm', scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 4, paused: false,
-    observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer',
+    observation: { generation: 'g1', receivedAt: NOW,
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null,
         projectDiskFreeBytes: null, deviceType: null, chip: null, os: null, gpuPercent: null },
       tools: {}, quotas: [], runningHarnessIds: ['h-old'], stoppedHarnessIds: [], capabilities: ['swarmBuddy', 'buddyModel', 'buddyEngine'],
@@ -172,14 +172,6 @@ describe('a person switching their Buddy engine', () => {
     }
     f.run({ type: 'buddy.engine', engine: 'codex' })
     expect(f.target().switchRequest?.engine).toBe('codex')
-  })
-
-  it('refuses an owner machine whose account became a Team account', () => {
-    const f = setup()
-    f.pool().observation!.sessionKind = 'team'
-    expect(() => f.run({ type: 'buddy.engine', engine: 'codex' })).toThrow(/own machine/i)
-    expect(f.target().switchRequest).toBeUndefined()
-    expect(f.target().harnessId).toBe('h-old')
   })
 
   it('excludes concurrent engine and model changes in both directions', () => {

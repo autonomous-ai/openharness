@@ -30,8 +30,6 @@ export interface ReportRecord {
   /** The earliest a closed agent's removal falls due (closedAgents.ts nextRemovalAt), at most DEADLINE_CAP_MS on: this record holds a
    *  heartbeat on the fast path until then. */
   deadline: number
-  /** Whether the Swarm's record says the machine is a Team account's (store.ts teamByRecord). */
-  team: boolean
   /** Who is told of a reading (parts/commit.ts membersToTell): the Swarm's people. */
   members: string[]
   /** The starts this machine may say it is preparing (machines.ts preparableStart). */
@@ -68,7 +66,7 @@ export interface ReportRedis {
 }
 
 const record = z.object({ stamp: z.number().finite(), hosts: z.object({ host: z.number().finite(), all: z.number().finite() }).optional(), lentCount: z.number().int().nonnegative(), lentProjects: z.record(z.string(), z.number().int().nonnegative()).optional(), removals: z.boolean(), deadline: z.number().finite(),
-  team: z.boolean(), members: z.array(z.string()), preparable: z.array(z.string()), at: z.number().finite() })
+  members: z.array(z.string()), preparable: z.array(z.string()), at: z.number().finite() })
 
 function parse(value: string | null): ReportRecord | undefined {
   if (value === null) return undefined

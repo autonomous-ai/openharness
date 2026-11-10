@@ -2,13 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import type { ContributedMachine } from './machines.js'
-import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT, projectOf } from './projects.js'
-import { DISPATCH_RULES, dispatchPlan, freeCrew } from './dispatch.js'
+import { agentProjectId, canReadAgent, canReadGroup, NO_PROJECT } from './projects.js'
 import { closedAgents, STOPPED_REMOVE_MS } from './closedAgents.js'
+import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 
-// Task #4116 (Swarm v3, anh Dee 11-07): "A Regular agent isn't tied to a project; the task decides where it works." Its PM gives
-// it a task only in a project its person can read, so nothing reaches its person that they could not read anyway; while it
-// works there it is that project's, and it is in none again once the task ends.
+// Task #4116 (Swarm v3, anh Dee 11-07): "A Regular agent isn't tied to a project; the task decides where it works." While it
+// works on a task it is that task's project's, and it is in none again once the task ends.
 const NOW = 50_000_000
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
@@ -33,7 +32,7 @@ function swarm() {
   const generation = (userId: string) => state.people.find(p => p.id === userId)!.generation
   state.machines = [{ machineId: 'mate-mac', name: 'mate-mac', contributorId: 'mate', membershipGeneration: generation('mate'), generation: 'g1',
     cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-    observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['regularAgent'] } } as ContributedMachine]
+    observation: { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['regularAgent'] } } as ContributedMachine]
   // Mate's Regular agent Ada, running in its chat.
   const made = run({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'mate-mac' } as Command, mate, own('mate'))
   const startId = made.result.startId as string
@@ -55,34 +54,18 @@ function swarm() {
 }
 
 describe('a Regular agent and its task', () => {
-  it('is in no project until its PM gives it a task in a project its person reads; then it works there, and is in none again after', () => {
+  it('is in no project until it holds a task in a project its person reads; then it works there, and is in none again after', () => {
     const f = swarm()
     expect(agentProjectId(f.state, f.agent(f.ada))).toBe(NO_PROJECT)
     const app = f.project('app', 'public')
-    // That project's PM sees it to give it work; its person reads the project.
+    // That project's PM sees it; its person reads the project.
     expect(canReadAgent(f.state, app.asPm, f.agent(f.ada))).toBe(true)
-    const assigned = f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
-    expect(f.group(app.task).assignment).toMatchObject({ agentId: f.ada })
+    storedAssignment(f.state, app.task, f.ada, NOW)
     expect(agentProjectId(f.state, f.agent(f.ada))).toBe(app.projectId)
     const asAda: Actor = { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' }
     expect(canReadGroup(f.state, asAda, f.group(app.task))).toBe(true)
-    f.run({ type: 'work.status', conversationId: app.task, assignmentId: assigned.result.assignmentId as string, status: 'done', result: 'Done.' } as Command, asAda)
+    storedStatus(f.state, app.task, 'done', 'Done.')
     expect(agentProjectId(f.state, f.agent(f.ada))).toBe(NO_PROJECT)
-  })
-
-  it('takes no task in a project its person cannot read, whose PM never sees it', () => {
-    const f = swarm()
-    const secret = f.project('secret', 'private')
-    expect(canReadAgent(f.state, secret.asPm, f.agent(f.ada))).toBe(false)
-    expect(code(() => f.run({ type: 'work.assign', conversationId: secret.task, agentId: f.ada }, secret.asPm))).not.toBeNull()
-    expect(f.group(secret.task).assignment).toBeNull()
-  })
-
-  it('works in one project at a time', () => {
-    const f = swarm()
-    const app = f.project('app', 'public'), web = f.project('web', 'public')
-    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
-    expect(code(() => f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm))).not.toBeNull()
   })
 
   // Security review of #4116 (Layoutfix): its one terminal carries every project it worked in and its person's private chat, so
@@ -90,7 +73,7 @@ describe('a Regular agent and its task', () => {
   it('keeps its terminal its person\'s alone, even from the PM whose task it holds, and from the Swarm\'s owner', () => {
     const f = swarm()
     const app = f.project('app', 'public'), web = f.project('web', 'public')
-    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
+    storedAssignment(f.state, app.task, f.ada, NOW)
     for (const type of ['agent.screen', 'agent.input'] as const) {
       const command = (type === 'agent.screen' ? { type, agentId: f.ada } : { type, agentId: f.ada, text: 'ls' }) as Command
       expect(code(() => f.run(command, app.asPm))).toBe('TERMINAL_PRIVATE')
@@ -103,36 +86,9 @@ describe('a Regular agent and its task', () => {
   it('keeps its terminal its person\'s alone even once it is out of its own chat', () => {
     const f = swarm()
     const app = f.project('app', 'public')
-    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
+    storedAssignment(f.state, app.task, f.ada, NOW)
     for (const chat of f.state.conversations.filter(c => c.kind === 'agent-chat')) chat.agentIds = chat.agentIds.filter(id => id !== f.ada)
     expect(code(() => f.run({ type: 'agent.screen', agentId: f.ada } as Command, app.asPm))).toBe('TERMINAL_PRIVATE')
-  })
-
-  // Security review 2 of #4116 (Rowan): the agent keeps one conversation, so what it learned in a private project would reach
-  // the members of the next project it works in. Once it has worked in a private project it takes tasks only there; work in
-  // public projects, which every member reads, moves on freely.
-  it('after a task in a private project, takes tasks only in that project, and no other project\'s PM sees it', () => {
-    const f = swarm()
-    const secret = f.project('secret', 'private'), web = f.project('web', 'public')
-    f.run({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
-    const done = (task: string, assignmentId: string) => f.run({ type: 'work.status', conversationId: task, assignmentId, status: 'done', result: 'Done.' } as Command,
-      { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' })
-    const first = f.run({ type: 'work.assign', conversationId: secret.task, agentId: f.ada }, secret.asPm)
-    done(secret.task, first.result.assignmentId as string)
-    expect(canReadAgent(f.state, web.asPm, f.agent(f.ada))).toBe(false)
-    expect(code(() => f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm))).not.toBeNull()
-    const again = f.run({ type: 'conversation.create', projectId: secret.projectId, title: 'secret again', brief: 'Do it.', checks: [] } as Command).result.conversationId as string
-    expect(code(() => f.run({ type: 'work.assign', conversationId: again, agentId: f.ada }, secret.asPm))).toBeNull()
-  })
-
-  it('after tasks in public projects only, takes a task in any project its person reads', () => {
-    const f = swarm()
-    const app = f.project('app', 'public'), secret = f.project('secret', 'private')
-    f.run({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
-    const first = f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
-    f.run({ type: 'work.status', conversationId: app.task, assignmentId: first.result.assignmentId as string, status: 'done', result: 'Done.' } as Command,
-      { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' })
-    expect(code(() => f.run({ type: 'work.assign', conversationId: secret.task, agentId: f.ada }, secret.asPm))).toBeNull()
   })
 
   // Security review 2 of #4116, second read (Rowan): a Regular agent comes into a project only through a task, which is where its
@@ -146,39 +102,9 @@ describe('a Regular agent and its task', () => {
     // A person who cannot see it is refused sooner: it is no agent of theirs to add.
     expect(code(() => f.run({ type: 'conversation.agent', conversationId: secret.conversationId, agentId: f.ada, present: true, lead: false } as Command))).not.toBeNull()
     // Working in one project, it joins none of another's.
-    f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm)
+    storedAssignment(f.state, web.task, f.ada, NOW)
     expect(code(() => f.run({ type: 'conversation.agent', conversationId: secret.task, agentId: f.ada, present: true, lead: false } as Command, secret.asPm))).not.toBeNull()
     expect(f.group(secret.task).agentIds).not.toContain(f.ada)
-  })
-
-  it('once in a project that is then made private, takes tasks only there', () => {
-    const f = swarm()
-    const app = f.project('app', 'public'), web = f.project('web', 'public')
-    const first = f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
-    f.run({ type: 'work.status', conversationId: app.task, assignmentId: first.result.assignmentId as string, status: 'done', result: 'Done.' } as Command,
-      { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' })
-    f.run({ type: 'project.sharing', projectId: app.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
-    expect(code(() => f.run({ type: 'work.assign', conversationId: web.task, agentId: f.ada }, web.asPm))).not.toBeNull()
-  })
-
-  // Security review 2 of #4116, third read (Rowan): a finished task leaves its agent in that task's chat, so the agent would keep
-  // hearing and posting in an earlier project's chats while it works in a private one. Taking a task takes it out of them.
-  it('leaves every other project\'s chats when it takes a task, and neither hears nor posts there', () => {
-    const f = swarm()
-    const app = f.project('app', 'public'), secret = f.project('secret', 'private')
-    f.run({ type: 'project.sharing', projectId: secret.projectId, visibility: 'private', memberIds: ['owner', 'mate'] } as Command)
-    const asAda: Actor = { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' }
-    const first = f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm)
-    f.run({ type: 'work.status', conversationId: app.task, assignmentId: first.result.assignmentId as string, status: 'done', result: 'Done.' } as Command, asAda)
-    expect(f.group(app.task).agentIds).toContain(f.ada)
-    f.run({ type: 'work.assign', conversationId: secret.task, agentId: f.ada }, secret.asPm)
-    expect(f.group(app.task).agentIds).not.toContain(f.ada)
-    const own = f.state.conversations.find(c => c.kind === 'agent-chat')!
-    expect(own.agentIds).toContain(f.ada)
-    const say = (conversationId: string, actor: Actor) => f.run({ type: 'message.send', conversationId, text: 'What are you on?', replyTo: null, recipientIds: [] } as Command, actor)
-    const heard = say(app.task, owner)
-    expect(heard.messages.flatMap(m => m.recipients ?? [])).not.toContain(f.ada)
-    expect(code(() => say(app.task, asAda))).not.toBeNull()
   })
 
   it('is seen idle by its person and itself, and by no other person', () => {
@@ -186,59 +112,6 @@ describe('a Regular agent and its task', () => {
     expect(canReadAgent(f.state, mate, f.agent(f.ada))).toBe(true)
     expect(canReadAgent(f.state, { kind: 'agent', agentId: f.ada, machineOwnerId: 'mate' }, f.agent(f.ada))).toBe(true)
     expect(canReadAgent(f.state, owner, f.agent(f.ada))).toBe(false)
-  })
-})
-
-// Task #4218 (anh Dee's Buddy's review): a Regular agent starts in its own empty folder, so its task tells it where the code is.
-describe('a Regular agent\'s task', () => {
-  const brief = (f: ReturnType<typeof swarm>, app: ReturnType<ReturnType<typeof swarm>['project']>) =>
-    f.run({ type: 'work.assign', conversationId: app.task, agentId: f.ada }, app.asPm).messages
-      .find(m => m.recipients.includes(f.ada))!.text
-
-  it('names its project\'s GitHub repository, to clone into its own folder', () => {
-    const f = swarm(), app = f.project('app', 'public')
-    projectOf(f.state, app.projectId).repository = { machineId: 'owner-mac', cwd: '/code/app', repositoryUrl: 'https://github.com/acme/app' }
-    const text = brief(f, app)
-    expect(text).toContain('https://github.com/acme/app')
-    expect(text).not.toContain('/code/app')
-  })
-
-  it('names its project\'s checkout when it is on the agent\'s own computer', () => {
-    const f = swarm(), app = f.project('app', 'public')
-    projectOf(f.state, app.projectId).repository = { machineId: 'mate-mac', cwd: '/code/app', repositoryUrl: null }
-    expect(brief(f, app)).toContain('/code/app')
-  })
-
-  it('says when its project has no code it can reach', () => {
-    const f = swarm(), app = f.project('app', 'public')
-    projectOf(f.state, app.projectId).repository = { machineId: 'owner-mac', cwd: '/code/app', repositoryUrl: null }
-    const text = brief(f, app)
-    expect(text).toContain('no code this computer can reach')
-    expect(text).not.toContain('/code/app')
-  })
-})
-
-// Task #4218: the automatic picks left out every idle Regular agent, which is in no project until a task places it, so a task
-// its PM routed (pinned) to one was never handed over.
-describe('the automatic picks and an idle Regular agent', () => {
-  const pin = (f: ReturnType<typeof swarm>, task: string) => { f.group(task).pin = { agentId: f.ada, why: 'findings', at: NOW } }
-
-  it('hand it a task pinned to it in a project its person reads', () => {
-    const f = swarm(), app = f.project('app', 'public')
-    pin(f, app.task)
-    expect(freeCrew(f.state, app.projectId, DISPATCH_RULES, NOW).map(a => a.id)).toContain(f.ada)
-    expect(dispatchPlan(f.state, app.projectId, DISPATCH_RULES, NOW)).toContainEqual(expect.objectContaining({ conversationId: app.task, agentId: f.ada }))
-  })
-
-  it('never in a project its person cannot read, nor outside the private project it worked in', () => {
-    const f = swarm(), secret = f.project('secret', 'private')
-    pin(f, secret.task)
-    expect(freeCrew(f.state, secret.projectId, DISPATCH_RULES, NOW).map(a => a.id)).not.toContain(f.ada)
-    expect(dispatchPlan(f.state, secret.projectId, DISPATCH_RULES, NOW)).toEqual([])
-    const app = f.project('app', 'public')
-    f.agent(f.ada).privateProjectId = 'elsewhere'
-    pin(f, app.task)
-    expect(freeCrew(f.state, app.projectId, DISPATCH_RULES, NOW).map(a => a.id)).not.toContain(f.ada)
   })
 })
 

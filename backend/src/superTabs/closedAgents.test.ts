@@ -102,13 +102,6 @@ describe('removeClosedAgents: what a removal leaves for the host', () => {
     expect(closed.state.harnessReservations).toEqual([])
     expect(closed.state.releasedHarnesses).toEqual([{ machineId: 'mac', harnessId: 'worker' }])
   })
-  it('holds a Team account for the project of a confidential session until its host confirms the data deleted', () => {
-    const f = fixture()
-    f.worker.confidential = true
-    f.worker.teamAccount = true
-    removeClosedAgents(f.state, [f.worker], NOW)
-    expect(f.state.closingSessions).toEqual([expect.objectContaining({ agentId: f.worker.id, heldFor: expect.any(String), since: NOW })])
-  })
   it('keeps an agent that holds a task, active or just lost', () => {
     const f = fixture()
     const group = f.state.conversations.find(c => c.id === 'lead')!
@@ -169,20 +162,10 @@ describe('what may come back', () => {
     expect(restoreRefusal(restoring(), record(), 'owner', facts)).toBeNull()
   })
 
-  it('never onto a Team account that serves another project', () => {
-    const team = { hostMachineId: 'host-mac', teamAccountOnly: true }
-    const onTeam = record({ agent: removedAgent({ teamAccount: true }) })
-    const held = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'other', since: AT }]
-    expect(restoreRefusal(restoring({ closingSessions: held } as Partial<SuperTabState>, team), onTeam, 'owner', facts)).toBe('team-other-project')
-    const mine = [{ agentId: 'b', machineId: 'mac', harnessId: 'b', machineOwnerId: 'owner', heldFor: 'p', since: AT }]
-    expect(restoreRefusal(restoring({ closingSessions: mine } as Partial<SuperTabState>, team), onTeam, 'owner', facts)).toBeNull()
-  })
-
   // Swarm v3 (task #4120, the PM's ruling): an agent works on any project its person reads, so it comes back to a teammate's
   // project too; one its person no longer reads ends (project-ended, above).
   it('comes back to a teammate\'s project its person reads', () => {
-    expect(restoreRefusal(restoring({}, { hostMachineId: 'host-mac' }), record(), 'owner', facts)).toBeNull()
-    const theirs = restoring({ projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>, { hostMachineId: 'host-mac' })
+    const theirs = restoring({ projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>)
     expect(restoreRefusal(theirs, record(), 'owner', facts)).toBeNull()
   })
 

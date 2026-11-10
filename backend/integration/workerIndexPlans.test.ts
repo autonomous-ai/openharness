@@ -55,22 +55,22 @@ describe('a turn on a Mac, Swarm agent or own session', () => {
 
   it('tells a live Swarm agent from a removed one and from the same session id on another Mac', async () => {
     await db.swarmAgent.createMany({ data: [agentRow('mac-a', 'live', false), agentRow('mac-a', 'removed', true)] })
-    expect(await turnMark('mac-a', 'live', false)).toEqual({ hosting: true })
-    expect(await turnMark('mac-a', 'removed', false)).toEqual({ worked: true })
-    expect(await turnMark('mac-b', 'live', false)).toEqual({ worked: true })
-    expect(await turnMark('mac-a', 'own-session', false)).toEqual({ worked: true })
+    expect(await turnMark('mac-a', 'live')).toEqual({ hosting: true })
+    expect(await turnMark('mac-a', 'removed')).toEqual({ worked: true })
+    expect(await turnMark('mac-b', 'live')).toEqual({ worked: true })
+    expect(await turnMark('mac-a', 'own-session')).toEqual({ worked: true })
   })
 
   it('follows a rebound Swarm agent to its current terminal, and leaves the one it left to the owner', async () => {
     await db.swarmAgent.create({ data: agentRow('mac-r', 'new-terminal', false, 'first-terminal') })
-    expect(await turnMark('mac-r', 'new-terminal', false)).toEqual({ hosting: true })
-    expect(await turnMark('mac-r', 'first-terminal', false)).toEqual({ worked: true })
+    expect(await turnMark('mac-r', 'new-terminal')).toEqual({ hosting: true })
+    expect(await turnMark('mac-r', 'first-terminal')).toEqual({ worked: true })
   })
 
   it('reads only the live agents of that machine, by the machine and deleted index', async () => {
     await db.swarmAgent.createMany({ data: [agentRow('mac-p', 'a', false), agentRow('mac-p', 'one', false), agentRow('mac-p', 'gone', true),
       ...Array.from({ length: 20 }, (_, i) => agentRow('mac-elsewhere', `other-${i}`, false))] })
-    const entries = await profiled(db, () => turnMark('mac-p', 'one', false))
+    const entries = await profiled(db, () => turnMark('mac-p', 'one'))
     const rows = reads(entries, 'SwarmAgent', ['machineId', 'deleted'])
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2)

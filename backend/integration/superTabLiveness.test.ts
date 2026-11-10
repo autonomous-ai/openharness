@@ -9,7 +9,6 @@ import { PrismaClient, type Prisma, type SuperTabDelivery } from '@prisma/client
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type Polled, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
-import { DOWN_REMOVE_MS } from '../src/superTabs/closedAgents.js'
 import { stableId } from '../src/superTabs/model.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
@@ -17,6 +16,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
+import { storeAssignment, storeStatus } from './storedWork.test-support.js'
 
 // A machine's reports and the delivery polls of its agents: what a Swarm's time checks still decide (a start that never runs), the
 // polls' costs, and what a report does to an agent closed or reopened on its machine. Swarm v4 loses no task and nudges no worker
@@ -70,7 +70,7 @@ async function swarm({ client = db, hooks, engines = ['codex'], lent = false }: 
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(group, 'test-host', harness.worker, 'Worker')
-  const assignmentId = lent ? '' : String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+  if (!lent) await storeAssignment(client, tab, group, worker, now)
   const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}, store = timed) => store.observeMachine(host, tab, machineId, {
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,
       diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
@@ -95,7 +95,7 @@ async function swarm({ client = db, hooks, engines = ['codex'], lent = false }: 
     const messages = await db.superTabMessage.findMany({ where: { id: { in: ids } } })
     return ids.map(id => messages.find(m => m.id === id)!).filter(m => (m.source as { kind?: string } | null)?.kind !== 'notice-digest')
   }
-  return { timed, tab, execute, lead, group, worker, assignmentId, harness, observe, beat, name, assignment, leadInbox, add,
+  return { timed, tab, execute, lead, group, worker, harness, observe, beat, name, assignment, leadInbox, add,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
@@ -619,13 +619,6 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(held.map(row => row.messageId)).toEqual(page.map(row => row.id))
   })
 
-  it('never answers a team session from its person\'s held answer: the team session meets its own checks', async () => {
-    const f = await swarm()
-    await held(f)
-    f.clock.now += 1_000
-    const team: AuthUser = { ...host, harnessSessionId: 'team-elsewhere', harnessSessionKind: 'team', harnessComputerId: 'elsewhere' }
-    await expect(f.timed.deliveries(team, f.tab, f.lead)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
-  })
 })
 
 // Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
@@ -863,7 +856,7 @@ describe('an agent closed on its machine', () => {
     expect(await closing(f)).toEqual([])
   })
 
-  it('keeps an agent that holds a task, which no report loses, and removes it once the Lead cancels the task', async () => {
+  it('keeps an agent that holds a task, which no report loses, and removes it once the task is cancelled', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     f.clock.now += MINUTE
@@ -874,7 +867,7 @@ describe('an agent closed on its machine', () => {
     await reports(f, 60, [], [f.harness.worker])
     expect(await f.assignment()).not.toMatchObject({ status: 'lost' })
     expect(await ids(f)).toContain(f.worker)
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    await storeStatus(db, f.tab, f.group, 'cancelled', 'Not needed')
     await reports(f, 10, [], [f.harness.worker])
     expect(await ids(f)).toEqual([f.lead])
   })
@@ -952,30 +945,6 @@ describe('an agent closed on its machine', () => {
     const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
     await reports(f, 20 * 60, [])
     expect(await ids(f)).toContain(idle)
-  })
-
-  // A session its machine lists stopped takes no task at all (closedAgents.ts sessionClosed, task #2744); one it has only
-  // stopped listing can still be assigned while the report that removes it after DOWN_REMOVE_MS is being written.
-  it('does not lose an assignment that lands while it is being removed (the report retries against it)', async () => {
-    const f = await swarm()
-    await f.beat(f.clock.now)
-    const idle = await f.add(f.group, 'test-host', f.harness.other, 'Idle one')
-    const second = String((await f.execute({ type: 'conversation.create', title: 'Second', brief: 'More', checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
-    await reports(f, DOWN_REMOVE_MS / 1000, [f.harness.worker])
-    let raced = false
-    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
-      if (raced) return
-      raced = true
-      await f.execute({ type: 'work.assign', conversationId: second, agentId: idle })
-    }), () => f.clock.now)
-    await reports(f, 10, [f.harness.worker], [], racing)
-    expect(raced).toBe(true)
-    const state = (await f.timed.read(owner, f.tab)).state
-    const group = state.conversations.find(c => c.id === second)!
-    expect(group.assignment).toMatchObject({ agentId: idle })
-    expect(state.agents.map(a => a.id)).toContain(idle)
-    expect(group.agentIds).toContain(idle)
-    expect(await closing(f)).toEqual([])
   })
 })
 
@@ -1166,19 +1135,6 @@ describe('a session reopened after its agent was removed', () => {
     await db.swarmMachine.update({ where: { id: row.id }, data: { data: { ...row.data as object, closingSessions: [] } } })
     await resume(f)
     expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
-  })
-
-  it('never past a hold: a session its Team account is held for stays out, and the hold stands', async () => {
-    const f = await removed()
-    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
-    const data = structuredClone(row.data) as { closingSessions: Array<Record<string, unknown>> }
-    for (const close of data.closingSessions) if (close.harnessId === f.harness.other) Object.assign(close, { heldFor: 'lead', since: f.clock.now })
-    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
-    await resume(f)
-    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
-    const after = (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })).data as { closingSessions: Array<Record<string, unknown>>; removedSessions?: unknown[] }
-    expect(after.closingSessions.find(c => c.harnessId === f.harness.other)).toMatchObject({ heldFor: 'lead' })
-    expect(after.removedSessions ?? []).toEqual([])
   })
 
   // Security review 1 of #2601: the record every Swarm registering this session writes (sessionScope.ts bindSession).

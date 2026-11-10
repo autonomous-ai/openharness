@@ -1,6 +1,5 @@
 import type { Command, CommandContext } from '../commands.js'
 import type { Actor, CommandEffects, SuperTabState } from '../model.js'
-import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
@@ -34,13 +33,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       if ((start.request.member || start.request.helperOf) && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
     }
   }
-  const slots = (machineId: string) => {
-    const pool = before.machines?.find(m => m.machineId === machineId)
-    const mac: ContributedMachine | undefined = pool?.hostMachineId ? before.machines?.find(m => m.machineId === pool.hostMachineId) : pool
-    for (const id of new Set([machineId, mac?.machineId, ...(before.machines ?? []).filter(m => mac && m.hostMachineId === mac.machineId).map(m => m.machineId)])) {
-      if (id) machine(id)
-    }
-  }
+  const slots = (machineId: string) => machine(machineId)
 
   // D1: the actor's own part (spec ruling 2).
   if (actor.kind === 'person') member(actor.userId)
@@ -127,9 +120,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'agent.new':
       head()
       break
-    case 'member.start': case 'member.helper':
-      newMemberStarts()
-      break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
     case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'project.answers': case 'project.about':
@@ -171,19 +161,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.unlink':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       break
-    // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
-    case 'work.priority':
-    case 'work.lane':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)
-      break
-    // A move reads that the task it goes after is still open in the project: archiving it meets the move here.
-    case 'work.queue':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      group(command.after ?? undefined)
       break
     case 'message.send': {
       if (command.handoff) leadCheck(projectOfGroup(command.conversationId)?.id)
@@ -241,18 +221,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
         agent(context.delivery.agentId)
         group(context.delivery.conversationId)
       }
-      break
-    case 'work.assign': {
-      head()
-      const target = before.agents.find(a => a.id === command.agentId)
-      const unsettled = before.starts?.find(s => s.poolGeneration && !s.poolSettled && target && s.request.machineId === target.machineId && s.harnessId === target.harnessId)
-      if (unsettled) touches.push({ kind: 'start', key: unsettled.id })
-      break
-    }
-    // Finished work no longer meets the next start, assignment or route on the project's progress part: that fenced the worker
-    // decisions the Lead had to make first (design ruling R5), which no command reads now (project instructions, phase 4).
-    case 'work.cancel':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
       break
     case 'route.record': {
       head()

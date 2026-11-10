@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { machineSlots, slotCounter, teamPoolOf, type ContributedMachine } from './machines.js'
+import { machineSlots, slotCounter, type ContributedMachine } from './machines.js'
 import { startFinished } from './parts/write.js'
 import type { SuperTabState } from './model.js'
 
@@ -26,9 +26,7 @@ function referenceSlots(state: SuperTabState, pool: ContributedMachine): number 
     }
     return running.size + pending
   }
-  const mac = pool.hostMachineId ? state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId) : pool
-  const team = mac && teamPoolOf(state, mac)
-  return [...new Set([pool, mac, team])].reduce((sum, each) => sum + (each ? poolSlots(each) : 0), 0)
+  return poolSlots(pool)
 }
 
 /** A small seeded generator, so a failure names the state that broke. */
@@ -43,7 +41,6 @@ function swarmOf(seed: number): SuperTabState {
   const machineIds = ['m1', 'm2', 'm3', 'mac']
   const harness = () => `h${Math.floor(r.next() * 12)}`
   const machines = machineIds.map(machineId => ({ machineId, contributorId: 'p1', maxAgents: 4,
-    ...(machineId !== 'mac' && r.chance(0.3) ? { hostMachineId: 'mac' } : {}),
     observation: { runningHarnessIds: Array.from({ length: 3 }, harness), stoppedHarnessIds: Array.from({ length: 3 }, harness),
       ...(r.chance(0.5) ? { stoppedReservations: [{ harnessId: harness(), generation: r.pick(['g1', 'g2']) }] } : {}) } })) as unknown as ContributedMachine[]
   return {

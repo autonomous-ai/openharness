@@ -19,6 +19,7 @@ import { swarmReadCache } from '../src/superTabs/cache.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
 
 // The hot reads of the roadmap's 2.7 (indexes) under Mongo's profiler: each must read only the documents it returns, never
@@ -63,7 +64,7 @@ async function scene({ sharedMachine, edit }: { sharedMachine?: string; edit?: (
   const lead = s.add('lead-harness', 'lead', true, ownerActor, leadMachine, owner.sub)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const done = s.group('Done work')
   const quiet = Array.from({ length: OTHERS }, (_, i) => s.group(`Quiet ${i}`))
   edit?.(s)
@@ -256,10 +257,10 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
       await store.deliveries(owner, s.tabId, s.lead)
       // The worker's time checks (timeChecks.ts), which read the Swarm's open deliveries for its idle agents.
       await store.runTimeChecks(s.tabId)
-      // Last: ending the running work releases its run record and open deliveries.
-      const work = ((await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.data as { assignment: { id: string } }).assignment.id
+      // Last: ending the running work releases its run record and open deliveries. A model that keeps failing loses it, as its
+      // host reports (terminal.ts).
       await store.execute(owner, s.tabId, { operationId: randomUUID(),
-        command: { type: 'work.cancel', conversationId: s.web, assignmentId: work, reason: 'No longer needed.' } })
+        command: { type: 'agent.alert', agentId: s.worker, alert: 'model', active: true } }, s.worker)
     })
   })
 

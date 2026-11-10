@@ -11,7 +11,7 @@
  */
 import type { PushOrigin } from '../github/pushOrigin.js'
 import { codePullRequests, fail, type Agent, type Conversation, type SuperTabState } from './model.js'
-import { groupProject, ledProject, onTeamAccount, teamAccountPool } from './projects.js'
+import { groupProject, ledProject } from './projects.js'
 
 export const TEAM_WRITTEN_WORK = 'TEAM_WRITTEN_WORK'
 export const TEAM_WRITTEN_REASON = 'A Harness Team agent wrote this task\'s code, so only the project owner\'s own agent, on their own computer, may run it.'
@@ -26,13 +26,11 @@ export const TEAM_WRITTEN_STOP = 'Stop: GitHub shows a Harness Team agent pushed
 const taskOf = (state: SuperTabState, group: Conversation): Conversation | undefined =>
   group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
 
-/** Whether [group]'s code is Team-written. An open task from before the mark reads its current assignee too. A step whose
- *  task this command did not load counts as Team-written: an unknown never reads as clean. */
+/** Whether [group]'s code is Team-written. A step whose task this command did not load counts as Team-written: an unknown
+ *  never reads as clean. */
 export function teamWrittenTask(state: SuperTabState, group: Conversation): boolean {
   const task = taskOf(state, group)
-  if (!task || group.teamWritten || task.teamWritten) return true
-  const assignee = state.agents.find(a => a.id === task.assignment?.agentId)
-  return !!assignee && onTeamAccount(state, assignee)
+  return !task || !!group.teamWritten || !!task.teamWritten
 }
 
 type Cause = NonNullable<Conversation['teamWrittenBy']>
@@ -45,34 +43,36 @@ function mark(group: Conversation, cause: Cause): void {
   group.teamWrittenBy = cause.kind === 'pushed' && was?.kind === 'pushed' ? { kind: 'pushed', pulls: [...new Set([...was.pulls, ...cause.pulls])] } : cause
 }
 
-/** Marks [group] when [worker], assigned to build it, runs in a Team account. A step or the project's coordinator marks nothing. */
-export function markTeamWritten(state: SuperTabState, group: Conversation, worker: Agent): void {
-  if (group.reviewOf || coordinates(state, group, worker) || !onTeamAccount(state, worker)) return
-  mark(group, { kind: 'assigned' })
+/** Marks each task one of [agentIds], Harness Team agents leaving with their machine (machine.teamGone), was assigned to build:
+ *  a task from before the mark read its assignee, which is gone now. A step or the project's coordinator marks nothing. */
+export function markHeldByTeam(state: SuperTabState, agentIds: ReadonlySet<string>): void {
+  for (const group of state.conversations) {
+    const worker = group.assignment ? state.agents.find(a => a.id === group.assignment!.agentId) : undefined
+    if (worker && agentIds.has(worker.id) && !group.reviewOf && !coordinates(state, group, worker)) mark(group, { kind: 'assigned' })
+  }
 }
 
-/** Refuses an agent outside a Team account for Team-written code. The project's coordinator stays: it never builds or runs it. */
+/** Refuses an agent for Team-written code. The project's coordinator stays: it never builds or runs it. */
 export function requireTeamWrittenAccount(state: SuperTabState, group: Conversation, worker: Agent): void {
   if (barredFromTeamWritten(state, group, worker)) failTeamWritten()
 }
 
 /** Whether [worker] may not join [group], Team-written code: anyone but its project's coordinator, the project owner's own agent
- *  outside a Team account (Swarm v3 has none left to take it: task #4120, the PM's ruling), and the Team agent already on it,
- *  which keeps what it holds until it is stopped. */
+ *  (Harness Team accounts are gone: task #4120, the PM's ruling). */
 export const barredFromTeamWritten = (state: SuperTabState, group: Conversation, worker: Agent, marked = teamWrittenTask(state, group)): boolean =>
-  marked && !coordinates(state, group, worker) && !onTeamAccount(state, worker) && !ownersOwnAgent(state, group, worker)
+  marked && !coordinates(state, group, worker) && !ownersOwnAgent(state, group, worker)
 
 /** Whether [worker] is [group]'s project owner's own agent, on their own machine: brought by them, on a machine they own, through no
- *  machine share and outside a Team account (task #4120, the PM's ruling; security review 2 of #3446). */
+ *  machine share (task #4120, the PM's ruling; security review 2 of #3446). */
 export const ownersOwnAgent = (state: SuperTabState, group: Conversation, worker: Agent): boolean => {
   const ownerId = groupProject(state, group).ownerId
-  return worker.contributorId === ownerId && worker.machineOwnerId === ownerId && !worker.hostGrant && !onTeamAccount(state, worker)
+  return worker.contributorId === ownerId && worker.machineOwnerId === ownerId && !worker.hostGrant
 }
 
-/** Whether [machineId] is [group]'s project owner's own computer: a listed machine they contributed, never a Team account's. */
+/** Whether [machineId] is [group]'s project owner's own computer: a listed machine they contributed. */
 export function ownersOwnMachine(state: SuperTabState, group: Conversation, machineId: string): boolean {
   const pool = state.machines?.find(m => m.machineId === machineId)
-  return !!pool && !teamAccountPool(pool) && pool.contributorId === groupProject(state, group).ownerId
+  return !!pool && pool.contributorId === groupProject(state, group).ownerId
 }
 
 /** Refuses a start for Team-written code anywhere but its project owner's own computer (task #4120, the PM's ruling). */

@@ -29,10 +29,3 @@ export function machineRuleRefusal(rules: readonly MachineRule[], work: { machin
 
 /** Whether [group] is a review, which a no-Reviewer rule refuses: a step that is not a test (as dispatch.ts sorts steps). */
 export const isReview = (group: Conversation): boolean => !!group.reviewOf && !/test/i.test(stepName(group))
-
-/** The machines [lane]'s work goes to first, by [rules]; none for no lane. */
-export function firstMachines(rules: readonly MachineRule[], lane: string | null): string[] {
-  if (!lane) return []
-  const name = lane.toLowerCase()
-  return rules.filter(rule => rule.first?.lanes.some(l => l.toLowerCase() === name)).flatMap(rule => rule.machineIds)
-}

@@ -31,7 +31,7 @@ function fakeRedis() {
   return redis
 }
 
-const recordAt = (at: number): ReportRecord => ({ stamp: 7, lentCount: 2, removals: false, deadline: at + 60_000, team: false, members: ['p1'],
+const recordAt = (at: number): ReportRecord => ({ stamp: 7, lentCount: 2, removals: false, deadline: at + 60_000, members: ['p1'],
   preparable: ['s1'], at })
 
 describe('what a full machine report leaves for the next one (DB 2.5)', () => {

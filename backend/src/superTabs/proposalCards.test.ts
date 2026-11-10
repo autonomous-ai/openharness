@@ -109,12 +109,6 @@ describe('proposal card creation', () => {
     expect(f.card(sent.result.conversationId).proposal).toHaveProperty('scope', 'Persist drafts')
   })
 
-  it('refuses hand assignment until the proposal is accepted', () => {
-    const f = fixture(), id = f.create().result.conversationId
-    expect(() => f.run({ type: 'work.assign', conversationId: id, agentId: f.worker }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
-  })
-
   it('refuses a manual agent start before a decision', () => {
     const f = fixture(), id = f.create().result.conversationId
     expect(() => f.run({ type: 'agent.start', request: { conversationId: id, machineId: 'host', name: 'Builder', engine: 'codex', cwd: '/fixture', worktree: false, requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }, f.pm))

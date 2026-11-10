@@ -1,18 +1,16 @@
 /**
- * A rename in Machines reaches the Swarms the machine is in (Dee, #2308; review of #2717): its Mac's Harness Team account rows
- * take the new name with their ' · Team' suffix, and the Swarms are told at once, so an offline machine is not left with its
- * old name there until it reports again.
+ * A rename in Machines reaches the Swarms the machine is in (Dee, #2308; review of #2717): the Swarms are told at once, so an
+ * offline machine is not left with its old name there until it reports again.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const findUnique = vi.hoisted(() => vi.fn())
 const update = vi.hoisted(() => vi.fn())
-const updateMany = vi.hoisted(() => vi.fn())
 const machineRenamed = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/prisma.js', () => ({
   machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] },
-  prisma: { machine: { findUnique, update, updateMany } },
+  prisma: { machine: { findUnique, update } },
 }))
 vi.mock('../lib/bus.js', () => ({
   getAgentPresence: vi.fn(), readAgentPresence: vi.fn(), clearAgentPresence: vi.fn(), pub: {}, consumeNewIdQuota: vi.fn(),
@@ -37,28 +35,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   findUnique.mockResolvedValue({ machineId: MAC, userId: owner.sub, managerId: '', autonomousEnv: 'prod', authMode: 'remote', deletedAt: null })
   update.mockResolvedValue({})
-  updateMany.mockResolvedValue({ count: 1 })
   machineRenamed.mockResolvedValue(undefined)
 })
 
 describe('rename', () => {
-  it('names the Mac\'s Team account rows "<new name> · Team"', async () => {
-    await machineService.rename(MAC, owner, 'Mac 3')
-    expect(updateMany).toHaveBeenCalledWith({ where: expect.objectContaining({ userId: owner.sub, autonomousEnv: 'prod', hostMachineId: MAC,
-      sessionKind: 'team' }), data: { name: 'Mac 3 · Team' } })
-  })
-
-  it('keeps a 40-character name whole before the suffix, as the CLI names a Team account after a longer hostname', async () => {
-    const long = 'M'.repeat(40)
-    await machineService.rename(MAC, owner, long)
-    expect(updateMany.mock.calls[0]![0].data).toEqual({ name: `${long} · Team` })
-  })
-
-  it('leaves the Team account rows as they are when the name is cleared', async () => {
-    await machineService.rename(MAC, owner, null)
-    expect(updateMany).not.toHaveBeenCalled()
-  })
-
   it('tells the Swarms the machine is in, as its owner\'s', async () => {
     await machineService.rename(MAC, owner, 'Mac 3')
     expect(machineRenamed).toHaveBeenCalledWith({ machineId: MAC, ownerId: owner.sub, autonomousEnv: 'prod' })

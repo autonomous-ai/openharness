@@ -240,16 +240,13 @@ model Machine {
   // device-auth grant and refreshed on every adapter-ws connect, so `harness auth device` on the same
   // box reconnects to THAT machine instead of minting a second one. Null on rows that predate it.
   computerId                      String?
-  // How the computer signed in on its LAST adapter-ws connect: `team` for a team session (lib/teamSession.ts),
-  // a Mac's team account running teammates' Swarm agents; `computer` for any other sign-in. A `team` row taken
-  // over by a normal sign-in is set to `computer` before that socket attaches, so `team` never names a machine a
-  // normal sign-in serves. Null on rows that predate it (never a team machine). A team session acts only for a
-  // row marked `team`; Swarm routing reads it (Task 3 of docs/plans/2026-10-24-swarm-team-account.md).
+  // How the computer signed in on its LAST adapter-ws connect: `computer`. `team` on a row a Harness Team account's
+  // session served before Team accounts went (anh Dee, 2026-11-10): never listed (MachineService.listForUser), set
+  // to `computer` before a normal sign-in's socket attaches, and soft-deleted once by superTabs/migration/teamMachinesJob.ts.
+  // Null on rows that predate it (never a team machine).
   sessionKind                     String?
-  // A team machine's Mac: the machineId of the owner's own machine on the computer whose Harness Team account this
-  // is, so every list shows that Mac once ("One machine" in docs/plans/2026-10-24-swarm-team-account.md). Copied from
-  // the team session (`HarnessSession.hostMachineId`) whenever that session registers its machine; nothing a team
-  // session sends sets it. Null for every other machine, a dedicated one (`harness team on`) included.
+  // A Harness Team account's machine's Mac: the machineId of the owner's own machine on that computer, written by Team
+  // sessions until they went (2026-11-10); written by nothing now. Null for every other machine.
   hostMachineId                   String?
   // Version string the CLIENT reported on its LAST adapter-ws connect (remote machines only) — the
   // client sends it as `?v=` and it is overwritten every time, so it reflects the most recent connect.
@@ -1342,6 +1339,22 @@ model SuperTabOperation {
   @@index([createdAt], map: "operation_expiry")
 }
 
+/// Which agent wrote a GitHub comment it posted through Harness (superTabs/githubComments.ts). The id is "<repository lowercased>|
+/// <kind>|<GitHub's comment id>": first writer wins. Ids only, no words. Removed 90 days after createdAt by a TTL index.
+model SuperTabGithubComment {
+  id        String   @id @map("_id")
+  tabId     String
+  projectId String
+  agentId   String
+  createdAt DateTime
+
+  /// A Swarm's records, removed with it (purge.ts).
+  @@index([tabId])
+  /// A record goes 90 days after createdAt (githubComments.ts ensureCommentExpiry). Declared so db push keeps the index; the schema
+  /// step makes it, with its expiry, before the push.
+  @@index([createdAt], map: "github_comment_expiry")
+}
+
 model SuperTabDelivery {
   id                    String   @id @map("_id")
   tabId                 String
@@ -1437,6 +1450,9 @@ model RoutingPolicy {
   @@unique([userId, autonomousEnv])
 }
 
+/// A task's earlier attempt, as work.define and work.assign replaced it. Written no more since those commands went (Swarm v4,
+/// 2026-11-10); still read by a task's attempts (store.ts) until routing goes (S8). Its rows go with the old collections
+/// (migration/dropCollections.ts REMOVED_COLLECTIONS), which needs the owner's go.
 model SuperTabAttempt {
   id              String   @id @map("_id")
   tabId           String
@@ -2007,14 +2023,10 @@ model HarnessSession {
   label       String
   /// `computer` — a computer signed in by a phone scanning its QR (lib/harnessSession.ts): it may
   /// connect AS a machine. Absent (every older row) or `viewer` — an app, which may not.
-  /// `team` — the daemon of a Mac's team account, minted by one of the account's computers
-  /// (lib/teamSession.ts): it may connect only as the machine of `computerId`, and do less than a computer.
+  /// `team` — a Harness Team account's daemon, issued until Team accounts went (anh Dee, 2026-11-10): refused, and
+  /// ended at its next refresh; its row ages out by `expiresAt`. Its `computerId` and `hostMachineId` stay on
+  /// such rows, read by nothing.
   kind        String?
-  /// With `kind: team`: the computer it is bound to (normalized, lib/deviceAuth.ts:normalizeComputerId).
-  computerId  String?
-  /// With `kind: team`: the machine of the Mac whose team account this is, recorded when the code was minted
-  /// (routes/auth.ts) and copied onto the team machine (`Machine.hostMachineId`). Null for a dedicated machine.
-  hostMachineId String?
   createdAt   DateTime  @default(now())
   lastUsedAt  DateTime  @default(now())
   /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.

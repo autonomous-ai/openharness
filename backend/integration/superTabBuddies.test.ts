@@ -20,7 +20,7 @@ import { commandSchema, type Command } from '../src/superTabs/commands.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
-import { quotaReset } from './holds.test-support.js'
+import { storeAssignment, storeStatus } from './storedWork.test-support.js'
 import { profiled, reads, plan } from './plans.test-support.js'
 
 // Buddies end to end through the store (buddies.ts): a person adds one on their own Swarm machine, its host starts it, they
@@ -30,12 +30,9 @@ let db: PrismaClient
 const owner: AuthUser = { sub: '300000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '300000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
 const watcher: AuthUser = { sub: '300000000000000000000003', email: 'watcher@example.com', autonomousEnv: 'prod', role: 'user' }
-// peer's sign-ins (lib/teamSession.ts): their own Mac's daemon, which relays their web app's Swarm requests, and the daemon
-// of the Harness Team account on that Mac, a second macOS user signed in to peer's account with a team session.
-const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', PEER_TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-const peerMac: AuthUser = { ...peer, harnessSessionId: 'peer-mac-session', harnessSessionKind: 'computer', harnessComputerId: PEER_COMPUTER }
-const peerTeam: AuthUser = { ...peer, harnessSessionId: 'peer-team-session', harnessSessionKind: 'team', harnessComputerId: PEER_TEAM_COMPUTER }
-const LIMITED = { code: 'TEAM_SESSION_LIMITED', status: 403 }
+// peer's own Mac's daemon, which relays their web app's Swarm requests.
+const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+const peerMac: AuthUser = { ...peer, harnessSessionId: 'peer-mac-session', harnessSessionKind: 'computer' }
 const config = { engine: 'claude', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
 beforeAll(async () => {
@@ -51,11 +48,8 @@ beforeAll(async () => {
     await db.machine.create({ data: { machineId, userId: user.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote',
       ...(machineId === 'peer-mac' ? { computerId: PEER_COMPUTER, sessionKind: 'computer' } : {}) } })
   }
-  await db.machine.create({ data: { machineId: 'peer-team', userId: peer.sub, computerId: PEER_TEAM_COMPUTER, sessionKind: 'team', hostMachineId: 'peer-mac',
-    apiKey: 'fixture-peer-team', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  // Machines in no Swarm (Dee, 10-29): peer's own laptop, a machine of peer's account given over to team work (`harness team
-  // on`, no Mac), and the owner's own laptop.
-  for (const [machineId, user, sessionKind] of [['peer-laptop', peer, 'computer'], ['peer-dedicated', peer, 'team'], ['owner-laptop', owner, 'computer']] as const) {
+  // Machines in no Swarm (Dee, 10-29): peer's own laptop and the owner's own laptop.
+  for (const [machineId, user, sessionKind] of [['peer-laptop', peer, 'computer'], ['owner-laptop', owner, 'computer']] as const) {
     await db.machine.create({ data: { machineId, userId: user.sub, sessionKind, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   }
 })
@@ -285,9 +279,9 @@ describe('a Buddy through the store', () => {
       checks: [{ description: 'Edits survive a restart', independent: false }], priority: 'P2', requesterId: owner.sub })).result.conversationId)
     const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
       configuration: config, lead: false })).result.agentId)
-    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })).result.assignmentId)
+    await storeAssignment(db, f.tab, group, builder)
     await f.execute({ type: 'message.send', conversationId: group, text: 'Opened https://github.com/acme/app/pull/12', replyTo: null, recipientIds: [] }, owner, builder)
-    await f.execute({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship it behind a flag?' }, owner, builder)
+    await storeStatus(db, f.tab, group, 'needs_human', 'Ship it behind a flag?')
 
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     const task = read.groups.find(g => g.key === group)!.data
@@ -337,12 +331,12 @@ describe('a Buddy through the store', () => {
         quality: 3, cost: 3, title: 'New agent on Kens-MacBook-Pro.local', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, owner, f.lead)).result.routeDecisionId)
-    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder, routeDecisionId, overrideReason: 'It has the context.' } as Command, owner, f.lead)
+    await storeAssignment(db, f.tab, group, builder)
     await f.execute({ type: 'message.send', conversationId: group, text: 'Starting now.', replyTo: null, recipientIds: [] }, owner, builder)
 
     const pm = (await f.store.messages(owner, f.tab, group, {}, f.lead)).messages
     const routed = pm.filter(m => ['route', 'route-override'].includes(String((m.source as { kind?: unknown } | null)?.kind)))
-    expect(routed.length).toBeGreaterThanOrEqual(2)
+    expect(routed.length).toBeGreaterThan(0)
     const seen = (await f.store.messages(peer, f.tab, group, {}, agentId)).messages
     expect(seen.map(m => m.text)).toContain('Starting now.')
     expect(JSON.stringify(seen)).not.toContain('Kens-MacBook-Pro.local')
@@ -815,21 +809,14 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     return { f, chat, agentId, proposer, proposal, pm, heard }
   }
 
-  it('hears the PM\'s answer in its proposal\'s thread, a tag of its person and the assignment, and nothing else', async () => {
+  it('hears the PM\'s answer in its proposal\'s thread and a tag of its person, and nothing else', async () => {
     const { f, agentId, proposer, proposal, pm, heard } = await proposed()
     const unrelated = String((await pm('Batch AB is merging.')).result.messageId)
     const answer = String((await pm('Taking it: a task opens now.', { replyTo: proposal })).result.messageId)
     const followUp = String((await pm('It goes to a builder next.', { replyTo: answer })).result.messageId)
     const tag = String((await pm('@peer does this cover drafts?', { mentions: [peer.sub] })).result.messageId)
-    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }], requesterId: peer.sub, proposalMessageId: proposal }, owner, f.lead)).result.conversationId)
-    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
-      configuration: config, lead: false })).result.agentId)
-    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
-    const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
-    expect(notice).toMatchObject({ source: { kind: 'agent-only' }, text: expect.stringMatching(/^News for your owner: #\d+ "Offline sync", recorded as their request, is assigned and working\.$/) })
     const got = await heard()
-    expect(got).toEqual([answer, followUp, tag, notice.id])
+    expect(got).toEqual([answer, followUp, tag])
     expect(got).not.toContain(unrelated)
     // Once: the older chat's Buddy that sent the proposal hears none of it.
     expect(await heard(proposer)).toEqual([])
@@ -839,13 +826,11 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     const claimed = await f.store.delivery(peer, f.tab, agentId, news.id, { type: 'claim', claimId: randomUUID() })
     expect(claimed).toMatchObject({ buddyNews: true, message: { id: answer, conversationId: 'lead' } })
 
-    // Readers never see whose Buddy listens: not among the answer's recipients, nor its deliveries; the notice is the Buddy's alone.
+    // Readers never see whose Buddy listens: not among the answer's recipients, nor its deliveries.
     const chat = await f.store.messages(owner, f.tab, 'lead', {})
     const shown = chat.messages.find(m => m.id === answer)!
     expect(shown.recipientIds).not.toContain(agentId)
     expect(shown.deliveries.map(d => d.agentId)).not.toContain(agentId)
-    expect((await f.store.messages(owner, f.tab, group, {})).messages.map(m => m.id)).not.toContain(notice.id)
-    expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
   })
 
   // River, 11-04 (task #2926): a proposal answered before threads, or built without the task's link, is closed by hand.
@@ -881,20 +866,14 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: stored.id } })).data).toMatchObject({ ledger: { proposal: { messageId: proposal } } })
   })
 
-  it('is told of work the PM opens from its proposal without naming anyone: the proposal\'s person is its requester (groups #294, #327)', async () => {
-    const { f, agentId, proposal, heard } = await proposed()
+  it('records the proposal\'s person as the requester of work the PM opens from it without naming anyone (groups #294, #327)', async () => {
+    const { f, proposal } = await proposed()
     const created = await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
       checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId: proposal }, owner, f.lead)
     const group = String(created.result.conversationId)
     expect(created.result.requesterUnknown).toBeUndefined()
     const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)!
     expect(stored.requesterId).toBe(peer.sub)
-    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
-      configuration: config, lead: false })).result.agentId)
-    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
-    const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
-    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", recorded as their request, is assigned and working\.$/)
-    expect(await heard()).toEqual([notice.id])
   })
 
   it('stops hearing once its person stops reading the project: nothing new is sent, and what waits is refused at pickup', async () => {
@@ -921,18 +900,6 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
       text: 'Taking this as a task.', replyTo: proposal, recipientIds: [] } }, f.lead)).result.messageId)
     expect(raced).toBe(true)
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: answer, agentId } })).toBe(0)
-  })
-
-  it('hears no assignment of a task its person cannot read', async () => {
-    const { f, agentId } = await proposed()
-    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }], priority: 'P2', requesterId: peer.sub }, owner, f.lead)).result.conversationId)
-    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
-      configuration: config, lead: false })).result.agentId)
-    await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
-    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })).toBe(0)
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId, conversationId: group } })).toBe(0)
   })
 
   it('refuses news its person loses after the claim read it but before the claim wrote (security review 1 of #2178)', async () => {
@@ -1011,9 +978,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
 })
 
 describe('a person\'s post in their Buddy chat from the web (phone bug, 10-29)', () => {
-  // The web app relays a person's Swarm requests through one of their online machines. Through their own Mac it is theirs;
-  // through their Team account it was refused ("A team sign-in can only run Swarm agents on its own machine"), so the app
-  // never relays through one now (desktop sharedTabsTarget), and the gate stays as it is.
+  // The web app relays a person's Swarm requests through one of their online machines: through their own Mac it is theirs.
   const post = (chat: string, text: string) => ({ type: 'message.send' as const, conversationId: chat, text, replyTo: null, recipientIds: [] })
   const stored = (f: Awaited<ReturnType<typeof swarm>>, chat: string) => db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: chat } })
   const delivered = async (f: Awaited<ReturnType<typeof swarm>>, chat: string) =>
@@ -1026,17 +991,6 @@ describe('a person\'s post in their Buddy chat from the web (phone bug, 10-29)',
     expect([...new Set(await delivered(f, chat))]).toEqual([agentId])
     expect((await f.store.messages(peer, f.tab, chat, {}, agentId)).messages.at(-1)).toMatchObject({ text: 'From my phone',
       author: expect.objectContaining({ kind: 'person', id: peer.sub }) })
-  })
-
-  it('is refused to their Team account\'s sign-in, as them or as their Buddy on their Mac, and nothing is stored or delivered', async () => {
-    const f = await swarm()
-    const { chat, agentId } = await buddy(f)
-    const before = (await stored(f, chat)).length, deliveredBefore = await delivered(f, chat)
-    await expect(f.execute(post(chat, 'As the person'), peerTeam)).rejects.toMatchObject(LIMITED)
-    await expect(f.execute(post(chat, 'As the Buddy'), peerTeam, agentId)).rejects.toMatchObject(LIMITED)
-    await expect(f.store.messages(peerTeam, f.tab, chat, {})).rejects.toMatchObject(LIMITED)
-    expect((await stored(f, chat)).length).toBe(before)
-    expect(await delivered(f, chat)).toEqual(deliveredBefore)
   })
 
   it('is nobody else\'s: the Swarm owner, the PM and a viewer are refused alike, told nothing about the chat', async () => {
@@ -1148,15 +1102,15 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     expect(JSON.stringify(await reads.firstLoad(owner, f.tab))).not.toContain('peer-laptop')
   })
 
-  it('is refused in the same words on someone else\'s machine, a Team sign-in with or without a Mac, and no machine at all, adding nothing', async () => {
+  it('is refused in the same words on someone else\'s machine and no machine at all, adding nothing', async () => {
     const f = await swarm()
-    // The same words for someone else's machine, a Team sign-in and a machine that does not exist, so they never say which
-    // (security review 2 of #2234).
+    // The same words for someone else's machine and a machine that does not exist, so they never say which (security review 2
+    // of #2234).
     const refusals = []
-    for (const machineId of ['owner-laptop', 'peer-team', 'peer-dedicated', 'ffffffffffffffffffffffffffffffff']) {
+    for (const machineId of ['owner-laptop', 'ffffffffffffffffffffffffffffffff']) {
       refusals.push(await add(f, machineId).then(() => null, (e: { code: string; message: string; status: number }) => [e.code, e.message, e.status]))
     }
-    expect(refusals).toEqual(Array(4).fill(['BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403]))
+    expect(refusals).toEqual(Array(2).fill(['BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403]))
     const read = await f.store.read(peer, f.tab)
     expect([read.state.starts ?? [], read.state.agents.filter(a => a.buddyOf)]).toEqual([[], []])
     expect(await poolRows(f.store, owner, 'owner-laptop')).toEqual([])
@@ -1221,7 +1175,7 @@ describe('the person\'s own browser, reading and writing the Swarm straight from
     expect(JSON.stringify(outside)).not.toContain('Private Swarm')
   })
 
-  it('speaks as an agent only where the person\'s own Mac may, and a team sign-in is still refused', async () => {
+  it('speaks as an agent only where the person\'s own Mac may', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     for (const asAgent of [agentId, f.lead]) {
@@ -1229,7 +1183,6 @@ describe('the person\'s own browser, reading and writing the Swarm straight from
         .toEqual(await refusal(f.store.messages(peerMac, f.tab, 'lead', {}, asAgent)))
     }
     expect(await refusal(f.store.messages(peerWeb, f.tab, 'lead', {}, f.lead))).toMatchObject({ code: 'FORBIDDEN', status: 403 })
-    expect(await refusal(new SwarmReads(f.store).firstLoad(peerTeam, f.tab))).toMatchObject(LIMITED)
   })
 })
 
@@ -1242,7 +1195,7 @@ describe('idle Buddy sleep (#3824)', () => {
     const { main, swarmChat, pool } = await swarmBuddy(f)
     const agent = (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
     const sent = await f.execute({ type: 'message.send', conversationId: swarmChat, text: 'Remember this', replyTo: null, recipientIds: [] }, peer)
-    const { receivedAt: _, sessionKind: __, ...report } = pool.machine.observation!
+    const { receivedAt: _, ...report } = pool.machine.observation!
     const idle = { ...report, runningHarnessIds: [agent.harnessId], idleBuddyHarnessIds: [agent.harnessId] }
     const current = async () => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
     now += 3_600_000 - 1
@@ -1278,7 +1231,7 @@ describe('Buddy input and sleep race (#3824)', () => {
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
     const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
-    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const { receivedAt: _, ...report } = first.pool.machine.observation!
     const idle = { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) }
     const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
     now += 3_600_000
@@ -1324,7 +1277,7 @@ describe('a sleeping proposal sender (#3824)', () => {
     await f.execute({ type: 'buddy.default', conversationId: second.swarmChat }, peer)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
     await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: { in: agents.map(a => a.id) } }, data: { status: 'answered' } })
-    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const { receivedAt: _, ...report } = first.pool.machine.observation!
     now += 3_600_001
     await f.store.observeMachine(peer, f.tab, 'peer-mac', { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) })
     const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
