@@ -341,11 +341,6 @@ export interface Conversation {
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
   briefAt?: number
-  /** The people who posted here, newest last, at most four (stuck.ts noteWriter, task #3915): whom a stuck line tags. */
-  writers?: string[]
-  /** The stuck line this task's people were told, until it is fixed (stuck.ts, task #3915): its reason's key, the line, whom it
-   *  tagged and what its fix says. */
-  stuck?: { key: string; messageId: string; tagged: string[]; fixed: string }
   /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
   cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */

@@ -54,7 +54,9 @@ async function fixture() {
   await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook', cwd: '/work', engines: ['codex'], maxAgents: 4 }, person)
   const own = String((await run(tab, { type: 'agent.add', conversationId: task, machineId: 'personal-mac', harnessId: randomUUID(),
     name: 'Builder', configuration: config, lead: false }, person)).result.agentId)
-  const said = String((await run(tab, { type: 'message.send', conversationId: task, text: 'Start with the parser.', replyTo: null, recipientIds: [] })).result.messageId)
+  // The PM's words: only agents post in a task's chat (agentsOnly.test.ts).
+  const said = String((await store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: task,
+    text: 'Start with the parser.', replyTo: null, recipientIds: [] } }, pm)).result.messageId)
   const state = await storedState(tab)
   const mac = state.machines!.find(m => m.machineId === 'personal-mac')!
   state.machines!.push({ ...structuredClone(mac), machineId: 'team-mac', hostMachineId: 'personal-mac' } as typeof mac)

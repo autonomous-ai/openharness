@@ -72,8 +72,10 @@ async function swarm(w: ReturnType<typeof world>, name = 'Lampos') {
   await execute({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', engines: ['codex'], maxAgents: 4 }, host)
   const lead = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'PM', configuration: config, lead: true }, host)).result.agentId)
   const worker = String((await execute({ type: 'agent.add', conversationId: 'lead', machineId, harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false }, host)).result.agentId)
-  const hello = String((await execute({ type: 'message.send', conversationId: 'lead', text: 'hello', replyTo: null, recipientIds: [] })).result.messageId)
-  await w.store.upload(member, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) })
+  // The PM's message and file: only agents post in a project's channel (agentsOnly.test.ts).
+  const hello = String((await w.store.execute(host, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'hello',
+    replyTo: null, recipientIds: [] } }, lead)).result.messageId)
+  await w.store.upload(host, tab, 'lead', { name: 'notes.txt', mime: 'text/plain', body: Readable.from(Buffer.from('notes')) }, lead)
   return { tab, execute, machineId, lead, worker, hello }
 }
 
@@ -289,7 +291,9 @@ describe('while a Swarm is deleted', () => {
     const w = world(), tab = (await w.store.create(owner, randomUUID(), 'Racing', 'public')).id
     const invitation = await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: member.email, role: 'collaborator', conversationId: 'lead' } })
     await w.store.execute(member, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
-    // The member's post read the Swarm before the delete committed, and writes after it.
+    // The member's new task read the Swarm before the delete committed, and writes after it. (A person's write: a person posts
+    // in no project channel, agentsOnly.test.ts.)
+    const groups = await db.swarmGroup.count({ where: { tabId: tab } })
     let deleted = false
     const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
       if (deleted) return
@@ -297,9 +301,9 @@ describe('while a Swarm is deleted', () => {
       await w.store.execute(owner, tab, { operationId: randomUUID(), command: { type: 'swarm.delete', name: 'Racing' } })
     }), () => w.clock.now)
     expect(await refusal(() => racing.execute(member, tab, { operationId: randomUUID(),
-      command: { type: 'message.send', conversationId: 'lead', text: 'after the delete', replyTo: null, recipientIds: [] } }))).toEqual(MISSING)
+      command: { type: 'conversation.create', title: 'After the delete', brief: '', checks: [] } }))).toEqual(MISSING)
     expect(deleted).toBe(true)
-    expect(await db.superTabMessage.count({ where: { tabId: tab, text: 'after the delete' } })).toBe(0)
+    expect(await db.swarmGroup.count({ where: { tabId: tab } })).toBe(groups)
   })
 
   /** A Swarm with a group archived by hand (so it may sleep), a finished start past its keeping,

@@ -92,16 +92,34 @@ async function swarm({ client = db, hooks, engines = ['codex'], lent = false }: 
     const messages = await db.superTabMessage.findMany({ where: { id: { in: ids } } })
     return ids.map(id => messages.find(m => m.id === id)!)
   }
-  return { timed, tab, execute, lead, group, worker, harness, observe, beat, name, assignment, leadInbox, add,
+  // Only agents post in a project's channel and its tasks' chats (agentsOnly.test.ts): the Lead's person writes to it in their own
+  // chat with it, and the Lead names a worker in a task. A lent Lead, from before Swarm v3, reads no chat of a person's (it runs on
+  // another person's computer, projects.ts readsAgentChat), and a lent worker sends nothing: an agent of host's own writes to it in
+  // the project's channel.
+  const leadChat = (await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, kind: 'agent-chat' } })).key
+  const crew = lent ? String((await execute({ type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Crew',
+    configuration: config, lead: false }, host)).result.agentId) : null
+  const toLead = (text: string) => crew
+    ? execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [lead] }, host, crew)
+    : execute({ type: 'message.send', conversationId: leadChat, text, replyTo: null, recipientIds: [] }, host)
+  const fromLead = (conversationId: string, text: string, recipientIds: string[]) =>
+    execute({ type: 'message.send', conversationId, text, replyTo: null, recipientIds }, host, lead)
+  /** [agentId]'s own chat with its person, which the time checks open (agentChats.ts), and that person's message to it there. */
+  const agentChat = async (agentId: string) => {
+    await timed.runTimeChecks(tab)
+    return (await db.swarmGroup.findMany({ where: { tabId: tab, kind: 'agent-chat' } }))
+      .find(g => (g.data as unknown as { agentIds: string[] }).agentIds.includes(agentId))!.key
+  }
+  const toAgent = async (agentId: string, text: string) =>
+    execute({ type: 'message.send', conversationId: await agentChat(agentId), text, replyTo: null, recipientIds: [] }, host)
+  return { timed, tab, execute, lead, group, worker, harness, observe, beat, name, assignment, leadInbox, add, leadChat, toLead, fromLead, agentChat, toAgent,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
 /** Three messages of a person to the Lead, in the order of their conversation. The ids of the messages. */
 async function threeMessagesToTheLead(f: Awaited<ReturnType<typeof swarm>>): Promise<string[]> {
   const ids: string[] = []
-  for (const text of ['Parser?', 'Renderer?', 'Exporter?']) {
-    ids.push(String((await f.execute({ type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] })).result.messageId))
-  }
+  for (const text of ['Parser?', 'Renderer?', 'Exporter?']) ids.push(String((await f.toLead(text)).result.messageId))
   return ids
 }
 
@@ -178,7 +196,7 @@ describe('a machine\'s report', () => {
 describe('machine reports and report progress', () => {
   it('reads no report progress and writes none, also when the worker\'s machine goes silent', async () => {
     const f = await swarm()
-    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Parser done', replyTo: null, recipientIds: [] })
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Parser done', replyTo: null, recipientIds: [] }, host, f.worker)
     // Nothing marks a work group for a report any more (task #3593), so no report progress exists to read or write.
     const before = await db.swarmProgress.findFirst({ where: { tabId: f.tab, deleted: false } })
     expect(before).toBeNull()
@@ -402,7 +420,7 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     const f = await swarm({ client: counted.client })
     await f.timed.deliveries(host, f.tab, f.lead)
     f.clock.now += 1_000
-    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
+    const sent = await f.toLead('Status?')
     f.clock.now += 1_000
     const rows = await f.timed.deliveries(host, f.tab, f.lead)
     expect(rows.map(d => d.messageId)).toEqual([sent.result.messageId])
@@ -451,11 +469,12 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 // while the host polls each second (Diego, 10-28): the poll answers it from one indexed read while nothing it relied on moved.
 describe('the delivery poll of an agent with a held delivery', () => {
   // The open deliveries, then the grant the host speaks for its agent under, read outside the Swarm (store.ts grantHolds):
-  // its machine and, lent by host to owner here (an agent from before Swarm v3), the contributor and the share.
+  // its machine and, lent by host to owner here (an agent from before Swarm v3), the contributor and the share. Then the grant of the
+  // agent that sent it (store.ts senderAllowed): only agents post in a project's channel (agentsOnly.test.ts).
   const HELD_READS = ['SuperTabDelivery.aggregateRaw', 'Machine.findFirst', 'User.findUnique', 'MachineShare.findUnique']
-  /** A person's message to the Lead, read by a full poll, claimed and held by its host. */
+  /** A message to the Lead, read by a full poll, claimed and held by its host. */
   const held = async (f: Awaited<ReturnType<typeof swarm>>) => {
-    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
+    const sent = await f.toLead('Status?')
     const [row] = await f.timed.deliveries(host, f.tab, f.lead)
     expect(row!.messageId).toBe(sent.result.messageId)
     await f.timed.delivery(host, f.tab, f.lead, row!.id, { type: 'claim', claimId: 'claim-1' })
@@ -472,7 +491,8 @@ describe('the delivery poll of an agent with a held delivery', () => {
     counted.ops.length = 0
     f.clock.now += 1_000
     const rows = await f.timed.deliveries(host, f.tab, f.lead)
-    expect(counted.ops).toEqual(HELD_READS)
+    // The sender, an agent on its person's own computer: its machine.
+    expect(counted.ops).toEqual([...HELD_READS, 'Machine.findFirst'])
     expect(rows.map(r => [r.id, r.status, r.holdReason])).toEqual([[row.id, 'claimed', 'team_waiting_user']])
   })
 
@@ -480,7 +500,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
   it('answers a receipt from its row and the machine, loading no Swarm parts', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
-    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const sent = await f.fromLead(f.group, 'Status?', [f.worker])
     const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
     counted.ops.length = 0
     expect(await f.timed.deliveryReceipt(host, f.tab, f.worker, row.id)).toEqual({ id: row.id, status: 'queued' })
@@ -490,7 +510,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
   it('answers a worker\'s held delivery from the same reads', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client, lent: true })
-    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const sent = await f.fromLead(f.group, 'Status?', [f.worker])
     const full = await f.timed.deliveries(host, f.tab, f.worker)
     const row = full.find(r => r.messageId === sent.result.messageId)!
     await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
@@ -498,7 +518,8 @@ describe('the delivery poll of an agent with a held delivery', () => {
     counted.ops.length = 0
     f.clock.now += 1_000
     const rows = await f.timed.deliveries(host, f.tab, f.worker)
-    expect(counted.ops).toEqual(HELD_READS)
+    // The sender, the lent Lead: its machine and the share it is lent through.
+    expect(counted.ops).toEqual([...HELD_READS, 'Machine.findFirst', 'MachineShare.findUnique'])
     // Its assignment's delivery is open beside it, as the full poll found.
     expect(rows.map(r => r.id)).toEqual(full.map(r => r.id))
     expect(rows.find(r => r.id === row.id)!.holdReason).toBe('team_waiting_draft')
@@ -508,7 +529,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
     const f = await swarm()
     const row = await held(f)
     f.clock.now += 1_000
-    const next = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And now?', replyTo: null, recipientIds: [] })
+    const next = await f.toLead('And now?')
     f.clock.now += 1_000
     expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.messageId)).toEqual([row.messageId, next.result.messageId])
   })
@@ -543,7 +564,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
   it('stops returning an agent\'s held delivery on the next poll once it leaves the conversation', async () => {
     const f = await swarm()
     const helper = await f.add(f.group, 'test-host', f.harness.other, 'Helper')
-    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [helper] })
+    await f.fromLead(f.group, 'Status?', [helper])
     const [row] = await f.timed.deliveries(host, f.tab, helper)
     await f.timed.delivery(host, f.tab, helper, row!.id, { type: 'claim', claimId: 'claim-1' })
     await f.timed.delivery(host, f.tab, helper, row!.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_draft' })
@@ -589,7 +610,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_user' })
     // The Lead's alone, so it reads their order (people do not read them).
-    const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
+    const page = (await f.timed.messages(host, f.tab, f.leadChat, {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     f.clock.now += 1_000
     await f.timed.deliveries(host, f.tab, f.lead)
     // Stored later sequence first, so insertion order cannot stand in for the tie-break; no Swarm write, so the stamp stays.
@@ -618,7 +639,7 @@ describe('the push for a new delivery', () => {
     expect(first).toHaveLength(3)
     expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
     // The Lead's alone, so it reads their order (people do not read them).
-    const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
+    const page = (await f.timed.messages(host, f.tab, f.leadChat, {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     expect(page).toHaveLength(3)
     // In conversation order.
     expect(page[1]!.sequence).toBeGreaterThan(page[0]!.sequence)
@@ -646,7 +667,7 @@ describe('the push for a new delivery', () => {
     const { waiting, hooks } = announcing()
     const f = await swarm({ hooks })
     waiting.length = 0
-    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    await f.fromLead(f.group, 'Status?', [f.worker])
     expect(waiting).toEqual([{ machineId: 'test-host', tabId: f.tab, agentId: f.worker }])
   })
 
@@ -663,7 +684,7 @@ describe('the push for a new delivery', () => {
     const heard: number[] = []
     const f = await swarm({ client, hooks: { deliveriesWaiting: () => { heard.push(open) } } })
     heard.length = 0
-    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    await f.fromLead(f.group, 'Status?', [f.worker])
     expect(heard).toEqual([0])
   })
 
@@ -672,7 +693,7 @@ describe('the push for a new delivery', () => {
   it('tells the machine when a claimed delivery, not yet held, is answered by its agent', async () => {
     const { waiting, hooks } = announcing()
     const f = await swarm({ hooks })
-    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const sent = await f.fromLead(f.group, 'Status?', [f.worker])
     const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
     await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
     waiting.length = 0
@@ -683,7 +704,7 @@ describe('the push for a new delivery', () => {
   // Cleo, reviewing #2632: each agent reply answers a delivery, and each machine told reads that agent's list.
   describe('ending deliveries tells only the machines holding what ended', () => {
     const claimedFor = async (f: Awaited<ReturnType<typeof swarm>>, agentId: string, text: string, claimId: string) => {
-      const sent = await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: null, recipientIds: [agentId] })
+      const sent = agentId === f.lead ? await f.toLead(text) : await f.toAgent(agentId, text)
       const row = (await f.timed.deliveries(host, f.tab, agentId)).find(r => r.messageId === sent.result.messageId)!
       await f.timed.delivery(host, f.tab, agentId, row.id, { type: 'claim', claimId })
       return sent.result.messageId as string
@@ -694,8 +715,9 @@ describe('the push for a new delivery', () => {
       const f = await swarm({ hooks })
       const forWorker = await claimedFor(f, f.worker, 'For the worker', 'claim-worker')
       await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
+      const workerChat = await f.agentChat(f.worker)
       waiting.length = 0
-      await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
+      await f.execute({ type: 'message.send', conversationId: workerChat, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
       expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
       expect(waiting.filter(w => w.agentId === f.lead)).toHaveLength(0)
       // A post naming the Lead reaches the Lead's machine at once (no digest holds it since Swarm v4), to wait there for its
@@ -711,7 +733,7 @@ describe('the push for a new delivery', () => {
     const asideWithClaim = async (f: Awaited<ReturnType<typeof swarm>>) => {
       const other = (await f.execute({ type: 'conversation.create', title: 'Aside', brief: 'On the side', checks: [] })).result.conversationId as string
       await f.execute({ type: 'conversation.agent', conversationId: other, agentId: f.worker, present: true, lead: false })
-      const aside = await f.execute({ type: 'message.send', conversationId: other, text: 'Aside', replyTo: null, recipientIds: [f.worker] })
+      const aside = await f.fromLead(other, 'Aside', [f.worker])
       const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === aside.result.messageId)!
       await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-worker' })
       return other
@@ -754,7 +776,7 @@ describe('the push for a new delivery', () => {
   it('tells the machine when a held delivery is answered by its agent', async () => {
     const { waiting, hooks } = announcing()
     const f = await swarm({ hooks })
-    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const sent = await f.fromLead(f.group, 'Status?', [f.worker])
     const row = (await f.timed.deliveries(host, f.tab, f.worker)).find(r => r.messageId === sent.result.messageId)!
     await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
     await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_draft' })
@@ -790,7 +812,7 @@ describe('a worker\'s delivery poll', () => {
   it('opens no transaction and returns the worker\'s open deliveries', async () => {
     const { opened, client } = counting()
     const f = await swarm({ client })
-    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const sent = await f.fromLead(f.group, 'Status?', [f.worker])
     await f.timed.readLoad(host, f.tab)
     opened.count = 0
     const rows = await f.timed.deliveries(host, f.tab, f.worker)

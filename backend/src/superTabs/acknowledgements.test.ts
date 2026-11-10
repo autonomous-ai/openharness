@@ -32,11 +32,14 @@ describe('an agent post that only acknowledges', () => {
     expect(() => send(f, f.lead, 'thanks', { recipientIds: [f.dev] })).toThrow(expect.objectContaining({ code: 'ACK_ONLY' }))
   })
 
+  // A person posts only in their own chat with their agent (agentsOnly.test.ts).
   it('lets real short answers through, and never refuses a person', () => {
     const f = stepsFixture()
     for (const text of ['Yes at 1a2b3c', 'https://github.com/a/b/pull/3', 'Merged.', 'on it?', 'Yes, thanks.', 'Okay, thanks.']) expect(() => send(f, f.dev, text)).not.toThrow()
-    expect(() => send(f, null, 'on it')).not.toThrow()
-    expect(() => send(f, null, 'thanks')).not.toThrow()
+    const chat = f.run({ type: 'agent.new', kind: 'regular', name: 'Ada', machineId: 'owner-mac', engine: 'claude', local: true } as Command, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.conversationId as string
+    expect(() => send(f, null, 'on it', {}, chat)).not.toThrow()
+    expect(() => send(f, null, 'thanks', {}, chat)).not.toThrow()
   })
 
   it('passes with a tag or a note to itself', () => {

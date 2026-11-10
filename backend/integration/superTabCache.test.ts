@@ -57,17 +57,27 @@ async function newSwarm(store = new SuperTabStore(db)) {
   return { store, tabId: id, lead: state.conversations.find(c => !c.kind)!.id }
 }
 const bumpsOf = (tabId: string) => stamps.bumps.filter(b => b.tabId === tabId).map(b => b.scopes)
-const send = (store: SuperTabStore, tabId: string, conversationId: string, text = 'hello') =>
-  store.execute(owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] } })
+const send = (store: SuperTabStore, tabId: string, conversationId: string, text = 'hello', asAgentId?: string) =>
+  store.execute(owner, tabId, { operationId: `send-${randomUUID()}`, command: { type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] } }, asAgentId)
+/** A coordinator on the owner's own machine, who posts in the project's channel: only agents post there (agentsOnly.test.ts). */
+async function addLead(store: SuperTabStore, tabId: string) {
+  const machineId = `host-${randomUUID()}`
+  await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  return String((await store.execute(owner, tabId, { operationId: `add-${randomUUID()}`, command: { type: 'agent.add', conversationId: 'lead', machineId,
+    harnessId: randomUUID(), name: 'Lead', configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }, lead: true } }))
+    .result.agentId)
+}
 
 describe('stamps after commit', () => {
   it('bumps a Swarm\'s main stamp once per command, after the command committed', async () => {
     const { store, tabId, lead } = await newSwarm()
     expect(bumpsOf(tabId)).toEqual([['main']])
+    const pm = await addLead(store, tabId)
+    expect(bumpsOf(tabId)).toEqual([['main'], ['main']])
     const seen: Array<Promise<number>> = []
     stamps.subscribe(id => { if (id === tabId) seen.push(db.superTabMessage.count({ where: { tabId, text: 'after commit' } })) })
-    await send(store, tabId, lead, 'after commit')
-    expect(bumpsOf(tabId)).toEqual([['main'], ['main']])
+    await send(store, tabId, lead, 'after commit', pm)
+    expect(bumpsOf(tabId)).toEqual([['main'], ['main'], ['main']])
     expect(await Promise.all(seen)).toEqual([1])
   })
 
@@ -109,16 +119,17 @@ describe('stamps after commit', () => {
 
   it('keeps a command that committed when its bump fails, and forgets the Swarm in this process', async () => {
     const { store, tabId, lead } = await newSwarm()
+    const pm = await addLead(store, tabId)
     await (await swarmReadCache()!.at([tabId])).get(tabId, 'probe', 'main', async () => ({ held: true }))
     expect(swarmReadCache()!.size.entries).toBeGreaterThan(0)
     const bump = stamps.bump.bind(stamps)
     stamps.bump = async () => { throw new Error('Redis is unreachable') }
-    await expect(send(store, tabId, lead, 'committed anyway')).resolves.toMatchObject({ result: { messageId: expect.any(String) } })
+    await expect(send(store, tabId, lead, 'committed anyway', pm)).resolves.toMatchObject({ result: { messageId: expect.any(String) } })
     expect(await db.superTabMessage.count({ where: { tabId, text: 'committed anyway' } })).toBe(1)
     expect(swarmReadCache()!.size.entries).toBe(0)
     stamps.bump = bump
     // Owed, and paid once Redis answers again: every process then sees the commit.
-    await vi.waitFor(() => expect(bumpsOf(tabId)).toEqual([['main'], ['main']]), { timeout: 5_000 })
+    await vi.waitFor(() => expect(bumpsOf(tabId)).toEqual([['main'], ['main'], ['main']]), { timeout: 5_000 })
   })
 })
 
@@ -143,6 +154,15 @@ async function privateScene(extra: (s: ReturnType<typeof richSwarm>) => void = (
   const report = await migrateSwarm(db, tabId)
   if (!report.ok) throw new Error(report.error)
   return { tabId, privateId, secret: s.secret, secretGroup: s.secretGroup, web: s.web, lead: s.lead, done: s.done }
+}
+/** privateScene with an agent of the owner's in Web, on the owner's own machine: only agents post in a project's channel and its
+ *  tasks' chats (agentsOnly.test.ts). */
+async function postingScene() {
+  const machineId = `host-${randomUUID()}`
+  await db.machine.create({ data: { machineId, userId: people.owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  let agentId = ''
+  const scene = await privateScene(s => { agentId = s.add('poster-harness', s.web, false, ownerActor, machineId, ownerActor.userId) })
+  return { ...scene, agentId }
 }
 const groupKeys = (read: { groups: Array<{ key: string }> }) => read.groups.map(g => g.key)
 
@@ -194,7 +214,7 @@ describe('reads through the cache', () => {
   })
 
   it('shows a commit on one process to the next read on another (stale after commit, two pods)', async () => {
-    const { tabId } = await privateScene()
+    const { tabId, agentId } = await postingScene()
     const a = pod(), b = pod()
     const before = await b.reads.firstLoad(people.owner, tabId)
     const { result } = await a.store.execute(people.owner, tabId, { operationId: `create-${randomUUID()}`,
@@ -206,9 +226,10 @@ describe('reads through the cache', () => {
     expect(groupKeys(changes as { groups: Array<{ key: string }> })).toContain(created)
     // And the other way: a message on B's Swarm, read on A.
     await b.store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
-      command: { type: 'message.send', conversationId: created, text: 'from B', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: created, text: 'from B', replyTo: null, recipientIds: [] } }, agentId)
     const messages = await a.store.messages(people.owner, tabId, created, {})
-    expect(messages.messages.map(m => m.text)).toEqual(['from B'])
+    // Besides the row saying the agent joined the conversation it posts in.
+    expect(messages.messages.filter(m => !m.source).map(m => m.text)).toEqual(['from B'])
   })
 
   it('shows a removal on one process to the removed person\'s next read on another: from a project, then the Swarm', async () => {
@@ -333,7 +354,7 @@ describe('a change poll\'s shared light read (DB 2.3)', () => {
     expect(first.byCollection.SwarmHead).toBe(1)
     expect(first.byCollection.SwarmProgress ?? 0).toBe(0)
     await store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
-      command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } }, agentId)
     await warm(cache!, tabId)
     const after = await partReads(poll)
     expect(after.byCollection.SwarmHead).toBe(1)
@@ -344,7 +365,7 @@ describe('a change poll\'s shared light read (DB 2.3)', () => {
 
 describe('named light conversations', () => {
   it('holds named light conversations per group: a second reader and an unknown id read nothing at the same stamp', async () => {
-    const { tabId, web } = await privateScene()
+    const { tabId, web, agentId } = await postingScene()
     const quiet = (await db.swarmGroup.findFirstOrThrow({ where: { tabId, key: { notIn: [web, 'lead'] }, kind: null, dormant: false } })).key
     await db.swarmGroup.update({ where: { id: `${tabId}:${quiet}` }, data: { dormant: true } })
     const { cache, store } = pod()
@@ -356,7 +377,7 @@ describe('named light conversations', () => {
     // Another reader at the same stamp: every id held, the unknown one as none.
     expect(await partReads(() => read(['nope', web, quiet]))).toMatchObject({ reads: 0, value: [{ key: web }, { key: quiet }] })
     await store.execute(people.owner, tabId, { operationId: `send-${randomUUID()}`,
-      command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } })
+      command: { type: 'message.send', conversationId: web, text: 'moves the stamp', replyTo: null, recipientIds: [] } }, agentId)
     expect((await partReads(() => read([quiet, 'nope']))).reads).toBe(1)
     // Without stamps: read from Mongo every time, still in one query.
     expect((await partReads(() => readLightGroups(db, DIRECT, tabId, [quiet, 'nope', web]))).reads).toBe(1)
