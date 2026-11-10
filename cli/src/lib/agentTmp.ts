@@ -205,7 +205,7 @@ export function agentTmpOf(key: string, deps: AgentTmpDeps = realDeps): string |
  * What gives an agent its private folder: the variables, and the arguments that add the folder to the engine's working
  * directories, or none. A Swarm agent (not a Buddy, which has its own) gets its own folder, both. A person's own session
  * gets the shared folder as TMPDIR beside a Team account only, as before. A folder that cannot be made private does not stop
- * the agent: it starts on the system's folder, the daemon's log says why, and `harness team status` shows ✗.
+ * the agent: it starts on the system's folder, and the daemon's log says why.
  */
 export function agentTmpLaunch(engine: AgentEngine, skill: Pick<SwarmSkill, 'role' | 'key'> | undefined,
   deps: AgentTmpDeps = realDeps): { env: Record<string, string>; args: string[] } {
@@ -261,20 +261,4 @@ export function buddyTmpEnv(engine: AgentEngine, root: string, deps: AgentTmpDep
  *  (./pathContainment.ts). None on Windows, whose temporary folder is the account's own. */
 export function agentTmpRoot(deps: AgentTmpDeps = realDeps): string | null {
   return deps.platform === 'win32' ? null : agentTmpFolder(deps.dataDir)
-}
-
-export interface AgentTmpState { path: string; state: 'private' | 'open' | 'not-made'; mode: number | null }
-
-/** What `harness team status` shows. A link, or another account's folder, is open whatever its mode says. */
-export function agentTmpState(folder: string = agentTmpFolder(), uid: number | undefined = process.geteuid?.()): AgentTmpState {
-  try {
-    const stat = lstatSync(folder)
-    if (!stat.isDirectory()) return { path: folder, state: 'open', mode: null }
-    const mode = stat.mode & 0o777
-    // Another account's 0700 folder is private from this one, not for it (prepareAgentTmp refuses it).
-    if (uid !== undefined && stat.uid !== uid) return { path: folder, state: 'open', mode }
-    return { path: folder, state: mode === 0o700 ? 'private' : 'open', mode }
-  } catch (error) {
-    return { path: folder, state: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'not-made' : 'open', mode: null }
-  }
 }

@@ -8,12 +8,12 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, openPullsPath, PULL_PAGES, sameKey, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, verdicts, type LedProject } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -255,7 +255,8 @@ export class GitHubAssign {
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
       const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
-      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''))
+      const people = pullPeople(pull, team)
+      const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       const onHead = (sha: string) => head.startsWith(sha)
       if ([...readers.values()].some(r => r.verdict === 'HOLD' && onHead(r.sha))) continue
       for (const task of tasksOf(pull)) withReaders.add(task)
@@ -267,13 +268,15 @@ export class GitHubAssign {
       for (const c of comments) {
         const found = ownAsk(c, ASKED)
         if (!found) continue
-        written.set(found[1]!.toLowerCase(), found[1]!)
-        if (head.startsWith(found[2]!)) onThisHead.set(found[1]!.toLowerCase(), (onThisHead.get(found[1]!.toLowerCase()) ?? 0) + 1)
-        const heads = asked.get(found[1]!.toLowerCase()) ?? new Map<string, number>()
+        // Keyed as the readers are (verdicts): the one asked as "Kai Lee" is the one that answered as "kai-lee".
+        const name = readerKey(found[1]!)
+        written.set(name, found[1]!)
+        if (head.startsWith(found[2]!)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
+        const heads = asked.get(name) ?? new Map<string, number>()
         // GitHub dates every comment; one it did not is taken as asked now, as before.
         const at = Date.parse(String(c.created_at ?? ''))
         heads.set(found[2]!, Math.max(heads.get(found[2]!) ?? 0, Number.isFinite(at) ? at : now))
-        asked.set(found[1]!.toLowerCase(), heads)
+        asked.set(name, heads)
       }
       // A reader asked [READ_WAIT_MS] ago with no verdict since is no longer counted on: another is asked too, and the first
       // READ-OK on the head counts, whoever's. Agents read within minutes of the ask that wakes them, so one that has not is
@@ -281,9 +284,10 @@ export class GitHubAssign {
       // measured from its ask for this head; one that never gave one, from its last ask.
       const lastAsk = (name: string, thisHead: boolean) =>
         Math.max(0, ...[...asked.get(name) ?? []].filter(([sha]) => !thisHead || onHead(sha)).map(([, at]) => at))
-      // Its author's own verdicts count for nothing, however its name is written (sameKey).
-      const own = (name: string) => sameKey(name) === sameKey(author)
-      const ok = [...readers].filter(([reader, r]) => !own(reader) && r.verdict === 'READ-OK' && onHead(r.sha)).map(([reader]) => reader)
+      // Its writers' own verdicts count for nothing, however the names are written, nor an unsigned READ-OK from the login that
+      // opened it (verdicts); a reader who signs two ways counts once, as the merger counts it.
+      const own = (name: string) => isWriter(people.writers, name)
+      const ok = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
       const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
@@ -293,12 +297,13 @@ export class GitHubAssign {
       // A stale reader not asked again yet is asked just now, above.
       const rereading = stale.filter(([reader]) => { const at = lastAsk(reader, true); return at === 0 || now - at < READ_WAIT_MS })
       let need = (twoReads ? 2 : 1) - ok.length - rereading.length - waiting.length
-      const skip = new Set([...asked.keys(), ...readers.keys()])
+      // None of its writers reads it: its label's agent nor its branch's (a task taken over carries both).
+      const skip = new Set([...asked.keys(), ...readers.keys(), ...[...read.builders.values()].filter(b => own(b.name)).map(b => b.id)])
       while (need-- > 0) {
         // A team of one builder still has its PM, who read for it before Harness asked readers (the swarm-sandbox, where
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
-        const pm = project.pm.toLowerCase()
+        const pm = readerKey(project.pm)
         const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
@@ -312,7 +317,7 @@ export class GitHubAssign {
           break
         }
         skip.add(reader.id)
-        skip.add(reader.name.toLowerCase())
+        skip.add(readerKey(reader.name))
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
       }
     }
@@ -386,7 +391,7 @@ export class GitHubAssign {
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${since}&per_page=${PAGE}`, 1)
     const asks = comments.filter(c => {
       const found = ownAsk(c, /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m)
-      return found?.[1]?.toLowerCase() === name.toLowerCase() && found[2]!.startsWith(QUIET_ASKED)
+      return !!found?.[1] && readerKey(found[1]) === readerKey(name) && found[2]!.startsWith(QUIET_ASKED)
     }).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
     return asks.length ? Math.max(...asks) : null
   }
@@ -413,10 +418,11 @@ export class GitHubAssign {
   /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
    *  refuses is said, and asked again next pass. */
   private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
-    const key = `${repo}#${number}@${head}:${name.toLowerCase()}${nth ? `:${nth}` : ''}`
+    const key = `${repo}#${number}@${head}:${readerKey(name)}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
-    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${this.clock()}, to **${name}**: ${what}, `
-      + `and start your comment with READ-OK ${head.slice(0, 7)} or HOLD ${head.slice(0, 7)} (with the file, line and fix).` })
+    const clock = this.clock(), sha = head.slice(0, 7)
+    const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${clock}, to **${name}**: ${what}, `
+      + `and start your comment with your name, as in "${name}, ${clock}: READ-OK ${sha}" or "${name}, ${clock}: HOLD ${sha}" with the file, line and fix.` })
     if (reply.status >= 300) { this.once(`[super-tab] Task assignment: ASK_REFUSED ${repo}#${number}: GitHub answered ${reply.status}`); return }
     this.asks.add(key)
     this.log(`[super-tab] asked ${name} to read ${repo}#${number} at ${head.slice(0, 7)}`)

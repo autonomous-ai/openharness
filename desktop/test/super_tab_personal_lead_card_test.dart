@@ -14,6 +14,7 @@ import 'package:harness/super_tabs/workspace.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
+import 'support/super_tab_fixture.dart';
 
 // Huy, 11-04 (task #2815, a follow-up to #2633): in his Personal Swarm,
 // # Harness Monitor had no Lead, and its empty chat said only "1 pane in this
@@ -27,7 +28,8 @@ final _shots = Platform.environment['PERSONAL_LEAD_CARD_SHOTS'];
 var _paneIds = 9000;
 
 /// The person's desk on this Mac: one tab, # Harness Monitor, with one pane,
-/// in a checkout of the project's repo or, without [repo], a plain folder.
+/// in a checkout of the project's repo or, without [repo], a plain folder and
+/// a project of that name made by hand.
 void _desk(SuperTabLaunchFixture f, {bool repo = true}) {
   f.app.machineStates['m']!.agents = [
     Agent(
@@ -47,6 +49,21 @@ void _desk(SuperTabLaunchFixture f, {bool repo = true}) {
     Swarm(id: 'desk', name: 'Harness Monitor')
       ..panes.add(TerminalPane(id: _paneIds++, machineId: 'm', agentId: 'n1')),
   );
+  if (!repo) _byHand(f, 'Harness Monitor');
+}
+
+/// A project the person made by hand, [name]: a pane with no repo is in no project (Swarm v4), so a project with no repo
+/// is one made so.
+void _byHand(SuperTabLaunchFixture f, String name) {
+  final server = f.connection.server.state;
+  (server['projects'] ??= [projectFixture('lead', 'Personal', 'lead')] as List)
+      .add(
+        projectFixture('by-hand', name, 'chat-by-hand', visibility: 'private'),
+      );
+  (server['conversations'] as List).add({
+    ...conversationFixture('chat-by-hand', 'Lead'),
+    'projectId': 'by-hand',
+  });
 }
 
 /// The fixture's Swarm made the person's Personal one ([personal] false leaves

@@ -11,6 +11,7 @@ import type { PreparedHandoff } from '../lib/handoffAuthority.js'
 import { startHandoff } from './handoff.js'
 import { handoffCoreApi, runHandoffService } from './handoffProcess.js'
 import { runServiceProcess, type ServiceProcessOptions } from './process.js'
+import { LOADED_HANDOFF_LIMITS, LOADED_HANDOFF_MS, LOADED_HANDOFF_TEST_MS } from '../testing/handoffLimits.js'
 
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
 // The SQLite binding, faked: an OpenCode store with one turn in it, and a count of the times it was loaded.
@@ -145,7 +146,7 @@ describe('the handoff in the edge host', () => {
       const publicationErrors: unknown[] = []
       const commit = createHandoffPublisher({ directory: join(ws, 'daemon-data'),
         resolve: id => Object.values(agents).find(agent => agent.agentId === id) as never,
-        ownedByOther: () => false, isRecentlyDeleted: () => false })
+        ownedByOther: () => false, isRecentlyDeleted: () => false, deadlineMs: LOADED_HANDOFF_MS })
       const publish = async (prepared: PreparedHandoff) => {
         try { return await commit(prepared, { current: () => true }) } catch (error) { publicationErrors.push(error); throw error }
       }
@@ -156,7 +157,7 @@ describe('the handoff in the edge host', () => {
       // The eager SQLite module does not open a database for a file-backed conversation.
       expect(core.transcripts.databaseHistory(agents.claude as never)).toBeUndefined()
       expect(core.transcripts.databaseHistory({ ...agents.claude, engine: 'codex' } as never)).toBeUndefined()
-      const prepare = startHandoff(core).agent_handoff_prepare!
+      const prepare = startHandoff(core, undefined, undefined, undefined, LOADED_HANDOFF_LIMITS).agent_handoff_prepare!
       const asker = { local: true, owner: true }
       await prepare({ agentId: 'claude-1', changeId: 'c'.repeat(32), targetEngine: 'codex' }, asker)
       expect(binding.loads).toBe(1)
@@ -181,8 +182,8 @@ describe('the handoff in the edge host', () => {
       expect(readFileSync(join(ws, handed2.file!), 'utf8')).toContain('add a search box')
     } finally { rmSync(ws, { recursive: true, force: true }) }
   // A real git repository and SQLite store: 1.6 s alone, 5.5 s in a full test:core run on a busy Mac (2026-11-07, #4252),
-  // past vitest's 5 s default.
-  }, 20_000)
+  // past vitest's 5 s default, and past the handoff's own 5 s deadline at load 30 (testing/handoffLimits.ts).
+  }, LOADED_HANDOFF_TEST_MS)
 })
 
 it('refuses malformed read/publication replies and never sends a revoked publication', async () => {

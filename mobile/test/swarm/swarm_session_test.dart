@@ -357,17 +357,23 @@ void main() {
   });
 
   group('a tag in a chat the person muted (anh Dee, 2026-11-09)', () {
-    /// Swarm `a` with one tag by Ann waiting in its lead chat, which the
-    /// reader set to [notify].
-    Future<(SwarmSession, _Notices)> tagged(String notify) async {
+    /// Swarm `a` with one tag by Ann waiting in [chat], its project's channel
+    /// unless named, which the reader set to [notify].
+    Future<(SwarmSession, _Notices)> tagged(
+      String notify, {
+      String chat = leadChat,
+    }) async {
       final fake = backend();
       final derived = {
         'decisionsWaiting': 0,
         'mentionsWaiting': 1,
-        'chatSettings': {leadChat: notify},
+        'chatSettings': {chat: notify},
       };
-      fake.routes['/api/super-tabs/a/parts'] = (_) =>
-          firstLoad(tabId: 'a', derived: derived);
+      fake.routes['/api/super-tabs/a/parts'] = (_) => firstLoad(
+        tabId: 'a',
+        groups: [groupData('g1', title: 'Fix login')],
+        derived: derived,
+      );
       fake.routes['/api/super-tabs/a/changes'] = (_) =>
           changes(cursor: 'c2', derived: derived);
       fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
@@ -378,7 +384,7 @@ void main() {
           {
             'id': 'm1',
             'projectName': 'Mobile',
-            'conversationId': leadChat,
+            'conversationId': chat,
             'conversationTitle': 'Mobile',
             'messageId': 'msg-1',
             'leadName': 'Ann',
@@ -395,11 +401,22 @@ void main() {
     }
 
     test('posts nothing, as its push, yet counts on the badge', () async {
-      final (s, notices) = await tagged('muted');
+      final (s, notices) = await tagged('muted', chat: 'g1');
       s.announce(s.inbox.needs.single);
 
       expect(notices.shown, isEmpty);
       expect(notices.badges.last, 1);
+    });
+
+    // Swarm v4 has no way to unmute a project's channel, so a mute kept from
+    // before is read as Mentions only, as the server now pushes its tags
+    // (lead, 2026-11-10).
+    test("rings in a project's channel muted before", () async {
+      final (s, notices) = await tagged('muted');
+      s.announce(s.inbox.needs.single);
+
+      expect(notices.shown.single.title, 'Ann tagged you');
+      expect(s.inbox.reader('a')!.snapshot!.chatSettings[leadChat], 'muted');
     });
 
     test('rings in a chat that is not muted', () async {

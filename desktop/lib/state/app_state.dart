@@ -104,7 +104,6 @@ import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/image_cache.dart' show superTabImageCache;
-import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
@@ -611,6 +610,10 @@ class MachineState {
   // opening a terminal stream against an unavailable node.
   String? pendingOfflineAgentId;
   final Set<String> processingAgentIds = {};
+
+  /// Agents a message waits on while their engine starts (the daemon's `message_waiting`, reason `engine_starting`), until
+  /// their turn starts or the daemon says it could not be typed: they read as starting, never as failed.
+  final Set<String> engineStartingAgentIds = {};
   final Set<String> unknownActivityAgentIds = {};
   final Map<String, AgentActivityOrder> activityOrder = {};
   final Set<String> legacyHeartbeatSeen = {};
@@ -1946,14 +1949,6 @@ class AppNotifier extends ChangeNotifier {
             cancel: cancel,
             onProgress: onProgress,
           ),
-    avatarUpload: ({required tabId, required png}) => _teamComputer
-        ? Future.error(
-            const SuperTabFailure(
-              'MACHINE_UNAVAILABLE',
-              teamComputerSwarmMessage,
-            ),
-          )
-        : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onChatMessage: superTabChatNotice(systemNotifications),
     onReply: superTabReplyNotice(systemNotifications),
@@ -4906,7 +4901,6 @@ class AppNotifier extends ChangeNotifier {
     activeSwarm.arrangedKey = null;
     notifyListeners();
     _persistLayout();
-    _personArranged(activeSwarm);
   }
 
   int _paneResizeRequest = 0;
@@ -4974,35 +4968,15 @@ class AppNotifier extends ChangeNotifier {
       return false;
     }
     if (identical(activeSwarm.paneSizes[layoutKey], arrangement)) {
-      if (persist) {
-        _persistLayout();
-        _personArranged(activeSwarm);
-      }
+      if (persist) _persistLayout();
       return true;
     }
     activeSwarm.savePaneSizes(layoutKey, arrangement);
     activeSwarm.arranged = arrangement;
     _paneLayoutRequest++;
     notifyListeners();
-    if (persist) {
-      _persistLayout();
-      _personArranged(activeSwarm);
-    }
+    if (persist) _persistLayout();
     return true;
-  }
-
-  final _arrangedListeners = <void Function(Swarm)>[];
-
-  /// [listener] hears each time the person arranged a tab's panes: a
-  /// finished divider drag or a preset chosen (a Personal project keeps its
-  /// own sizes, task #3099).
-  void addArrangedListener(void Function(Swarm) listener) =>
-      _arrangedListeners.add(listener);
-
-  void _personArranged(Swarm swarm) {
-    for (final listener in _arrangedListeners.toList()) {
-      listener(swarm);
-    }
   }
 
   void resetPaneSizes() {
@@ -14012,7 +13986,6 @@ class AppNotifier extends ChangeNotifier {
       // A Swarm's tab keeps the Swarm's name (task #2647).
       if (!tab.nameIsCustom &&
           !tab.isSuperTab &&
-          !tab.isProjectTab &&
           tab.titleMachineId == machine.machine.machineId &&
           tab.titleAgentId == agent.id) {
         final title = Swarm.titleFor(agent);
@@ -15175,6 +15148,33 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.start(machineId, agentId);
   }
 
+  /// How long an agent reads as starting at most after its daemon said a message waits for its engine: a wait that ended
+  /// without a word (the agent stopped, the delivery replaced) must not say starting for good.
+  static const engineWaitFor = Duration(minutes: 2);
+  final Map<String, Timer> _engineWaits = {};
+
+  void _startEngineWait(MachineState machine, String agentId) {
+    final key = _turnActivityKey(machine.machine.machineId, agentId);
+    _engineWaits.remove(key)?.cancel();
+    _engineWaits[key] = Timer(engineWaitFor, () {
+      if (_endEngineWait(machine, agentId) && !_disposed) notifyListeners();
+    });
+    if (machine.engineStartingAgentIds.add(agentId)) notifyListeners();
+  }
+
+  /// Ends [agentId]'s wait for its engine; whether it was waiting.
+  bool _endEngineWait(MachineState machine, String agentId) {
+    _engineWaits
+        .remove(_turnActivityKey(machine.machine.machineId, agentId))
+        ?.cancel();
+    return machine.engineStartingAgentIds.remove(agentId);
+  }
+
+  /// Whether a message waits for [agentId]'s engine to start on [machineId] (the daemon's `message_waiting`).
+  bool engineStarting(String machineId, String agentId) =>
+      machineStates[machineId]?.engineStartingAgentIds.contains(agentId) ??
+      false;
+
   void _cancelTurnActivity(
     String machineId,
     String agentId, {
@@ -15182,6 +15182,10 @@ class AppNotifier extends ChangeNotifier {
   }) {
     final key = _turnActivityKey(machineId, agentId);
     _turnActivityWatchdogs.remove(key)?.cancel();
+    // A turn that ended, an agent stopped or deleted, a disconnect: no message waits for its engine any more.
+    if (machineStates[machineId] case final machine?) {
+      _endEngineWait(machine, agentId);
+    }
     // Every ordinary end of a turn comes through here — `turn_ended`, a
     // disconnect, a deleted agent — so this is where the clock stops. An end for
     // a turn this process never saw start contributes nothing (see
@@ -15203,6 +15207,9 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.processingAgentIds.clear();
+    for (final agentId in machine.engineStartingAgentIds.toList()) {
+      _endEngineWait(machine, agentId);
+    }
     machine.unknownActivityAgentIds.clear();
     machine.activityOrder.clear();
     machine.legacyHeartbeatSeen.clear();
@@ -15216,8 +15223,13 @@ class AppNotifier extends ChangeNotifier {
     }
     _turnActivityWatchdogs.clear();
     modelStarts.clear();
+    for (final timer in _engineWaits.values) {
+      timer.cancel();
+    }
+    _engineWaits.clear();
     for (final machine in machineStates.values) {
       machine.processingAgentIds.clear();
+      machine.engineStartingAgentIds.clear();
       machine.unknownActivityAgentIds.clear();
       machine.activityOrder.clear();
       machine.legacyHeartbeatSeen.clear();
@@ -19999,41 +20011,6 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// A saved arrangement for Swarm tab [swarmId]'s [count] panes (a Personal
-  /// project's own, kept on this computer): what [copySuperTabLayout] takes
-  /// from a tab, from a record instead.
-  void applySuperTabLayout(
-    String swarmId, {
-    required int count,
-    PanePreset? preset,
-    Map<String, PaneArrangement> sizes = const {},
-    String? arrangedKey,
-    int? gridColumns,
-  }) {
-    final tab = swarms
-        .where((s) => s.id == swarmId && s.isSuperTab)
-        .firstOrNull;
-    if (tab == null || _disposed || tab.panes.length != count) return;
-    final prefix = '$count:';
-    tab.presets.remove(count);
-    if (preset != null && preset.supportsCount(count)) {
-      tab.presets[count] = preset;
-    }
-    tab.paneSizes.removeWhere((key, _) => key.startsWith(prefix));
-    for (final MapEntry(:key, :value) in sizes.entries) {
-      if (key.startsWith(prefix) && value.tiles.length == count) {
-        tab.paneSizes[key] = value;
-      }
-    }
-    final arranged = arrangedKey == null ? null : tab.paneSizes[arrangedKey];
-    tab.arranged = arranged;
-    tab.arrangedKey = arranged == null ? null : arrangedKey;
-    tab.gridColumns = gridColumns;
-    _paneLayoutRequest++;
-    _persistLayout();
-    notifyListeners();
-  }
-
   void reserveSuperTabPane(String swarmId, String machineId, String harnessId) {
     final tab = swarms
         .where((s) => s.id == swarmId && s.superTabId != null)
@@ -20343,7 +20320,6 @@ class AppNotifier extends ChangeNotifier {
     if (firstAgent &&
         !target.nameIsCustom &&
         !target.isSuperTab &&
-        !target.isProjectTab &&
         !target.isCompanions &&
         !target.isDevices) {
       final agent = machine.agents
@@ -21120,7 +21096,6 @@ class AppNotifier extends ChangeNotifier {
       if (firstAgent &&
           !target.nameIsCustom &&
           !target.isSuperTab &&
-          !target.isProjectTab &&
           pane.agentId != null) {
         final agent = machineStates[pane.machineId]?.agents
             .where((agent) => agent.id == pane.agentId)
@@ -21279,41 +21254,6 @@ class AppNotifier extends ChangeNotifier {
   /// Store tab, orchestrator tabs and an untouched New Tab are this window's.
   bool _deskTracks(Swarm swarm) =>
       swarm.kind == 'harness' && !isDraftSwarm(swarm.id);
-
-  /// The most tabs the desk keeps (backend `DESK_MAX_TABS`): it drops a 25th
-  /// without an error, so a caller that adds one checks first.
-  static const deskMaxTabs = 24;
-
-  /// How many of this window's tabs the desk holds.
-  int get deskTabCount => swarms.where(_deskTracks).length;
-
-  /// Tab [id] takes [name] without it becoming the person's: a Personal
-  /// project's tab following its project's rename. A name the person chose
-  /// stays.
-  void renameTabAutomatically(String id, String name) {
-    final swarm = swarms.where((s) => s.id == id).firstOrNull;
-    final clean = name.trim();
-    if (swarm == null || swarm.nameIsCustom || clean.isEmpty) return;
-    final next = clean.length > 80 ? clean.substring(0, 80) : clean;
-    if (swarm.name == next) return;
-    swarm.name = next;
-    _persistLayout();
-    notifyListeners();
-  }
-
-  /// Tab [id] named [name], made in the background when it is not here yet:
-  /// the tab on screen stays, and the name is not the person's, so it may
-  /// follow what it is named after (a Personal project's own tab, task
-  /// #3099). It reaches the desk as any new tab does.
-  Swarm ensureBackgroundTab(String id, String name) {
-    final existing = swarms.where((s) => s.id == id).firstOrNull;
-    if (existing != null) return existing;
-    final swarm = Swarm(id: id, name: name, nameIsCustom: false);
-    swarms.add(swarm);
-    _persistLayout();
-    notifyListeners();
-    return swarm;
-  }
 
   /// `swarms` as the desk would hold them.
   List<DeskTab> _deskProjection() => [
@@ -22941,6 +22881,28 @@ class AppNotifier extends ChangeNotifier {
         await session.handleFrame(type, payload);
       }
       return;
+    }
+    // A message waits for its agent's engine to start: the agent reads as starting until its turn starts or the daemon's error
+    // says it could not be typed.
+    if (type == 'message_waiting') {
+      final id = _eventAgentId(machine, event, payload);
+      if (id != null && payload['reason'] == 'engine_starting') {
+        _startEngineWait(machine, id);
+      }
+      return;
+    }
+    if (type == 'turn_started' || type == 'turn_ended' || type == 'error') {
+      final id = _eventAgentId(machine, event, payload);
+      final agent = machine.agents.where((a) => a.id == id).firstOrNull;
+      final sessionId = _eventSessionId(event, payload);
+      // Another conversation's late frame, or a sub-agent's, is not the turn the message waits for.
+      final other =
+          sessionId != null &&
+          agent?.sessionId != null &&
+          sessionId != agent!.sessionId;
+      if (id != null && !other && _endEngineWait(machine, id)) {
+        notifyListeners();
+      }
     }
     if (type == 'agent_activity' ||
         _modelAnswerEvents.contains(type) ||

@@ -11,7 +11,6 @@ import { dirname, join } from 'node:path'
 import { leadSwitchOf, SWITCH_RECOVERY_MS, switchWithin } from './leadSwitch.js'
 import { isCrewRow } from './crew.js'
 import { identifier, object } from './wire.js'
-import { isTeamDaemon } from './teamDaemon.js'
 
 /** `leads`: the Leads of active projects here, which never lapse (owner, 2026-10-23: the Lead of an active project is never
  *  stopped in any case). Absent in a file from before Leads were kept.
@@ -68,11 +67,10 @@ export function retainedLeads(dataDir: string): Set<string> {
   } catch { return new Set() }
 }
 
-/** Only the server's current sleep instruction grants an idle close, never a window's Close or a Team purge. A new
+/** Only the server's current sleep instruction grants an idle close, never a window's Close. A new
  *  awake roster revokes it even while checkpointing. Missing, lapsed or unreadable authority grants no sleep. */
 export function retainedSleepingBuddies(dataDir: string, now = Date.now()): Set<string> {
   try {
-    if (isTeamDaemon()) return new Set()
     const file = retentionFile(dataDir)
     if (now - statSync(file).mtimeMs > RETENTION_LAPSE_MS) return new Set()
     return new Set(read(file).sleepingBuddies ?? [])

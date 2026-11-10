@@ -91,7 +91,7 @@ export function settleReply(state: SuperTabState, group: Conversation, agentId: 
   }
 }
 
-/** The PM's explicit reaction on [messageId] settles it. Automatic receipt eyes never call this command path (#3663). */
+/** The PM's reaction on [messageId] settles it: an acknowledgement, kept nowhere (reactions.ts). */
 export function settleReaction(state: SuperTabState, group: Conversation, agentId: string, messageId: string, on: boolean): void {
   if (!on || !group.owed || !byPm(state, group, agentId)) return
   settle(group, ask => ask.id === messageId)

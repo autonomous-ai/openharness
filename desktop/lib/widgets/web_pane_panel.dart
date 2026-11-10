@@ -30,6 +30,27 @@ import '../terminal/terminal_text.dart';
 import 'verdict_marks.dart';
 import 'native_webview_host.dart';
 
+/// The harnesses whose viewer is a web page the person browses: their pane carries a browser bar.
+const _browserHarnesses = {'autonomous/web-studio'};
+
+/// The screen a web page is tried at in its pane: a phone's width, a tablet's, or the whole pane.
+enum _PageSize {
+  mobile('Mobile · 390 px', AppIcons.smartphone, 390),
+  tablet('Tablet · 820 px', AppIcons.tablet, 820),
+  desktop('Desktop · full width', AppIcons.monitor, null);
+
+  const _PageSize(this.label, this.icon, this.width);
+  final String label;
+  final IconData icon;
+
+  /// The page's width in logical pixels; null is the pane's own.
+  final double? width;
+}
+
+/// Where this computer's gateway to another machine's viewer starts a page (the CLI's
+/// remoteViewerProxy `BOOTSTRAP`).
+const _gatewayPrefix = '/__harness_viewer/';
+
 /// A domain harness's viewer, in a tile beside its agent's terminal.
 ///
 /// The page is the harness's own — Circuit's board workspace, Workshop's 3D
@@ -112,6 +133,33 @@ class _WebPanePanelState extends State<WebPanePanel> {
           ) ==
       true;
   WebViewController? _controller;
+
+  /// A web harness's pane reads as a browser: back, forward, reload, the page's address, and the page in
+  /// the computer's own browser (owner, 2026-11-09). Other viewers (a 3D model, a board) keep their header.
+  bool get _browserBar =>
+      !_isMonitor &&
+      widget.notifier
+              .stateOf(widget.pane.machineId)
+              ?.agents
+              .any(
+                (agent) =>
+                    agent.id == widget.pane.ownerAgentId &&
+                    _browserHarnesses.contains(agent.dsh),
+              ) ==
+          true;
+
+  /// The page the webview is on now, which a click inside the page may have moved from [TerminalPane.url].
+  String? _pageUrl;
+  bool _canGoBack = false, _canGoForward = false;
+  _PageSize _pageSize = _PageSize.desktop;
+  final _address = TextEditingController();
+  final _addressFocus = FocusNode();
+
+  /// Whether the pane's page comes through this computer's gateway to another machine's viewer
+  /// (the CLI's remoteViewerProxy): its address here is `/__harness_viewer/<token>?path=…`.
+  bool get _throughGateway =>
+      Uri.tryParse(widget.pane.url ?? '')?.path.startsWith(_gatewayPrefix) ==
+      true;
 
   /// Whether [_controller] has its JavaScript channel. A load before then was cancelled by the one
   /// [_mountController] makes once it is added, and the cancellation counted as a failed load.
@@ -219,7 +267,108 @@ class _WebPanePanelState extends State<WebPanePanel> {
       widget.pane.focusViewerInput = null;
     }
     _remote?.dispose();
+    _address.dispose();
+    _addressFocus.dispose();
     super.dispose();
+  }
+
+  /// The webview moved to [url]: the address bar says where, and back and forward say whether they can.
+  Future<void> _pageChanged(String? url) async {
+    if (url == null || url.isEmpty) return;
+    _pageUrl = url;
+    if (!_addressFocus.hasFocus) _address.text = _shownAddress(url);
+    final controller = _controller;
+    if (controller == null) return;
+    final back = await controller.canGoBack().catchError((_) => false);
+    final forward = await controller.canGoForward().catchError((_) => false);
+    _set(() {
+      _canGoBack = back;
+      _canGoForward = forward;
+    });
+  }
+
+  /// Where the agent's page lives on its own machine, when the verdict names it (its dev server,
+  /// `http://127.0.0.1:5173`): the address the agent and its terminal speak of.
+  String? get _agentOrigin {
+    final preview = Uri.tryParse(widget.verdict?.preview ?? '');
+    return preview != null && preview.scheme == 'http' && preview.hasPort
+        ? preview.origin
+        : null;
+  }
+
+  /// The page's full address. Through the gateway, the origin is the agent's own (its dev server) when
+  /// the verdict names it, so the bar reads as the agent's terminal does; else the address it has here.
+  String _shownAddress(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return url;
+    final page = uri.path.startsWith(_gatewayPrefix)
+        ? (uri.queryParameters['path'] ?? '/')
+        : (uri.path.isEmpty ? '/' : uri.path) +
+              (uri.hasQuery ? '?${uri.query}' : '') +
+              (uri.fragment.isEmpty ? '' : '#${uri.fragment}');
+    final origin = _throughGateway ? (_agentOrigin ?? uri.origin) : uri.origin;
+    return '$origin$page';
+  }
+
+  /// What the person typed, as a page of this viewer: a path ("/menu"), or a full address on the page's
+  /// host and port (here, or the agent's own). Anything else stays out of the pane, which shows the
+  /// agent's pages only.
+  Uri? _typedPage(String text) {
+    final input = text.trim();
+    final current = Uri.tryParse(_pageUrl ?? widget.pane.url ?? '');
+    if (input.isEmpty || current == null || !current.hasAuthority) return null;
+    if (input.startsWith('/')) return Uri.tryParse('${current.origin}$input');
+    final typed = Uri.tryParse(input.contains('://') ? input : 'http://$input');
+    if (typed != null && typed.hasAuthority) {
+      if (typed.origin == current.origin) return typed;
+      // The agent's own address of a page through the gateway: the same page, here.
+      if (_throughGateway && typed.origin == _agentOrigin) {
+        return Uri.tryParse(
+          current.origin + typed.toString().substring(typed.origin.length),
+        );
+      }
+    }
+    // A bare path without its slash ("menu"), never a host.
+    if (!input.contains(':') && !input.contains('.')) {
+      return Uri.tryParse('${current.origin}/$input');
+    }
+    return null;
+  }
+
+  void _goTo(String text) {
+    final page = _typedPage(text);
+    final controller = _controller;
+    if (controller == null) return;
+    if (page == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This pane shows the agent’s pages. Type a path such as /about, or open the page in your browser.',
+          ),
+        ),
+      );
+      if (_pageUrl case final url?) _address.text = _shownAddress(url);
+      return;
+    }
+    controller.loadRequest(page);
+  }
+
+  /// The page in this computer's browser: through the gateway, its bootstrap address leading to the
+  /// page shown now, so the browser gets the gateway's cookie on the way.
+  Uri? get _pageForBrowser {
+    final pane = Uri.tryParse(widget.pane.url ?? '');
+    if (pane == null) return null;
+    final shown = _pageUrl;
+    if (_throughGateway) {
+      final page = Uri.tryParse(shown ?? '');
+      if (page == null || page.path.startsWith(_gatewayPrefix)) return pane;
+      final path =
+          (page.path.isEmpty ? '/' : page.path) +
+          (page.hasQuery ? '?${page.query}' : '') +
+          (page.fragment.isEmpty ? '' : '#${page.fragment}');
+      return pane.replace(queryParameters: {'path': path});
+    }
+    return Uri.tryParse(shown ?? '') ?? pane;
   }
 
   Future<void> _mountController() async {
@@ -239,8 +388,10 @@ class _WebPanePanelState extends State<WebPanePanel> {
           ..setNavigationDelegate(
             NavigationDelegate(
               onPageStarted: _viewerLoad.started,
+              onUrlChange: (change) => unawaited(_pageChanged(change.url)),
               onPageFinished: (url) {
                 _viewerLoad.finished(url);
+                unawaited(_pageChanged(url));
                 // A fresh document has no stamp; give it the app's appearance before it is looked at.
                 _stampedBrightness = null;
                 _stampTheme();
@@ -405,6 +556,24 @@ class _WebPanePanelState extends State<WebPanePanel> {
         children: [
           _header(context),
           Divider(height: 1, color: AppColors.border),
+          if (_browserBar &&
+              _controller != null &&
+              widget.pane.viewerError == null) ...[
+            _BrowserBar(
+              address: _address,
+              focus: _addressFocus,
+              onBack: _canGoBack ? () => _controller?.goBack() : null,
+              onForward: _canGoForward ? () => _controller?.goForward() : null,
+              onReload: () => _controller?.reload(),
+              onSubmit: _goTo,
+              size: _pageSize,
+              onSize: (size) => setState(() => _pageSize = size),
+              onOpenInBrowser: _pageForBrowser == null
+                  ? null
+                  : () => _openInBrowser(_pageForBrowser!),
+            ),
+            Divider(height: 1, color: AppColors.border),
+          ],
           Expanded(
             child: NativeWebViewHost(
               visible: widget.visible,
@@ -448,7 +617,10 @@ class _WebPanePanelState extends State<WebPanePanel> {
                   children: [
                     Flexible(
                       child: Text(
-                        widget.title,
+                        // The agent's own app, not the package's viewer, while its verdict names one.
+                        _browserBar && _agentOrigin != null
+                            ? 'Preview'
+                            : widget.title,
                         key: const ValueKey('viewer-pane-title'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -540,10 +712,24 @@ class _WebPanePanelState extends State<WebPanePanel> {
               ),
       );
     }
+    final width = _browserBar ? _pageSize.width : null;
     return Stack(
       fit: StackFit.expand,
       children: [
-        WebViewWidget(controller: controller),
+        // A phone's or a tablet's width, centred on the pane's own ground, as a browser's device mode. One
+        // tree for every size, so changing it resizes the page and never rebuilds its native view.
+        LayoutBuilder(
+          builder: (context, box) => Center(
+            child: SizedBox(
+              key: const ValueKey('web-pane-page'),
+              width: width != null && width < box.maxWidth
+                  ? width
+                  : box.maxWidth,
+              height: box.maxHeight,
+              child: WebViewWidget(controller: controller),
+            ),
+          ),
+        ),
         if (_viewerLoad.failure case final failure?)
           ColoredBox(
             key: const ValueKey('web-pane-waiting'),
@@ -587,6 +773,144 @@ class _ViewerActions extends StatelessWidget {
           onPressed: onClose,
         ),
       ],
+    );
+  }
+}
+
+/// Back, forward, reload, the page's address and the computer's own browser, as a browser's toolbar.
+class _BrowserBar extends StatelessWidget {
+  const _BrowserBar({
+    required this.address,
+    required this.focus,
+    required this.onReload,
+    required this.onSubmit,
+    required this.size,
+    required this.onSize,
+    this.onBack,
+    this.onForward,
+    this.onOpenInBrowser,
+  });
+
+  final TextEditingController address;
+  final FocusNode focus;
+  final VoidCallback? onBack, onForward, onOpenInBrowser;
+  final VoidCallback onReload;
+  final ValueChanged<String> onSubmit;
+  final _PageSize size;
+  final ValueChanged<_PageSize> onSize;
+
+  Widget _button(
+    String label,
+    Widget icon,
+    VoidCallback? onPressed, {
+    Key? key,
+  }) => Tooltip(
+    message: label,
+    waitDuration: const Duration(milliseconds: 500),
+    child: SizedBox(
+      width: 28,
+      height: 28,
+      child: IconButton(
+        key: key,
+        padding: EdgeInsets.zero,
+        iconSize: 15,
+        color: AppColors.text,
+        disabledColor: AppColors.mutedStrong.withValues(alpha: 0.45),
+        onPressed: onPressed,
+        icon: icon,
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      key: const ValueKey('web-pane-browser-bar'),
+      height: 36,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          children: [
+            _button(
+              'Back',
+              const Icon(AppIcons.arrowLeft),
+              onBack,
+              key: const ValueKey('web-pane-back'),
+            ),
+            _button(
+              'Forward',
+              const Icon(AppIcons.arrowRight),
+              onForward,
+              key: const ValueKey('web-pane-forward'),
+            ),
+            _button(
+              'Reload page',
+              const AppPaneIcon(AppPaneSymbol.reload, size: 15),
+              onReload,
+              key: const ValueKey('web-pane-reload-page'),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Container(
+                height: 26,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.border.withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      AppIcons.globe,
+                      size: 13,
+                      color: AppColors.mutedStrong,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: TextField(
+                        key: const ValueKey('web-pane-address'),
+                        controller: address,
+                        focusNode: focus,
+                        maxLines: 1,
+                        style: grid.AppType.monoLabel(color: AppColors.text),
+                        decoration: const InputDecoration(
+                          isCollapsed: true,
+                          border: InputBorder.none,
+                        ),
+                        onSubmitted: onSubmit,
+                        onTap: () => address.selection = TextSelection(
+                          baseOffset: 0,
+                          extentOffset: address.text.length,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            for (final option in _PageSize.values)
+              _button(
+                option.label,
+                Icon(
+                  option.icon,
+                  color: option == size
+                      ? AppColors.text
+                      : AppColors.mutedStrong,
+                ),
+                option == size ? () {} : () => onSize(option),
+                key: ValueKey('web-pane-size-${option.name}'),
+              ),
+            const SizedBox(width: 2),
+            _button(
+              'Open in browser',
+              const Icon(AppIcons.externalLink),
+              onOpenInBrowser,
+              key: const ValueKey('web-pane-open-page-in-browser'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

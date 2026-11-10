@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import type { PrismaClient } from '@prisma/client'
+import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
-import { reactionCounts } from './reactions.js'
+import { RETIRED_NOTE } from './retired.js'
+import { counted } from './retired.test-support.js'
+import { SuperTabStore } from './store.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -26,87 +30,55 @@ function fixture() {
   return { run, invite, lead, agent, get state() { return state } }
 }
 const react = (on: boolean, emoji = 'tada'): Command => ({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji, on } as Command)
-const target = (reacted: boolean) => ({ reaction: { messageId: 'm1', reacted } })
+const target = { reaction: { messageId: 'm1' } }
 
+// Reactions are gone (anh Dee, 2026-11-09): nothing stores, counts or shows one (reactions.ts).
 describe('reactions', () => {
-  it('bumps the group only when the reaction changes', () => {
+  it('does nothing for a person\'s: answered as ignored, nothing moves and nothing settles', () => {
     const f = fixture()
-    expect(f.run(react(true), owner, target(false)).result).toMatchObject({ changed: true })
-    expect(f.lead().reactionSeq).toBe(1)
-    expect(f.run(react(true), owner, target(true)).result).toMatchObject({ changed: false })
-    expect(f.run(react(false), owner, target(false)).result).toMatchObject({ changed: false })
-    expect(f.lead().reactionSeq).toBe(1)
-    f.run(react(false), owner, target(true))
-    expect(f.lead().reactionSeq).toBe(2)
+    for (const on of [true, false]) {
+      const effects = f.run(react(on), owner, target)
+      expect(effects.result).toEqual({ ignored: true, note: RETIRED_NOTE })
+      expect(effects.settles).toBeUndefined()
+    }
+    expect(f.lead().reactionSeq).toBeUndefined()
   })
 
-  it('refuses a message the store did not find here, an unknown emoji, a viewer and an archived group', () => {
-    const f = fixture()
-    expect(() => f.run(react(true))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
-    expect(() => f.run(react(true, 'skull'), owner, target(false))).toThrow()
-    f.invite('viewer')
-    expect(() => f.run(react(true), peer, target(false))).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
-    const group = f.run({ type: 'conversation.create', title: 'Old', brief: 'Done.', checks: [] }).result.conversationId as string
-    f.run({ type: 'conversation.archive', conversationId: group, archived: true })
-    expect(() => f.run({ type: 'message.react', conversationId: group, messageId: 'm1', emoji: 'tada', on: true }, owner, target(false)))
-      .toThrow(expect.objectContaining({ code: 'ARCHIVED' }))
+  it('answers a person\'s reaction before anything is read, counted as a retired command by client', async () => {
+    const queries: Query[] = []
+    const store = new SuperTabStore(recordingDb(queries) as PrismaClient)
+    const user = { sub: 'u1', email: 'u@example.com', autonomousEnv: 'prod', role: 'user' } as never
+    const before = await counted('message.react', 'desktop')
+    expect(await store.execute(user, 'tab-1', { operationId: 'op-1', command: react(true) }, undefined, undefined, { kind: 'desktop', version: '1.4.0' }))
+      .toEqual({ result: { ignored: true, note: RETIRED_NOTE }, parts: [] })
+    expect(queries).toEqual([])
+    expect(await counted('message.react', 'desktop')).toBe(before + 1)
   })
 
-  it('counts each emoji in a fixed order, only from reactors still in the Swarm', () => {
-    const f = fixture()
-    f.invite()
-    const rows = [
-      { messageId: 'm1', emoji: 'tada', actorKind: 'person', actorId: 'peer' },
-      { messageId: 'm1', emoji: 'thumbs_up', actorKind: 'person', actorId: 'owner' },
-      { messageId: 'm1', emoji: 'tada', actorKind: 'person', actorId: 'owner' },
-      { messageId: 'm1', emoji: 'tada', actorKind: 'person', actorId: 'left-the-swarm' },
-      { messageId: 'm1', emoji: 'heart', actorKind: 'agent', actorId: 'removed-agent' },
-      { messageId: 'm2', emoji: 'eyes', actorKind: 'person', actorId: 'owner' },
-    ]
-    expect(reactionCounts(f.state, rows).get('m1')).toEqual([
-      { emoji: 'thumbs_up', count: 1, by: [{ kind: 'person', id: 'owner' }] },
-      { emoji: 'tada', count: 2, by: [{ kind: 'person', id: 'peer' }, { kind: 'person', id: 'owner' }] },
-    ])
-    expect(reactionCounts(f.state, rows).get('m2')).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'person', id: 'owner' }] }])
-  })
-
-  it('lets an agent react in a conversation it is in, as a person does, with ✅ for done', () => {
+  // Task #3391: an agent acknowledges with a reaction rather than an "on it" post, and that settles its delivery of the message,
+  // as an answer does (the store closes the rows). It is kept nowhere and shown to nobody.
+  it('settles an agent\'s delivery with its reaction, whatever the emoji, and moves nothing a reader polls', () => {
     const f = fixture()
     const builder = f.agent('lead', 'Builder')
     // A member stored there before the project chat held only its coordinator (#2207).
     f.lead().agentIds.push(builder)
-    for (const emoji of ['eyes', 'check', 'rocket']) {
-      expect(f.run(react(true, emoji), asAgent(builder), target(false)).result, emoji).toMatchObject({ changed: true })
+    for (const emoji of ['eyes', 'check', 'thumbs_up']) {
+      const effects = f.run(react(true, emoji), asAgent(builder), target)
+      expect(effects.settles, emoji).toEqual({ messageId: 'm1', agentId: builder })
+      expect(effects.result, emoji).toMatchObject({ changed: true })
     }
-    expect(f.lead().reactionSeq).toBe(3)
-  })
-
-  it('refuses an agent outside the conversation, so it cannot mark a message it does not take part in', () => {
-    const f = fixture()
-    const group = f.run({ type: 'conversation.create', title: 'Side', brief: 'Side work.', checks: [] }).result.conversationId as string
-    const outsider = f.agent(group, 'Outsider')
-    expect(() => f.run(react(true, 'eyes'), asAgent(outsider), target(false))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(f.run(react(false, 'eyes'), asAgent(builder), target).settles).toBeUndefined()
     expect(f.lead().reactionSeq).toBeUndefined()
   })
 
-  it('shows an agent\'s progress in its order: 👀 started, ✅ done, 🚀 merged', () => {
-    const f = fixture()
-    const builder = f.agent('lead', 'Builder')
-    const rows = ['rocket', 'check', 'eyes'].map(emoji => ({ messageId: 'm1', emoji, actorKind: 'agent', actorId: builder }))
-    expect(reactionCounts(f.state, rows).get('m1')!.map(r => r.emoji)).toEqual(['eyes', 'check', 'rocket'])
-  })
-
-  // Task #3391: a reaction settles the reacting agent's delivery of the message, as an answer does (the store closes the rows).
-  it('tells the store which delivery an agent\'s reaction settles, and settles nothing for anyone else', () => {
+  it('refuses an agent\'s reaction to a message the store did not find, an unknown emoji, and an agent outside the conversation', () => {
     const f = fixture()
     const builder = f.agent('lead', 'Builder')
     f.lead().agentIds.push(builder)
-    for (const emoji of ['eyes', 'check', 'thumbs_up']) {
-      expect(f.run(react(true, emoji), asAgent(builder), target(false)).settles, emoji).toEqual({ messageId: 'm1', agentId: builder })
-    }
-    // A repeat of the reaction still settles: its delivery may have come back since.
-    expect(f.run(react(true, 'eyes'), asAgent(builder), target(true)).settles).toEqual({ messageId: 'm1', agentId: builder })
-    expect(f.run(react(false, 'eyes'), asAgent(builder), target(true)).settles).toBeUndefined()
-    expect(f.run(react(true), owner, target(false)).settles).toBeUndefined()
+    expect(() => f.run(react(true, 'eyes'), asAgent(builder))).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
+    expect(() => f.run(react(true, 'skull'), asAgent(builder), target)).toThrow()
+    const group = f.run({ type: 'conversation.create', title: 'Side', brief: 'Side work.', checks: [] }).result.conversationId as string
+    const outsider = f.agent(group, 'Outsider')
+    expect(() => f.run(react(true, 'eyes'), asAgent(outsider), target)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
   })
 })

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:clock/clock.dart';
 import 'package:cryptography/dart.dart' show DartSha256;
@@ -541,6 +540,9 @@ class ConversationServer {
   // While set, a thread's older pages (`thread` and `before`) wait for it, and
   // nothing else does: a slow older read while the page reloads.
   Completer<void>? holdThreadPages;
+  // While set, the read of a conversation's messages waits for it, and nothing else does: the state is
+  // read and the page not yet.
+  Completer<void>? holdMessages;
   // Makes every command answer with this refusal: {code, message}, with
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
@@ -603,6 +605,20 @@ class ConversationServer {
 
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
+
+  /// The Swarm's leaderboard of agents shipping (`GET .../shipping`); null answers 404, as a server before it. Reads of it are
+  /// listed in [shippingReads].
+  Map<String, dynamic>? shipping;
+  final shippingReads = <String>[];
+
+  /// Answers by the read's path instead of [shipping], as a server does.
+  Map<String, dynamic> Function(String path)? shippingAnswer;
+
+  /// Holds the next reads of the leaderboard until it completes.
+  Future<void>? shippingGate;
+
+  /// How many leaderboard reads fail as a server that is down does, before they answer again.
+  var failShippingReads = 0;
 
   /// A Member's own chat that agent.new opens is left out of a Swarm's first load, as a big Swarm's read can leave out
   /// a quiet chat (hotfix #4647): only a read of the chat itself finds it.
@@ -1012,63 +1028,6 @@ class ConversationServer {
         },
   ];
 
-  // Avatar pictures uploaded, as the backend's avatar route keeps them.
-  final avatarUploads = <Uint8List>[];
-
-  /// What the backend's avatar route does with a picture.
-  Future<Map<String, dynamic>> uploadAvatar({
-    required String tabId,
-    required Uint8List png,
-  }) async {
-    avatarUploads.add(png);
-    final id = 'avatar-${avatarUploads.length}';
-    return {
-      'avatar': {'id': id},
-    };
-  }
-
-  /// A person's own status, username or avatar, or an agent's avatar, as the
-  /// backend stores it (profile.ts, usernames.ts).
-  void _profile(Map command, String reader) {
-    final (key, id) = command['type'] == 'agent.avatar'
-        ? ('agents', command['agentId'])
-        : ('people', reader);
-    // An upload's record says only that there is one; its link comes signed with each read (backend avatarLinks.ts).
-    Map<String, dynamic> avatar(Map choice) {
-      if (choice['kind'] != 'upload') return Map<String, dynamic>.from(choice);
-      final links = state['avatars'] ??= <String, dynamic>{};
-      (links as Map)['${key == 'agents' ? 'agent' : 'person'}:$id'] =
-          superTabSignedAvatar(choice['id'] as String);
-      return {'kind': 'upload'};
-    }
-
-    state[key] = <dynamic>[
-      for (final row in state[key] as List)
-        if ((row as Map)['id'] != id)
-          row
-        else
-          <String, dynamic>{
-            ...row,
-            if (command['type'] == 'member.status')
-              'status': command['status']
-            else if (command['type'] == 'member.timeZone')
-              'timeZone': command['timeZone']
-            else if (command['type'] == 'member.username')
-              'username': (command['username'] as String?)?.toLowerCase()
-            else if (command['type'] == 'member.name')
-              'name': (command['name'] as String?)?.replaceAll(
-                RegExp(r'\s+'),
-                ' ',
-              )
-            else
-              'avatar': command['avatar'] == null
-                  ? null
-                  : avatar(command['avatar'] as Map),
-          },
-    ];
-    revision++;
-  }
-
   /// An edit as the backend keeps it (messageEdits.ts): the new text, when it
   /// changed, and the group's `reactionSeq` moved. False for the same text.
   bool editMessage(String messageId, String text) {
@@ -1375,13 +1334,6 @@ class ConversationServer {
           ];
           output['startId'] = operationId;
         }
-      } else if (command['type'] == 'member.status' ||
-          command['type'] == 'member.timeZone' ||
-          command['type'] == 'member.username' ||
-          command['type'] == 'member.name' ||
-          command['type'] == 'member.avatar' ||
-          command['type'] == 'agent.avatar') {
-        _profile(command, reader ?? 'owner');
       } else if (command['type'] == 'message.edit') {
         output['changed'] = editMessage(
           command['messageId'] as String,
@@ -1909,6 +1861,33 @@ class ConversationServer {
                 )['archived'] =
             command['archived'];
         revision++;
+      } else if (command['type'] == 'project.closeTab') {
+        // As backend commands.ts closes a v3 tab's project: gone when none of its chats has a message, else kept
+        // read-only and archived.
+        final projectId = command['projectId'];
+        final groups = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((g) => g['projectId'] == projectId)
+            .toList();
+        if (groups.any((g) => ((g['lastMessageSequence'] ?? 0) as num) > 0)) {
+          for (final project
+              in (state['projects'] as List).cast<Map<String, dynamic>>()) {
+            if (project['id'] == projectId) project['archived'] = true;
+          }
+          for (final group in groups) {
+            group['archived'] = true;
+          }
+          output['outcome'] = 'archived';
+        } else {
+          state['projects'] = (state['projects'] as List)
+              .where((p) => p['id'] != projectId)
+              .toList();
+          (state['conversations'] as List).removeWhere(
+            (g) => g['projectId'] == projectId,
+          );
+          output['outcome'] = 'deleted';
+        }
+        revision++;
       } else if (command['type'] == 'project.delete') {
         final projectId = command['projectId'];
         final projects =
@@ -1987,6 +1966,9 @@ class ConversationServer {
       return result;
     }
     if (holdReads case final hold?) await hold.future;
+    if (holdMessages case final hold? when path.contains('/messages')) {
+      await hold.future;
+    }
     if (failReads) throw StateError('Offline');
     if (failReadsOf case final part? when path.contains(part)) {
       throw StateError('Offline');
@@ -2135,6 +2117,23 @@ class ConversationServer {
               .toList(),
         }),
       ) as Map<String, dynamic>;
+    }
+    if (uri.pathSegments.last == 'shipping') {
+      shippingReads.add(path);
+      if (failShippingReads > 0) {
+        failShippingReads--;
+        throw const SuperTabFailure(
+          'OFFLINE',
+          'No connection.',
+          statusCode: 503,
+        );
+      }
+      if (shippingGate case final gate?) await gate;
+      final board = shippingAnswer?.call(path) ?? shipping;
+      if (board == null) {
+        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
+      }
+      return jsonDecode(jsonEncode(board)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'leaderboard') {
       leaderboardReads.add(path);
@@ -2559,7 +2558,6 @@ class ConversationServer {
     SuperTabUpload? upload,
     SuperTabReading reading = const SuperTabReading(),
   }) => SuperTabController(
-    avatarUpload: uploadAvatar,
     reading: reading,
     tabId: tabId,
     accountId: account,

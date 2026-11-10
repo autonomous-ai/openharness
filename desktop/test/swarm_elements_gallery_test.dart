@@ -17,13 +17,23 @@ import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/shared/theme/app_type.dart';
 import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/buddy_rows.dart';
+import 'package:harness/super_tabs/channel_feed.dart';
+import 'package:harness/super_tabs/channel_feed_widgets.dart';
+import 'package:harness/super_tabs/channel_talk.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/github_issues.dart';
+import 'package:harness/super_tabs/github_row.dart';
 import 'package:harness/super_tabs/task_board.dart';
+import 'package:harness/super_tabs/agent_instructions.dart';
 import 'package:harness/super_tabs/avatar_art.dart';
+import 'package:harness/super_tabs/agent_info.dart';
+import 'package:harness/super_tabs/back_to_chat.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/instructions_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
+import 'package:harness/super_tabs/project_sidebar.dart' show SuperTabFoldRow;
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
@@ -135,12 +145,32 @@ Future<List<SuperTabController>> _show(
   final old = grid.AppTheme.brightness.value;
   grid.AppTheme.brightness.value = brightness;
   addTearDown(() => grid.AppTheme.brightness.value = old);
+  // Faye's pane reads her own file and, under it, the project's AGENTS.md and CLAUDE.md, as her computer sends them.
+  final computer =
+      SwarmV4Computer(
+          files: {'h/Faye': 'Answer in Vietnamese.\nNever push to main.'},
+        )
+        ..shared = [
+          {
+            'name': 'AGENTS.md',
+            'text': '# lampOS\n\nShip small.\nKeep the answer short, and say\nwhat you checked.',
+            'truncated': true,
+          },
+          {
+            'name': 'CLAUDE.md',
+            'text': 'Read AGENTS.md first.',
+            'truncated': false,
+          },
+        ]
+        ..skipped = [
+          {'name': 'CLAUDE.local.md', 'why': 'link'},
+        ];
   // The task cards read the lampOS review Swarm's channel.
   final c = swarmV4Server().controller(account: 'owner');
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 1950);
+  tester.view.physicalSize = const Size(760, 3194);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -154,10 +184,13 @@ Future<List<SuperTabController>> _show(
           faces: faces,
           // The decision cards read their answers' state from a reader's Decisions.
           swarm: c,
+          instructions: computer.link,
         ),
       ),
     ),
   );
+  // The pane's read answers after the first frame, and shows on the next.
+  await tester.pump();
   await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
@@ -196,8 +229,12 @@ const _rest = .0001;
     (
       regions: _regions(tester),
       // A glyph's smoothed edge reaches a little past its box.
+      // Selectable text (the Instructions pane's files) draws its words through an editable, not a RichText.
       words: [
-        for (final text in find.byType(RichText).evaluate())
+        for (final text in [
+          ...find.byType(RichText).evaluate(),
+          ...find.byType(EditableText).evaluate(),
+        ])
           tester.getRect(find.byElementPredicate((e) => e == text)).inflate(2),
       ],
     );
@@ -332,7 +369,12 @@ final _person = SuperTabPerson.fromJson({
 });
 
 class _Gallery extends StatelessWidget {
-  const _Gallery(this.brightness, {required this.faces, required this.swarm});
+  const _Gallery(
+    this.brightness, {
+    required this.faces,
+    required this.swarm,
+    required this.instructions,
+  });
   final Brightness brightness;
   final List<String> faces;
 
@@ -340,6 +382,9 @@ class _Gallery extends StatelessWidget {
 
   /// The lampOS review Swarm, whose channel the task cards read.
   final SuperTabController swarm;
+
+  /// How the Instructions pane asks Faye's computer.
+  final SwarmInstructionsLink instructions;
   static const boundary = ValueKey('swarm-elements-gallery');
 
   @override
@@ -422,6 +467,7 @@ class _Gallery extends StatelessWidget {
                           ('Quinn', false, false, true, 'on #12'),
                           ('Kai', false, true, false, 'free'),
                           ('Wren', false, false, false, 'offline'),
+                          ('Moss', false, false, false, 'starting'),
                         ])
                           SuperTabQuietRow(
                             leading: SuperTabAvatar.agent(
@@ -452,6 +498,20 @@ class _Gallery extends StatelessWidget {
                           detail: 'Mac Studio',
                           onTap: () {},
                         ),
+                        // While a click joins it: it waits.
+                        SuperTabQuietRow(
+                          leading: SuperTabAvatar(
+                            identity: 'agent:${swarmAgentId('m', 'billing')}',
+                            name: 'Billing fix',
+                            size: SuperTabQuietRow.faceSize,
+                            face: true,
+                          ),
+                          name: 'Billing fix',
+                          detail: 'joining',
+                          onTap: null,
+                        ),
+                        // Past the first eight: the rest, a click away.
+                        SuperTabFoldRow(hidden: 32, onTap: () {}),
                         // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',
@@ -526,6 +586,15 @@ class _Gallery extends StatelessWidget {
                         ),
                         SwarmChatTime(DateTime.utc(2026, 11, 7, 9, 12)),
                         _message('dee', 'Found it, thanks!', person: _person),
+                        // A post to a teammate reads "Quinn to Kai", and says when the one asked is off.
+                        _message(
+                          'Quinn',
+                          '@Kai can you read #12?',
+                          agent: _agent('Quinn'),
+                          id: 'm-Quinn-to',
+                          to: ['Kai'],
+                          note: 'Kai is offline',
+                        ),
                       ],
                     ),
                   ),
@@ -578,6 +647,20 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title('Back to chat: where a pane took the chat\'s place'),
+              SizedBox(width: 280, child: SwarmBackToChat(onBack: () {})),
+              title('Info: what the app knows of an agent, beside its chat'),
+              SizedBox(
+                width: 380,
+                height: 300,
+                child: SwarmAgentInfo(
+                  controller: swarm,
+                  agent: swarm.snapshot!.agent('first builder')!,
+                  machineName: 'Mac Studio',
+                  github: swarmV4GitHub(),
+                  onClose: () {},
+                ),
+              ),
               // Empty means empty (anh Dee's rule 7): each element with nothing optional, and no words for what
               // is not there.
               title('Empty: a row'),
@@ -598,6 +681,64 @@ class _Gallery extends StatelessWidget {
                   ),
                 ],
               ),
+              title(
+                'Instructions: the agent\'s own file, then its folder\'s AGENTS.md and CLAUDE.md, read only',
+              ),
+              SizedBox(
+                width: 380,
+                height: 500,
+                child: SwarmAgentInstructions(
+                  agent: _agent('Faye'),
+                  machineName: 'Mac Studio',
+                  onClose: () {},
+                  link: instructions,
+                ),
+              ),
+              // The one empty pane that says why (anh Dee 2026-11-09): a blank channel read as broken.
+              title('Empty: a project\'s channel'),
+              const SizedBox(
+                width: 400,
+                height: 60,
+                child: SuperTabEmptyWords(superTabEmptyChannel),
+              ),
+              // What a project's agents do on GitHub, in its channel (anh Dee 2026-11-09): their cards, why it stops, and the
+              // button for older cards after a read that failed.
+              title(
+                'Channel feed: an agent\'s card on GitHub, why it stops, older cards',
+              ),
+              SizedBox(
+                width: 560,
+                child: Column(
+                  children: [
+                    _githubCard(
+                      'Quinn',
+                      'comment',
+                      12,
+                      'issue',
+                      'Quinn, 07:05: Taking #12. Measuring the clips first.',
+                    ),
+                    _githubCard(
+                      'Kai',
+                      'merged',
+                      20,
+                      'pull',
+                      'Score the update rows again',
+                    ),
+                    _githubCard(
+                      'Quinn',
+                      'task',
+                      13,
+                      'issue',
+                      'Voice: answer within a second',
+                    ),
+                    SwarmFeedState(
+                      feed: _feed()
+                        ..error = 'Sign in to GitHub: run gh auth login.',
+                    ),
+                    SwarmFeedEarlier(feed: _feed()..moreFailed = true),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -605,6 +746,49 @@ class _Gallery extends StatelessWidget {
     );
   }
 }
+
+/// A card in a channel of what an agent did on GitHub, as the channel draws one ([SuperTabGitHubRow]): [who]'s, for [event]
+/// (`comment`, `opened`, `merged`, `task`) on issue or pull request [number], its words [text].
+Widget _githubCard(
+  String who,
+  String event,
+  int number,
+  String on,
+  String text,
+) {
+  final agent = _agent(who);
+  return SuperTabGitHubRow(
+    agent: agent,
+    author: who,
+    onOpen: on == 'issue' ? () {} : null,
+    message: SuperTabMessage.fromJson({
+      'id': 'gh-$who-$number-$event',
+      'conversationId': 'github:lead',
+      'sequence': 0,
+      'text': event == 'task'
+          ? 'New task for $who: issue autonomous-ai/lampOS#$number $text\nhttps://github.com/autonomous-ai/lampOS/issues/$number'
+          : 'On GitHub, deehw wrote on $on autonomous-ai/lampOS#$number:\n$text\nhttps://github.com/autonomous-ai/lampOS/$on/$number',
+      'createdAt': '2026-11-09T07:05:00Z',
+      'author': {'kind': 'agent', 'id': agent.id, 'name': who},
+      'source': {
+        'kind': 'github',
+        'event': event,
+        'on': on,
+        'repository': 'autonomous-ai/lampOS',
+        'number': number,
+        'url': 'https://github.com/autonomous-ai/lampOS/$on/$number',
+        'login': 'deehw',
+      },
+    }),
+  );
+}
+
+/// A feed that reads nothing: the state and the button are drawn from what it says.
+SwarmChannelFeed _feed() => SwarmChannelFeed(
+  github: SwarmGitHub(),
+  repository: 'autonomous-ai/lampOS',
+  channelId: 'lead',
+);
 
 /// A chat message row, as the chat draws one. Its time is words, which the
 /// comparison leaves out, so the image holds in every time zone.
@@ -616,9 +800,12 @@ Widget _message(
   String? id,
   bool grouped = false,
   bool joinsBelow = false,
+  List<String> to = const [],
+  String? note,
 }) => SuperTabMessageRow(
   grouped: grouped,
   joinsBelow: joinsBelow,
+  to: to,
   message: SuperTabMessage.fromJson({
     'id': id ?? 'm-$author',
     'conversationId': 'lead',
@@ -632,7 +819,7 @@ Widget _message(
   author: author,
   agent: agent,
   person: person,
-  receipts: const [],
+  receipts: [if (note != null) SuperTabPostNote(note)],
   onReturnToComposer: () {},
   readerId: 'p1',
 );

@@ -361,9 +361,11 @@ export class CodexNormalizer implements EngineNormalizer {
     // Every `phase` streams — `commentary`, `final_answer`, and the ones that carry none. That is parity
     // rather than an expansion: the old vocabulary already emitted several `agent_message` per turn
     // (measured on a real 0.146 rollout), because codex's preambles were always part of the answer.
+    // The commentary says so: whoever keeps what a turn said as it goes (core/turns/ends.ts) leaves it out
+    // of the answer, as `lastCodexTurnText` does.
     if (AGENT_TEXT_TYPES.has(type)) {
       const message = messageText(item)
-      return message ? [{ type: 'text_delta', payload: { content: message } }] : []
+      return message ? [{ type: 'text_delta', payload: { content: message, ...(string(item.phase) === 'commentary' ? { commentary: true as const } : {}) } }] : []
     }
 
     if (type === 'SubAgentActivity') return this.subAgentActivity(item)
