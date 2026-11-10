@@ -99,13 +99,18 @@ void main() {
     };
     expect(details.evaluate(), isNotEmpty);
     expect(rights, hasLength(1), reason: '$rights');
-    // The heading's +: its glyph's box ends on the same edge.
+    // The headings' +, Your Team's and Projects': each glyph's box ends on the same edge.
     final plus = find.descendant(
       of: find.byKey(_Gallery.leftPane),
       matching: find.byIcon(AppIcons.plus),
     );
-    expect(plus, findsOneWidget);
-    expect(tester.getRect(plus).right, moreOrLessEquals(rights.single));
+    expect(plus, findsNWidgets(2));
+    for (final e in plus.evaluate()) {
+      expect(
+        tester.getRect(find.byWidget(e.widget)).right,
+        moreOrLessEquals(rights.single),
+      );
+    }
     await _close(tester, bars);
   });
 
@@ -168,7 +173,7 @@ Future<List<SuperTabController>> _show(
   addTearDown(c.dispose);
   await c.refresh();
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 3096);
+  tester.view.physicalSize = const Size(760, 3224);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(

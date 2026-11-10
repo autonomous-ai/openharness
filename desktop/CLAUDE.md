@@ -477,7 +477,10 @@ rebuild unchanged row controls and arrows rebuild only changed highlights. The c
 invalidates for row metadata, availability, action, geometry, theme, and font changes. Keep focus,
 semantics, and traversal on the row; do not replace them with paint-only search results.
 Creation and draft precedence are documented in `design/new-harness-entry-rules.md` and exercised
-by its listed tests. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
+by its listed tests. A Swarm's New project and New agent never hold their person (anh Dee, 2026-11-10): once the
+start is under way (`HarnessLaunchIntegration.onStarted`) the form closes and its controller goes to
+`AppNotifier.swarmStarts` (`super_tabs/swarm_starts.dart`), which waits for its start, follows a held request and
+gives it a `starting` row in the left pane; a `failed` row opens that same controller again. Cmd-T/Cmd-O retarget the same draft/search; Store requests own their explicit
 product and machine. `test/benchmarks/swarm_benchmark.dart` measures large synthetic inventories;
 its headless debug timings do not establish native display or network latency.
 
