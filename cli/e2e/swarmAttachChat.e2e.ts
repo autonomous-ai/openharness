@@ -101,6 +101,60 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('Attach a stopped session
     expect((await messages()).filter(m => m.author?.kind === 'agent' && String(m.text).includes(typed))).toHaveLength(1)
   }, 6 * 60_000)
 
+  // anh Dee, 2026-11-10: the agents Attach had renamed are deleted from Your Team, and the sessions attached again by name.
+  it('Delete, then Attach again: the session is still there to attach, and it gets its own name back', async () => {
+    const me = await signIn(backend, person, { ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential',
+      HARNESS_SWARM: '' })
+    onTestFailed(() => {
+      console.log(`---- daemon\n${tail(me.daemon.log(), 150)}`)
+      console.log(`---- backend\n${tail(readFileSync(backend.logPath, 'utf8'), 80)}`)
+    })
+    const api = async (path: string, method = 'GET', body?: unknown) => {
+      const r = await backend.api(person, path, method, body)
+      expect(r.status, `${method} ${path}: ${JSON.stringify(r.body)}`).toBe(200)
+      return r.body.data
+    }
+    const swarm = async (tab: string) => reassemble(storeOf({ ...(await api(`/api/super-tabs/${tab}/parts`)), tabId: tab })) as Record<string, any>
+    const rows = async () => (await me.client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents
+    const cwd = join(me.daemon.projectsDir, 'sandbox'); mkdirSync(cwd, { recursive: true })
+    const created = await me.client.request('agent_create', { engine: 'claude', cwd, bypassPermission: false, name: 'pip' }, 90_000)
+    expect(created.error, JSON.stringify(created)).toBeUndefined()
+    const harnessId = created.agent.id as string
+    await until('pip to bind its conversation', async () => (await rows()).find(a => a.id === harnessId && a.sessionId && a.status === 'active') ?? null, 60_000, 500)
+    const tab = (await api('/api/super-tabs', 'POST', { operationId: randomUUID(), name: 'Personal' })).id as string
+    expect((await me.client.request('super_tabs', { action: 'wake' }))).toMatchObject({ ok: true })
+    const attach = async (name: string) => {
+      const creationId = randomUUID()
+      const command = async (step: string, body: Record<string, unknown>) =>
+        (await api(`/api/super-tabs/${tab}/commands`, 'POST', { operationId: `${creationId}-${step}`, command: body })).result as Record<string, any>
+      const chat = await command('chat', { type: 'agent.new', kind: 'regular', machineId: me.machineId, engine: 'claude', name, local: true })
+      const added = await command('join', { type: 'agent.add', conversationId: chat.conversationId, machineId: me.machineId, harnessId, name,
+        lead: false, configuration: { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null } })
+      return added.agentId as string
+    }
+    // Attached under a name it was not given, as Desktop before 1.4.15 did.
+    const cade = await attach('Cade')
+    expect((await swarm(tab)).agents.map((a: any) => a.displayName ?? a.name)).toContain('Cade')
+
+    // Delete (delete_agent.dart): the Swarm lets go of it.
+    await api(`/api/super-tabs/${tab}/commands`, 'POST', { operationId: randomUUID(), command: { type: 'agent.remove', agentId: cade } })
+    await until('Cade to leave Your Team', async () => (await swarm(tab)).agents.every((a: any) => a.id !== cade) || null, 30_000, 500)
+    // Its session is on its computer still, running or stopped, for Attach to find (swarm_screen.dart _attachContext).
+    // Running still: a person's removal stops nothing on the computer (backend agent.remove), whatever Delete's dialog says (#3791).
+    const after = await until('the session to settle', async () => (await rows()).find(a => a.id === harnessId) ?? null, 30_000, 500)
+    if (after.status === 'stopped') {
+      const resumed = await me.client.request('agent_resume', { agentId: harnessId, creationId: randomUUID() }, 90_000)
+      expect(resumed.error, JSON.stringify(resumed)).toBeUndefined()
+      await until('pip to run again', async () => (await rows()).find(a => a.id === harnessId && a.status === 'active') ?? null, 60_000, 500)
+    }
+
+    // Attached again by its own name: the name its deleted row had is free.
+    const pip = await attach('pip')
+    const member = (await swarm(tab)).agents.find((a: any) => a.id === pip)
+    expect(member?.displayName ?? member?.name).toBe('pip')
+    expect(member?.harnessId).toBe(harnessId)
+  }, 6 * 60_000)
+
   it('+ New agent: its chat opens first, the session Desktop starts with its Swarm role joins it, and answers there', async () => {
     const me = await signIn(backend, person, { ANTHROPIC_API_KEY: 'fixture-not-a-credential', OPENAI_API_KEY: 'fixture-not-a-credential',
       HARNESS_SWARM: '' })
