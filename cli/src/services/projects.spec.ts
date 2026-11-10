@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readInstructions, writeInstructions } from '../lib/agentInstructions.js'
+import { readInstructions, readSharedInstructions, writeInstructions } from '../lib/agentInstructions.js'
 import { createPullRequestsStatusReader } from '../lib/pullRequestsStatus.js'
 import { listDir } from '../lib/fsBrowse.js'
 import { readGitProject } from '../lib/gitProject.js'
@@ -25,7 +25,10 @@ vi.mock('../lib/sessionGitPullRequest.js', () => ({ readSessionGitPullRequest: v
 // The instructions file is the real one, on a real folder: only a failure no real disk gives on demand needs a stand-in.
 vi.mock('../lib/agentInstructions.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/agentInstructions.js')>()
-  return { ...actual, readInstructions: vi.fn(actual.readInstructions), writeInstructions: vi.fn(actual.writeInstructions) }
+  return {
+    ...actual, readInstructions: vi.fn(actual.readInstructions), writeInstructions: vi.fn(actual.writeInstructions),
+    readSharedInstructions: vi.fn(actual.readSharedInstructions),
+  }
 })
 vi.mock('../lib/mediaPreview.js', async (importOriginal) => ({
   MediaPreviewError: (await importOriginal<typeof import('../lib/mediaPreview.js')>()).MediaPreviewError,
@@ -185,6 +188,112 @@ describe('an agent\'s instructions file', () => {
     }
   })
 
+  // What instructs most agents is the project's AGENTS.md and CLAUDE.md in its folder, whether or not the agent has a file of
+  // its own here (a Product Manager in a repository that has no agents folder at all). The read shows them beside its own, as
+  // a read-only extra: a reader that predates it never looks at the field, and a save never touches them.
+  describe('the files that instruct it besides, AGENTS.md and CLAUDE.md in its folder', () => {
+    const both = [{ name: 'AGENTS.md', text: 'Agent rules\n', truncated: false }, { name: 'CLAUDE.md', text: 'Claude rules\n', truncated: false }]
+
+    it('are shown, read only, for an agent with no file of its own, and beside one that has it', async () => {
+      const { ask, file, cwd } = await project()
+      await writeFile(join(cwd, 'AGENTS.md'), 'Agent rules\n')
+      await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
+      for (const asker of [LOCAL_OWNER, OWN_COMPUTER]) {
+        expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }, asker)).toEqual({ text: null, version: '', shared: both })
+      }
+      await mkdir(join(cwd, 'agents'))
+      await writeFile(file, 'Be brief.\n')
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ text: 'Be brief.\n', version: sha256('Be brief.\n'), shared: both })
+    })
+
+    it('are left out of the answer altogether when there are none, as an answer from a daemon that predates them reads', async () => {
+      const { ask, cwd } = await project()
+      const none = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
+      expect(none).toEqual({ text: null, version: '' })
+      expect(none).not.toHaveProperty('shared')
+      await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ text: null, version: '', shared: [both[1]] })
+    })
+
+    it('are never written: a save answers as before and leaves both as they were', async () => {
+      const { ask, cwd } = await project()
+      await writeFile(join(cwd, 'AGENTS.md'), 'Agent rules\n')
+      await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
+      const saved = await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'mine', version: '' })
+      expect(saved).toEqual({ version: sha256('mine') })
+      expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'AGENTS', text: 'not that file', version: '' })).toEqual({ version: sha256('not that file') })
+      expect(await readFile(join(cwd, 'AGENTS.md'), 'utf8')).toBe('Agent rules\n')
+      expect(await readFile(join(cwd, 'CLAUDE.md'), 'utf8')).toBe('Claude rules\n')
+      expect(await readFile(join(cwd, 'agents', 'AGENTS.md'), 'utf8')).toBe('not that file')
+    })
+
+    it('never fail the read: one that is not text is left out, and logged by that name, never what it held', async () => {
+      const { ask, cwd } = await project()
+      await writeFile(join(cwd, 'AGENTS.md'), Buffer.from([0x66, 0xff, 0xfe, 0x66]))
+      await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ text: null, version: '', shared: [both[1]] })
+        expect(log.mock.calls.map((call) => call.join(' '))).toEqual(['[projects] agent_instructions_read left out AGENTS.md · NOT_UTF8'])
+      } finally { log.mockRestore() }
+    })
+
+    it('say nothing of a file that is not a plain file: a link or a folder is as the person made it', async () => {
+      const { ask, cwd } = await project()
+      await mkdir(join(cwd, 'AGENTS.md'))
+      await writeFile(join(cwd, 'CLAUDE.md'), 'Claude rules\n')
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ text: null, version: '', shared: [both[1]] })
+        expect(log).not.toHaveBeenCalled()
+      } finally { log.mockRestore() }
+    })
+
+    it('that the disk fails on are left out too, and logged by file name and code, never where or what', async () => {
+      const { ask } = await project()
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        vi.mocked(readSharedInstructions).mockResolvedValueOnce({
+          shared: [],
+          failed: [
+            { name: 'AGENTS.md', error: Object.assign(new Error('/Users/me/secret-project/AGENTS.md: input/output error'), { code: 'EIO' }) },
+            { name: 'CLAUDE.md', error: new Error('no code on this one') },
+            { name: 'AGENTS.md', error: undefined },
+          ],
+        })
+        const answer = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })
+        expect(answer).toEqual({ text: null, version: '' })
+        expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
+          '[projects] agent_instructions_read left out AGENTS.md · EIO',
+          '[projects] agent_instructions_read left out CLAUDE.md · unknown',
+          '[projects] agent_instructions_read left out AGENTS.md · unknown',
+        ])
+      } finally { log.mockRestore() }
+    })
+
+    // The caps are per file, so a read carries at most three texts of 64 KiB, however long the files are.
+    it('never make a read carry more than three texts of 64 KiB, the agent\'s own file and these two', async () => {
+      const { ask, cwd, file } = await project()
+      await mkdir(join(cwd, 'agents'))
+      await writeFile(file, 'o'.repeat(65_536))
+      await writeFile(join(cwd, 'AGENTS.md'), 'a'.repeat(100_000))
+      await writeFile(join(cwd, 'CLAUDE.md'), 'c'.repeat(1_000_000))
+      const answer = await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }) as { text: string; shared: Array<{ text: string; truncated: boolean }> }
+      expect(answer.text).toHaveLength(65_536)
+      expect(answer.shared.map((one) => [one.text.length, one.truncated])).toEqual([[65_536, true], [65_536, true]])
+    })
+
+    it('are shown to nobody but the account\'s own computers: a collaborator is refused before anything is read', async () => {
+      const { ask, cwd } = await project()
+      await writeFile(join(cwd, 'AGENTS.md'), 'SECRET agent rules')
+      vi.mocked(readSharedInstructions).mockClear()
+      for (const asker of [{ local: false, owner: true }, { local: false, owner: false, guest: 'kim@acme.io' }]) {
+        expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' }, asker)).toEqual({ error: 'OWNER_REQUIRED' })
+      }
+      expect(readSharedInstructions).not.toHaveBeenCalled()
+    })
+  })
+
   it('saves it when the writer saw the file as it is, and refuses a save over a change it did not see', async () => {
     const { ask, file } = await project()
     const first = await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'one', version: '' }, OWN_COMPUTER)
@@ -300,7 +409,14 @@ describe('an agent\'s instructions file', () => {
       expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
       vi.mocked(writeInstructions).mockRejectedValueOnce(new Error('disk'))
       expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'x', version: '' })).toEqual({ error: 'WRITE_FAILED' })
+      // A rejection with nothing in it is still a failure with a name, not a second failure in the handler that reports it.
+      vi.mocked(readInstructions).mockRejectedValueOnce(undefined)
+      expect(await ask('agent_instructions_read', { agentId: 'a1', name: 'Faye' })).toEqual({ error: 'READ_FAILED' })
+      vi.mocked(writeInstructions).mockRejectedValueOnce(null)
+      expect(await ask('agent_instructions_write', { agentId: 'a1', name: 'Faye', text: 'x', version: '' })).toEqual({ error: 'WRITE_FAILED' })
       expect(log.mock.calls.map((call) => call.join(' '))).toEqual([
+        '[projects] agent_instructions_read failed · unknown',
+        '[projects] agent_instructions_write failed · unknown',
         '[projects] agent_instructions_read failed · unknown',
         '[projects] agent_instructions_write failed · unknown',
       ])

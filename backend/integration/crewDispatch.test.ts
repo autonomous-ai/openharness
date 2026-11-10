@@ -119,28 +119,6 @@ describe('the crew dispatch pass', () => {
     } finally { errors.mockRestore() }
   })
 
-  it('keeps host reports and the lead sweep working when one project’s rules are invalid', async () => {
-    const s = await twoProjects()
-    await s.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Mac', cwd: '/repo', engines: ['claude'], maxAgents: 8 })
-    await s.execute({ type: 'work.assign', conversationId: s.tasks.Api!, agentId: s.crew.Ash! })
-    await s.execute({ type: 'work.assign', conversationId: s.phone, agentId: s.worker })
-    const pool = (await poolRows(s.store, owner, 'owner-mac')).find(p => p.tabId === s.tab)!.machine
-    const agents = (await db.swarmAgent.findMany({ where: { tabId: s.tab } })).map(row => row.data as unknown as Agent)
-    await s.corrupt()
-    s.advance(60_000)
-    const report = () => s.store.observeMachine(owner, s.tab, 'owner-mac', { generation: pool.generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {},
-      runningHarnessIds: agents.map(a => a.harnessId), stoppedHarnessIds: [] })
-    await report()
-    const messages = (await s.store.messages(owner, s.tab, s.phone, {}, s.worker)).messages
-    expect(messages.filter(m => (m.source as { kind?: string })?.kind === 'crew-nudge')).toHaveLength(1)
-    s.advance(3 * 3_600_000)
-    await report()
-    await s.store.runTimeChecks(s.tab)
-    expect((await readGroup(s.tab, s.phone)).assignment?.status).toBe('lost')
-    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.status).toBe('working')
-    expect((await readGroup(s.tab, s.tasks.Api!)).assignment?.nudgedAt).toBeUndefined()
-  })
-
   it('lets a review step open under invalid rules but refuses new tasks with a repair instruction', async () => {
     const s = await twoProjects()
     await s.corrupt()

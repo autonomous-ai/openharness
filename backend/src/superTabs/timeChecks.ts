@@ -14,7 +14,7 @@ export const TIME_CHECK_QUIET_MS = 7 * 24 * 3_600_000
 export const TIME_CHECK_SWARMS = 200
 /** A Swarm whose groups show no activity since its last check is checked again only this often (AGENTS.md standard 4: a timer that
  *  wakes while nothing changed is a defect). Its stalls (30 minutes) and idle agents (15) are still told within minutes of
- *  falling due; a lost task's machine reports run the loss checks every 30 s anyway (liveness.ts sweepLiveness). */
+ *  falling due. */
 export const QUIET_CHECK_MS = 5 * 60_000
 
 /** The Swarms to check: those with a conversation awake and active in the last [TIME_CHECK_QUIET_MS], newest first. On the
