@@ -3877,6 +3877,37 @@ describe('ending a Buddy\'s thread sessions', () => {
     expect(ends(t)).toEqual([])
   })
 
+  // A delivery its pane held (a draft, a dialog) was tried again every second, and each try wrote and fsynced the journal twice:
+  // the 'submitting' intent before the core's check of the pane, then 'prepared' again. The pane is asked first now, from the core,
+  // with nothing written, and the intent is written only for a pane that takes it (Q3, 2026-11-10).
+  it('writes nothing while its pane holds a delivery, asking the core about the pane, and writes and types it once it may', async () => {
+    const write = vi.fn(writeJournal)
+    const t = lifeFixture([sessionRow()], { write })
+    t.live(true)
+    const backendOf = t.core.account.backend
+    t.core.account.backend = async (method, path, body) => {
+      if (method === 'GET' && path.endsWith('/agents/agent/deliveries')) return { status: 200, body: { data: [{ id: 'delivery', conversationId: chat, status: 'claimed' }] } }
+      if ((body as Record<string, unknown> | undefined)?.type === 'claim') {
+        return { status: 200, body: { data: { delivery: { id: 'delivery' }, message: { id: 'm', conversationId: chat, text: 'Still there?', author: { name: 'Peer' } } } } }
+      }
+      return backendOf(method, path, body)
+    }
+    vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_draft'))
+    let hold: string | null = 'team_waiting_draft'
+    t.core.turns.holdOf = vi.fn(async () => hold)
+    t.push({ type: 'super_tab_deliveries' })
+    await t.poll()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    const refused = write.mock.calls.length
+    for (let i = 0; i < 10; i++) await t.poll(1_000)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    expect(write.mock.calls.length).toBe(refused)
+    expect(t.core.turns.holdOf).toHaveBeenCalledWith('harness', 'team:service:superTabs:delivery')
+    hold = null
+    await t.poll(1_000)
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+  })
+
   // Spec 2026-11-02-poll-cost Part 3: a delivery its pane holds no longer keeps its list read each second, and still waits.
   it('never ends one whose delivery its pane holds', async () => {
     const t = lifeFixture([sessionRow()])
