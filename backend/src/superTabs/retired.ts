@@ -29,3 +29,10 @@ export const RETIRED_NOTE = 'Swarm no longer has this. Nothing was done.'
 
 /** A retired command's whole answer: it says it was ignored and changed no part. */
 export const retiredAnswer = (): { result: Record<string, unknown>; parts: never[] } => ({ result: { ignored: true, note: RETIRED_NOTE }, parts: [] })
+
+/** No picture is set any more (2026-11-09), but an older Desktop or phone still picks one: `member.avatar` or `agent.avatar` with a
+ *  picture, and the upload before it (`POST /api/super-tabs/:tabId/avatars`). Each is refused in these words, which both apps
+ *  show where the picture was picked, rather than answered as ignored: an app takes an ok answer for a picture set, and reads
+ *  the upload's id out of one. Clearing a picture still clears it (profile.ts), so nobody keeps a photo of themselves they want
+ *  gone. The refusals go with the two commands' picture shapes, not before 2026-12-09. */
+export const PICTURES_RETIRED = { code: 'AVATARS_RETIRED', status: 410, message: 'Pictures can’t be changed any more.' } as const

@@ -229,7 +229,9 @@ describe('message.delete', () => {
     const upload = await f.store.upload(peer, f.tab, f.web.conversationId, { name: 'plan.txt', mime: 'text/plain', body: Readable.from([Buffer.from('plan')]) })
     const fileId = String((upload as { attachment?: { id: string }; id?: string }).attachment?.id ?? (upload as { id?: string }).id)
     const reply = await f.send(f.web.conversationId, 'See the plan', peer, { replyTo: root, attachmentIds: [fileId], recipientIds: [f.pm] })
-    await f.execute({ type: 'message.react', conversationId: f.web.conversationId, messageId: reply, emoji: 'thumbs_up', on: true }, owner)
+    // A reaction stored before they were gone (2026-11-09): nothing makes one now, but a delete still takes it with the message.
+    await db.superTabReaction.create({ data: { id: `${reply}-r`, tabId: f.tab, conversationId: f.web.conversationId, messageId: reply,
+      actorKind: 'person', actorId: owner.sub, emoji: 'thumbs_up' } })
     expect(await db.superTabDelivery.count({ where: { messageId: reply, status: { in: ['queued', 'claimed'] } } })).toBe(1)
     expect((await f.page(f.web.conversationId, owner, { thread: root })).threads.find(t => t.id === root)?.replies).toBe(1)
     expect((await f.remove(f.web.conversationId, reply)).result).toMatchObject({ changed: true, kept: false })
@@ -283,7 +285,9 @@ describe('message.delete', () => {
     const f = await swarm()
     const root = await f.send(f.web.conversationId, 'Owner root', owner)
     const reply = await f.send(f.web.conversationId, 'Reply', peer, { replyTo: root, recipientIds: [f.pm] })
-    await f.execute({ type: 'message.react', conversationId: f.web.conversationId, messageId: reply, emoji: 'thumbs_up', on: true }, owner)
+    // A reaction stored before they were gone (2026-11-09): nothing makes one now, but a delete still takes it with the message.
+    await db.superTabReaction.create({ data: { id: `${reply}-r`, tabId: f.tab, conversationId: f.web.conversationId, messageId: reply,
+      actorKind: 'person', actorId: owner.sub, emoji: 'thumbs_up' } })
     const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabActivity', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread', 'SuperTabMention']
     const entries = await profiled(db, () => f.remove(f.web.conversationId, reply))
     // The profiler saw the delete's writes (so the check below is not empty by accident).

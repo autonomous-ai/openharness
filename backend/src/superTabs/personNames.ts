@@ -1,6 +1,7 @@
 import { isRoleName } from './agentNames.js'
+import { printable } from './profile.js'
 import { reserved } from './buddies.js'
-import type { Author, SuperTabState } from './model.js'
+import type { Author, Person, SuperTabState } from './model.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
 
 /**
@@ -21,7 +22,22 @@ export function nameRefusal(name: string): { code: 'INVALID_NAME' | 'NAME_RESERV
   return null
 }
 
-/** The name the Swarm shows for person [id]: the one they set, else their username. */
+/** Makes [person]'s name in a Swarm their account's [accountName] (anh Dee, 2026-11-10: with no editor left, a person's name follows
+ *  their account), or none when the account has none or one a Swarm may not show (nameRefusal, hidden characters: an SSO or an
+ *  admin can set what Harness's own editor refuses), so their username shows. A name they chose in the Swarm before is kept in
+ *  `chosenName`, read by nobody. True when the stored person changed; one already showing that name is not written. */
+export function nameFromAccount(person: Person, accountName: string | null | undefined): boolean {
+  const trimmed = accountName?.replace(/\s+/g, ' ').trim()
+  const name = trimmed && printable(trimmed) && !nameRefusal(trimmed) ? trimmed : undefined
+  if (person.name === name) return false
+  if (!person.nameFollowsAccount && person.name !== undefined) person.chosenName = person.name
+  person.nameFollowsAccount = true
+  if (name === undefined) delete person.name
+  else person.name = name
+  return true
+}
+
+/** The name the Swarm shows for person [id]: their account's (nameFromAccount), else their username. */
 export const shownNameOf = (state: SuperTabState, id: string): string | undefined =>
   state.people.find(p => p.id === id)?.name ?? usernameOf(state, id)
 
