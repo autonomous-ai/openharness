@@ -148,24 +148,11 @@ class SwarmIssueEarlier {
 
 /// Why GitHub could not be read, in the words the person sees.
 class SwarmGitHubError implements Exception {
-  const SwarmGitHubError(this.message, {this.retryAt});
+  const SwarmGitHubError(this.message);
   final String message;
-
-  /// When GitHub will answer again, for a read it refused for asking too much; null for every other failure.
-  final DateTime? retryAt;
 
   @override
   String toString() => message;
-}
-
-/// One answer of a REST list ([SwarmGitHub.rest]): its ETag and its JSON text, or neither when GitHub said it has not changed.
-class SwarmRestPage {
-  const SwarmRestPage({this.etag, this.body});
-
-  final String? etag;
-
-  /// Null for a list that has not changed since the ETag it was asked with.
-  final String? body;
 }
 
 /// Runs `gh` with these arguments; tests give their own.
@@ -594,51 +581,6 @@ class SwarmGitHub {
     throw refusal;
   }
 
-  /// One page of a REST list of [repository] (`gh api repos/<repository>/<path>`), conditional on [etag]: GitHub answers a list
-  /// that has not changed 304 with no body, and does not count that against its rate limit. A refusal for asking too much says
-  /// when to ask again ([SwarmGitHubError.retryAt]).
-  Future<SwarmRestPage> rest(
-    String repository,
-    String path, {
-    String? etag,
-  }) async {
-    final result = await _ask(
-      [
-        'api',
-        '-i',
-        if (etag != null) ...['-H', 'If-None-Match: $etag'],
-        'repos/$repository/$path',
-      ],
-      log: 'feed',
-      missing:
-          'Install the GitHub CLI (gh) to see what your agents do on GitHub.',
-    );
-    final answer = _RestAnswer.read('${result.stdout}');
-    if (answer != null) {
-      if (answer.status == 304) return const SwarmRestPage();
-      if (answer.status >= 200 && answer.status < 300) {
-        return SwarmRestPage(etag: answer.headers['etag'], body: answer.body);
-      }
-      if (answer.limited) {
-        appLog.warn('super-tabs', 'GitHub feed not read: rate limited');
-        throw SwarmGitHubError(
-          'GitHub is limiting requests.',
-          retryAt: answer.retryAt,
-        );
-      }
-    }
-    final (kind, refusal) = _refusal(
-      result.exitCode,
-      '${result.stderr}',
-      repository,
-    );
-    appLog.warn(
-      'super-tabs',
-      'GitHub feed not read: $kind (gh exited ${result.exitCode})',
-    );
-    throw refusal;
-  }
-
   /// Runs `gh` with [arguments]: its result, or why it could not run in the words the person sees. [log] names what was being
   /// read, and [missing] says what to install gh for.
   Future<ProcessResult> _ask(
@@ -735,55 +677,6 @@ class SwarmGitHub {
       arguments,
       environment: const {'GH_PROMPT_DISABLED': '1', 'NO_COLOR': '1'},
     );
-  }
-}
-
-/// What `gh api -i` printed: the status line, the headers (names in lower case) and the body after the first empty line.
-class _RestAnswer {
-  const _RestAnswer(this.status, this.headers, this.body);
-
-  final int status;
-  final Map<String, String> headers;
-  final String body;
-
-  /// Null for output that is not an HTTP answer (gh failed before it asked).
-  static _RestAnswer? read(String output) {
-    final end = RegExp(r'\r?\n\r?\n').firstMatch(output);
-    final head = (end == null ? output : output.substring(0, end.start)).split(
-      RegExp(r'\r?\n'),
-    );
-    final status = RegExp(r'^HTTP/\S+\s+(\d{3})').firstMatch(head.first);
-    if (status == null) return null;
-    final headers = <String, String>{};
-    for (final line in head.skip(1)) {
-      final colon = line.indexOf(':');
-      if (colon > 0) {
-        headers[line.substring(0, colon).trim().toLowerCase()] = line
-            .substring(colon + 1)
-            .trim();
-      }
-    }
-    return _RestAnswer(
-      int.parse(status.group(1)!),
-      headers,
-      end == null ? '' : output.substring(end.end),
-    );
-  }
-
-  /// A refusal for asking too much: 429, or 403 with none left or a wait named.
-  bool get limited =>
-      status == 429 ||
-      (status == 403 &&
-          (headers['x-ratelimit-remaining'] == '0' ||
-              headers.containsKey('retry-after')));
-
-  /// When GitHub will answer again: its `Retry-After`, else its reset; a minute from now when it names neither.
-  DateTime get retryAt {
-    final wait = int.tryParse(headers['retry-after'] ?? '');
-    final reset = int.tryParse(headers['x-ratelimit-reset'] ?? '');
-    if (wait != null) return clock.now().add(Duration(seconds: wait));
-    if (reset != null) return DateTime.fromMillisecondsSinceEpoch(reset * 1000);
-    return clock.now().add(const Duration(minutes: 1));
   }
 }
 
