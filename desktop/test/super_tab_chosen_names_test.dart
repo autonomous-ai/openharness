@@ -196,21 +196,6 @@ void main() {
       expect(renames(server), 0);
     });
 
-    test(
-      'a Buddy is left alone: its name is set in its own settings',
-      () async {
-        final (client, server) = await opened();
-        (server.state['agents'] as List)[0]['buddyOf'] = {
-          'personId': 'owner',
-          'projectId': 'lead',
-          'generation': 'g',
-        };
-        await (await client.open('tab')).refresh();
-        expect(await client.syncChosenNames(local({'nameChosen': true})), 0);
-        expect(renames(server), 0);
-      },
-    );
-
     test('a harness this machine does not know is left alone', () async {
       final (client, server) = await opened();
       expect(await client.syncChosenNames((_, _) => null), 0);

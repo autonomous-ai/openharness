@@ -23,8 +23,7 @@ ConversationServer _buddyChat() {
   final server = ConversationServer()..threads = true;
   final chat =
       (server.state['conversations'] as List)[1] as Map<String, dynamic>
-        ..['kind'] = 'buddy'
-        ..['buddyOwnerId'] = 'owner'
+        ..['kind'] = 'agent-chat'
         ..['title'] = 'Rowan';
   (server.state['agents'] as List).add({
     'id': 'buddy-main',
@@ -33,7 +32,6 @@ ConversationServer _buddyChat() {
     'machineId': 'mac',
     'harnessId': 'h-main',
     'contributorId': 'owner',
-    'buddyOf': {'personId': 'owner', 'generation': 'g1'},
     'configuration': {'engine': 'claude'},
   });
   chat['agentIds'] = ['buddy-main'];

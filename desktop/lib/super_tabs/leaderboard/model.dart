@@ -43,7 +43,6 @@ class SuperTabLeaderboard {
           )
           .toList(),
       waiting = SuperTabWaiting.fromJson(_map(json['waiting'])),
-      agents = _list(json['agents']).map(SuperTabAgentScore.fromJson).toList(),
       byModel = _list(json['byModel'])
           .map(SuperTabModelScore.fromJson)
           .toList(),
@@ -73,10 +72,6 @@ class SuperTabLeaderboard {
   final List<SuperTabPersonScore> people;
   final SuperTabWaiting waiting;
 
-  /// The project's PM and Buddies, most points first; empty from a server
-  /// before them.
-  final List<SuperTabAgentScore> agents;
-
   /// Every model that worked the week, most points first; empty from a
   /// server before them.
   final List<SuperTabModelScore> byModel;
@@ -85,32 +80,6 @@ class SuperTabLeaderboard {
   /// is: engine, model, tasks and first reviews, no effort or points. Null
   /// from a server before it.
   final List<SuperTabModelScore>? recentModels;
-}
-
-/// A permanent agent, the PM or a Buddy, scored by name like a person
-/// (Dee, 2026-10-29).
-class SuperTabAgentScore {
-  SuperTabAgentScore.fromJson(Map<String, dynamic> json)
-    : agentId = json['agentId'] as String? ?? '',
-      displayName = json['displayName'] as String? ?? '',
-      buddy = json['kind'] == 'buddy',
-      personId = _text(json['personId']),
-      machineId = json['machineId'] as String? ?? '',
-      points = _int(json['points']),
-      rank = _int(json['rank']),
-      shipped = _int(json['shipped']);
-
-  final String agentId, displayName, machineId;
-
-  /// A Buddy, else the project's PM.
-  final bool buddy;
-
-  /// A Buddy's person; null for the PM.
-  final String? personId;
-
-  /// The PM's: requests of the groups it led that shipped; a Buddy's: groups
-  /// opened from its proposals that shipped.
-  final int points, rank, shipped;
 }
 
 /// The temporary workers by what they ran on, never by agent (Dee,

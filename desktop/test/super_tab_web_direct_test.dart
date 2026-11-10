@@ -1,6 +1,6 @@
 // The web reads and writes Swarm chats straight from the backend
 // (docs/specs/2026-10-30-web-swarm-direct.md): with no machine of the
-// person's at all, the Swarm list, a project chat and the Buddy chat load and
+// person's at all, the Swarm list, a project chat and an agent's chat load and
 // send; with one connected, its socket still tells the browser what changed,
 // and the read it starts goes direct too. Native Desktop is unchanged.
 import 'dart:async';
@@ -16,13 +16,13 @@ import 'package:harness/viewer/viewer_key_store.dart';
 import 'package:harness/viewer/viewer_services.dart';
 import 'package:harness/ws/ws_conn.dart';
 
-import 'support/buddy_fixture.dart';
+import 'support/own_agent_fixture.dart';
 import 'support/web_swarm_backend.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show MemoryStore;
 
 const _tab = '0123456789abcdef01234567';
-const _buddyChat = 'buddy-owner-lead';
+const _agentChat = 'agent-chat-wren';
 
 /// One of the person's machines: records what it is asked, and answers a
 /// relayed Swarm call as its daemon would.
@@ -81,8 +81,8 @@ void main() {
   late AppNotifier app;
 
   setUp(() {
-    server = buddySwarm()..state['id'] = _tab;
-    giveBuddy(
+    server = ownAgentSwarm()..state['id'] = _tab;
+    giveOwnAgent(
       server,
       person: 'owner',
       machineId: 'studio',
@@ -143,7 +143,7 @@ void main() {
     fail('expected a SuperTabFailure');
   }
 
-  test('with no machine at all, the Swarm list, a project chat and the Buddy '
+  test('with no machine at all, the Swarm list, a project chat and an agent'
       'chat load and send straight from the backend', () async {
     expect(app.machineStates, isEmpty);
     await app.superTabs.refreshTabs();
@@ -154,11 +154,11 @@ void main() {
     await c.refresh();
     expect(c.error, isNull);
     expect(c.snapshot, isNotNull);
-    expect(c.snapshot!.conversation(_buddyChat), isNotNull);
+    expect(c.snapshot!.conversation(_agentChat), isNotNull);
 
-    expect(await c.select(_buddyChat), isTrue);
+    expect(await c.select(_agentChat), isTrue);
     expect(c.error, isNull);
-    c.setDraft(_buddyChat, 'Hello from the phone');
+    c.setDraft(_agentChat, 'Hello from the phone');
     final sent = await c.send();
     expect(sent, isNotNull);
     expect(c.error, isNull);

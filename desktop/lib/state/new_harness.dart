@@ -1557,10 +1557,7 @@ class NewHarnessController extends ChangeNotifier {
       _settingsModes.any((mode) => mode.id == _permissionFor(_settingsEngine))
       ? _permissionFor(_settingsEngine)
       : kDefaultPermissionMode;
-  bool get takesTask => !bringsBuddy && (isCloud || takesFirstTask(_base));
-
-  /// Join's Buddy, which the Swarm starts (task #4196).
-  bool get bringsBuddy => integration?.startBuddy != null;
+  bool get takesTask => isCloud || takesFirstTask(_base);
   bool get taskTooLong => task.trim().length > kFirstTaskMaxLength;
   List<PermissionMode> get _modes =>
       _noAgentSetup || isCloud || leadThroughSwarm
@@ -2016,8 +2013,7 @@ class NewHarnessController extends ChangeNotifier {
   /// A missing or ambiguous saved value stays visible until the person
   /// replaces it. These checks never select a different launch target.
   ({NewHarnessField field, String message})? get requiredChoice {
-    // A Buddy needs only its agent and computer (task #4196).
-    if (checking || bringsBuddy) return null;
+    if (checking) return null;
     if (needsProject) {
       return (field: NewHarnessField.projectMenu, message: 'Choose a project.');
     }
@@ -4648,9 +4644,7 @@ class NewHarnessController extends ChangeNotifier {
     }
     // A Swarm's start closes at once whatever it is doing: before it is under way nothing was sent, and after, it goes on
     // without this form (anh Dee, 2026-11-10: never block for minutes).
-    if (busy &&
-        integration?.inBackground != true &&
-        integration?.stopBuddy?.call() != true) {
+    if (busy && integration?.inBackground != true) {
       warn('Still working on it. You can close once it is done.');
       return false;
     }
@@ -4711,7 +4705,6 @@ class NewHarnessController extends ChangeNotifier {
         return _fail(failure.toString());
       }
     }
-    if (bringsBuddy) return _startBuddy();
     if (!checking && usesProfile && _profile != null) {
       if (loadingProfiles) {
         return _fail(
@@ -5077,26 +5070,6 @@ class NewHarnessController extends ChangeNotifier {
   /// services/cloud.ts), which starts it at its maker; no folder, no install.
   /// New Project's Product Manager the Swarm starts
   /// ([HarnessLaunchIntegration.startInSwarm]) on [leadSwarmMachine].
-  /// Join's Buddy (task #4196): the Swarm starts it on the chosen computer,
-  /// as before this form; the form chose only its engine and computer.
-  Future<NewHarnessOutcome> _startBuddy() async {
-    busy = true;
-    error = null;
-    status = 'Starting your Buddy on $machineLabel…';
-    notifyListeners();
-    try {
-      await integration!.startBuddy!(_machineId, _base);
-    } catch (failure) {
-      return _fail(failure.toString());
-    }
-    integration?.completed = true;
-    if (_disposed) return NewHarnessOutcome.created;
-    busy = false;
-    status = null;
-    notifyListeners();
-    return NewHarnessOutcome.created;
-  }
-
   Future<NewHarnessOutcome> _startInSwarm() async {
     final start = integration?.startInSwarm;
     if (start == null) {

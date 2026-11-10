@@ -91,8 +91,6 @@ void main() {
       addTearDown(tester.view.reset);
 
       final server = swarm();
-      server.state['swarmBuddy'] = true;
-      server.state['buddyCap'] = 5;
       (server.state['people'] as List).addAll([
         {'id': 'tuan', 'email': 'tuan@example.com', 'role': 'collaborator'},
         {'id': 'dee', 'email': 'dee@example.com', 'role': 'collaborator'},
@@ -154,17 +152,12 @@ void main() {
         ),
         {
           ...conversationFixture('b-plan', 'Planning'),
-          'kind': 'swarm-buddy',
-          'buddyOwnerId': 'owner',
-          'buddyName': 'Planning',
-          'buddyDefault': true,
+          'kind': 'agent-chat',
           'agentIds': <String>[],
         }..remove('projectId'),
         {
           ...conversationFixture('b-code', 'Code'),
-          'kind': 'swarm-buddy',
-          'buddyOwnerId': 'owner',
-          'buddyName': 'Code',
+          'kind': 'agent-chat',
           'agentIds': <String>[],
         }..remove('projectId'),
       ]);
