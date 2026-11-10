@@ -97,6 +97,11 @@ describe('delivered turns', () => {
     deliveries.settled({ deliveryId: mine, sessionId: 'agent-1', state: 'delivered' })
     deliveries.settled({ deliveryId: inCore, sessionId: 'agent-1', state: 'rejected', reason: 'cancelled' })
     expect([mine, inCore].map(deliveries.personsOwn)).toEqual([false, false])
+    // Bounded: past KEPT_DELIVERERS marks never settled, the oldest is forgotten; marked again, one moves to the newest end.
+    for (let i = 0; i < KEPT_DELIVERERS; i++) deliveries.turns.deliver('agent-1', 'hi', `team:service:superTabs:${i}`, { personsOwn: true })
+    deliveries.turns.deliver('agent-1', 'hi', 'team:service:superTabs:0', { personsOwn: true })
+    deliveries.turns.deliver('agent-1', 'hi', 'team:service:superTabs:last', { personsOwn: true })
+    expect(['0', '1', '2', 'last'].map(id => deliveries.personsOwn(`team:service:superTabs:${id}`))).toEqual([true, false, true, true])
   })
 
   it('writes a delivery from the core\'s own process into the agent, and takes one back at once', () => {
