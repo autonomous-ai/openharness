@@ -96,14 +96,14 @@ function parseProxy(value: unknown, current: BrowserSettings['proxy']): BrowserS
   const host = text(raw.host, 'proxy.host', 253)
   // A host name, an IPv4 address or an IPv6 address; anything else would change the proxy URL.
   if (!/^[A-Za-z0-9.:[\]-]+$/.test(host)) invalid('proxy.host')
-  return {
-    scheme: oneOf(SCHEMES, raw.scheme, 'proxy.scheme'),
-    host,
-    port: integer(raw.port, 'proxy.port', 1, 65535),
-    username: text(raw.username, 'proxy.username', MAX_LOGIN, true),
-    // The password is write-only: a form that never saw it sends none, and the stored one stays.
-    password: raw.password === undefined ? current?.password ?? '' : text(raw.password, 'proxy.password', MAX_LOGIN, true),
-  }
+  const scheme = oneOf(SCHEMES, raw.scheme, 'proxy.scheme')
+  const port = integer(raw.port, 'proxy.port', 1, 65535)
+  const username = text(raw.username, 'proxy.username', MAX_LOGIN, true)
+  if (raw.password !== undefined) return { scheme, host, port, username, password: text(raw.password, 'proxy.password', MAX_LOGIN, true) }
+  // The password is write-only: a form that never saw it sends none, and the stored one stays. Only for the same
+  // proxy and login: a changed host would otherwise be sent a password the person never gave it.
+  const same = current?.scheme === scheme && current.host === host && current.port === port && current.username === username
+  return { scheme, host, port, username, password: same ? current.password : '' }
 }
 
 function parseDevice(value: unknown): BrowserSettings['device'] {

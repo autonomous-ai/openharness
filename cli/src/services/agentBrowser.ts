@@ -32,6 +32,8 @@ type SetupDeps = ConstructorParameters<typeof Setup>[0]
 type Reply = Record<string, unknown>
 
 const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
+/** Setup's own failures whose Retry installs Podman again (agentBrowser/setup.ts); no start fails with them. */
+const SETUP_INSTALL_FAILURES = new Set(['podman_install_failed', 'podman_manual'])
 // Xvnc listens on 5900 inside the container only (no published port): a viewer's bytes reach it through an exec.
 const VNC_PIPE = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
 
@@ -186,12 +188,12 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   }
 
   /** A request for one agent's browser from its own person: the agent's id, or why not. */
-  const ownBrowser = (handler: (agentId: string, payload: Reply) => Reply | Promise<Reply>) => async (payload: Reply, asker: Asker): Promise<Reply> => {
+  const ownBrowser = (handler: (agentId: string, payload: Reply, asker: Asker) => Reply | Promise<Reply>) => async (payload: Reply, asker: Asker): Promise<Reply> => {
     if (!mayOpenBrowser(asker)) return { error: 'NOT_OWNER' }
     begin()
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
     if (!agentId || !browsers.state(agentId)) return { error: 'NO_BROWSER' }
-    try { return await handler(agentId, payload) } catch (error) { return named(error) }
+    try { return await handler(agentId, payload, asker) } catch (error) { return named(error) }
   }
 
   return {
@@ -226,7 +228,10 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
         return named(error)
       }
     },
-    agent_browser_retry: ownBrowser((agentId) => {
+    agent_browser_retry: ownBrowser((agentId, _payload, asker) => {
+      // These come from setup alone, and their Retry runs the install again: its password dialog shows on this
+      // computer, so, as Install, only this computer may ask (spec § Setup).
+      if (!asker.local && SETUP_INSTALL_FAILURES.has(browsers.state(agentId)?.error ?? '')) return LOCAL_ONLY
       void browsers.retry(agentId)
       return { ok: true }
     }),
@@ -239,7 +244,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       else if (!next.proxy && before.proxy) count('agent_browser_proxy_removed')
       return publicSettings(browsers.settings(agentId))
     }),
-    // A proxy sent without its password is tested with the stored one, as a save keeps it.
+    // A proxy sent without its password is tested with the stored one only when it is the stored proxy, as a save keeps it.
     agent_browser_proxy_test: ownBrowser(async (agentId, payload) => {
       const current = browsers.settings(agentId)
       const proxy = parseSettings({ ...current, proxy: payload.proxy }, current).proxy

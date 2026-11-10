@@ -51,6 +51,14 @@ describe('agent browser settings', () => {
     expect(parseSettings({ ...withProxy, proxy: { ...proxy, password: 'new-pw' } }, withProxy).proxy?.password).toBe('new-pw')
   })
 
+  it('a proxy changed in scheme, host, port or username never gets the stored password', () => {
+    const { password: _password, ...proxy } = withProxy.proxy!
+    for (const changed of [{ scheme: 'http' }, { host: 'other.example.com' }, { port: 1081 }, { username: 'you' }]) {
+      expect(parseSettings({ ...withProxy, proxy: { ...proxy, ...changed } }, withProxy).proxy?.password, JSON.stringify(changed)).toBe('')
+    }
+    expect(parseSettings({ ...withProxy, proxy }, defaultSettings(host)).proxy?.password).toBe('')
+  })
+
   it('publicSettings never contains the password', () => {
     const shown = publicSettings(withProxy)
     expect(JSON.stringify(shown)).not.toContain('secret-pw')

@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type AddressInfo, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -85,9 +85,11 @@ function podmanHere() {
   return { podman, spawn: vi.spyOn(podman, 'spawn') }
 }
 
-function saveState(browsers: Record<string, BrowserSettings>) {
-  writeFileSync(join(dataDir, 'agent-browser.json'), JSON.stringify({ browsers, deleting: [], setup: null }), { mode: 0o600 })
+function saveState(browsers: Record<string, BrowserSettings>, deleting: string[] = []) {
+  writeFileSync(join(dataDir, 'agent-browser.json'), JSON.stringify({ browsers, deleting, setup: null }), { mode: 0o600 })
 }
+
+const savedState = () => JSON.parse(readFileSync(join(dataDir, 'agent-browser.json'), 'utf8')) as { browsers: Record<string, unknown>; deleting: string[] }
 
 /** An HTTP proxy on loopback that answers the exit lookup. */
 async function lookupProxy(answer: Record<string, unknown> = { status: 'success', timezone: 'Europe/Paris', query: '203.0.113.7' }): Promise<number> {
@@ -138,6 +140,8 @@ describe('the agent browser service', () => {
 
   it('stopped stops, deleted deletes', async () => {
     const { port } = start()
+    const closed: string[] = []
+    port.onCloseViewers(agentId => closed.push(agentId))
     port.attached(session('a1'))
     await ready(port, 'a1')
     port.stopped('a1')
@@ -149,11 +153,12 @@ describe('the agent browser service', () => {
     port.deleted('a1')
     await eventually(() => expect(asked()).toContain('volume rm harness-browser-a1'))
     await eventually(() => expect(asked().filter(line => line === 'secret rm harness-proxy-a1')).toHaveLength(2))
-    // An agent without a browser costs Podman nothing.
+    // An agent without a browser costs Podman nothing: a stop or a delete closes its viewers at once, before any
+    // Podman call, and none was asked for.
     const before = asked().length
     port.stopped('plain')
     port.deleted('plain')
-    await new Promise(done => setTimeout(done, 50))
+    expect(closed).toEqual(['a1', 'a1'])
     expect(asked()).toHaveLength(before)
   })
 
@@ -215,6 +220,31 @@ describe('the agent browser service', () => {
     // Podman is here already, and Linux runs it in no machine: setup has nothing to install, and says it is done.
     expect(await requests.agent_browser_setup!({}, LOCAL)).toEqual({ ok: true })
     await eventually(() => expect(count).toHaveBeenCalledWith('agent_browser_setup_ok'))
+  })
+
+  // Retry after a failed install runs the install again: the password dialog shows on that computer, so only it may ask.
+  it('retry that would run setup again refuses a non-local asker', async () => {
+    const missing = createPodman({ resolve: async () => null, exists: () => false, platform: 'linux' })
+    const which = async (cmd: string) => (cmd === 'pkexec' || cmd === 'apt-get' ? `/usr/bin/${cmd}` : null)
+    for (const [interactive, error] of [[true, 'podman_install_failed'], [false, 'podman_manual']] as const) {
+      const run = vi.fn(async () => ({ code: 126, stdout: '', stderr: 'cancelled' }))
+      const { port, requests } = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'setup-')) }), {
+        podman: missing, setup: { which, run, interactive: () => interactive },
+      })
+      port.attached(session('a1'))
+      await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'needs_setup' }))
+      expect(await requests.agent_browser_setup!({}, LOCAL)).toEqual({ ok: true })
+      await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error }))
+      const installs = run.mock.calls.length
+      for (const asker of [OTHER_DESKTOP, SHARE_GUEST]) {
+        expect(await requests.agent_browser_retry!({ agentId: 'a1' }, asker)).toEqual(asker === OTHER_DESKTOP ? { error: 'LOCAL_ONLY' } : { error: 'NOT_OWNER' })
+      }
+      // The refusal is decided before anything runs: setup was not asked again.
+      expect(port.frameContext('a1')).toEqual({ state: 'failed', error })
+      expect(run).toHaveBeenCalledTimes(installs)
+      expect(await requests.agent_browser_retry!({ agentId: 'a1' }, LOCAL)).toEqual({ ok: true })
+      if (interactive) await eventually(() => expect(run).toHaveBeenCalledTimes(installs + 1))
+    }
   })
 
   it('on win32 availability is unsupported and no process starts', async () => {
@@ -340,6 +370,27 @@ describe('the agent browser service', () => {
     expect(heard.at(-1)).toContain(`Basic ${Buffer.from('kim:stored').toString('base64')}`)
   })
 
+  it('a proxy test or a save to another proxy never carries the stored password', async () => {
+    const heard: string[] = []
+    const server = createServer(socket => socket.once('data', (chunk) => {
+      heard.push(chunk.toString())
+      socket.end(`HTTP/1.1 200 OK\r\n\r\n${JSON.stringify({ status: 'success', timezone: 'Europe/Paris', query: '203.0.113.7' })}`)
+    }))
+    servers.push(server)
+    await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
+    const stored = { scheme: 'http' as const, host: 'proxy.example', port: 3128, username: 'kim', password: 'stored' }
+    saveState({ a1: { ...defaultSettings(HOST), proxy: stored } })
+    const { port, requests } = start()
+    port.attached(session('a1'))
+    await eventually(() => expect(port.frameContext('a1')).toBeDefined())
+    const other = { scheme: 'http', host: '127.0.0.1', port: (server.address() as AddressInfo).port, username: 'kim' }
+    expect(await requests.agent_browser_proxy_test!({ agentId: 'a1', proxy: other }, LOCAL)).toMatchObject({ ok: true })
+    expect(heard).toHaveLength(1)
+    expect(heard[0]).not.toContain(Buffer.from('kim:stored').toString('base64'))
+    expect(await requests.agent_browser_settings_save!({ agentId: 'a1', settings: { ...defaultSettings(HOST), proxy: other } }, LOCAL))
+      .toMatchObject({ proxy: { host: '127.0.0.1', passwordSet: false } })
+  })
+
   it('state finds the agent by pane and carries the human mode', async () => {
     const ofPane = vi.fn(async (pane: string) => (pane === '%7' ? 'a1' : pane === '%8' ? 'plain' : null))
     const { port, requests } = start(fakeCore({ dataDir, agents: { ofPane } }))
@@ -385,8 +436,10 @@ describe('the agent browser service', () => {
     port.attached(session('a1'))
     await eventually(() => expect(port.frameContext('a1')).toEqual({ state: 'failed', error: 'state_unreadable' }))
     expect(await requests.agent_browser_settings!({ agentId: 'a1' }, LOCAL)).toEqual({ error: 'STATE_UNREADABLE' })
+    const log = vi.spyOn(console, 'log')
     port.deleted('a1')
-    await new Promise(done => setTimeout(done, 50))
+    // The delete ends at the state file it cannot record in, and says so.
+    await eventually(() => expect(log).toHaveBeenCalledWith(expect.stringMatching(/^agent browser a1: not deleted: /)))
     expect(asked().filter(line => / rm |^rm /.test(line))).toEqual([])
   })
 
@@ -395,20 +448,23 @@ describe('the agent browser service', () => {
     saveState(listed)
     start(fakeCore({ dataDir, agents: { ids: async () => ({ live: ['a1'], stopped: ['a2'] }) } }))
     await eventually(() => expect(asked()).toContain('volume rm harness-browser-a3'))
+    // The delete ends in the state file: the file written next must not lose a3 to it.
+    await eventually(() => expect(Object.keys(savedState().browsers).sort()).toEqual(['a1', 'a2']))
     expect(asked().filter(line => line.includes('harness-browser-a1') || line.includes('harness-browser-a2'))).toEqual([])
 
-    // No answer, a failed one, or a core that has no such call: nothing is deleted.
+    // No answer, a failed one, or a core that has no such call: only the delete already recorded is finished. Its end
+    // is the signal resume has run: a delete of a listed agent would record it in the same step.
     for (const ids of [async () => { throw new Error('timed out') }, undefined]) {
       await stopAll()
       fake = fakePodman()
       fake.reply('ps', { stdout: '[]' })
-      saveState(listed)
+      saveState(listed, ['a9'])
       const agents = ids ? { ids } : {}
-      const { podman, spawn } = podmanHere()
-      start(fakeCore({ dataDir, agents }), { podman })
-      await eventually(() => expect(spawn).toHaveBeenCalled())
-      await new Promise(done => setTimeout(done, 300))
-      expect(asked()).toEqual([])
+      start(fakeCore({ dataDir, agents }))
+      await eventually(() => expect(savedState().deleting).toEqual([]))
+      expect(Object.keys(savedState().browsers).sort()).toEqual(['a1', 'a2', 'a3'])
+      expect(asked()).toContain('volume rm harness-browser-a9')
+      expect(asked().filter(line => !line.includes('harness-browser-a9') && !line.includes('harness-proxy-a9'))).toEqual([])
     }
   })
 
@@ -447,10 +503,13 @@ describe('the agent browser service', () => {
 
   it('without a state file it waits for its first use to look at Podman', async () => {
     const ids = vi.fn(async () => ({ live: [], stopped: [] }))
-    const { requests } = start(fakeCore({ dataDir, agents: { ids } }))
-    await new Promise(done => setTimeout(done, 100))
-    expect(fake.calls()).toEqual([])
+    const { podman } = podmanHere()
+    const path = vi.spyOn(podman, 'path')
+    // The first use asks for Podman's path and the core's agents at once, before any await: none of them yet.
+    const { requests } = start(fakeCore({ dataDir, agents: { ids } }), { podman })
+    expect(path).not.toHaveBeenCalled()
     expect(ids).not.toHaveBeenCalled()
+    expect(fake.calls()).toEqual([])
     await requests.agent_browser_available!({}, LOCAL)
     await eventually(() => expect(ids).toHaveBeenCalledTimes(1))
   })
@@ -466,8 +525,11 @@ describe('the agent browser service', () => {
   it('stopped before Podman was looked for, it starts no event stream', async () => {
     saveState({})
     const { podman, spawn } = podmanHere()
+    const path = vi.spyOn(podman, 'path')
     start(undefined, { podman }).port.stop()
-    await new Promise(done => setTimeout(done, 200))
+    // The stream starts, or not, in the callbacks on that first look; setImmediate runs after every one of them.
+    await path.mock.results[0]!.value
+    await new Promise(done => setImmediate(done))
     expect(spawn).not.toHaveBeenCalled()
   })
 
