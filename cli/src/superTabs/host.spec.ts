@@ -3939,6 +3939,52 @@ describe('ending a Buddy\'s thread sessions', () => {
   })
 
   // Spec 2026-11-02-poll-cost Part 3: a delivery its pane holds no longer keeps its list read each second, and still waits.
+  // A delivery its busy agent's pane refused was tried again on every tick (each second) while the agent worked, and each try wrote
+  // and fsynced the journal twice ('submitting', then 'prepared' again): 120 fsyncs a minute for one busy agent, 180 ms each on a
+  // busy Mac (Q3, 2026-11-10). It waits for the agent's turn to end instead, and 30 s at most when no end is heard.
+  describe('a delivery its busy agent refused', () => {
+    const held = (t: ReturnType<typeof lifeFixture>) => {
+      t.live(true)
+      const backendOf = t.core.account.backend
+      t.core.account.backend = async (method, path, body) => {
+        if (method === 'GET' && path.endsWith('/agents/agent/deliveries')) return { status: 200, body: { data: [{ id: 'delivery', conversationId: chat, status: 'claimed' }] } }
+        if ((body as Record<string, unknown> | undefined)?.type === 'claim') {
+          return { status: 200, body: { data: { delivery: { id: 'delivery' }, message: { id: 'm', conversationId: chat, text: 'Still there?', author: { name: 'Peer' } } } } }
+        }
+        return backendOf(method, path, body)
+      }
+      vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_busy'))
+      t.push({ type: 'super_tab_deliveries' })
+    }
+
+    it('writes nothing while its agent works, and is typed once as soon as the turn ends', async () => {
+      const write = vi.fn(writeJournal)
+      const t = lifeFixture([sessionRow()], { write })
+      held(t)
+      await t.poll()
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      const refused = write.mock.calls.length
+      for (let i = 0; i < 20; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      expect(write.mock.calls.length).toBe(refused)
+      t.end()
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
+    it('is tried again 30 s on when no end of the turn is heard, once', async () => {
+      const t = lifeFixture([sessionRow()])
+      held(t)
+      await t.poll()
+      for (let i = 0; i < 29; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+      for (let i = 0; i < 29; i++) await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+  })
+
   it('never ends one whose delivery its pane holds', async () => {
     const t = lifeFixture([sessionRow()])
     t.live(true)
