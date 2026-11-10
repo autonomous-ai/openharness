@@ -584,7 +584,7 @@ describe('private swarm projects on the real control API', () => {
 
   // Quiet project chats (Dee, 2026-10-31; task #3593): the server writes the status card's lines from task state and wakes the coordinator
   // for none of them; its report adds its own lines after them and posts nothing.
-  it('wakes the coordinator for no work change and shows the server\'s card with its own lines', async () => {
+  it('wakes the coordinator for no work change and shows its own lines alone on the card', async () => {
     // 14:00 in Vietnam.
     let now = Date.UTC(2026, 9, 31, 7, 0)
     const timed = new SuperTabStore(db, () => now)
@@ -606,24 +606,21 @@ describe('private swarm projects on the real control API', () => {
     expect(await updates()).toEqual([])
     // After the row naming who added the Lead (#2207); a task no message asked for posts nothing in the chat (#2925).
     expect((await chat()).map(m => (m.source as Record<string, unknown>)?.kind)).toEqual(['system'])
-    // The server wrote the card: one line for the task, which waits on an owner.
-    expect((await status())!.text).toContain('"Work": to do. Waits on: an owner. Owner: none.')
-    // The Lead's report adds its own lines after the server's, and posts nothing.
+    // The server writes no line for the task (Swarm v4, 2026-11-10).
+    expect(await status()).toBeUndefined()
+    // The Lead's report is the card, and posts nothing.
     const card = 'Freeze starts Friday.'
     await execute({ type: 'project.report', projectId: 'lead', through: {}, text: card }, lead)
     expect(await updates()).toEqual([])
     expect((await chat()).filter(m => m.text === card || (m.source as Record<string, unknown>)?.kind === 'project-report')).toEqual([])
-    expect((await status())!.text).toContain('"Work": to do.')
-    expect((await status())!.text.endsWith(card)).toBe(true)
+    expect((await status())!.text).toBe(card)
     // An ordinary message and a second task wake nobody.
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
     now += 3_600_000
     await execute({ type: 'conversation.create', title: 'Docs', brief: 'Write them', checks: [{ description: 'Read', independent: false }] })
     now += 900_000
     expect(await updates()).toEqual([])
-    const lines = (await status())!.text
-    expect(lines).toContain('"Docs": to do.')
-    expect(lines.endsWith(card)).toBe(true)
+    expect((await status())!.text).toBe(card)
   })
 })
 
