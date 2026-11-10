@@ -75,19 +75,14 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
  * they muted the chat (push/muted.ts). One notice per chat a write posts in, for its newest words, under the phone's own key
  * and slot for that chat (mobile lib/swarm/swarm_notices.dart announceChat), so the app's "New messages" notice and the push
  * are one notification. It sounds once until the person reads the chat: one sent while their read mark is behind what the chat
- * held before this write is quiet (push/unread.ts), as the app's own is. Only the agent's own post (`post`), never a row the
+ * held before this write, as [before] holds it, is quiet (push/unread.ts), as the app's own is. Only the agent's own post (`post`), never a row the
  * server writes in its name; only to the person listed on the chat while they are still in the Swarm at that generation, and
  * only from their own agent, on their own account, as the chat's readers are (projects.ts readsAgentChat).
  */
-export function chatNotices(tabId: string, state: SuperTabState, messages: MessageDraft[]): PhoneNotice[] {
-  const newest = new Map<string, { message: MessageDraft; main: number }>()
-  for (const message of messages) {
-    if (message.author.kind !== 'agent' || !message.post) continue
-    const was = newest.get(message.conversationId)
-    const main = (was?.main ?? 0) + (!message.thread || message.thread === message.id || message.alsoInChat ? 1 : 0)
-    newest.set(message.conversationId, { message, main })
-  }
-  return [...newest.values()].flatMap(({ message, main }): PhoneNotice[] => {
+export function chatNotices(tabId: string, state: SuperTabState, messages: MessageDraft[], before: SuperTabState): PhoneNotice[] {
+  const newest = new Map<string, MessageDraft>()
+  for (const message of messages) if (message.author.kind === 'agent' && message.post) newest.set(message.conversationId, message)
+  return [...newest.values()].flatMap((message): PhoneNotice[] => {
     const group = state.conversations.find(c => c.id === message.conversationId)
     if (!group || !isAgentChat(group) || !group.agentIds.includes(message.author.id)) return []
     const listed = group.audience?.people[0]
@@ -96,9 +91,10 @@ export function chatNotices(tabId: string, state: SuperTabState, messages: Messa
     if (!to || agent?.contributorId !== to.id || agent.machineOwnerId !== to.id) return []
     const key = `chat:${tabId}:${group.id}`
     const thread = message.thread && message.thread !== message.id && !message.alsoInChat ? message.thread : null
-    const before = (group.lastMainSequence ?? 0) - main
+    // The chat's newest main row before this write, as the write found it: a chat new in this write had none.
+    const held = before.conversations.find(c => c.id === group.id)?.lastMainSequence ?? 0
     return [{ personId: to.id, key, slot: key, title: `${actorName(state, 'agent', agent.id, message.author)} wrote to you`, subtitle: '',
       body: BODY, link: linkOf(tabId, group.id, message.id, thread), setting: stableId(tabId, group.id, to.id, 'notify'),
-      ...before > 0 ? { unreadBefore: { mark: stableId(tabId, group.id, to.id), tabId, conversationId: group.id, sequence: before } } : {} }]
+      ...held > 0 ? { unreadBefore: { mark: stableId(tabId, group.id, to.id), tabId, conversationId: group.id, sequence: held } } : {} }]
   })
 }
