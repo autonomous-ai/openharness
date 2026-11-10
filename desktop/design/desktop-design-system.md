@@ -595,7 +595,8 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `super_tabs/issue_panel.dart`), titled by its number, with Open in GitHub:
   its title, its agent, state and who opened it, its labels, its open pull
   request as a row (the chip, its title and branch, and Open, which goes to it
-  on GitHub), then its text and
+  on GitHub; a tap on the row opens the pull request's own chat in the task's
+  place, and closing that goes back to the task), then its text and
   comments as posts, each under the face and name its first words sign it with
   (`Migrate, 09:3x: …`) and its GitHub login. It reads the newest 30
   comments; the rest are one tap away (`1,546 earlier comments` and Show,
@@ -607,6 +608,27 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   requests. Wait a few minutes.` when GitHub's rate limit answers, and
   then no `gh` runs for two minutes, whatever asks; `Authorize gh for this
   organization's SSO: run gh auth refresh.` when SAML does) with a retry.
+- **Pull requests** (anh Dee, 2026-11-10: "it has its own comments on PRs").
+  Beside the Tasks icon, ⑂ (`gitPullRequest`) opens the project's open pull
+  requests in the same pane, titled Pull requests, as GitHub has Pull requests
+  beside Issues; each icon shows its list, or closes the pane when it already
+  shows it, and no tab switches them. Three columns, newest activity first, by
+  who acts next, as lampOS's train bot sorts them each round (`train-bot.sh`
+  `eligible`): To read (no READ-OK on its head yet: a reader), To fix (a HOLD,
+  a failing check or a conflict, or still a draft: its builder) and Merging
+  (read, its checks running or green: Harness merges it). A card holds its chip
+  (`#5770 Merging`), its title on up to three lines, and its agent's face with
+  its branch and last activity. They are the newest 50 the board reads for its
+  chips, those that are no task's included: of lampOS's last 197 builder pull
+  requests, one was linked to an issue. A card opens the pull request's own
+  chat in the list's place, the task's panel reading its pull request:
+  titled by its number, its branch and chip (`Merged` or `Closed` once it is
+  not open), its text, its comments, and its reviews among them by time, each
+  with its verdict (`Approved`, `Changes requested`, `Review`) and line
+  comments with their place (`rows.py, line 40`); its merge is one quiet
+  centred line (`Merged · 16:02`). The same read brings them: the newest 30
+  comments (the rest a tap away), 30 reviews and each review's first 20 line
+  comments. Read only, as a task is: agents write on GitHub.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
   one thing: `Project settings…`, whose rows are Rename project, Project
   details, Switch PM… and Delete Project. It has no Notifications: a channel

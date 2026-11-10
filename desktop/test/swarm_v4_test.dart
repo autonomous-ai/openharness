@@ -306,12 +306,12 @@ void main() {
       Finder inColumn(String name, Finder f) =>
           find.descendant(of: key('swarm-task-column-$name'), matching: f);
       // Nobody has read #5772; #5771, no task's, failed its check; #5770 has its READ-OK and green checks.
-      expect(inColumn('To read', key('swarm-pull-5772')), findsOneWidget);
-      expect(inColumn('To fix', key('swarm-pull-5771')), findsOneWidget);
-      expect(inColumn('Merging', key('swarm-pull-5770')), findsOneWidget);
+      expect(inColumn('To read', key('swarm-pull-card-5772')), findsOneWidget);
+      expect(inColumn('To fix', key('swarm-pull-card-5771')), findsOneWidget);
+      expect(inColumn('Merging', key('swarm-pull-card-5770')), findsOneWidget);
       // No tasks among them.
       expect(key('swarm-task-5759'), findsNothing);
-      await tester.tap(key('swarm-pull-5770'));
+      await tester.tap(key('swarm-pull-card-5770'));
       await tester.pumpAndSettle();
       Finder inPanel(Finder f) =>
           find.descendant(of: key('swarm-issue-panel'), matching: f);
@@ -336,12 +336,12 @@ void main() {
       await tester.tap(key('swarm-issue-close'));
       await tester.pumpAndSettle();
       expect(key('swarm-issue-panel'), findsNothing);
-      expect(key('swarm-pull-5770'), findsOneWidget);
+      expect(key('swarm-pull-card-5770'), findsOneWidget);
       // ▦ swaps the pane for the tasks; ⑂ again closes it.
       await tester.tap(key('swarm-tasks-button'));
       await tester.pumpAndSettle();
       expect(key('swarm-task-5759'), findsOneWidget);
-      expect(key('swarm-pull-5770'), findsNothing);
+      expect(key('swarm-pull-card-5770'), findsNothing);
       await tester.tap(key('swarm-pulls-button'));
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-pulls-button'));

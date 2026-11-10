@@ -527,7 +527,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        key: ValueKey('swarm-pull-${pull.number}'),
+        key: ValueKey('swarm-pull-card-${pull.number}'),
         onTap: widget.onOpenPull == null
             ? null
             : () => widget.onOpenPull!(repository, pull.number),
