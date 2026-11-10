@@ -3938,7 +3938,6 @@ describe('ending a Buddy\'s thread sessions', () => {
     expect(ends(t)).toEqual([])
   })
 
-  // Spec 2026-11-02-poll-cost Part 3: a delivery its pane holds no longer keeps its list read each second, and still waits.
   // A delivery its busy agent's pane refused was tried again on every tick (each second) while the agent worked, and each try wrote
   // and fsynced the journal twice ('submitting', then 'prepared' again): 120 fsyncs a minute for one busy agent, 180 ms each on a
   // busy Mac (Q3, 2026-11-10). It waits for the agent's turn to end instead, and 30 s at most when no end is heard.
@@ -3954,6 +3953,8 @@ describe('ending a Buddy\'s thread sessions', () => {
         return backendOf(method, path, body)
       }
       vi.mocked(t.core.turns.deliver).mockImplementation(() => t.event('rejected', 'team_waiting_idle'))
+      // It works until a test says otherwise.
+      vi.mocked(t.core.agents.activity).mockImplementation(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'working' as const])))
       t.push({ type: 'super_tab_deliveries' })
     }
 
@@ -3972,6 +3973,22 @@ describe('ending a Buddy\'s thread sessions', () => {
       expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
     })
 
+    // The end can come before the refusal it answers (the core reads the pane while the turn ends), or the pane can still look
+    // busy a moment after it: the host asks whether the agent works, from memory, and tries it at once when it does not.
+    it('is tried at the next tick when its agent no longer works, however the end and the refusal crossed', async () => {
+      const t = lifeFixture([sessionRow()])
+      held(t)
+      // The turn ends while the core reads the pane: its end is heard first, then the refusal.
+      vi.mocked(t.core.turns.deliver).mockImplementationOnce(() => {
+        vi.mocked(t.core.agents.activity).mockImplementation(async (ids: string[]) => Object.fromEntries(ids.map(id => [id, 'idle' as const])))
+        t.end()
+        t.event('rejected', 'team_waiting_idle')
+      })
+      await t.poll()
+      await t.poll(1_000)
+      expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
+    })
+
     it('is tried again 30 s on when no end of the turn is heard, once', async () => {
       const t = lifeFixture([sessionRow()])
       held(t)
@@ -3985,6 +4002,7 @@ describe('ending a Buddy\'s thread sessions', () => {
     })
   })
 
+  // Spec 2026-11-02-poll-cost Part 3: a delivery its pane holds no longer keeps its list read each second, and still waits.
   it('never ends one whose delivery its pane holds', async () => {
     const t = lifeFixture([sessionRow()])
     t.live(true)
