@@ -633,6 +633,34 @@ export class PlatformService {
     return true
   }
 
+  /**
+   * Point this data folder's definition at [node] when it runs another Node, changing nothing else in it: the managed
+   * Node moved (to Node 24, or back on a rollback) since `harness service install` wrote it, and only the Node is known
+   * to have changed. Null when there is nothing to do: no definition of this data folder's, one that names [node]
+   * already, Harness OS's unit (the package's), or Windows, whose task runs harness-launch.exe, which reads
+   * current-node at every start. Nothing is reloaded: launchd and systemd keep the job they loaded, the daemon this
+   * runs in, and read the file at their next load; until then the Node they start, which is never removed
+   * (lib/runtimeInstall.ts), starts cli.js, and it runs the master on the managed Node (masterProcess.ts).
+   */
+  repointNode(node: string, logFile: string): Outcome | null {
+    if (this.os || this.platform === 'taskscheduler' || !this.ownedBy(logFile)) return null
+    if (!isAbsolute(node) || CONTROL.test(node)) return { ok: false, detail: `the node path for the service must be absolute, on one line: ${JSON.stringify(node)}` }
+    const content = this.deps.readFile(this.file)!
+    // The program as launchdPlist and systemdUnit write it: the first word of ProgramArguments, of ExecStart.
+    const [program, word] = this.platform === 'launchd'
+      ? [/(<key>ProgramArguments<\/key>\n\t<array>\n\t\t<string>)[^<]*(<\/string>)/, xml(node)]
+      : [/^(ExecStart=)"(?:[^"\\]|\\.)*"()/m, execWord(node, 0)]
+    if (!program.test(content)) return { ok: false, detail: `${this.file} does not run its Node where harness service install writes it` }
+    const next = content.replace(program, (_, before: string, after: string) => `${before}${word}${after}`)
+    if (next === content) return null
+    try {
+      this.deps.writeFile(this.file, next)
+    } catch (error) {
+      return { ok: false, detail: (error as Error).message }
+    }
+    return { ok: true }
+  }
+
   inspect(): PlatformState {
     const base = { platform: this.platform, file: this.file, target: this.target, installed: this.installed(), linger: null, unreachable: null }
     if (this.platform === 'taskscheduler') {

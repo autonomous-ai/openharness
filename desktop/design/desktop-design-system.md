@@ -1102,6 +1102,9 @@ in the footer. Recent-harness context uses its monochrome presentation.
 at page scale. Related settings use grouping and whitespace. Existing artwork,
 terminal previews, native toolbar/footer components and domain-specific visuals
 retain their meaning. Read-only loading/error views use the same hierarchy.
+Settings ▸ About adds one body-size secondary line under the app identity, `Node v24.22.2` or
+`Node v22.23.2 · stays on 22: <reason>`, from the daemon's status; it is absent when the daemon
+sends no Node.
 
 **macOS notification menu** — one Notifications section with up to five unread
 session rows and a route to the full inbox. Use a 13-point semibold session title,

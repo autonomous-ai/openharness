@@ -84,13 +84,24 @@ class BundleGuards(unittest.TestCase):
                 patch.object(update, 'verify_runtime'):
             update.install_package(self.package, self.version, self.runtime, [kernel])
         run.assert_called_once()
-        self.assertEqual(run.call_args.args[0], ['pacman', '--noconfirm', '-U', str(kernel), str(self.package)])
+        self.assertEqual(run.call_args.args[0], ['pacman', '--noconfirm', '--ask=4', '-U', str(kernel), str(self.package)])
+
+    def test_an_update_from_jod_to_the_node_24_package_replaces_it_without_a_prompt(self):
+        # --ask=4 answers pacman's "remove conflicting package?" question; with --noconfirm alone it
+        # defaults to no and the transaction aborts when nodejs-lts-krypton gives way to nodejs-lts-krypton.
+        for call in (lambda: update.install_package(self.package, self.version, self.runtime),
+                     lambda: update.prepare_packages(self.package)):
+            with patch.object(update.subprocess, 'run') as run, \
+                    patch.object(update, 'installed_version', return_value=self.version), \
+                    patch.object(update, 'verify_runtime'):
+                call()
+            self.assertIn('--ask=4', run.call_args.args[0])
 
     def test_dependency_prefetch_includes_kernel_without_installing(self):
         kernel = self.root / 'linux-t2.pkg.tar.zst'
         with patch.object(update.subprocess, 'run') as run:
             update.prepare_packages(self.package, [kernel])
-        run.assert_called_once_with(['pacman', '--noconfirm', '-U', '--downloadonly',
+        run.assert_called_once_with(['pacman', '--noconfirm', '--ask=4', '-U', '--downloadonly',
                                     str(kernel), str(self.package)], check=True)
 
     def test_missing_dependency_download_leaves_receipt_and_checkpoint_untouched(self):
@@ -198,7 +209,7 @@ class BundleGuards(unittest.TestCase):
         snapshot = self.root / 'snapshot'
         db = snapshot / 'var/lib/pacman/local/harness-os-1-1'
         db.mkdir(parents=True)
-        (db / 'desc').write_text('%NAME%\nharness-os\n\n%VERSION%\n1-1\n\n%ARCH%\nx86_64\n\n%DEPENDS%\nnodejs-lts-jod\n')
+        (db / 'desc').write_text('%NAME%\nharness-os\n\n%VERSION%\n1-1\n\n%ARCH%\nx86_64\n\n%DEPENDS%\nnodejs-lts-krypton\n')
         (db / 'files').write_text('%FILES%\nusr/\nusr/lib/\nusr/lib/harness/\nusr/lib/harness/harness-tui\nusr/lib/harness/hn\n')
         library = snapshot / 'usr/lib/harness'
         library.mkdir(parents=True)
@@ -220,7 +231,7 @@ class BundleGuards(unittest.TestCase):
             self.assertNotIn('usr/lib/harness/unowned-user-file', archive.getnames())
             self.assertEqual(archive.getmember('usr/lib/harness/hn').linkname, 'harness-tui')
             self.assertEqual(archive.getmember('usr/lib/harness/harness-tui').mode, 0o755)
-            self.assertIn(b'depend = nodejs-lts-jod', archive.extractfile('.PKGINFO').read())
+            self.assertIn(b'depend = nodejs-lts-krypton', archive.extractfile('.PKGINFO').read())
 
     def test_rollback_rejects_corrupt_backup_without_touching_package_database(self):
         receipt = {'id': '20261003T120000Z-12345678', 'status': 'applied', 'root_uuid': 'test-root',

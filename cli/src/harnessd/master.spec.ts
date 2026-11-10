@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { placeNode } from '../testing/placeNode.js'
@@ -369,7 +369,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       execArgv: [],
       scriptPath: core,
       pidFile,
-      restoreUpdate: () => updates.push('restore'),
+      restoreUpdate: () => { updates.push('restore') },
       confirmUpdate: () => updates.push('confirm'),
       env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10' },
       exit: (code) => exits.push(code),
@@ -918,7 +918,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       try {
         runMaster({
           nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
-          restoreUpdate: () => updates.push('restore'), confirmUpdate: () => {},
+          restoreUpdate: () => { updates.push('restore') }, confirmUpdate: () => {},
           env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo('tok')) },
           exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
         })
@@ -985,7 +985,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
           const updates: string[] = []
           runMaster({
             nodePath: process.execPath, execArgv: [], scriptPath: core, pidFile: file, reexecMarkerFile: marker(), logFile: join(dir, 'daemon.log'),
-            restoreUpdate: () => updates.push('restore'), confirmUpdate: () => {},
+            restoreUpdate: () => { updates.push('restore') }, confirmUpdate: () => {},
             env: { ...process.env, HARNESSD_SERVICES: 'none', [RESUME_ENV]: encodeResume(handedTo(token, 'pending')) },
             exit: (code) => exits.push(code), onSignal: () => {},
           })
@@ -1150,7 +1150,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       const signals = new Map<string, () => void>()
       const supervisor = runMaster({
         nodePath: process.execPath, execArgv: [], scriptPath, pidFile: join(dir, 'adapter.pid'), statusFile: join(dir, 'harnessd-status.json'),
-        restoreUpdate: () => calls.push('restore'), confirmUpdate: () => calls.push('confirm'),
+        restoreUpdate: () => { calls.push('restore') }, confirmUpdate: () => calls.push('confirm'),
         env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_INITIAL_BACKOFF_MS: '10', HARNESSD_UPDATE_PROBATION_MS: '100' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
         version: '1.0.0', reexecMarkerFile: join(dir, 'harnessd-reexec.json'),
@@ -1283,6 +1283,37 @@ describe('runMaster', { timeout: 60_000 }, () => {
         await new Promise((resolve) => setTimeout(resolve, 200))
         expect(plain.calls).toEqual([])
         await plain.stop()
+      } finally { log.mockRestore() }
+    })
+
+    it('fails the probation of an update that moved it to Node 24 back onto the Node before, and re-executes on that', async () => {
+      // The master runs on the Node 24 the update moved the daemon to; the build before ran on 22.
+      const runtime = join(dir, 'runtime')
+      const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
+      const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
+      for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')]) }
+      const script = bundle('process.exit(3)')
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      try {
+        const master = start(script, {
+          nodePath: v24, runtimeDir: runtime, unjudgedUpdate: () => '2.0.0',
+          // lib/selfUpdate.ts `restore`: the build before back on disk, and the Node it ran on.
+          restoreUpdate: () => {
+            master.calls.push('restore')
+            writeFileSync(script, readFileSync(script, 'utf8') + '\n// the build before\n')
+            return v22
+          },
+        })
+        await until('the master to re-execute on the build before', () => master.execs.length > 0)
+        const link = join(runtime, 'node-v22.23.2-test', 'libexec', 'harnessd', 'harnessd')
+        expect(master.execs[0].file).toBe(link)
+        expect(master.execs[0].args).toEqual([link, script, '__harnessd'])
+        expect(master.calls).toEqual(['restore'])
+        expect(lines.filter((line) => line.includes('[harnessd] the core did not come up on Node'))).toEqual([
+          expect.stringMatching(/\[harnessd\] the core did not come up on Node v24\.22\.2; back on v22\.23\.2$/),
+        ])
+        await master.stop()
       } finally { log.mockRestore() }
     })
 

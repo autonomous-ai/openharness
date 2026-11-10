@@ -1,13 +1,17 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { nodeMigration } from './nodeMigration.js'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { createHash } from 'crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
-  msUntilSlot, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate, stage as stageOn,
-  startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
+  msUntilSlot, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate,
+  stage as stageOn, startSelfUpdater as startSelfUpdaterOn, unjudgedUpdate,
 } from './selfUpdate.js'
+import { env } from '../config/env.js'
+import { managedNodePath } from './nodeRuntime.js'
+import { placeNode } from '../testing/placeNode.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { versionsOnDisk } from './windows/cliVersions.js'
@@ -22,9 +26,9 @@ vi.mock('./windows/installLayout.js', async (real) => {
 // The cases below that pass no platform are about the macOS and Linux layout (files swapped in place, `.prev`
 // backups). Left to the default, `process.platform`, they took the Windows version-folder path when the suite
 // ran on Windows; pinned here, they test the same layout on every host. The Windows cases pass 'win32'.
-const stage = (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = 'darwin'): void =>
-  stageOn(dir, cliBuf, notifyBuf, version, platform)
-const restore = (dir: string, platform: NodeJS.Platform = 'darwin'): void => restoreOn(dir, platform)
+const stage = (dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = 'darwin', previousNode: string | null = null): void =>
+  stageOn(dir, cliBuf, notifyBuf, version, platform, previousNode)
+const restore = (dir: string, platform: NodeJS.Platform = 'darwin'): string | null => restoreOn(dir, platform)
 const settleRolledBack = (dir: string, platform: NodeJS.Platform = 'darwin'): string | null => settleRolledBackOn(dir, platform)
 const startSelfUpdater = (opts: Parameters<typeof startSelfUpdaterOn>[0]): ReturnType<typeof startSelfUpdaterOn> =>
   startSelfUpdaterOn({ platform: 'darwin', ...opts })
@@ -1502,5 +1506,135 @@ describe('the automatic updater on Windows, judged against the build cli\\curren
     } finally { poller.stop() }
     expect(readFileSync(join(cli, 'current'), 'utf8')).toBe('9.9.9\r\n')
     expect(readFileSync(join(cli, '9.9.9', 'cli.js'))).toEqual(cliSource)
+  })
+})
+
+describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () => {
+  const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+  const runtime = env.ADAPTER_RUNTIME_DIR
+  const currentNode = join(runtime, 'current-node')
+  const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
+  const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
+  const note = (dir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8'))
+  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts): copies of this test's Node.
+  beforeEach(() => {
+    for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node) }
+    writeFileSync(currentNode, `${v22}\n`)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    for (const path of [currentNode, dirname(dirname(v22)), dirname(dirname(v24))]) rmSync(path, { recursive: true, force: true })
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+    dirs = []
+  })
+
+  function serveUpdate(cli: Buffer): void {
+    const notify = Buffer.from('export {}\n')
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (url.endsWith('/metadata.json')) {
+        return new Response(JSON.stringify({ adapter: {
+          version: '9.9.9', cli: { url: 'https://updates.test/cli.js', sha256: sha(cli) }, notify: { url: 'https://updates.test/notify.mjs', sha256: sha(notify) },
+        } }))
+      }
+      return new Response(url.endsWith('cli.js') ? cli : notify)
+    })
+  }
+  /** Node 24 put in place as `ensureNodeMeetsMinimum` does: `current-node` names it. */
+  const installs24 = (events: string[]) => async () => {
+    events.push(`ensure on ${managedNodePath()}`)
+    writeFileSync(currentNode, `${v24}\n`)
+    return { node: v24, reason: null }
+  }
+
+  it('installs Node 24 before staging the build, whose canary runs on it', async () => {
+    // A build that says its version only on Node 24: the canary runs on the Node the next daemon runs on.
+    serveUpdate(Buffer.from('console.log(process.execPath.includes("node-v24.") ? "9.9.9" : "on " + process.execPath)\n'))
+    const dir = tempDir()
+    const events: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      node: { ensure: installs24(events), running: v22 },
+      onStaged: () => { events.push(`staged with ${managedNodePath()}`) },
+    })
+    try {
+      await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
+    } finally { poller.stop() }
+    expect(events).toEqual([`ensure on ${v22}`, `staged with ${v24}`])
+    // The rollback's way back.
+    expect(note(dir)).toMatchObject({ version: '9.9.9', previousNode: v22 })
+    expect(nodeMigration(dir)).toBeNull()
+  })
+
+  it('stages the build when Node 24 does not go in, and records why for `harness status`', async () => {
+    serveUpdate(Buffer.from('console.log("9.9.9")\n'))
+    const dir = tempDir()
+    const staged: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      node: { ensure: async () => ({ node: v22, reason: 'download-failed' as const }), running: v22 },
+      onStaged: (version) => { staged.push(version) },
+    })
+    try {
+      await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 10_000 })
+    } finally { poller.stop() }
+    expect(nodeMigration(dir)).toBe('download-failed')
+    expect(managedNodePath()).toBe(v22)
+  })
+
+  it('puts current-node back on the Node the update moved the daemon off when it is rolled back, and says so', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'cli.js'), 'old')
+    writeFileSync(join(dir, 'notify.mjs'), 'old')
+    stage(dir, Buffer.from('new'), Buffer.from('new'), '9.9.9', 'darwin', v22)
+    writeFileSync(currentNode, `${v24}\n`)
+    expect(restore(dir)).toBe(v22)
+    expect(readFileSync(currentNode, 'utf8')).toBe(`${v22}\n`)
+    expect(statSync(currentNode).mode & 0o777).toBe(0o600)
+    expect(nodeMigration(dir)).toBe('rolled-back')
+    expect(readFileSync(join(dir, 'cli.js'), 'utf8')).toBe('old')
+    // An update that moved no Node leaves it be.
+    stage(dir, Buffer.from('newer'), Buffer.from('newer'), '9.9.10', 'darwin', v22)
+    expect(restore(dir)).toBeNull()
+    expect(managedNodePath()).toBe(v22)
+    // A Node the product did not lay down is never written there.
+    stage(dir, Buffer.from('newest'), Buffer.from('newest'), '9.9.11', 'darwin', '/usr/local/bin/node')
+    writeFileSync(currentNode, `${v24}\n`)
+    expect(restore(dir)).toBeNull()
+    expect(managedNodePath()).toBe(v24)
+  })
+
+  it('keeps the Node to go back to when a newer build is staged during probation, as it keeps the backup', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'cli.js'), 'kept')
+    writeFileSync(join(dir, 'notify.mjs'), 'kept')
+    stage(dir, Buffer.from('on probation'), Buffer.from('on probation'), '9.9.9', 'darwin', v22)
+    // The core on probation runs on Node 24, and stages the next build.
+    stage(dir, Buffer.from('newer'), Buffer.from('newer'), '9.9.10', 'darwin', v24)
+    expect(note(dir)).toMatchObject({ version: '9.9.10', previousNode: v22 })
+  })
+
+  it('on Windows, names Node 24 in current-node before the handover, whose launcher reads it, and goes back on a rollback', async () => {
+    serveUpdate(Buffer.from('console.log("9.9.9")\n'))
+    const cli = join(tempDir(), 'cli')
+    mkdirSync(join(cli, '1.0.0'), { recursive: true })
+    writeFileSync(join(cli, '1.0.0', 'cli.js'), 'cli 1.0.0')
+    writeFileSync(join(cli, '1.0.0', 'notify.mjs'), 'notify 1.0.0')
+    writeFileSync(join(cli, 'current'), '1.0.0\r\n')
+    const events: string[] = []
+    const poller = startSelfUpdater({
+      currentVersion: '1.0.0', url: 'https://updates.test/metadata.json', key: 'adapter', dir: cli, intervalMs: 20, platform: 'win32',
+      node: { ensure: installs24(events), running: v22 },
+      // The master asks its core to hand over, and the handover's harness-launch.exe starts the next master.
+      onStaged: () => { events.push(`staged with ${managedNodePath()}`) },
+    })
+    try {
+      await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
+    } finally { poller.stop() }
+    expect(events).toEqual([`ensure on ${v22}`, `staged with ${v24}`])
+    expect(note(cli)).toMatchObject({ version: '9.9.9', previous: '1.0.0', previousNode: v22 })
+    expect(restore(cli, 'win32')).toBe(v22)
+    expect(readFileSync(currentNode, 'utf8')).toBe(`${v22}\r\n`)
+    expect(readFileSync(join(cli, 'current'), 'utf8').trim()).toBe('1.0.0')
   })
 })

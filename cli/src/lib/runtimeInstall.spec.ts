@@ -238,6 +238,116 @@ describe('ensureManagedRuntime', () => {
   })
 })
 
+/** A Node already laid down under the runtime dir and named by `current-node`, as an installer leaves it. */
+function installedNode(version: string, key: string): string {
+  const dir = join(runtimeDir, `node-${version}-${key}`, 'bin')
+  mkdirSync(dir, { recursive: true })
+  const bin = join(dir, 'node')
+  writeFileSync(bin, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  writeFileSync(join(runtimeDir, 'current-node'), `${bin}\n`)
+  return bin
+}
+
+describe('ensureNodeMeetsMinimum', () => {
+  const key = currentPlatformKey()
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'harness-node-minimum-'))
+    runtimeDir = join(root, '.harness', 'runtime')
+    binDir = join(root, '.local', 'bin')
+    cliDir = join(root, '.harness', 'cli')
+    for (const dir of [runtimeDir, binDir, cliDir]) mkdirSync(dir, { recursive: true })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    rmSync(root, { recursive: true, force: true })
+    for (const key of ['ADAPTER_RUNTIME_DIR', 'HARNESS_BIN_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_METADATA_URL', 'ADAPTER_GRID_RUNTIME_METADATA_URL', 'HARNESS_GRID_BIN']) {
+      delete process.env[key]
+    }
+  })
+
+  const currentNode = () => readFileSync(join(runtimeDir, 'current-node'), 'utf8').trim()
+
+  it('installs the manifest Node when the managed one is 22', async () => {
+    const old = installedNode('v22.23.2', key)
+    const { bytes, root: archiveRoot } = buildArchive('v24.22.2', key)
+    stubFetch(manifestFor('node', key, 'v24.22.2', bytes, archiveRoot), bytes)
+    const { ensureNodeMeetsMinimum } = await load()
+
+    const result = await ensureNodeMeetsMinimum(() => {})
+
+    const node = join(runtimeDir, `node-v24.22.2-${key}`, 'bin', 'node')
+    expect(result).toEqual({ node, reason: null })
+    expect(currentNode()).toBe(node)
+    // Engines installed with npm under 22 live in its folder, and are still found there.
+    expect(existsSync(old)).toBe(true)
+  })
+
+  it('makes no request when the managed Node is 24', async () => {
+    const node = installedNode('v24.22.2', key)
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const { ensureNodeMeetsMinimum } = await load()
+
+    expect(await ensureNodeMeetsMinimum(() => {})).toEqual({ node, reason: null })
+    expect(fetchSpy).toHaveBeenCalledTimes(0)
+  })
+
+  it('keeps 22 when the manifest only has 22', async () => {
+    const old = installedNode('v22.23.2', key)
+    const { bytes, root: archiveRoot } = buildArchive('v22.23.3', key)
+    stubFetch(manifestFor('node', key, 'v22.23.3', bytes, archiveRoot), bytes)
+    const { ensureNodeMeetsMinimum } = await load()
+
+    expect(await ensureNodeMeetsMinimum(() => {})).toEqual({ node: old, reason: 'no-manifest-entry' })
+    expect(currentNode()).toBe(old)
+  })
+
+  it('keeps 22 when 24 does not run', async () => {
+    const old = installedNode('v22.23.2', key)
+    const { bytes, root: archiveRoot } = buildArchive('v24.22.2', key, 'node', '#!/bin/sh\nexit 1\n')
+    stubFetch(manifestFor('node', key, 'v24.22.2', bytes, archiveRoot), bytes)
+    const { ensureNodeMeetsMinimum } = await load()
+
+    expect(await ensureNodeMeetsMinimum(() => {})).toEqual({ node: old, reason: 'does-not-run' })
+    expect(currentNode()).toBe(old)
+  })
+
+  it('keeps 22 when the archive does not match the manifest', async () => {
+    const old = installedNode('v22.23.2', key)
+    const { bytes, root: archiveRoot } = buildArchive('v24.22.2', key)
+    stubFetch(manifestFor('node', key, 'v24.22.2', bytes, archiveRoot, { sha256: 'a'.repeat(64) }), bytes)
+    const { ensureNodeMeetsMinimum } = await load()
+
+    expect(await ensureNodeMeetsMinimum(() => {})).toEqual({ node: old, reason: 'download-failed' })
+    expect(currentNode()).toBe(old)
+  })
+
+  it('gives up on a manifest that never answers', async () => {
+    const old = installedNode('v22.23.2', key)
+    // Holds the request until the caller's own signal ends it, as a server that never answers does.
+    vi.stubGlobal('fetch', (_input: string | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason))
+    }))
+    const { ensureNodeMeetsMinimum } = await load()
+
+    const started = performance.now()
+    expect(await ensureNodeMeetsMinimum(() => {}, 50)).toEqual({ node: old, reason: 'manifest-unreachable' })
+    expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
+  it('touches nothing on a computer with no managed Node, and says so when the Node it runs on is too old', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const { ensureNodeMeetsMinimum } = await load()
+
+    const tooOld = Number(process.versions.node.split('.')[0]) < 24
+    expect(await ensureNodeMeetsMinimum(() => {})).toEqual({ node: null, reason: tooOld ? 'unmanaged' : null })
+    expect(fetchSpy).toHaveBeenCalledTimes(0)
+  })
+})
+
 /**
  * The managed grid follows the PIN, where the managed Node stops at "one is installed": the harness
  * manifest names the grid version this daemon can drive, and a pin that moved must reach a machine

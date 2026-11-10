@@ -16,9 +16,12 @@
 import { createHash } from 'crypto'
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { execFile } from 'child_process'
-import { dirname, join } from 'path'
+import { dirname, join, sep } from 'path'
+import { env } from '../config/env.js'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
 import { managedNodePath } from './nodeRuntime.js'
+import { NODE_MIGRATION_FILE, type NodeMigration } from './nodeMigration.js'
+import type { NodeMigrationReason } from './runtimeInstall.js'
 import { patientDeadline } from './patientExec.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { currentCli } from './windows/installLayout.js'
@@ -55,10 +58,10 @@ function writeJson(file: string, value: unknown): void {
   writeWhole(file, `${JSON.stringify(value)}\n`)
 }
 
-function writeWhole(file: string, bytes: string | Buffer): void {
+function writeWhole(file: string, bytes: string | Buffer, mode?: number): void {
   const tmp = `${file}.tmp`
   try {
-    writeFileSync(tmp, bytes)
+    writeFileSync(tmp, bytes, mode === undefined ? undefined : { mode })
     renameSync(tmp, file)
   } catch (error) {
     try { rmSync(tmp, { force: true }) } catch { /* not a file this call wrote */ }
@@ -68,17 +71,18 @@ function writeWhole(file: string, bytes: string | Buffer): void {
 
 const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
-/** The update a stage left to be kept or rolled back: its version, the sha256 of the cli.js it put in place, and
- *  (Windows) the version to roll back to. */
-interface Pending { version: string; sha256: string | null; previous: string | null }
+/** The update a stage left to be kept or rolled back: its version, the sha256 of the cli.js it put in place,
+ *  (Windows) the version to roll back to, and the Node the daemon ran on before it, which a rollback goes back to. */
+interface Pending { version: string; sha256: string | null; previous: string | null; previousNode: string | null }
 
 function readPending(dir: string): Pending | null {
-  const pending = readJson(join(dir, PENDING)) as { version?: unknown; sha256?: unknown; previous?: unknown } | null
+  const pending = readJson(join(dir, PENDING)) as { version?: unknown; sha256?: unknown; previous?: unknown; previousNode?: unknown } | null
   if (typeof pending?.version !== 'string') return null
   return {
     version: pending.version,
     sha256: typeof pending.sha256 === 'string' ? pending.sha256 : null,
     previous: typeof pending.previous === 'string' ? pending.previous : null,
+    previousNode: typeof pending.previousNode === 'string' ? pending.previousNode : null,
   }
 }
 
@@ -112,6 +116,17 @@ export function unjudgedUpdate(dir: string, fingerprint: string | null): string 
 export function rejectedVersions(dir: string): string[] {
   const rejected = readJson(join(dir, REJECTED))
   return Array.isArray(rejected) ? rejected.filter((version): version is string => typeof version === 'string') : []
+}
+
+/** Record why the daemon is not on the minimum Node, or, with null, that nothing holds it back. */
+export function recordNodeMigration(dir: string, reason: NodeMigration | null): void {
+  try {
+    if (reason === null) rmSync(join(dir, NODE_MIGRATION_FILE), { force: true })
+    else writeJson(join(dir, NODE_MIGRATION_FILE), { reason, at: Date.now() })
+  } catch (error) {
+    // A full disk costs `harness status` the reason, never the update.
+    console.error(`[update] could not record why the daemon's Node stays as it is (${error instanceof Error ? error.message : String(error)})`)
+  }
 }
 
 /** Strict semver-greater on the `X.Y.Z` core (ignores pre-release/build). Unparseable → false, so a
@@ -369,7 +384,8 @@ export async function canary(cliBuf: Buffer, dir: string, version?: string): Pro
 
 /**
  * Swap the new bytes into `dir`, backing up the current files to `.prev` for rollback, and note
- * `version` as pending until it is kept or rolled back. (Verified in memory first, so only bytes we
+ * `version` as pending until it is kept or rolled back, with the Node the daemon ran on before it
+ * ([previousNode]) for the rollback to go back to. (Verified in memory first, so only bytes we
  * already trust are ever written.)
  *
  * All or nothing, because a full disk found the gaps (e2e/updateHostile.e2e.ts): everything new is
@@ -384,8 +400,10 @@ export async function canary(cliBuf: Buffer, dir: string, version?: string): Pro
  * newer build staged during its probation), the backups already hold the last build that was kept,
  * and stay: a rollback goes back to a build that proved itself, not to one that never did.
  */
-export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = process.platform): void {
-  if (platform === 'win32') { stageVersion(dir, cliBuf, notifyBuf, version); return }
+export function stage(
+  dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string, platform: NodeJS.Platform = process.platform, previousNode: string | null = null,
+): void {
+  if (platform === 'win32') { stageVersion(dir, cliBuf, notifyBuf, version, previousNode); return }
   mkdirSync(dir, { recursive: true })
   const path = (name: string): string => join(dir, name)
   const temporary = (name: string): string => `${path(name)}.tmp`
@@ -402,6 +420,9 @@ export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: 
   }
   const renames: Array<[string, string]> = []
   try {
+    const judging = unjudged()
+    // Like the backups: while the bundle on disk is still being judged, the Node to go back to is the one before it.
+    const node = judging ? readPending(dir)?.previousNode ?? null : previousNode
     if (readText(path(PACKAGE)) !== RUNTIME_PACKAGE) {
       write(temporary(PACKAGE), RUNTIME_PACKAGE)
       renames.push([temporary(PACKAGE), path(PACKAGE)])
@@ -409,7 +430,7 @@ export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: 
     write(temporary(CLI), cliBuf)
     write(temporary(NOTIFY), notifyBuf)
     renames.push([temporary(CLI), path(CLI)], [temporary(NOTIFY), path(NOTIFY)])
-    if (!unjudged()) {
+    if (!judging) {
       for (const name of [CLI, NOTIFY]) {
         if (!existsSync(path(name))) continue
         const backup = `${path(name)}.prev`
@@ -427,7 +448,7 @@ export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: 
     // Before the swap: a process that dies between here and the end leaves an update the next master
     // finds and judges (`unjudgedUpdate`), not a bundle no one knows is new. Written whole or not at
     // all, so a marker it would replace is never lost to a failed write.
-    if (version) writeJson(path(PENDING), { version, sha256: sha256(cliBuf), at: Date.now() })
+    if (version) writeJson(path(PENDING), { version, sha256: sha256(cliBuf), at: Date.now(), ...(node ? { previousNode: node } : {}) })
   } catch (error) {
     for (const file of written) { try { rmSync(file, { force: true }) } catch { /* not this call's to clear */ } }
     throw error
@@ -442,16 +463,19 @@ export function stage(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: 
  * that proved itself, not to one that never did. The note is written before the pointer moves, as on a Mac before the
  * swap; if the pointer cannot be moved, the note goes back to what it was.
  */
-function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version?: string): void {
+function stageVersion(dir: string, cliBuf: Buffer, notifyBuf: Buffer, version: string | undefined, previousNode: string | null): void {
   if (!version) throw new Error('a Windows install stages a build into its own version folder, which needs its version')
   const live = currentCli(dirname(dir))
   const pending = readPending(dir)
   const judged = live !== null && !!pending?.sha256 && pending.sha256 === fileSha256(live.cliJs)
   const previous = judged ? pending!.previous : live?.version ?? null
+  const node = judged ? pending!.previousNode : previousNode
   writeVersionFolder(dir, version, cliBuf, notifyBuf)
   const note = join(dir, PENDING)
   const before = readText(note)
-  writeJson(note, { version, sha256: sha256(cliBuf), at: Date.now(), ...(previous && previous !== version ? { previous } : {}) })
+  writeJson(note, {
+    version, sha256: sha256(cliBuf), at: Date.now(), ...(previous && previous !== version ? { previous } : {}), ...(node ? { previousNode: node } : {}),
+  })
   try {
     switchTo(dir, version)
   } catch (error) {
@@ -476,8 +500,14 @@ function fileSha256(file: string): string | null {
  * and remember the version that failed. Without that, the restored daemon's updater found the same
  * build in the manifest a minute later and staged it again: a release that passed its canary but
  * crashed the daemon restarted every machine once a minute until a fix was published.
+ *
+ * An update that moved the daemon to another Node (`startSelfUpdater`'s `node`) goes back to the Node before it too:
+ * `current-node` names it again, the status says so (`nodeMigration`), and the Node is returned, for the master to
+ * re-execute on (../harnessd/master.ts). Null when the Node stays as it is.
  */
-export function restore(dir: string, platform: NodeJS.Platform = process.platform): void {
+export function restore(dir: string, platform: NodeJS.Platform = process.platform): string | null {
+  // Read before the note goes.
+  const previousNode = readPending(dir)?.previousNode ?? null
   let movedBack = true
   if (platform === 'win32') movedBack = restoreVersion(dir)
   else {
@@ -493,6 +523,25 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
     // judges it again (`unjudgedUpdate`) and rolls it back once more.
     if (movedBack) rmSync(join(dir, PENDING), { force: true })
   } catch { /* the rollback itself is what matters */ }
+  return putNodeBack(dir, previousNode, platform)
+}
+
+/**
+ * `current-node` back on [previous], the Node a rolled-back update moved the daemon off, which what starts the daemon
+ * next reads (the master's re-execution onto the build put back; on Windows, harness-launch.exe). Only a Node inside
+ * the managed runtime, as `managedNodePath` trusts; nothing when it is already the one named.
+ */
+function putNodeBack(dir: string, previous: string | null, platform: NodeJS.Platform): string | null {
+  if (!previous || !previous.startsWith(env.ADAPTER_RUNTIME_DIR + sep) || previous === managedNodePath()) return null
+  try {
+    // As runtimeInstall writes it: the path and the platform's line end, readable by this account alone.
+    writeWhole(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${previous}${platform === 'win32' ? '\r\n' : '\n'}`, 0o600)
+  } catch (error) {
+    console.error(`[harnessd] could not put current-node back on ${previous} (${error instanceof Error ? error.message : String(error)}) — the daemon stays on the Node it names`)
+    return null
+  }
+  recordNodeMigration(dir, 'rolled-back')
+  return previous
 }
 
 /** Windows: `cli\current` back to the build the pending note names. False when the pointer could not be moved there;
@@ -646,6 +695,15 @@ export function startSelfUpdater(opts: {
   /** The protocol of a terminal host payload prepared and waiting to go into this handover first (`beforeStage`), or
    *  null. A build that needs exactly that protocol goes ahead with it, as one pair. */
   readyPtyProtocol?: () => number | null
+  /**
+   * The Node the next daemon runs on, made sure of once per build before its canary (lib/runtimeInstall.ts
+   * `ensureNodeMeetsMinimum`), which then runs on it. The handover after the stage starts the master on it: on macOS
+   * and Linux `startMasterFromBundle` (../masterProcess.ts) re-executes onto `current-node`, on Windows
+   * harness-launch.exe reads it. Why it stayed is recorded (`nodeMigration`), and the build is staged either way.
+   * `running`: the Node this daemon runs on, which the pending note names for a rollback to go back to (`restore`).
+   * Left out, the Node is left as it is.
+   */
+  node?: { ensure(): Promise<{ reason: NodeMigrationReason | null }>; running: string }
 }): Poller {
   let checking = false
   let done = false
@@ -744,6 +802,8 @@ export function startSelfUpdater(opts: {
       }
       if (halted) return
       if (!verified.canaried) {
+        if (opts.node) recordNodeMigration(opts.dir, (await opts.node.ensure()).reason)
+        if (halted) return
         const result = await runCanary(verified.cliBuf, opts.dir, entry.version)
         if (halted) return
         if (!result.ok && result.problem === 'unwritable') {
@@ -785,7 +845,7 @@ export function startSelfUpdater(opts: {
         // read again now, could fail and count as this CLI's protocol. One that went in is the caller's (`withLock`).
         const shortNow = host ? (ready.ptyProtocol > host.protocol ? host.protocol : null) : hostShortOf(ready.ptyProtocol)
         if (shortNow !== null) { waitForHost(ready.version, ready.ptyProtocol, shortNow); return }
-        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform)
+        stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform, opts.node?.running ?? null)
         done = true
         stop()
         console.log(`[update] staged ${ready.version} — restarting now`)

@@ -66,11 +66,15 @@ archives for both ARM64 and x64 (including machines where `uname -m` reports `am
 releasing a desktop build that requires a new Node version:
 
 ```bash
-make upload-node-runtime ARGS="22.23.2"
+DRY_RUN=1 make upload-node-runtime ARGS="24.22.2"   # prints the object paths, uploads nothing
+make upload-node-runtime ARGS="24.22.2"             # staging: harness/staging/runtime/metadata.json
 ```
 
+Publish to staging first, run the E2E against it, and only then publish production with an explicit
+`METADATA_PATH=harness/runtime/metadata.json make upload-node-runtime ARGS="24.22.2"`.
+
 The publisher downloads the official Node archives and `SHASUMS256.txt`, verifies each archive before
-uploading, then atomically merges `harness/runtime/metadata.json`. The app verifies the manifest's
+uploading, then atomically merges the manifest (staging unless `METADATA_PATH` says otherwise). The app verifies the manifest's
 size and SHA-256 again before extracting an archive. A runtime manifest applies to fresh installs;
 roll out a changed runtime to existing users with a newer desktop build. Never replace an existing
 versioned archive in place.
