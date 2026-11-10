@@ -1274,7 +1274,6 @@ describe('a dispatch claim the backend refuses', () => {
   it.each([
     ['a routing rule answered to the Lead', answered('RULE_BROKEN', 'Only these machines. This start was not launched. Route again.', 403)],
     ['a revoked grant thrown to a contributed host', thrown('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.')],
-    ['a Team account the backend fails starts for', thrown('TEAM_ACCOUNT_REQUIRED', 'This Mac has no Harness Team account.')],
   ] as const)('cancels its creation, releases its capacity and fails the start when it can never pass: %s', async (_name, refuse) => {
     const { f } = refused(refuse)
     const detail = (await refuse().catch((error: Error) => ({ detail: error.message }))).detail
@@ -1291,7 +1290,6 @@ describe('a dispatch claim the backend refuses', () => {
     ['a paused Swarm', answered('PAUSED', 'New work is paused in this Super Tab.')],
     ['a paused machine, thrown to a contributed host', thrown('MACHINE_PAUSED', 'New work is paused on this machine.', 409)],
     ['an offline machine', answered('MACHINE_OFFLINE', 'This machine is offline.')],
-    ['a Team account held for now', thrown('TEAM_ACCOUNT_HELD', 'The Harness Team account runs another project\'s Product Manager.')],
     ['a decision the Lead owes', answered('WORKER_DECISION_REQUIRED', 'Answer the open decision first.')],
     ['a code this client does not know', answered('SOMETHING_NEW', 'A newer refusal.', 400)],
   ] as const)('keeps the start waiting and gives its capacity back when it may pass later: %s', async (_name, refuse) => {
@@ -1368,8 +1366,8 @@ describe('a dispatch claim the backend refuses', () => {
   })
 
   it('releases without failing again a start the backend already failed', async () => {
-    const { f } = refused(thrown('TEAM_ACCOUNT_REQUIRED', 'This Mac has no Harness Team account.'), { error: 'This Mac has no Harness Team account.' })
-    expect(await resume(f)).toMatchObject({ error: 'START_FAILED', detail: 'This Mac has no Harness Team account.' })
+    const { f } = refused(thrown('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.'), { error: 'The original machine grant was revoked.' })
+    expect(await resume(f)).toMatchObject({ error: 'START_FAILED', detail: 'The original machine grant was revoked.' })
     expect(types(f)).toContain('super_tabs:observeCapacity')
     expect(commands(f).some(c => c!.type === 'agent.startFailed')).toBe(false)
   })

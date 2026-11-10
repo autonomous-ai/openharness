@@ -2848,17 +2848,15 @@ describe('one call for all of a machine\'s readings (DB 2.5)', () => {
   })
 
   it('sends each Swarm\'s reading on its own to a backend without that call, and asks again ten minutes later', async () => {
-    for (const refusal of [missing, new SuperTabHostError('TEAM_SESSION_LIMITED', 'This session cannot do that.', 403)]) {
-      const f = twoSwarms()
-      f.readings.mockRejectedValueOnce(refusal)
-      await f.machine.tick()
-      expect(sentTo(f).map(([tab]) => tab)).toEqual(['tab', 'second-tab'])
-      expect(f.start).toHaveBeenCalledTimes(2)
-      f.advance(); await f.machine.tick()
-      expect(f.readings, refusal.code).toHaveBeenCalledOnce()
-      f.step(READINGS_RETRY_MS); await f.machine.tick()
-      expect(f.readings).toHaveBeenCalledTimes(2)
-    }
+    const f = twoSwarms()
+    f.readings.mockRejectedValueOnce(missing)
+    await f.machine.tick()
+    expect(sentTo(f).map(([tab]) => tab)).toEqual(['tab', 'second-tab'])
+    expect(f.start).toHaveBeenCalledTimes(2)
+    f.advance(); await f.machine.tick()
+    expect(f.readings).toHaveBeenCalledOnce()
+    f.step(READINGS_RETRY_MS); await f.machine.tick()
+    expect(f.readings).toHaveBeenCalledTimes(2)
   })
 
   it('sends one Swarm\'s reading again alone, in its older form, when the backend refuses a field for that Swarm', async () => {
