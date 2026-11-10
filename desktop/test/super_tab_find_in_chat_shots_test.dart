@@ -54,7 +54,6 @@ Future<SuperTabController> _show(
       home: Scaffold(
         body: SuperTabView(
           controller: c,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Team Mac',

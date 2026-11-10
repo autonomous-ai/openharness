@@ -92,7 +92,6 @@ Future<void> showView(WidgetTester tester, ConversationServer server) async {
       home: Scaffold(
         body: SuperTabView(
           controller: controller,
-          onInvite: () {},
           onAddAgent: (_) {},
           onOpenTerminal: (_) {},
           machineName: (_) => 'Mac',

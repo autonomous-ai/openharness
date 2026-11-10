@@ -127,12 +127,10 @@ void main() {
               builder: (_, _) => SuperTabView(
                 controller: c,
                 app: app,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Mac Studio',
                 github: swarmV4GitHub(),
-                board: true,
               ),
             ),
           ),

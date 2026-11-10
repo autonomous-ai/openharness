@@ -27,7 +27,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             onNewProject: () {},

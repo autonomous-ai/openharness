@@ -7,7 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
@@ -184,11 +184,9 @@ void main() {
                 controller: c,
                 app: app,
                 onNewSwarm: () {},
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Mac Studio',
-                board: true,
               ),
             ),
           ),

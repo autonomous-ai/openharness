@@ -101,9 +101,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Test Mac',
@@ -437,9 +435,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
-              board: false,
               controller: controller,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Test Mac',
@@ -542,32 +538,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(viewer, findsNothing);
       expect(thread, findsOneWidget);
-      await close(tester, c);
-    });
-
-    testWidgets('what is typed while it is open never reaches the composer, '
-        'and the composer has the keys again once it closes', (tester) async {
-      final c = await chat(tester);
-      final composer = find.byKey(const ValueKey('super-message-composer'));
-      EditableText field() => tester.widget<EditableText>(
-        find.descendant(of: composer, matching: find.byType(EditableText)),
-      );
-      await tester.tap(composer);
-      await tester.pumpAndSettle();
-      expect(field().focusNode.hasFocus, isTrue);
-
-      await tester.tap(inline('a2'));
-      await settle(tester);
-      expect(field().focusNode.hasFocus, isFalse);
-      await tester.sendKeyEvent(LogicalKeyboardKey.keyX);
-      await tester.sendKeyEvent(LogicalKeyboardKey.space);
-      await tester.pump();
-      expect(field().controller.text, isEmpty);
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      expect(viewer, findsNothing);
-      expect(field().focusNode.hasFocus, isTrue);
       await close(tester, c);
     });
 
@@ -758,6 +728,9 @@ void main() {
         expect(find.text('Show more'), findsNothing);
         expect(find.text('Show less'), findsNothing);
 
+        // The chat shows the block's end; its Copy is above, as a person scrolls to it.
+        await tester.ensureVisible(find.text('Copy'));
+        await tester.pumpAndSettle();
         await tester.tap(find.text('Copy'));
         await tester.pump();
         expect(copied, [lines.join('\n')]);

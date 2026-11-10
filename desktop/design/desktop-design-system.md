@@ -385,14 +385,16 @@ leaderboard) share four rules.
 
 - **Unread.** Goal: see what changed without a second signal to decode. An
   unread project or group shows its name in bold, with no dot beside it.
-- **Mentions.** Goal: tell "something changed" apart from "someone needs
-  you". A conversation that mentions you is bold and adds an `@N` count of
-  those mentions at its trailing edge, just before the status column.
+- **Asks you.** Goal: tell "something changed" apart from "someone needs
+  you". In Swarm v4 an agent reaches its person only in its own chat: an
+  agent with something new there asks you. Its Your Team row is bold, and the
+  Swarm's tab, the Swarm list, the Dock and the menu bar count those agents
+  (`superTabAgentsAsking`, from read marks). No row carries an `@N`.
 - **Status column.** Goal: compare status down the list at a glance. Status
   marks use the shared activity vocabulary (see the
   [icon design system](icon-design-system.md#deliberate-exceptions)) and sit
   in a fixed trailing column, last on rows that show status (agents,
-  conversations); a mention's `@N` sits just before it. Ranking rows have no
+  conversations). Ranking rows have no
   status mark and keep the points number last. Names and marks keep their
   positions as status changes.
 - **Names.** Goal: recognize teammates the way they know each other. People
@@ -611,8 +613,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted (the browser keeps them, and
-  Notifications, until it moves to v4).
+  archived, so no other way to them is wanted.
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
@@ -758,7 +759,7 @@ Top to bottom:
 
 | Element | Implementation | Rule |
 | --- | --- | --- |
-| Quiet row | `SuperTabQuietRow` (`super_tabs/buddy_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
+| Quiet row | `SuperTabQuietRow` (`super_tabs/quiet_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
 | Agent state | `SwarmAgentStates` (`super_tabs/agent_state.dart`) | An agent's row ends with one state in the row's detail, in this order: `offline` (its machine reports its session gone, `SuperTabAgent.downSince`), `starting` (a message to it waits while its engine starts: its frame's `waitingFor: engine`, which the daemon sends again when it changes and a reconnect reads whole; its 1:1 chat's bar adds `· starting` too, and neither says a failure), `on #12` (its project's board has the open issue labelled `status:taken` and `builder:<its name>`; in a Personal Swarm, whose projects name no repository, the board of the repo its own pane works in), `free` (its latest post in its project's channel says `free: <name>`, as the Swarm's basics ask of an agent with no task); none of them shows nothing. An offline agent's face is grey (`SuperTabAvatar.agent` draws it so, `super-face-offline`) wherever it is drawn: its row, its 1:1 chat's header and its posts. Read only for the projects the person's own agents are in: a channel again when the Swarm says it moved, a board once a minute while the Swarm is on screen. |
@@ -769,7 +770,7 @@ Top to bottom:
 | Org name | `SuperTabQuietHeading.org` | Semibold 13 primary, no icon; its chevron only on hover; opens the Swarm menu. |
 | Person | `SuperTabAvatar.person` at 20 | A photo, or an initial on the neutral grey disc. |
 
-The phone and web layouts keep their own rows.
+The phone keeps its own rows. The browser draws this pane, as the Desktop does.
 
 ## Phone
 

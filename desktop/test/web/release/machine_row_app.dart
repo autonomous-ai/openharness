@@ -65,7 +65,6 @@ Future<void> main() async {
               width: 1000,
               child: SuperTabView(
                 controller: controller,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Studio',
