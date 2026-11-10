@@ -26,7 +26,8 @@ const dir = mkdtempSync(join(tmpdir(), 'probe-node-'))
 }
 
 // harnessd/reexec.ts, masterProcess.ts: process.execve of a missing node binary aborts (134); a missing script is MODULE_NOT_FOUND.
-if (typeof process.execve !== 'function') report('process.execve missing binary', process.platform === 'win32', 'process.execve absent')
+if (process.platform === 'win32') lines.push('skipped process.execve checks (no execve on win32)')
+else if (typeof process.execve !== 'function') report('process.execve missing binary', false, 'process.execve absent')
 else {
   const missingBin = spawnSync(process.execPath, ['-e', `process.execve('${join(dir, 'no-node')}', ['x'], process.env)`], { encoding: 'utf8' })
   report('process.execve missing node binary aborts (134)', missingBin.status === null && missingBin.signal === 'SIGABRT' || missingBin.status === 134,
@@ -57,7 +58,8 @@ else {
   report('held loop: child exit 0 with empty stdout', seen === 'err null, stdout ""', seen)
 }
 
-// kit/windowsFiles.ts: a read-write open of an NTFS file changes ctime even without a write.
+// kit/windowsFiles.ts: a read-write open of an NTFS file changed ctime even without a write on one machine and not on
+// another, so this prints what it measured instead of judging it.
 if (process.platform === 'win32') {
   const file = join(dir, 'a.json'), moved = join(dir, 'b.json')
   writeFileSync(file, '{}')
@@ -66,7 +68,7 @@ if (process.platform === 'win32') {
   await new Promise((r) => setTimeout(r, 50))
   closeSync(openSync(moved, 'r+'))
   const after = statSync(moved).ctimeMs
-  report('NTFS ctime changes on read-write open without write', after !== before, `ctime ${before} -> ${after}`)
+  lines.push(`measured NTFS ctime on read-write open without write: ${before} -> ${after}, ${after !== before ? 'changed' : 'unchanged'}`)
 } else lines.push('skipped NTFS ctime (Windows only)')
 
 // lib/sqliteRead.ts: node:sqlite is there without a flag and takes a busy timeout.
