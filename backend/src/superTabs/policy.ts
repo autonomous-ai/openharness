@@ -6,7 +6,12 @@
  * the server and shown to people. Revision 0 is the seed below, never stored until the first save (policyStore.ts).
  */
 import { z } from 'zod'
-import { personKey } from './instructionsDiff.js'
+
+const HONORIFIC = /^(?:anh|chị|chi|em|cô|chú|bác|mr\.?|mrs\.?|ms\.?|dr\.?)\s+/iu
+/** A name as one person: case, width, spaces, a leading "@", an honorific and a possessive aside ("Dee's daily check" is
+ *  Dee's). */
+const personKey = (name: string): string => name.normalize('NFKC').trim().replace(/^@/, '').replace(HONORIFIC, '')
+  .replace(/['\u2019]s\b.*$/su, '').toLowerCase().replace(/[\s\p{Zs}]+/gu, '')
 
 /** The record as stored, as JSON: small enough that a reader reads every revision kept. */
 export const MAX_RULES_BYTES = 16_384
