@@ -1998,6 +1998,16 @@ export class SuperTabHost {
     }
     const message = object(result.message)
     if (typeof message.text !== 'string' || !identifier(message.conversationId)) throw new Error('The delivery has no message.')
+    // Its pane held it before: the core is asked what holds it now, before anything is read, granted, leased or written, and it
+    // waits while something does. Tried every second, each try wrote and fsynced the journal twice, its intent and then
+    // 'prepared' again (Q3, 2026-11-10). A dialog or a question may be one a person's message answers: only the write may close
+    // it (it presses Escape), so a person's message goes on to the write there.
+    if (claim.refused) {
+      const hold = await this.core.turns.holdOf(entry.harnessId, id)
+      if (this.stopped || this.journal.entries[deliveryId] !== entry || this.active.has(id)) return false
+      const person = object(message.author).kind === 'person' && result.buddyNews !== true
+      if (hold && !(hold === 'team_waiting_user' && person)) { this.reportWithheld(entry, hold); return false }
+    }
     // Downloaded before the lease: a large file must not use up the 2.5 s the core gives a write.
     let files = this.files.get(deliveryId)
     if (files === undefined) {

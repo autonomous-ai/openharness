@@ -820,12 +820,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A read-only view of agents' terminals for an experiment's viewers, told to its process (core/terminalWatch.ts).
   const terminalWatch = createTerminalWatch({ terminals, resolve: (id) => registry.resolve(id), watchers: new Set(Object.keys(EXPERIMENTS)), moveGate,
     tell: (service, viewer, output) => serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'watch', viewer, output } }) ?? false })
+  let holdOfRef: ((agentId: string, deliveryId: string) => Promise<string | null>) | null = null
   const deliveries = createDeliveries({
     submit: (agentId, text, deliveryId) => backendRef?.onMessage?.(agentId, text, deliveryId),
     cancel: (deliveryId) => backendRef?.onCancelOrchestratorMessage?.(deliveryId) ?? false,
     tell: (service, event) => { serviceLinksRef?.notify(service, { type: 'service_event', payload: { kind: 'delivery', event } }, { untilDelivered: true }) },
     // The experiments' turns (the orchestrator's first), and Agent Messages' typed messages (core/api.ts).
     deliverers: new Set(TURN_DELIVERERS),
+    // Built further down: read when a service asks, never now.
+    hold: (agentId, deliveryId) => holdOfRef?.(agentId, deliveryId) ?? Promise.resolve(null),
   })
   // Each live turn's end, for the services in this process and the Swarm's in its own, and what each turn answered
   // (core/turns/ends.ts), all said by the event funnel as the turn goes.
@@ -1410,6 +1413,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
   })
   const input = inputs.input
+  holdOfRef = inputs.holdOf
   // A window that connects while a message waits for its engine reads it off the agent's frame, pushed or listed. A message is
   // sent by an agent's id, or by its session's.
   waitingForRef = (s) => input.waitingFor(s.agentId) ?? input.waitingFor(s.sessionId)

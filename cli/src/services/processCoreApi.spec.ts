@@ -15,6 +15,20 @@ it('grants typed deliveries only in its connected service namespace and refuses 
   expect(await api.turns.leaseDeliveries('worker', {})).toBe(false)
   expect(await processCoreApi('/data', 'worker').turns.leaseDeliveries('worker', {})).toBe(false)
 })
+
+it('asks the core what holds a delivery from its pane, and hears nothing from a core that cannot say', async () => {
+  const ask = vi.fn(async (): Promise<Record<string, unknown>> => ({ hold: 'team_waiting_draft' }))
+  const api = processCoreApi('/data', 'superTabs', { ask })
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBe('team_waiting_draft')
+  expect(ask).toHaveBeenCalledWith('delivery_hold', { agentId: 'agent-1', deliveryId: 'team:service:superTabs:d1' })
+  ask.mockResolvedValueOnce({ hold: null })
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+  ask.mockResolvedValueOnce({ error: 'UNKNOWN_QUERY' })
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+  ask.mockRejectedValueOnce(new Error('Disconnected'))
+  expect(await api.turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+  expect(await processCoreApi('/data', 'superTabs').turns.holdOf('agent-1', 'team:service:superTabs:d1')).toBeNull()
+})
 import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
