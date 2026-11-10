@@ -516,47 +516,14 @@ describe('the model behind each assignment (roadmap, Dec: about 30% of work on c
   })
 })
 
-describe('a group opened from a Buddy\'s proposal (Lead, 2026-10-29: the Buddy earns when it ships)', () => {
-  /** A Buddy of the owner in the project, and its proposal posted in the project chat. */
-  function proposed(f: ReturnType<typeof fixture>) {
-    const buddy = f.add('buddy')
-    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'g' }
-    const proposal: NonNullable<CommandContext['proposal']> = { id: 'm-proposal', conversationId: 'lead',
-      author: { kind: 'agent', id: buddy, name: 'buddy', membershipGeneration: 'g' }, source: { kind: 'buddy-proposal', personId: 'owner', ownerMessageId: 'm-ask' } }
-    return { buddy, proposal }
-  }
-  const createFrom = (f: ReturnType<typeof fixture>, proposal: CommandContext['proposal']) =>
-    f.run(commandSchema.parse({ type: 'conversation.create', title: 'Dark mode', brief: 'Add it.', checks, proposalMessageId: 'm-proposal' }), owner,
-      { proposal }).result.conversationId as string
-
-  it('records the Buddy whose proposal the group comes from', () => {
+// Proposals are gone (2026-11-10): an older CLI's PM still names one when it opens a task, which credits no Buddy and asks nobody.
+describe('a group an older PM opens naming a Buddy\'s proposal', () => {
+  it('opens as any other, for the person who opens it, crediting nobody for the proposal', () => {
     const f = fixture()
     f.at(5_000)
-    const { buddy, proposal } = proposed(f)
-    const id = createFrom(f, proposal)
-    expect(f.group(id).ledger).toEqual({ askedAt: 5_000, proposal: { buddyId: buddy, messageId: 'm-proposal' } })
-  })
-
-  it('is requested by the person the proposal was sent for when a Lead names nobody, and by the one it names otherwise', () => {
-    const f = fixture(), lead = f.asAgent(f.add('lead', 'lead', true))
-    f.invitePeer()
-    const { proposal } = proposed(f)
-    const fromLead = (extra: Record<string, unknown> = {}) => f.run(commandSchema.parse({ type: 'conversation.create', title: 'Dark mode', brief: 'Add it.',
-      checks, proposalMessageId: 'm-proposal', ...extra }), lead, { proposal }).result.conversationId as string
-    expect(f.group(fromLead()).requesterId).toBe('owner')
-    expect(f.group(fromLead({ requesterId: 'peer' })).requesterId).toBe('peer')
-    // A person opening it from someone else's proposal opens it for that someone.
-    const forPeer = { ...proposal, source: { ...proposal.source, personId: 'peer' } }
-    expect(f.group(createFrom(f, forPeer)).requesterId).toBe('peer')
-  })
-
-  it('refuses a link to a message that is not a Buddy\'s proposal in this project\'s chat', () => {
-    const f = fixture()
-    const { proposal } = proposed(f)
-    const lead = f.add('not-buddy')
-    for (const wrong of [undefined, { ...proposal, source: null }, { ...proposal, conversationId: 'elsewhere' },
-      { ...proposal, author: { ...proposal.author, id: lead } }, { ...proposal, author: { ...proposal.author, kind: 'person' as const, id: 'owner' } }]) {
-      expect(() => createFrom(f, wrong), JSON.stringify(wrong)).toThrow(/proposal/i)
-    }
+    const id = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Dark mode', brief: 'Add it.', checks, proposalMessageId: 'm-proposal' }), owner)
+      .result.conversationId as string
+    expect(f.group(id).ledger).toEqual({ askedAt: 5_000 })
+    expect(f.group(id).requesterId).toBe('owner')
   })
 })

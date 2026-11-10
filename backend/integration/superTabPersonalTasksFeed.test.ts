@@ -11,7 +11,7 @@ import { feedIdsOf, markFeedIds } from '../src/superTabs/read/feedIds.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
-// Task #4203: the person's Tasks feed is the history of their own agents' tasks, their requests and their proposals,
+// Task #4203: the person's Tasks feed is the history of their own agents' tasks and their requests,
 // dormant and archived ones too, newest first, paged through one index, and only what they may read.
 let replica: MongoMemoryReplSet, db: PrismaClient
 const owner: AuthUser = { sub: '560000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -52,13 +52,6 @@ async function fixture() {
   const peerAgent = String((await execute({ type: 'agent.add', conversationId: theirs, machineId: 'feed-peer-mac', harnessId: randomUUID(), name: 'Peers', configuration: config, lead: false }, peer)).agentId)
   await execute({ type: 'work.assign', conversationId: theirs, agentId: peerAgent }, owner, pm)
   const asked = await task('Peer asked', peer.sub)
-  // The Board switch is #3819's command; the proposal cards read only its stored value.
-  const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${tab}:head` } })
-  const data = head.data as unknown as { projects: Array<{ boardMode?: true }> }
-  data.projects[0]!.boardMode = true
-  await db.swarmHead.update({ where: { id: head.id }, data: { data: data as never, version: head.version + 1 } })
-  const proposal = String((await execute({ type: 'proposal.create', projectId: 'lead', title: 'Keep drafts', text: 'Keep offline drafts', goal: 'Preserve work',
-    why: 'Reconnect loses drafts', doneWhen: 'Draft returns', evidence: ['Repro'], priority: 'P2' }, peer)).conversationId)
   const ownersOwn = await task('Owner work', owner.sub)
   const ownerAgent = String((await execute({ type: 'agent.add', conversationId: ownersOwn, machineId: 'feed-owner-mac', harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false })).agentId)
   await execute({ type: 'work.assign', conversationId: ownersOwn, agentId: ownerAgent }, owner, pm)
@@ -67,7 +60,7 @@ async function fixture() {
   const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: tab, key: theirs } } })
   await db.swarmGroup.update({ where: { id: row.id }, data: { archived: true, dormant: true,
     data: { ...row.data as object, archived: true, dormant: true } as never } })
-  return { store, tab, execute, now: () => now, theirs, asked, proposal, ownersOwn, secret, peerAgent, ownerAgent }
+  return { store, tab, execute, now: () => now, theirs, asked, ownersOwn, secret, peerAgent, ownerAgent }
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>
@@ -88,11 +81,11 @@ async function copies(f: Fixture, key: string, n: number, newest: number, projec
 const ids = (rows: Array<{ id: string }>) => rows.map(r => r.id)
 
 describe('the person\'s Tasks feed (task #4203)', () => {
-  it('lists my agents\' tasks, archived ones too, my requests and my proposals, never another\'s own work', async () => {
+  it('lists my agents\' tasks, archived ones too, and my requests, never another\'s own work', async () => {
     const f = await fixture()
     const feed = (await new SwarmReads(f.store).firstLoad(peer, f.tab)).personalTasks!
     expect(feed).toMatchObject({ reset: true, removed: [], olderCursor: null })
-    expect(ids(feed.upserts)).toEqual([f.proposal, f.asked, f.theirs])
+    expect(ids(feed.upserts)).toEqual([f.asked, f.theirs])
     expect(feed.upserts.find(r => r.id === f.theirs)).toMatchObject({ status: 'working', agent: { id: f.peerAgent },
       requester: { id: owner.sub } })
   })
@@ -108,7 +101,7 @@ describe('the person\'s Tasks feed (task #4203)', () => {
     expect(second).toMatchObject({ reset: false, removed: [], olderCursor: null })
     const all = [...ids(first.upserts), ...ids(second.upserts)]
     expect(new Set(all).size).toBe(all.length)
-    expect(new Set(all)).toEqual(new Set([f.proposal, f.asked, f.theirs, ...older]))
+    expect(new Set(all)).toEqual(new Set([f.asked, f.theirs, ...older]))
     const at = [...first.upserts, ...second.upserts].map(r => r.at)
     expect(at).toEqual([...at].sort((a, b) => b - a))
   })
@@ -159,7 +152,7 @@ describe('the person\'s Tasks feed (task #4203)', () => {
     const reads = new SwarmReads(f.store)
     let page: Awaited<ReturnType<typeof reads.personalTasks>> | undefined
     const entries = await profiled(db, async () => { page = await reads.personalTasks(peer, f.tab) })
-    expect(ids(page!.upserts)).toEqual([f.proposal, f.asked, f.theirs])
+    expect(ids(page!.upserts)).toEqual([f.asked, f.theirs])
     const feed = plan(readsOf(entries))
     expect(feed.length).toBeLessThanOrEqual(2)
     for (const read of feed) expect(read.returned).toBeLessThanOrEqual(50)

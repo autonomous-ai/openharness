@@ -465,16 +465,6 @@ export function buddyInstructionsProject(state: SuperTabState, actor: Actor, bud
   return project
 }
 
-/** A private conversation's audience: each person a member who reads its project, captured at their generation. */
-export function audienceOf(state: SuperTabState, project: SwarmProject, personIds: string[]): NonNullable<Conversation['audience']> {
-  return { people: [...new Set(personIds)].map(id => {
-    const member = state.people.find(p => p.id === id) ?? fail('INVALID_AUDIENCE', 'List people in this Swarm.', 400)
-    if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
-      fail('INVALID_AUDIENCE', `${member.email} cannot read this project.`, 400)
-    }
-    return { id: member.id, generation: member.generation }
-  }) }
-}
 
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
   // A Swarm-wide Buddy belongs to no project and writes only in its person's chat: its person reads it, and so does it.

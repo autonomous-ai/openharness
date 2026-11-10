@@ -86,30 +86,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       newMemberStarts()
       break
     }
-    case 'proposal.close':
-      head()
-      leadCheck(command.projectId)
-      break
-    case 'proposal.create':
-      head()
-      group(leadGroupOf(command.projectId))
-      break
-    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
-      head()
-      const card = before.conversations.find(c => c.id === command.conversationId)
-      leadCheck(card && groupProject(before, card).id)
-      for (const identity of card?.proposal?.senders ?? []) member(identity.personId)
-      if (command.type === 'proposal.merge') {
-        group(command.intoConversationId)
-        for (const id of card?.proposal?.mergedFrom ?? []) group(id)
-      }
-      break
-    }
-    case 'buddy.propose':
-      head()
-      leadCheck(command.projectId)
-      if (actor.kind === 'agent') member(before.agents.find(a => a.id === actor.agentId)?.buddyOf?.personId)
-      break
     case 'buddy.create':
       // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
       slots(command.machineId)
@@ -165,7 +141,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(leadGroupOf(projectId))
       member(command.requesterId)
       for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
-      if (command.proposalMessageId) head()
       break
     }
     case 'conversation.unlink':

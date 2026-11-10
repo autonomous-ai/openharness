@@ -27,9 +27,6 @@ export function stageTaskApproval(state: SuperTabState, group: Conversation, now
     personId: member.id, generation: member.generation, state: 'proposal', createdAt: now,
   }
 }
-/** A proposal the PM has not accepted or reshaped is not yet a task its person can approve (#4249): Later is undecided too. */
-export const undecidedProposal = (group: Conversation): boolean =>
-  !!group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')
 /** A task whose scope changed goes back to its person: an approval is of the work as it was shown (#4249). */
 export function reopenTaskApproval(group: Conversation): void {
   if (group.taskApproval?.state !== 'approved') return
@@ -59,18 +56,12 @@ export function authorizeTaskApproval(state: SuperTabState, actor: Actor, type: 
 }
 /** Why a leaving person's pending approvals are rejected (commands.ts member.remove). */
 export const REQUESTER_LEFT = 'Its requester left the Swarm.'
-/** Rejects [group]'s approval for [reason], and settles its proposal with it (task #4218): the PM's clock and proposal.decide read
- *  the proposal's own decision, so a rejection that left it open was overdue for good and could still be accepted. */
-export function rejectTaskApproval(group: Conversation, reason: string, by: string, now: number): void {
+/** Rejects [group]'s approval for [reason]. */
+export function rejectTaskApproval(group: Conversation, reason: string, now: number): void {
   const approval = pendingTaskApproval(group)
   approval.state = 'rejected'
   approval.decidedAt = now
   approval.reason = reason
-  const proposal = group.proposal
-  if (proposal && !proposal.decision && !proposal.mergedInto) {
-    proposal.decision = { kind: 'no', reason, at: now, by }
-    delete proposal.overdue
-  }
 }
 export function pendingTaskApproval(group: Conversation): TaskApproval {
   const approval = group.taskApproval

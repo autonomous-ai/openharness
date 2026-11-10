@@ -252,6 +252,14 @@ describe('the retired reads', () => {
       body: { success: false, error: { code: 'REMINDERS_RETIRED', message: 'Reminders are gone. Nothing was set.' } } })
   })
 
+  // Proposals go too (S9): an older Desktop's Tasks view reads a project's.
+  it('answers an older client\'s proposals read with none, with each query it sent, and reads nothing', async () => {
+    for (const url of ['/api/super-tabs/tab-1/proposals?projectId=app', '/api/super-tabs/tab-2/proposals?projectId=lead', '/api/super-tabs/tab-1/proposals']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data: { proposals: [] } } })
+    }
+  })
+
   it('answers an older client\'s decisions read with none, with each query it sent, and reads nothing', async () => {
     for (const url of ['/api/super-tabs/tab-1/decisions?state=open', '/api/super-tabs/tab-1/decisions?state=answered&asAgentId=agent-1',
       '/api/super-tabs/tab-2/decisions?state=settled', '/api/super-tabs/tab-2/decisions']) {
@@ -577,33 +585,3 @@ describe('the machine lines of a change read', () => {
   })
 })
 
-// The Tasks view's Proposals (#2569): one project's open Buddy proposals, read by the store as the project chat's reader.
-describe('a project\'s open proposals', () => {
-  let app: FastifyInstance
-  const calls: unknown[][] = []
-  beforeEach(async () => {
-    calls.length = 0
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    const store = { proposals: async (...args: unknown[]) => { calls.push(args); return { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } } }
-    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-
-  it('answers the store\'s list for the project named, as the signed-in person', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/super-tabs/tab-1/proposals?projectId=app' })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ success: true, data: { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } })
-    expect(calls).toEqual([[expect.objectContaining({ sub: 'u1' }), 'tab-1', 'app']])
-  })
-
-  it('refuses a read that names no project, or anything else', async () => {
-    for (const query of ['', '?projectId=', '?projectId=app&asAgentId=a1']) {
-      const res = await app.inject({ method: 'GET', url: `/api/super-tabs/tab-1/proposals${query}` })
-      expect(res.statusCode, query).toBe(400)
-    }
-    expect(calls).toEqual([])
-  })
-})

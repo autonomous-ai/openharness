@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
-import { canChat, legacyAsks, steers, switched } from './boardRights.js'
+import { canChat, steers, switched } from './boardRights.js'
 import { openTasks } from './dispatch.js'
 import { owedLines } from './inbox.js'
 import { holdOf } from './pulse.js'
@@ -299,7 +299,7 @@ describe('the PM\'s owed asks in a switched project', () => {
     expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/Owed asks/)
 
     f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    // The ask from before the switch stays until its card exists (legacyAsks); a new one is never owed.
+    // The ask from before the switch stays until it is answered; a new one is never owed.
     expect(owedLines(f.state, f.project(), 1000).join('\n')).toMatch(/before this project switched/)
     const before = f.state.conversations.find(c => c.id === f.app.conversationId)!.owed?.length ?? 0
     ask()
@@ -307,23 +307,3 @@ describe('the PM\'s owed asks in a switched project', () => {
   })
 })
 
-describe('switching a project on', () => {
-  it('hands over every message still owed to its PM, oldest first, and keeps each until its card exists', () => {
-    const f = boardFixture()
-    const ask = (text: string, actor: Actor) => f.run({ type: 'message.send', conversationId: f.app.conversationId, text, replyTo: null, recipientIds: [f.pm] }, actor).messageId as string
-    const first = ask('First', member), second = ask('Second', granted)
-    expect(legacyAsks(f.state, f.project())).toEqual([
-      { messageId: first, conversationId: f.app.conversationId, personId: 'd', at: 1000, thread: first },
-      { messageId: second, conversationId: f.app.conversationId, personId: 'c', at: 1000, thread: second },
-    ])
-    f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
-    // No card is made here yet (#3817 makes them): the asks stay, so nothing is dropped.
-    expect(legacyAsks(f.state, f.project()).map(a => a.messageId)).toEqual([first, second])
-    // Readycheck's review: until their cards exist, the PM still sees them, while a message after the switch owes nothing.
-    const owed = owedLines(f.state, f.project(), 1000).join('\n')
-    expect(owed).toContain(first)
-    expect(owed).toContain(second)
-    const after = ask('After the switch', projectOwner)
-    expect(owedLines(f.state, f.project(), 1000).join('\n')).not.toContain(after)
-  })
-})

@@ -8,7 +8,7 @@ import { agentOnly, isLeads, stableId, AGENT_ONLY, type Agent, type Author, type
 import { agentProjectId, canReadGroup, groupProject, isAgentChat } from './projects.js'
 import { SHIP_KIND } from './ship.js'
 
-/** The source buddy.propose gives the proposal it posts (commands.ts). */
+/** The source of a Buddy's proposal, posted until proposals went (2026-11-10). */
 const PROPOSAL_KIND = 'buddy-proposal'
 
 /** [personId]'s Buddy in [group]'s project, when it reads [group] as its person would: never a private conversation, and

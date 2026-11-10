@@ -1,13 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { SEED_SETTLE_MS } from '../src/superTabs/proposals.js'
 import { AGENT_NAMES } from '../src/superTabs/agentNames.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Readable } from 'node:stream'
-import { crc32, deflateSync, inflateSync } from 'node:zlib'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { storeOldLeads } from './oldLeads.test-support.js'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -15,8 +12,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import type { Author, MessageDraft, SuperTabState } from '../src/superTabs/model.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
-import { sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
-import { commandSchema, type Command } from '../src/superTabs/commands.js'
+import type { Command } from '../src/superTabs/commands.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
@@ -138,38 +134,6 @@ describe('a Buddy and the route\'s reads', () => {
   })
 })
 
-/** A complete PNG: one opaque red pixel, its chunks' checksums real, as a screenshot tool writes one. */
-function png(): Buffer {
-  const chunk = (type: string, data: Buffer) => {
-    const body = Buffer.concat([Buffer.from(type, 'latin1'), data])
-    const length = Buffer.alloc(4), sum = Buffer.alloc(4)
-    length.writeUInt32BE(data.length)
-    sum.writeUInt32BE(crc32(body))
-    return Buffer.concat([length, body, sum])
-  }
-  const header = Buffer.alloc(13)
-  header.writeUInt32BE(1, 0)
-  header.writeUInt32BE(1, 4)
-  header.set([8, 6, 0, 0, 0], 8)
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header),
-    chunk('IDAT', deflateSync(Buffer.from([0, 255, 0, 0, 255]))), chunk('IEND', Buffer.alloc(0))])
-}
-
-/** What an image viewer reads from a PNG: its size and its first pixel, after checking every chunk's checksum. */
-function openPng(bytes: Buffer): { width: number; height: number; pixel: number[] } {
-  if (!bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) throw new Error('not a PNG')
-  let at = 8, width = 0, height = 0
-  const data: Buffer[] = []
-  for (;;) {
-    const length = bytes.readUInt32BE(at), type = bytes.toString('latin1', at + 4, at + 8), body = bytes.subarray(at + 8, at + 8 + length)
-    if (crc32(bytes.subarray(at + 4, at + 8 + length)) !== bytes.readUInt32BE(at + 8 + length)) throw new Error(`bad ${type} checksum`)
-    if (type === 'IHDR') { width = body.readUInt32BE(0); height = body.readUInt32BE(4) }
-    if (type === 'IDAT') data.push(body)
-    at += 12 + length
-    if (type === 'IEND') break
-  }
-  return { width, height, pixel: [...inflateSync(Buffer.concat(data)).subarray(1, 5)] }
-}
 
 describe('a person\'s private chat at the store\'s write (security review of #3557)', () => {
   // The command's rows are checked in applyCommand; the store checks every write again, so a notice written off that path with
@@ -235,44 +199,6 @@ describe('a Buddy through the store', () => {
     expect(claimed).toMatchObject({ message: { id: sent, conversationId: chat } })
     await f.store.delivery(peer, f.tab, agentId, waiting.id, { type: 'ack', claimId, receipt: 'r-1', uncertain: false })
     expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: waiting.id } })).toMatchObject({ status: 'delivered', receipt: 'r-1' })
-  })
-
-  it('sends its owner\'s proposal to the PM in the project chat, once per ask', async () => {
-    const f = await swarm()
-    const { chat, agentId } = await buddy(f)
-    const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = () => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
-      priority: 'normal' }, peer, agentId)
-    const sent = await propose()
-    const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: String(sent.result.messageId) } })
-    // Its owner's own words, delivered to the PM, with the goal and scope kept for the PM and no reply from the Buddy (task #2926).
-    expect(row).toMatchObject({ conversationId: 'lead', recipientIds: [f.lead], author: { kind: 'person', id: peer.sub }, text: 'Send it to the PM',
-      source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: ask, goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' } })
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, replyTo: row.id } })).toBe(0)
-    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: row.id, agentId: f.lead } })).toBe(1)
-    const page = await f.store.messages(owner, f.tab, 'lead', {})
-    expect(page.messages.find(m => m.id === row.id)).toMatchObject({ text: 'Send it to the PM' })
-    await expect(propose()).rejects.toThrow('already sent')
-    await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi PM', replyTo: null, recipientIds: [] }, peer, agentId))
-      .rejects.toThrow('A Buddy posts only in its own chat')
-  })
-  // Task #2777: the Tasks view's Proposals read the proposals kept apart, by id, in place of the whole project chat.
-  it('keeps its owner\'s proposal in the project\'s open proposals until the PM answers it in its thread', async () => {
-    const f = await swarm()
-    const { chat, agentId } = await buddy(f)
-    const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const sent = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
-      priority: 'normal' }, peer, agentId)).result.messageId)
-    // Written with the proposal itself, before anything reads it.
-    expect(await db.superTabOpenProposal.findMany({ where: { tabId: f.tab }, select: { id: true, conversationId: true } })).toEqual([{ id: sent, conversationId: 'lead' }])
-    const listed = async () => (await f.store.proposals(owner, f.tab, 'lead')).proposals.map(p => p.messageId)
-    expect(await listed()).toEqual([sent])
-    // Past the seed's half hour, the read takes the kept proposals alone.
-    await db.superTabOpenProposal.update({ where: { id: `seeded:${f.tab}:lead` }, data: { createdAt: new Date(Date.now() - SEED_SETTLE_MS - 1000) } })
-    expect(await listed()).toEqual([sent])
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Taking this as a task', replyTo: sent, recipientIds: [] }, owner, f.lead)
-    expect(await listed()).toEqual([])
-    expect(await db.superTabOpenProposal.count({ where: { id: sent } })).toBe(0)
   })
 
   it('reads its project\'s work as its person: which task owns it, its pull request, its state and what blocks it', async () => {
@@ -380,149 +306,6 @@ describe('a Buddy through the store', () => {
     expect((await reads.dormant(peer, f.tab, { projectId: 'lead' }, agentId)).groups.find(g => g.key === group)?.data).toMatchObject({ archived: true })
   })
 
-  it('carries the files its owner handed it on the proposal, for the PM to open, and no other file', async () => {
-    const f = await swarm()
-    const { chat, agentId } = await buddy(f)
-    const upload = async (name: string, mime: string, bytes: Buffer, conversationId = chat, asBuddy = true) =>
-      (await f.store.upload(peer, f.tab, conversationId, { name, mime, body: Readable.from([bytes]) }, asBuddy ? agentId : undefined)).attachment.id
-    const plan = await upload('plan.md', 'text/markdown', Buffer.from('# Offline sync\n'))
-    const shot = await upload('shot.png', 'image/png', png())
-    // A log its owner sent in their chat, and one they uploaded but never sent.
-    const log = await upload('sync.log', 'text/plain', Buffer.from('conflict at 10:02\n'), chat, false)
-    const sentIn = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Here is the log', replyTo: null, recipientIds: [], attachmentIds: [log] }, peer)).result.messageId)
-    const unsent = await upload('draft.txt', 'text/plain', Buffer.from('not for the PM'), chat, false)
-    const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM with the plan', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = async (attachmentIds: string[], ownerMessageId?: string) => f.execute({ type: 'buddy.propose', conversationId: chat,
-      ownerMessageId: ownerMessageId ?? await ask(), text: 'Send it to the PM with the plan', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
-
-    await expect(propose([plan, unsent])).rejects.toThrow('Upload this file again')
-    await expect(propose([plan, 'a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24), 'd'.repeat(24), 'e'.repeat(24)])).rejects.toThrow('at most 5 files')
-    const sent = await propose([plan, shot, log])
-    const id = String(sent.result.messageId)
-    const read = (await f.store.messages(owner, f.tab, 'lead', {}, f.lead)).messages.find(m => m.id === id)
-    expect(read?.attachments?.map(a => [a.name, a.mime, a.url.startsWith('https://cdn.example.test/super-tabs/')])).toEqual([
-      ['plan.md', 'text/markdown', true], ['shot.png', 'image/png', true], ['sync.log', 'text/plain', true]])
-    expect((await f.store.messages(owner, f.tab, 'lead', {})).messages.find(m => m.id === id)?.attachments).toHaveLength(3)
-    // Each opens from its link as the apps open it: the picture shown in place, the plan and the log as their own text.
-    // And from the signed link each read adds (fileLinks.ts), as apps that know links open it.
-    expect(read!.attachments!.map(a => f.files.open(a.link!)?.length)).toEqual(read!.attachments!.map(a => a.size))
-    const opened = (url: string) => f.files.objects.get(new URL(url).pathname.slice(1))!
-    const [planFile, shotFile, logFile] = read!.attachments!.map(a => opened(a.url))
-    expect(openPng(shotFile!.bytes)).toEqual({ width: 1, height: 1, pixel: [255, 0, 0, 255] })
-    expect(shotFile).toMatchObject({ contentType: 'image/png', contentDisposition: "inline; filename*=UTF-8''shot.png" })
-    expect([planFile!.bytes.toString(), logFile!.bytes.toString()]).toEqual(['# Offline sync\n', 'conflict at 10:02\n'])
-    expect(planFile).toMatchObject({ contentDisposition: "attachment; filename*=UTF-8''plan.md" })
-    // Its own files go with the proposal; its owner's stays with their message too.
-    const rows = await db.superTabAttachment.findMany({ where: { tabId: f.tab, id: { in: [plan, shot, log, unsent] } } })
-    expect(Object.fromEntries(rows.map(r => [r.id, r.usedBy ?? null]))).toEqual({ [plan]: id, [shot]: id, [log]: sentIn, [unsent]: null })
-    // Each goes with one proposal at most: a file it already sent, and its owner's file already proposed, go again only
-    // as new files. Nor does one its owner sent outside their chat.
-    await expect(propose([plan])).rejects.toThrow('Upload this file again')
-    await expect(propose([log])).rejects.toThrow('already went with a proposal')
-    // Two proposals racing for one file of its owner's: one carries it.
-    const again = await upload('again.log', 'text/plain', Buffer.from('conflict at 10:05\n'), chat, false)
-    await f.execute({ type: 'message.send', conversationId: chat, text: 'And this one', replyTo: null, recipientIds: [], attachmentIds: [again] }, peer)
-    const [first, second] = [await ask(), await ask()]
-    const raced = await Promise.allSettled([propose([again], first), propose([again], second)])
-    expect(raced.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: first, goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' } } } })
-      + await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead', source: { equals: { kind: 'buddy-proposal', personId: peer.sub, buddyId: agentId, ownerMessageId: second, goal: 'Offline sync', scope: 'Desktop only', priority: 'normal' } } } })).toBe(1)
-    const elsewhere = await upload('other.txt', 'text/plain', Buffer.from('project chat'), 'lead', false)
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'FYI', replyTo: null, recipientIds: [], attachmentIds: [elsewhere] }, peer)
-    await expect(propose([elsewhere])).rejects.toThrow('Upload this file again')
-    // Nor can it post a file in the project chat any other way.
-    await expect(upload('leak.md', 'text/markdown', Buffer.from('x'), 'lead')).rejects.toThrow('does not participate')
-    const loose = await upload('loose.md', 'text/markdown', Buffer.from('x'))
-    await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: '', replyTo: null, recipientIds: [], attachmentIds: [loose] }, peer, agentId))
-      .rejects.toThrow('Attach this file again')
-  })
-  it('carries a picture it showed its owner in their chat, for the project to open, and no file it did not show them (#4470)', async () => {
-    const f = await swarm()
-    const { chat, agentId, swarmChat, main } = await buddy(f)
-    const upload = async (name: string, bytes: Buffer, conversationId = chat, as: string | null = agentId, user = peer) =>
-      (await f.store.upload(user, f.tab, conversationId, { name, mime: 'image/png', body: Readable.from([bytes]) }, as ?? undefined)).attachment.id
-    const show = async (attachmentIds: string[], conversationId = chat, as = agentId) => String((await f.execute({ type: 'message.send', conversationId,
-      text: 'Here is the mockup', replyTo: null, recipientIds: [], attachmentIds }, peer, as)).result.messageId)
-    const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM with the mockup', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = async (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: await ask(),
-      text: 'Send it to the PM with the mockup', goal: 'New board', scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
-
-    // The picture it drew and showed its owner, on its own message in their chat.
-    const mockup = await upload('mockup.png', png())
-    const shownIn = await show([mockup])
-    // Not one it showed in another chat, even its owner's other Buddy chat, nor one its owner's other Buddy showed there.
-    const elsewhere = await upload('elsewhere.png', png(), swarmChat, main)
-    await show([elsewhere], swarmChat, main)
-    // Nor one another person posted in the project chat.
-    const projects = await upload('project.png', png(), 'lead', null, owner)
-    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Board idea', replyTo: null, recipientIds: [], attachmentIds: [projects] })
-    // Nor one over the 10 MB a proposal file may be, which it could have sent by an upload link.
-    const large = await upload('large.png', png())
-    await db.superTabAttachment.update({ where: { id: large }, data: { size: 10 * 1024 * 1024 + 1 } })
-    await show([large])
-    for (const id of [elsewhere, projects]) await expect(propose([id])).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
-    await expect(propose([large])).rejects.toMatchObject({ code: 'ATTACHMENT_TOO_LARGE', status: 413 })
-    await expect(propose([mockup, 'a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24), 'd'.repeat(24), 'e'.repeat(24)])).rejects.toThrow('at most 5 files')
-
-    const id = String((await propose([mockup])).result.messageId)
-    // The project's members open it on the proposal, its owner's message in the project chat, as the PM does.
-    for (const as of [f.lead, undefined]) {
-      const read = (await f.store.messages(owner, f.tab, 'lead', {}, as)).messages.find(m => m.id === id)
-      expect(read?.attachments?.map(a => [a.name, a.mime])).toEqual([['mockup.png', 'image/png']])
-      expect(openPng(f.files.open(read!.attachments![0]!.link!)!)).toEqual({ width: 1, height: 1, pixel: [255, 0, 0, 255] })
-    }
-    // It stays on the message its owner saw, and goes with one proposal at most.
-    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: mockup } })).toMatchObject({ usedBy: shownIn, proposedBy: id })
-    expect((await f.store.messages(peer, f.tab, chat, { messageId: shownIn }, agentId)).messages[0]?.attachments?.map(a => a.id)).toEqual([mockup])
-    await expect(propose([mockup])).rejects.toThrow('already went with a proposal')
-  })
-  it('persists approved files on a proposal card for the PM to open after the switch', async () => {
-    const f = await swarm()
-    const { chat, agentId } = await buddy(f)
-    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
-    const upload = async (name: string, asBuddy: boolean) =>
-      (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
-    const plan = await upload('plan.txt', true), log = await upload('sync.log', false)
-    await f.execute({ type: 'message.send', conversationId: chat, text: 'Here is my log', replyTo: null, recipientIds: [], attachmentIds: [log] }, peer)
-    const ask = async () => String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send these files to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = async (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat,
-      ownerMessageId: await ask(), text: 'Send these files to the PM', goal: 'Offline sync', scope: 'Desktop only', priority: 'normal',
-      why: 'Drafts disappear', doneWhen: 'Drafts return', evidence: ['Network-off reproduction'], attachmentIds }, peer, agentId)
-    const sent = await propose([plan, log]), cardId = String(sent.result.conversationId)
-    const read = (await f.store.messages(owner, f.tab, cardId, {}, f.lead)).messages.find(m => (m.source as { kind?: string })?.kind === 'proposal-card')!
-    expect(read.attachments?.map(a => a.name)).toEqual(['plan.txt', 'sync.log'])
-    expect(read.attachments!.map(a => f.files.open(a.link!)?.toString())).toEqual(['plan.txt', 'sync.log'])
-    expect(sent.result.messageId).toBe(read.id)
-    const card = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: f.tab, key: cardId } } })
-    expect(card.data).toHaveProperty('proposal.scope', 'Desktop only')
-    expect(await db.superTabAttachment.findUniqueOrThrow({ where: { id: plan } })).toHaveProperty('usedBy', read.id)
-    await expect(propose([plan])).rejects.toThrow('Upload this file again')
-    await expect(propose([log])).rejects.toThrow('already went with a proposal')
-  })
-
-  it('never carries a file the expiry sweep took, its owner\'s or its own (Diego, 10-30)', async () => {
-    const f = await swarm()
-    const { chat, agentId } = await buddy(f)
-    const bucket = { store: f.files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' }
-    const upload = async (name: string, asBuddy: boolean) =>
-      (await f.store.upload(peer, f.tab, chat, { name, mime: 'text/plain', body: Readable.from([Buffer.from(name)]) }, asBuddy ? agentId : undefined)).attachment.id
-    // One its owner uploaded in their chat and never sent, one of its own; the sweep took both a day later, and their files
-    // are not gone yet (the bucket failed), so the rows are still there.
-    const [owners, own] = [await upload('draft.txt', false), await upload('notes.txt', true)]
-    await db.superTabAttachment.updateMany({ where: { id: { in: [owners, own] } }, data: { createdAt: new Date(Date.now() - 25 * 3_600_000) } })
-    const remove = vi.spyOn(f.files, 'delete').mockRejectedValue(new Error('bucket unavailable'))
-    try {
-      await sweepUnsentAttachments(db, bucket, new Date(), { chunk: 10, chunks: 1, pauseMs: 0 })
-    } finally {
-      remove.mockRestore()
-    }
-    const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const propose = (attachmentIds: string[]) => f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync',
-      scope: 'Desktop only', priority: 'normal', attachmentIds }, peer, agentId)
-    await expect(propose([owners])).rejects.toThrow('Upload this file again')
-    await expect(propose([own])).rejects.toThrow('Upload this file again')
-    expect((await db.superTabAttachment.findMany({ where: { id: { in: [owners, own] } } })).map(r => r.proposedBy ?? null)).toEqual([null, null])
-  })
   it('never hears of a machine removed from the Swarm in its change feed, though the PM does (security review 2 of #2115)', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
@@ -799,14 +582,14 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
 // News goes to the person's one Buddy, which posts only in their own chat (spec 3: "News ... goes to the main Buddy"); the
 // Buddy that proposed, in their older project chat, hears none of it.
 describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', () => {
-  /** peer's proposal in the project chat, sent by the Buddy of their older chat there on their ask; [agentId] is their one
-   *  Buddy, which hears the news. */
+  /** peer's proposal in the project chat, as the Buddy of their older chat there posted it until proposals went (2026-11-10): their
+   *  words, with the goal and scope it wrote. [agentId] is their one Buddy, which hears the news. */
   async function proposed() {
     const f = await swarm()
     const { chat, agentId: proposer, main: agentId, swarmChat } = await buddy(f)
-    const ask = String((await f.execute({ type: 'message.send', conversationId: chat, text: 'Send it to the PM', replyTo: null, recipientIds: [] }, peer)).result.messageId)
-    const proposal = String((await f.execute({ type: 'buddy.propose', conversationId: chat, ownerMessageId: ask, text: 'Send it to the PM', goal: 'Offline sync', scope: 'Desktop only',
-      priority: 'normal' }, peer, proposer)).result.messageId)
+    const proposal = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Send it to the PM', replyTo: null, recipientIds: [f.lead] }, peer)).result.messageId)
+    await db.superTabMessage.update({ where: { id: proposal }, data: { source: { kind: 'buddy-proposal', personId: peer.sub, buddyId: proposer, goal: 'Offline sync',
+      scope: 'Desktop only', priority: 'normal' } } })
     const pm = (text: string, extra: { replyTo?: string; mentions?: string[] } = {}) => f.execute({ type: 'message.send', conversationId: 'lead', text,
       replyTo: extra.replyTo ?? null, recipientIds: [], ...extra.mentions ? { mentions: extra.mentions } : {} }, owner, f.lead)
     /** What peer's host is handed for a Buddy from outside its person's Buddy chats, by message. */
@@ -822,7 +605,7 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     const followUp = String((await pm('It goes to a builder next.', { replyTo: answer })).result.messageId)
     const tag = String((await pm('@peer does this cover drafts?', { mentions: [peer.sub] })).result.messageId)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }], requesterId: peer.sub, proposalMessageId: proposal }, owner, f.lead)).result.conversationId)
+      checks: [{ description: 'Edits survive a restart', independent: false }], priority: 'P2', requesterId: peer.sub }, owner, f.lead)).result.conversationId)
     const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
       configuration: config, lead: false })).result.agentId)
     await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
@@ -846,55 +629,6 @@ describe('a Buddy hears how its person\'s requests go, unasked (Diego, 10-29)', 
     expect(shown.deliveries.map(d => d.agentId)).not.toContain(agentId)
     expect((await f.store.messages(owner, f.tab, group, {})).messages.map(m => m.id)).not.toContain(notice.id)
     expect((await f.store.messages(peer, f.tab, group, {}, agentId)).messages.map(m => m.id)).toContain(notice.id)
-  })
-
-  // River, 11-04 (task #2926): a proposal answered before threads, or built without the task's link, is closed by hand.
-  it('leaves the open proposals for good once the PM closes it with a reason, posting nothing', async () => {
-    const { f, proposal } = await proposed()
-    const rows = await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead' } })
-    await f.execute({ type: 'proposal.close', projectId: 'lead', messageId: proposal, reason: 'Built in #2901' }, owner, f.lead)
-    const listed = async () => (await f.store.proposals(owner, f.tab, 'lead')).proposals.map(p => p.messageId)
-    expect(await listed()).not.toContain(proposal)
-    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: 'lead' } })).toBe(rows)
-    // Past the seed's half hour too, and its reason kept with it.
-    await db.superTabOpenProposal.updateMany({ where: { id: `seeded:${f.tab}:lead` }, data: { createdAt: new Date(Date.now() - SEED_SETTLE_MS - 1000) } })
-    expect(await listed()).not.toContain(proposal)
-    const [kept] = await db.superTabOpenProposal.aggregateRaw({ pipeline: [{ $match: { _id: proposal } }] }) as unknown as Array<Record<string, unknown>>
-    expect(kept).toMatchObject({ sequence: -2, closed: { reason: 'Built in #2901', by: f.lead } })
-  })
-
-  it('links the proposal when the PM names its details, the reply it was delivered; a reply of its own stays refused (Scholes, 11-04)', async () => {
-    const { f, proposal, pm } = await proposed()
-    // A proposal posted before task #2926 has its Buddy's first reply holding its details, stored as it was written then.
-    const root = await db.superTabMessage.findUniqueOrThrow({ where: { id: proposal } })
-    const details = await db.superTabMessage.create({ data: { id: randomUUID().replaceAll('-', '').slice(0, 24), tabId: f.tab, conversationId: 'lead',
-      sequence: root.sequence + 10_000, author: { kind: 'agent', id: String((root.source as { buddyId: string }).buddyId), name: 'Buddy' },
-      text: 'Goal: Offline sync\nScope: Desktop only\nPriority: normal', replyTo: proposal, thread: proposal, recipientIds: [f.lead], mentions: [] } })
-    const open = (proposalMessageId: string) => f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId }, owner, f.lead)
-    const answer = String((await pm('Taking this as a task.', { replyTo: proposal })).result.messageId)
-    await expect(open(answer)).rejects.toMatchObject({ code: 'PROPOSAL_UNKNOWN' })
-    const created = await open(details.id)
-    const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === String(created.result.conversationId))!
-    expect(stored.requesterId).toBe(peer.sub)
-    expect(stored.cards?.line).toMatchObject({ messageId: proposal, conversationId: 'lead' })
-    expect((await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: stored.id } })).data).toMatchObject({ ledger: { proposal: { messageId: proposal } } })
-  })
-
-  it('is told of work the PM opens from its proposal without naming anyone: the proposal\'s person is its requester (groups #294, #327)', async () => {
-    const { f, agentId, proposal, heard } = await proposed()
-    const created = await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
-      checks: [{ description: 'Edits survive a restart', independent: false }], proposalMessageId: proposal }, owner, f.lead)
-    const group = String(created.result.conversationId)
-    expect(created.result.requesterUnknown).toBeUndefined()
-    const stored = (await f.store.read(owner, f.tab)).state.conversations.find(c => c.id === group)!
-    expect(stored.requesterId).toBe(peer.sub)
-    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
-      configuration: config, lead: false })).result.agentId)
-    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
-    const notice = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: group, recipientIds: { has: agentId } } })
-    expect(notice.text).toMatch(/^News for your owner: #\d+ "Offline sync", recorded as their request, is assigned and working\.$/)
-    expect(await heard()).toEqual([notice.id])
   })
 
   it('stops hearing once its person stops reading the project: nothing new is sent, and what waits is refused at pickup', async () => {
@@ -1306,38 +1040,5 @@ describe('Buddy input and sleep race (#3824)', () => {
     expect(injected).toBe(true)
     expect((await current(first.main)).asleep).toBeUndefined()
     expect((await f.store.deliveries(peer, f.tab, first.main)).some(d => d.status === 'queued')).toBe(true)
-  })
-})
-
-
-describe('a sleeping proposal sender (#3824)', () => {
-  // A PM question shows on the card alone: no notice in any Buddy chat wakes a Buddy for it (task #4558).
-  it('wakes no Buddy for a PM question on the card, and writes nothing in either Buddy chat', async () => {
-    let now = Date.now()
-    const f = await swarm(() => now)
-    await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
-    const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
-    const approved = await f.execute({ type: 'message.send', conversationId: first.swarmChat, text: 'Preserve drafts', replyTo: null, recipientIds: [] }, peer)
-    const proposal = await f.execute(commandSchema.parse({ type: 'buddy.propose', conversationId: first.swarmChat, projectId: 'lead', ownerMessageId: approved.result.messageId,
-      title: 'Preserve drafts', text: 'Preserve drafts', goal: 'Preserve work', scope: 'Draft storage', priority: 'P2',
-      why: 'Reconnect loses work', doneWhen: 'Draft returns', evidence: ['Offline reproduction'] }), peer, first.main)
-    await f.execute({ type: 'buddy.default', conversationId: second.swarmChat }, peer)
-    const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: { in: agents.map(a => a.id) } }, data: { status: 'answered' } })
-    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
-    now += 3_600_001
-    await f.store.observeMachine(peer, f.tab, 'peer-mac', { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) })
-    const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
-    expect((await current(first.main)).asleep).toBeDefined()
-    expect((await current(second.main)).asleep).toBeDefined()
-    await f.execute(commandSchema.parse({ type: 'proposal.ask', conversationId: proposal.result.conversationId, personId: peer.sub,
-      question: 'How long?', defaultAnswer: 'Seven days', deadline: now + 60_000 }), owner, f.lead)
-    expect((await current(first.main)).asleep).toBeDefined()
-    expect((await current(second.main)).asleep).toBeDefined()
-    for (const [agentId, chat] of [[first.main, first.swarmChat], [second.main, second.swarmChat]] as const) {
-      expect((await f.store.deliveries(peer, f.tab, agentId)).filter(d => d.conversationId === chat)).toEqual([])
-    }
-    const rows = await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: { in: [first.swarmChat, second.swarmChat] } } })
-    expect(rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'proposal-notice')).toEqual([])
   })
 })

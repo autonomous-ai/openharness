@@ -16,10 +16,6 @@ export const PRIORITY_MEANING: Record<TaskPriority, string> = {
 export const DEFAULT_PRIORITY: TaskPriority = 'P2'
 export const PRIORITY_DEFAULTED = 'No priority given: this task is P2. Set P0-P3 with work.priority.'
 
-/** A Buddy proposal's low, normal or high on the same scale. A proposal never reaches P0: only the PM or a person sets that. */
-export function proposalPriority(value: unknown): TaskPriority {
-  return value === 'high' ? 'P1' : value === 'low' ? 'P3' : 'P2'
-}
 
 const LEADING = /^\s*URGENT\b\s*:?\s*/i
 const TRAILING = /\s*\((?:[^()]*,\s*)?(urgent|high)(?:\s+priority)?\)\s*$/i
