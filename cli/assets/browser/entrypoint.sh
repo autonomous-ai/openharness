@@ -62,8 +62,17 @@ BROWSER=$!
 if [ -n "${DEVICE:-}" ]; then ( node /opt/harness-browser/device-inject.mjs > /tmp/device.log 2>&1 & ); fi
 
 # Bash as PID 1 ignores SIGTERM unless trapped: without this, `podman stop` waits its 10 s and kills Chrome before it
-# writes the profile, which can lose the login.
-trap 'kill -TERM "$BROWSER" "$XVNC" 2>/dev/null; wait "$BROWSER"; exit 0' TERM INT
+# writes the profile, which can lose the login. Closed over CDP first, as a person closes it: a Chrome ended by SIGTERM
+# never writes the cookies it keeps in memory for up to 30 s, so a login just made was lost at the stop (measured on
+# the M2 Mac, 2026-11-10: the Cookies file unchanged after SIGTERM, written after Browser.close). Bounded inside
+# podman's 10 s; SIGTERM still ends a browser that did not answer.
+stop_browser() {
+  (cd /opt/harness-browser && timeout 6 node --input-type=module -e "import { chromium } from 'playwright-core'; const browser = await chromium.connectOverCDP('http://127.0.0.1:9222'); await (await browser.newBrowserCDPSession()).send('Browser.close').catch(() => {})") > /dev/null 2>&1
+  kill -TERM "$BROWSER" "$XVNC" 2>/dev/null
+  wait "$BROWSER"
+  exit 0
+}
+trap stop_browser TERM INT
 
 # Ready is CDP answering and VNC accepting, checked for at most 60 s; the service looks for the marker as long.
 for _ in $(seq 1 300); do

@@ -77,6 +77,18 @@ describe('browser assets', () => {
     expect(ready).toBeGreaterThan(file.indexOf('/dev/tcp/127.0.0.1/5900'))
   })
 
+  it('entrypoint\'s stop closes the browser over CDP, as a person closes it, before any signal', () => {
+    const file = onDisk('entrypoint.sh')
+    expect(file).toMatch(/^trap stop_browser TERM INT$/m)
+    const stop = /^stop_browser\(\) \{\n([\s\S]*?)\n\}$/m.exec(file)?.[1] ?? ''
+    const close = stop.indexOf("send('Browser.close')")
+    expect(close, 'Browser.close').toBeGreaterThan(-1)
+    // Bounded, inside podman's 10 s stop (containers.ts STOP_SECONDS), so a browser that does not answer still goes.
+    expect(stop).toMatch(/timeout [1-8] node /)
+    expect(stop.indexOf('kill -TERM "$BROWSER"')).toBeGreaterThan(close)
+    expect(stop).toMatch(/wait "\$BROWSER"/)
+  })
+
   it('entrypoint starts openbox, and waits until it runs, before the browser', () => {
     const file = onDisk('entrypoint.sh')
     // The spike's keys reached no window until the browser's window had X focus, which openbox gives a window it maps.
