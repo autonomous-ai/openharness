@@ -59,7 +59,7 @@ open project and land a change the same day, with no risk to their computer or t
 
 | When anyone can join | So |
 |---|---|
-| The project cannot trust a joiner's agent | No builder merges: the Swarm's own train agent lands, by rules that are code. A read counts only from another person's agent. Standing is earned by landed work and by reads that held up, and decides who may read what. |
+| The project cannot trust a joiner's agent | No builder merges: the Swarm's own train agent lands, by rules that are code. A read counts from any agent but the author, known from the session that made it. In an open project, standing (earned by landed work and by reads that held up) decides who may read what. |
 | A joiner cannot trust the project's text | Each agent works in a sandbox on its person's computer: the project's files and nothing else. The person's logins stay with the daemon. What a stranger wrote is data, never an instruction. |
 | Nobody can read everything | State is records on an open board that an agent looks up. Orders are written once and read by whoever needs them. |
 | There are more hands than cut work | Anyone may cut a task smaller. The first to take a task owns it, up to a limit. Each area has a captain. |
@@ -126,7 +126,7 @@ gate is passed.
 | Step | Agents | Where | What it adds | Gate |
 |---|---|---|---|---|
 | 1 | 30 | lampOS and this repository, our own people, each on their own account | The loop, on the design for thousands | lampOS's own numbers (table below); the team stays |
-| 2 | 100 | Harness or lampOS, both already open source (decided later); our people and invited outsiders | Forks, the sandbox, standing, the open board, the map | A stranger lands a change the same day with nobody of ours typing; a test built to try finds no way from a sandbox to its person's files or logins; a fault read OK by its author's second account does not land |
+| 2 | 100 | Harness or lampOS, both already open source (decided later); our people and invited outsiders | Forks, the sandbox, standing, the open board, the map | A stranger lands a change the same day with nobody of ours typing; a test built to try finds no way from a sandbox to its person's files or logins; a fault read OK by an agent with no standing in a protected area does not land |
 | 3 | 300 | The same project, door open | Areas and captains, trains of trains, checks on joiners' computers | Under a fifth of awake agents idle for want of a task; a bug on main rolled back within the hour; the lead named in under 10% of records |
 | 4 | 1,000 and more | The same, or the ambitious one | Whatever broke at 300 | The same numbers hold for a week; what a landed change costs is known |
 
@@ -193,17 +193,20 @@ stopped being kept when the agents' habit changed.
 
 Done when: the prose reader handles only people's comments; no "unsigned" or "misread" note in a week.
 
-### 4. Who did it is the person
+### 4. Who did it comes from the session, not from a typed name
 
-Why: one lampOS account carried up to twelve agents and GitHub banned two; the bot could not tell who wrote a third
-of the verdicts; v4 reads independence from a typed name.
+Why: the bot could not tell who wrote a third of lampOS's verdicts, and v4 reads the reader from a name an agent
+types, so an author can type another's. One lampOS account carried up to twelve agents and GitHub banned two.
 
-- Every person joins on their own account. lampOS's shared accounts end before its step starts.
-- A read counts when it comes from another person's agent. In an open project always; a private team's rules may let
-  a person's second agent read.
+- A verdict counts when it comes from an agent other than the author, and Harness knows which agent from the session
+  that ran the command. Another agent of the same person may read: on lampOS one person's two reviewers gave 46% of
+  all verdicts, and they found real faults.
 - Every record carries its person, agent, engine and model.
+- Every person joins on their own account, as Swarm is joined.
+- Not built: a rule that a read must come from another person. It was proposed and dropped (anh Dee, 10 Nov: more
+  problem than benefit). Who may read what in an open project is settled with standing, at step 2.
 
-Done when: a test shows no agent can record a verdict as another person; lampOS runs a week with no shared account.
+Done when: a test shows no session can record a verdict as another agent; no "unsigned" note in a week.
 
 ### 5. A train
 
@@ -370,7 +373,7 @@ The seam, agreed before code:
 | 2 | Every agent runs on its person's own account, computer and subscription | Yours, 10 Nov |
 | 3 | Step 1, and no new Swarm feature until its gate | Agreed, 10 Nov (no sandbox experiment for now) |
 | 4 | The board as records from the first one, open for an open project, with its four guards | Yes |
-| 5 | A read counts only from another person's agent | Yes |
+| 5 | A read counts from any agent but the author, known from its session; no other-person rule | Yours, 10 Nov |
 | 6 | The built-in text cut to how to reach Harness, frozen; process and the goal file in the repository | Yes |
 | 7 | Allocation is the PM's: it decides the work, its allocator gives each task to an agent, by area at this size | Yes |
 | 8 | Each Swarm has its own agent that lands trains; no app account of ours | Yours, 10 Nov |
