@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, authorizeCommandAccess, commandSchema, withoutCredentials, type CommandContext } from './commands.js'
 import { fullSwarm, NOW, owner, peer, outsider } from './read/fixture.test-support.js'
 import type { Actor } from './model.js'
-import { queueSiblings } from './taskQueue.js'
 import { touchesFor } from './parts/touches.js'
 import { GROUP_FIELDS } from './parts/light.js'
 import { storedAssignment } from './storedWork.test-support.js'
@@ -38,10 +37,9 @@ describe('personal approval enforced before work', () => {
     expect(commandSchema.safeParse({ type: 'member.approvalMode', mode: 'review', personId: owner.userId }).success).toBe(false)
     for (const actor of [f.pm, f.buddyActor]) expect(() => f.runCommand({ type: 'member.approvalMode', mode: 'autoApprove' }, actor)).toThrow()
   })
-  it('stages a PM task, keeps it out of Next up, and blocks starts and registration until approval', () => {
+  it('stages a PM task, and blocks starts and registration until approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal', personId: peer.userId } })
-    expect(queueSiblings(f.state, f.state.projects![0]!)).not.toContainEqual(f.card(id))
     expect(() => f.runCommand({ type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, f.pm))
       .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))

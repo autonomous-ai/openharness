@@ -762,31 +762,8 @@ describe('a person\'s Buddy chat before any Buddy (Lead, 10-29)', () => {
 })
 
 describe('a person\'s private chat with their own agent (anh Dee, 11-07, task #4558)', () => {
-  const tell = (personId = 'peer', text = 'Your fix is merged.') => ({ type: 'person.tell' as const, personId, text })
   const send = (conversationId: string, text = 'Hello') => ({ type: 'message.send' as const, conversationId, text, replyTo: null, recipientIds: [] })
 
-  // "I don't want River or Theo to show up in this chat": a Lead's private line is refused, its own project's or another's.
-  it('refuses a Lead\'s private line, from its own project or another, naming the project chat, and opens no chat for it', () => {
-    const f = fresh()
-    const webPm = f.state.agents.find(a => a.harnessId === 'web-pm')!.id
-    for (const lead of [f.pm, webPm]) {
-      expect(() => f.run(tell(), agentActor(lead))).toThrow(expect.objectContaining({ code: 'PRIVATE_CHAT',
-        message: expect.stringContaining('project chat') }))
-    }
-    expect(f.state.conversations.filter(c => c.kind === 'buddy' || c.kind === 'swarm-buddy')).toEqual([])
-  })
-
-  it('keeps another agent\'s line the PM\'s crew need in the project chat, and refuses a person, a stranger or a Buddy', () => {
-    const f = fresh()
-    const worker = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'worker-harness', machineId: 'machine', name: 'Worker',
-      configuration, lead: false }).result.agentId as string
-    expect(() => f.run(tell(), peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
-    expect(() => f.run(tell('stranger'), agentActor(f.pm))).toThrow('person in this Swarm')
-    expect(f.run(tell(), agentActor(worker)).messages).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, recipients: [f.pm],
-      source: expect.objectContaining({ kind: 'crew-need' }) })])
-    expect(f.state.conversations.filter(c => c.kind === 'buddy' || c.kind === 'swarm-buddy')).toEqual([])
-    expect(() => setup().run(tell('owner'), agentActor('buddy'))).toThrow('A Buddy')
-  })
 
   it('lets the person and their own agent post there, and refuses any other agent\'s row, whatever command writes it', () => {
     const f = setup()

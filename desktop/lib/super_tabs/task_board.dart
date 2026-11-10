@@ -36,6 +36,8 @@ class SwarmTaskBoard extends StatefulWidget {
     required this.github,
     required this.onOpen,
     required this.onClose,
+    this.onOpenPull,
+    this.pulls = false,
     this.app,
     this.openNumber,
     this.refreshEvery = const Duration(minutes: 1),
@@ -51,6 +53,13 @@ class SwarmTaskBoard extends StatefulWidget {
   /// Opens an issue of the repository (`owner/name`).
   final void Function(String repository, SwarmIssue issue) onOpen;
   final VoidCallback onClose;
+
+  /// Opens a pull request of the repository as its own chat, from Pull requests; null where none opens.
+  final void Function(String repository, int number)? onOpenPull;
+
+  /// It shows the project's open pull requests in three columns ([pullColumnsOf]), not its tasks: what ⑂ opens beside the
+  /// channel, as ▦ opens the tasks (anh Dee, 2026-11-10).
+  final bool pulls;
 
   /// The person's app: a Personal project's repository is known only on their own Desktop ([repositoryOf]).
   final AppNotifier? app;
@@ -83,6 +92,42 @@ class SwarmTaskBoard extends StatefulWidget {
           ? null
           : PersonalProjects.of(app).repositoryOf(controller, project.id),
     );
+  }
+
+  /// The three columns of [pulls], each newest activity first, by who acts next, as lampOS's train bot sorts them each round
+  /// (train-bot.sh `eligible`): To read, no READ-OK on its head yet, so a reader; To fix, a HOLD, a failing check or a
+  /// conflict, or still a draft, so its builder; Merging, read, so Harness merges it, its checks still running or not.
+  static List<(String, List<SwarmPull>)> pullColumnsOf(List<SwarmPull> pulls) {
+    bool toFix(SwarmPull p) => switch (p.status) {
+      SwarmPullStatus.held ||
+      SwarmPullStatus.failing ||
+      SwarmPullStatus.conflict ||
+      SwarmPullStatus.draft => true,
+      _ => false,
+    };
+    return [
+      (
+        'To read',
+        [
+          for (final p in pulls)
+            if (!toFix(p) && !p.readOk) p,
+        ],
+      ),
+      (
+        'To fix',
+        [
+          for (final p in pulls)
+            if (toFix(p)) p,
+        ],
+      ),
+      (
+        'Merging',
+        [
+          for (final p in pulls)
+            if (!toFix(p) && p.readOk) p,
+        ],
+      ),
+    ];
   }
 
   /// The three columns of [issues], each newest activity first: To do, Assigned, On it.
@@ -121,6 +166,13 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
 
   /// The open pull requests by the task each is for, as last read.
   Map<int, SwarmPull>? _pulls;
+
+  /// Every open pull request, newest activity first, those that are no task's included (anh Dee, 2026-11-10: "it has its own
+  /// comments on PRs"): lampOS's builders link almost none to an issue.
+  List<SwarmPull>? _pullList;
+
+  /// Why the pull requests could not be read, while none were read before.
+  String? _pullsError;
   String? _error;
   String? _repository;
 
@@ -170,6 +222,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
     if (old.conversationId != widget.conversationId) {
       _issues = null;
       _pulls = null;
+      _pullList = null;
       _error = null;
       _read();
     }
@@ -199,6 +252,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
       setState(() {
         _issues = kept;
         _pulls = widget.github.keptPulls(repository);
+        _pullList = widget.github.keptPullList(repository);
       });
     }
     // The first hundred show while the rest are read, only where nothing shows yet: a list already shown is whole, and
@@ -227,9 +281,16 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
           team: SwarmPull.teamOf(widget.controller.snapshot, repository),
         );
         if (mounted && repository == _repository) {
-          setState(() => _pulls = pulls);
+          setState(() {
+            _pulls = pulls;
+            _pullList = widget.github.keptPullList(repository);
+            _pullsError = null;
+          });
         }
       } on SwarmGitHubError catch (error) {
+        if (mounted && repository == _repository) {
+          setState(() => _pullsError = error.message);
+        }
         appLog.warn(
           'super-tabs',
           'GitHub pull requests not read: ${error.message}',
@@ -265,7 +326,10 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
             ),
             child: Row(
               children: [
-                Text('Tasks', style: DesktopChrome.text(medium: true)),
+                Text(
+                  widget.pulls ? 'Pull requests' : 'Tasks',
+                  style: DesktopChrome.text(medium: true),
+                ),
                 const Spacer(),
                 if (stale != null) ...[
                   Flexible(
@@ -329,7 +393,15 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
       // Waiting in the shape of its answer: the board's columns of cards.
       return const _BoardSkeleton(key: ValueKey('swarm-tasks-loading'));
     }
-    final columns = SwarmTaskBoard.columnsOf(issues);
+    if (widget.pulls) return _pullsBody(context, repository);
+    return _board([
+      for (final (name, column) in SwarmTaskBoard.columnsOf(issues))
+        (name, [for (final issue in column) _card(context, repository, issue)]),
+    ]);
+  }
+
+  /// [columns] side by side, each its name, its count and its cards, sharing the pane's width down to [columnMinWidth] each.
+  Widget _board(List<(String, List<Widget>)> columns) {
     return LayoutBuilder(
       builder: (context, box) {
         const pad = grid.AppDesktop.groupGap;
@@ -348,13 +420,10 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final (i, (name, column)) in columns.indexed)
+                for (final (i, (name, cards)) in columns.indexed)
                   Padding(
                     padding: EdgeInsets.only(left: i == 0 ? 0 : gap),
-                    child: SizedBox(
-                      width: width,
-                      child: _column(context, repository, name, column),
-                    ),
+                    child: SizedBox(width: width, child: _column(name, cards)),
                   ),
               ],
             ),
@@ -364,12 +433,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
     );
   }
 
-  Widget _column(
-    BuildContext context,
-    String repository,
-    String name,
-    List<SwarmIssue> issues,
-  ) {
+  Widget _column(String name, List<Widget> cards) {
     return Column(
       key: ValueKey('swarm-task-column-$name'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -388,7 +452,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
                 ),
               ),
               const SizedBox(width: 8),
-              Text('${issues.length}', style: DesktopChrome.metadata()),
+              Text('${cards.length}', style: DesktopChrome.metadata()),
             ],
           ),
         ),
@@ -396,12 +460,12 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
         Expanded(
           child: LaidOutListView.builder(
             padding: const EdgeInsets.only(bottom: grid.AppDesktop.groupGap),
-            itemCount: issues.length,
+            itemCount: cards.length,
             itemBuilder: (context, i) => Padding(
               padding: EdgeInsets.only(
                 top: i == 0 ? 0 : grid.AppDesktop.controlGap,
               ),
-              child: _card(context, repository, issues[i]),
+              child: cards[i],
             ),
           ),
         ),
@@ -420,6 +484,96 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard>
       ),
     ),
   );
+
+  /// The open pull requests in their three columns ([SwarmTaskBoard.pullColumnsOf]), each newest activity first.
+  Widget _pullsBody(BuildContext context, String repository) {
+    final pulls = _pullList;
+    if (pulls == null && _pullsError != null) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _line(_pullsError!, key: 'swarm-pulls-error'),
+          const SizedBox(height: 8),
+          AppIconButton(
+            key: const ValueKey('swarm-pulls-retry'),
+            icon: AppIcons.refreshCw,
+            tooltip: 'Try again',
+            onPressed: _read,
+          ),
+        ],
+      );
+    }
+    if (pulls == null) {
+      return const _BoardSkeleton(key: ValueKey('swarm-pulls-loading'));
+    }
+    return _board([
+      for (final (name, column) in SwarmTaskBoard.pullColumnsOf(pulls))
+        (
+          name,
+          [for (final pull in column) _pullCard(context, repository, pull)],
+        ),
+    ]);
+  }
+
+  /// A pull request as a card, as a task's is: its number and where it stands, its title, and its agent, branch and last
+  /// activity. A tap opens its chat.
+  Widget _pullCard(BuildContext context, String repository, SwarmPull pull) {
+    final agent = pull.author;
+    return Material(
+      color: grid.AppPalette.cardBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(SwarmLayout.cardRadius),
+        side: BorderSide(color: DesktopChrome.rim),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: ValueKey('swarm-pull-card-${pull.number}'),
+        onTap: widget.onOpenPull == null
+            ? null
+            : () => widget.onOpenPull!(repository, pull.number),
+        child: Padding(
+          padding: SwarmLayout.cardPadding,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: SwarmLayout.capsuleGap),
+                child: SwarmPullChip(pull: pull),
+              ),
+              Text(
+                pull.title,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: SwarmType.body(context)
+                    .copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  if (agent != null) ...[
+                    swarmAgentFace(widget.controller, agent, size: 18),
+                    const SizedBox(width: 6),
+                  ],
+                  Flexible(
+                    child: Text(
+                      [
+                        pull.branch,
+                        if (pull.updatedAt case final at?)
+                          swarmAgo(at, widget.now()),
+                      ].join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: DesktopChrome.metadata(),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _card(BuildContext context, String repository, SwarmIssue issue) {
     final agent = issue.agent;
