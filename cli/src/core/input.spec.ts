@@ -190,10 +190,14 @@ describe('the session input controller\'s dependencies', () => {
     let at = 0
     const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
     for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
-    const { deps: given } = deps({ shortTurns, answersQuestion: (id) => id === 'team:service:superTabs:person' ? {} : null })
+    const { deps: given } = deps({ shortTurns, personsOwn: (id) => id === 'team:service:superTabs:person' })
     const wired = sessionInputDeps(given, () => lock([]))
     expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:person')).toBeNull()
     expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:agent')).toBe('team_waiting_control')
+    // Its maker asks the same before it writes it again, and hears what the pane holds, never the guard.
+    const { holdOf } = createInput(given)
+    expect(await holdOf('a1', 'team:service:superTabs:person')).toBeNull()
+    expect(await holdOf('a1', 'team:service:superTabs:agent')).toBe('team_waiting_control')
   })
 
   it('asks whether an engine\'s reader is starting, and tells the app a message waits for it', async () => {

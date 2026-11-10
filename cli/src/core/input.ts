@@ -71,6 +71,8 @@ export interface InputDeps {
   /** Whether a delivery is a person's Swarm message, which closes a question open in a Claude pane (core/deliveries.ts), and when
    *  it was written (ms); null for any other. */
   answersQuestion?: (deliveryId: string) => { writtenAt?: number } | null
+  /** Whether a delivery is a person's own words in their agent's 1:1 chat (core/deliveries.ts), which no short-turn hold holds. */
+  personsOwn?: (deliveryId: string) => boolean
   /** The AskUserQuestion the core knows is open for a session, and when it opened (core/questions.ts); none, no Escape. */
   pendingQuestion?: (sessionId: string) => { openedAt: number; text: string } | null
   /** Whether an answer holds the agent's pane (`SessionInputController.acquireControl`): no Escape while it does. */
@@ -186,9 +188,9 @@ function paneHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission'>, sessio
 /** The pane as a typed delivery's write first reads it (`beforeTeamWrite`), and what holds it there. Before the pane is read, an
  *  agent the short-turn guard holds: its Swarm deliveries are asked again every second, but for its person's own message, which is
  *  their input and never held. */
-async function readTeamHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission' | 'readScreen' | 'shortTurns' | 'terminal' | 'answersQuestion'>,
+async function readTeamHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission' | 'readScreen' | 'shortTurns' | 'terminal' | 'personsOwn'>,
   session: RegisteredSession, deliveryId?: string): Promise<{ capture: string | null; screen: ScreenReading | null; hold: string | null }> {
-  if (deps.shortTurns?.holding(session.sessionId) && !(deliveryId && deps.answersQuestion?.(deliveryId))) {
+  if (deps.shortTurns?.holding(session.sessionId) && !(deliveryId && deps.personsOwn?.(deliveryId))) {
     return { capture: null, screen: null, hold: 'team_waiting_control' }
   }
   const capture = await deps.terminal.captureTerminal(session.agentId)
@@ -370,8 +372,9 @@ export function createInput(deps: InputDeps) {
     else input.submit(target, adapted, deliveryId)
   }
   const messageRequest = createMessageRequest((id, content, context, receipt) => submitAgent(id, content, undefined, context, receipt), deps.typed)
-  /** What holds a typed delivery from [id]'s pane now, read as its write reads it (`beforeTeamWrite`, `injectTeam`), with nothing
-   *  typed, pressed or locked: a question a person's message would close is said as it is, since only the write may press Escape. */
+  /** What holds a typed delivery from [id]'s pane now, read as its write reads it (`beforeTeamWrite`, `injectTeam`) but for its
+   *  maker's lease, with nothing typed, pressed or locked: a question a person's message would close is said as it is, since only
+   *  the write may press Escape. */
   const holdOf = async (id: string, deliveryId: string): Promise<string | null> => {
     const session = resolve(id)
     if (!session) return 'team_waiting_unavailable'

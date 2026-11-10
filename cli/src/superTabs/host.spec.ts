@@ -829,21 +829,6 @@ describe('Super Tab native delivery handoff', () => {
     expect(await line({ author: person, text: 'How is it going?', thread: 'message' })).toMatch(/ --answers 'message'$/)
     expect(await line({ author: person, text: 'And the tests?', thread: 'root', replyTo: 'root' })).toMatch(/ --reply-to 'message'$/)
   })
-  // The short-turn guard holds an agent's automatic input, never its person's (core/input.ts readTeamHold): asked what holds a
-  // delivery its pane held once, the core says the guard, and the host goes on to the write for its person's own message alone.
-  it('goes on to the write of its person\'s own message under a short-turn hold, and keeps an agent\'s waiting', async () => {
-    const twice = async (author: Record<string, unknown>) => {
-      const t = setup({ author, text: 'Next one, please.' })
-      vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'p1', email: 'p1@example.com' })
-      vi.mocked(t.core.turns.holdOf).mockResolvedValue('team_waiting_control')
-      const host = t.open()
-      await host.tick(); t.event('rejected', 'team_waiting_control')
-      await host.tick()
-      return vi.mocked(t.core.turns.deliver).mock.calls.length
-    }
-    expect(await twice({ kind: 'person', id: 'p1', name: 'sam@example.com' })).toBe(2)
-    expect(await twice({ kind: 'agent', id: 'agent-2', name: 'Kai' })).toBe(1)
-  })
   it('only the machine\'s own person\'s message may close its question', async () => {
     const signedIn = (t: ReturnType<typeof setup>, accountId: string | null) =>
       vi.mocked(t.core.account.identity).mockResolvedValue(accountId ? { accountId, email: `${accountId}@example.com` } : null)
@@ -4022,12 +4007,14 @@ describe('a person\'s message in an agent\'s own 1:1 chat', () => {
     expect(typed(alone)).toEqual(['Attached files:\n- /drops/1-screen.png (screen.png, 5 B)'])
   })
 
-  it('still closes the question its person\'s message answers, as any person\'s Swarm message does', async () => {
+  // And is its person's own input, which the short-turn guard never holds (core/input.ts readTeamHold): a person's message anywhere
+  // else is not marked so (only the machine's own person's message may close its question, above).
+  it('still closes the question its person\'s message answers, as any person\'s Swarm message does, and is marked their own input', async () => {
     const t = inChat({ createdAt: '2026-11-09T08:00:00.000Z' })
     vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'ken', email: 'ken@example.test' })
     await t.open().tick()
     expect(t.core.turns.deliver).toHaveBeenCalledWith('harness', 'ok, ship it', 'team:service:superTabs:delivery',
-      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z') })
+      { answersQuestion: true, writtenAt: Date.parse('2026-11-09T08:00:00.000Z'), personsOwn: true })
   })
 
   it('is typed again, as typed, when the pane held it, with nothing read for it and one reply owed', async () => {

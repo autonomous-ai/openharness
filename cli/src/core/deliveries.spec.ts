@@ -81,6 +81,24 @@ describe('delivered turns', () => {
     expect(await blind.turns.holdOf('agent-1', id)).toBeNull()
   })
 
+  // A person's own words in their agent's 1:1 chat are their input, which the short-turn guard never holds (core/input.ts
+  // readTeamHold): marked from either process, kept through a write the pane held (its maker asks what holds it before writing it
+  // again), and forgotten once it is written.
+  it('keeps a person\'s own chat message marked through a held write, until it settles', () => {
+    const deliveries = createDeliveries({ submit: vi.fn(), cancel: vi.fn(() => false), tell: vi.fn(), deliverers: new Set(['superTabs']) })
+    deliveries.ready()
+    const mine = 'team:service:superTabs:mine', theirs = 'team:service:superTabs:theirs', inCore = 'team:service:superTabs:core'
+    deliveries.answer('superTabs', 'deliver', { agentId: 'agent-1', text: 'hi', deliveryId: mine, personsOwn: true })
+    deliveries.answer('superTabs', 'deliver', { agentId: 'agent-1', text: 'hi', deliveryId: theirs })
+    deliveries.turns.deliver('agent-1', 'hi', inCore, { personsOwn: true })
+    expect([mine, theirs, inCore].map(deliveries.personsOwn)).toEqual([true, false, true])
+    deliveries.settled({ deliveryId: mine, sessionId: 'agent-1', state: 'rejected', reason: 'team_waiting_control' })
+    expect(deliveries.personsOwn(mine)).toBe(true)
+    deliveries.settled({ deliveryId: mine, sessionId: 'agent-1', state: 'delivered' })
+    deliveries.settled({ deliveryId: inCore, sessionId: 'agent-1', state: 'rejected', reason: 'cancelled' })
+    expect([mine, inCore].map(deliveries.personsOwn)).toEqual([false, false])
+  })
+
   it('writes a delivery from the core\'s own process into the agent, and takes one back at once', () => {
     const { deps, deliveries } = setup({ cancel: vi.fn(() => false) })
     deliveries.turns.deliver('agent-1', 'hello', 'd1')
