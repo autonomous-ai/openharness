@@ -43,10 +43,10 @@ Read it before starting any task. This plan does not repeat its reasons.
   replaced, and an existing machine is never changed.
 - **Names and copy:**
   - Product word: **Browser**.
-  - Pill tooltip: "A sandboxed Chrome the agent drives". Line under the pill: "Needs setup · about 5 min".
+  - Pill tooltip: "A sandboxed Chrome the agent drives". Line under the pill: "Needs setup · about 15 min".
   - Disabled tooltips: "Set up Browser on <machine name> first", "Update Harness on <machine name> first".
   - Setup dialog: title "Set up Browser"; body "Installs Podman on this computer to run the agent's Chrome. Asks for
-    your password once. About 5 minutes, 1.5 GB."; extra line on Windows without WSL 2 "Windows restarts once.";
+    your password once. About 15 minutes, 3 GB."; extra line on Windows without WSL 2 "Windows restarts once.";
     buttons **Cancel**, **Install**.
   - Setup progress lines: "Podman installed", "Starting Podman…", "Building browser", "Starting browser". Restart
     step: "Restart Windows to finish", with **Later** and **Restart**.
@@ -1155,7 +1155,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - `the pill is not offered on the web`: `browserOffered({required bool web, required bool offersBrowser})` is false
     when `web` is true. The form passes `kIsWeb`, so the test needs no browser platform;
   - `ready, stopped, podman_old and podman_memory: the pill works and shows no line`;
-  - `needs_setup on this computer: the pill works and shows "Needs setup · about 5 min"`;
+  - `needs_setup on this computer: the pill works and shows "Needs setup · about 15 min"`;
   - `needs_setup on another computer: disabled with "Set up Browser on Ken Mac first"`;
   - `unsupported: disabled with "Update Harness on Ken Mac first"`;
   - `unavailable: disabled with "Browser isn't available on Ken Mac right now"`;

@@ -191,11 +191,11 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 │  └────────────────────────────────────────────────┘  │
 │                                                      │
 │  ( ☐ Worktree )  ( ☑ Browser )                       │
-│                    Needs setup · about 5 min         │
+│                    Needs setup · about 15 min         │
 │                                         ( Start )    │
 └──────────────────────────────────────────────────────┘
 Tooltip on the pill: "A sandboxed Chrome the agent drives".
-"Needs setup · about 5 min" shows only when this computer has no Podman.
+"Needs setup · about 15 min" shows only when this computer has no Podman.
 
 The agent's machine is another of the person's computers, and it has no Podman:
    ( ☐ Browser )  dimmed, tooltip "Set up Browser on Ken Mac first"
@@ -209,7 +209,7 @@ The agent's machine is another of the person's computers, and it has no Podman:
 │                                              │
 │  Installs Podman on this computer to run     │
 │  the agent's Chrome. Asks for your password  │
-│  once. About 5 minutes, 1.5 GB.              │
+│  once. About 15 minutes, 3 GB.               │
 │  Windows restarts once.     ← only when WSL 2 is missing
 │                                              │
 │                    ( Cancel )  ( Install )   │
@@ -332,6 +332,14 @@ Saving a change that needs it restarts the browser; the login stays.
     not change that machine. The message names what to do, and the person does it in Podman.
 - **The Podman machine** (macOS and Windows, where Podman runs a Linux VM):
   - If the person already has a machine, Harness uses it as it is and changes none of its settings.
+  - **A machine that cannot start** *(measured on the spike's Mac: its files had been deleted by another app, and
+    `podman machine start` failed after 31 s every time)*: Harness does not repair or remove it. Setup creates a
+    machine of its own, named `harness`, sized as in Setup step 2, and uses it from then on through its own connection
+    (`podman --connection harness`). The person's machine and their default connection stay as they were. This is
+    asked for once, in the same Set up Browser dialog, with the line "Podman on this computer won't start. Harness
+    will set up its own." The availability reply for this case is `needs_setup`.
+  - While a machine is stopped, `podman info` fails and reports no memory. The machine's memory is read from
+    `podman machine inspect` (`Resources.Memory`, MiB) instead.
   - If there is none, setup creates one (see Setup).
   - A stopped machine is started by Harness (`podman machine start`) when a browser starts. If it will not start,
     the state is `podman_down`.
@@ -453,7 +461,10 @@ Saving a change that needs it restarts the browser; the login stays.
   - **Ready** means CDP answers `/json/version` and port 5900 accepts a connection. The entrypoint checks both, with
     a bound, then writes a ready marker. When the service starts a browser it looks for the marker once a second for
     at most 60 s. After that nothing polls.
-  - The entrypoint ends with `wait -n` on the browser and Xvnc *(prior art: `:215`)*. The container exits when either
+  - PID 1 traps SIGTERM and stops the browser cleanly, so `podman stop` does not kill it after 10 s and leave
+    "Restore pages?" on the next start *(measured)*.
+  - The entrypoint ends with a plain `wait -n` *(prior art: `:215`)*; with process ids it missed a browser that had
+    already exited *(measured)*. The container exits when either
     exits, including when a person closes the browser's last window. The service then restarts it.
   - Named exit codes: 3 when the profile dir is not writable (`profile_unwritable`), 4 when the proxy cannot be
     used at start (`proxy_failed`). These two go straight to Failed; the service does not restart the container for
@@ -466,14 +477,16 @@ Saving a change that needs it restarts the browser; the login stays.
 - **No published ports** *(call)*: the container publishes nothing on the host. The daemon reaches VNC, and the
   agent's relay reaches the tool server, only through `podman exec`.
 - **Network** *(call)*: one bridge network per running container, so one browser cannot reach another container.
-  - The network is created when the browser starts and removed when it stops. Podman's default pool holds about 256
-    networks, and stopped browsers must not use them up.
+  - The network is created when the browser starts and removed when it stops, so stopped browsers hold none. (The
+    spike made 300 networks on one Podman with no error, so the count is not a limit at 8 browsers.)
   - A page can reach the host's address. This is accepted and stated. The daemon's loopback socket refuses any
     request that carries an `Origin` (`cli/src/localWsServer.ts:343-353`).
   - The browser can reach the internet and the local network, as any browser on that network can. Also accepted.
 - **Hardening** *(call)*: `--cap-drop ALL --security-opt no-new-privileges --read-only`. No host folder is mounted.
-  - tmpfs mounts, each with a size, all counted inside the memory cap: `/tmp` 256 MB, the user's `HOME` 256 MB,
-    `/var/tmp` and `/run` 16 MB each.
+  - tmpfs mounts, each with a size, all counted inside the memory cap: `/tmp` 256 MB, the user's `HOME` 256 MB with
+    `mode=1777` (without it the browser crashes at start, *measured*), `/var/tmp` and `/run` 16 MB each.
+  - A replaced proxy secret reaches only a newly created container, never a restarted one *(measured)*. Stopping a
+    browser removes its container (the volume stays), so every start creates it again and gets the current secret.
 - **Limits** *(call)*: `--memory 2g --cpus 2 --pids-limit 512 --shm-size 1g`.
   - *(prior art: `docker.ts:736-800`)* If Podman refuses a limit (rootless on cgroup v1, or a rootless machine the
     person already had on WSL), the container is created again without that limit. A warning is logged and
@@ -683,6 +696,11 @@ Saving a change that needs it restarts the browser; the login stays.
      Linux, Ctrl+V becomes a paste.
    - **Paste** sets the remote clipboard over the UTF-8 extended clipboard, then sends Ctrl+V. **Copy** brings the
      remote selection back.
+   - **Typing outside the keyboard map** *(measured)*: single Vietnamese letters and emoji arrive exactly, but a long
+     run with many different such characters can have some swapped, because Xvnc maps them onto a few spare key codes.
+     Long text in another script goes through Paste.
+   - **Focus** *(measured)*: keys reach nothing until the browser window has X focus. openbox gives a new window focus;
+     the entrypoint starts openbox before the browser and waits for it.
 2. **The bridge**: noVNC's `RFB` takes a channel object instead of a URL. The page gives it one that passes raw RFB
    bytes to Dart through the webview's JavaScript channel (`addJavaScriptChannel` / `runJavaScript`). The bridge's
    cost is not known yet; see The spike.
@@ -758,7 +776,11 @@ Saving a change that needs it restarts the browser; the login stays.
      `podman exec -i harness-browser-<agentId> socat STDIO TCP:127.0.0.1:5900`: one exec per open viewer, at most 4
      per browser.
    - The stream exists only while a panel is open. Closing the panel, or losing the connection, ends the exec.
-   - The page asks for Tight encoding at quality 6 and compression 2.
+   - The page asks for Tight encoding at quality 6 and compression 2. The spike measured what that costs while a page
+    scrolls without stopping (Wikipedia, 201 images): about 2.6 MB/s at 1920x1080, 1.0-1.2 MB/s at 1280x720, 350 KB/s
+    at 1280x720 capped at 10 frames a second, 200 KB/s capped at 5; 1-9 KB/s at rest. Text stayed sharp in all of
+    them. The relay's terminal budget is about 140 KB/s per stream, so the stream design (quality, frame cap and the
+    relay budget per route) is redone with these numbers before Phase 3 is built.
 
 ### The spike (before anything else is built)
 
@@ -790,7 +812,7 @@ design changes first and this spec is revised.
   - a **Browser** pill next to Worktree, with the tooltip "A sandboxed Chrome the agent drives";
   - when the form targets a machine, it asks that machine's daemon `agent_browser_available`;
   - `ready`, `stopped`, `podman_old` or `podman_memory`: the pill works;
-  - `needs_setup` and the machine is this computer: the pill works, the line "Needs setup · about 5 min" shows under
+  - `needs_setup` and the machine is this computer: the pill works, the line "Needs setup · about 15 min" shows under
     it, and **Start** opens the Set up Browser dialog;
   - `needs_setup` on another computer: the pill is disabled, with the tooltip "Set up Browser on <machine name>
     first";
