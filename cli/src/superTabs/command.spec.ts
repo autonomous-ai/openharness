@@ -76,7 +76,8 @@ it('refuses a post or an answer of more than 32,000 characters with the length, 
   // From the command: the agent is told in the line it reads, and the daemon is never asked.
   const print = vi.fn(), request = vi.fn(), open = vi.fn(async () => ({ request, close: vi.fn(), machineId: 'machine' }))
   expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-4'], { where: () => where, pane: undefined, open: open as never, print, stdin: () => 'y'.repeat(3_000_000), terminal: () => false })).toBe(1)
-  expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'This post is 3,000,000 characters, and a post takes at most 32,000: nothing was posted. Say it shorter, or put the rest in a file or a pull request and post its link.', operationId: 'op-4' })
+  // Named, as other refusals are, with the words in its detail.
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toEqual({ error: 'POST_TOO_LONG', detail: 'This post is 3,000,000 characters, and a post takes at most 32,000: nothing was posted. Say it shorter, or put the rest in a file or a pull request and post its link.', operationId: 'op-4' })
   expect(open).not.toHaveBeenCalled()
 })
 // An interrupted post is repeated with the same id and the same stdin; stdin is read before anything is sent, so the repeat
