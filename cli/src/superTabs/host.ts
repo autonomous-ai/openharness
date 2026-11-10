@@ -1246,9 +1246,9 @@ export class SuperTabHost {
     // launch carries. One its person attached (Desktop's Attach) was started outside the Swarm, without them, until its first
     // restart gives it its role (inCore/adoption.ts); one the Swarm started before they last changed has the old ones, and
     // keeps them as long as it runs (anh Dee's team moved to Swarm v4 on 2026-11-10 with agents started days before).
-    // Either is told the current basics once, as only it reads, in its own
-    // chat. The operation id names the text, so a restart or a second daemon never tells it twice. A plain shell is no
-    // agent.
+    // Either is told the current basics once, as only it reads, in its own chat. The operation id names the basics' version,
+    // so a restart or a second daemon never tells it twice: the Swarm keeps one request under it, and refuses another
+    // (OPERATION_REUSED, which tellSkill takes as told). A plain shell is no agent.
     if (!session || (session.engine !== 'claude' && session.engine !== 'codex') || this.now() < due) return
     this.skillChecks.set(target.agent.harnessId, Infinity)
     const { text: basics, version } = swarmBasics(target.lead === true)

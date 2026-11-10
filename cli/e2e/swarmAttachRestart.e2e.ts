@@ -109,15 +109,12 @@ it.each(['claude', 'codex'])('an attached %s agent is told the basics once, and 
   await until('it to run again', async () => (await c.request('agents_list', {})).agents
     ?.some((row: Record<string, any>) => row.id === harnessId && row.sessionId && row.status === 'active') || null, 90_000)
 
-  // Nothing more told, by this daemon or the next one, which no longer remembers telling it: its launch carries the basics.
-  const quiet = async () => {
-    const reads = rosterReads
-    await until('two more roster reads', () => rosterReads >= reads + 2 || null, 60_000, 100)
-    expect(notices).toHaveLength(1)
-  }
-  await quiet()
+  // Nothing more told by the next daemon, which no longer remembers telling it: the Swarm took one notice. Three roster reads
+  // leave a whole poll after the one that set its check off.
   c.close(); await d.restart()
   client = await LocalClient.connect(d, { machineId: ME.machineId })
   expect(await client.request('super_tabs', { action: 'wake' })).toMatchObject({ ok: true })
-  await quiet()
+  const reads = rosterReads
+  await until('three more roster reads', () => rosterReads >= reads + 3 || null, 90_000, 100)
+  expect(notices).toHaveLength(1)
 }, 600_000)
