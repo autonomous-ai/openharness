@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { guestHelperStatus, installGuestHelper } from './guestHelperInstall.js'
 import { WINDOWS_GUEST_SETUP_VERSION } from './windows/guestRequests.js'
-import type { RunAdmin } from '../team/admin.js'
+import type { RunAdmin } from './windows/elevated.js'
 
 const SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
 const whoami = async () => ({ code: 0, stdout: `"HOST\\\\owner","${SID}"\n`, stderr: '' })

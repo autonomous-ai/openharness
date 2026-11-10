@@ -701,54 +701,22 @@ describe('GitHub App tokens through the service', () => {
     expect(call.mock.calls.length).toBe(calls)
   })
 
-  it('runs a team daemon\'s Swarm host from its first connection, and a person\'s only once it hosts Swarm work', () => {
-    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) }
-    const started = (team: boolean) => {
-      const start = vi.fn()
-      const service = superTabService(fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'team-wake-')) }),
-        { ...quiet, team: () => team, host: () => ({ machineId: 'machine-1', start, stop: vi.fn() }) as unknown as SuperTabHost })
-      service.port.connected()
-      return start.mock.calls.length
-    }
-    // Added to a Swarm by its Mac's daemon, which does not wake it: without its host it reported no privacy check (third VM run).
-    expect(started(true)).toBe(1)
-    expect(started(false)).toBe(0)
+  it('runs a person\'s Swarm host only once it hosts Swarm work', () => {
+    const start = vi.fn()
+    const service = superTabService(fakeCore({ dataDir: mkdtempSync(join(tmpdir(), 'host-wake-')) }),
+      { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }), host: () => ({ machineId: 'machine-1', start, stop: vi.fn() }) as unknown as SuperTabHost })
+    service.port.connected()
+    expect(start).not.toHaveBeenCalled()
   })
 
   it('keeps the tokens fresh while connected, and stops with the service', () => {
     const tokens = { start: vi.fn(), stop: vi.fn() }
-    const engines = { start: vi.fn(), stop: vi.fn() }
-    const service = superTabService(fakeCore(), { githubTokens: () => tokens, teamEngines: () => engines })
+    const service = superTabService(fakeCore(), { githubTokens: () => tokens })
     service.port.connected()
     expect(tokens.start).toHaveBeenCalledTimes(1)
-    // And, in a Harness Team account, reports its own engines to its owner (team/engines.ts).
-    expect(engines.start).toHaveBeenCalledTimes(1)
     service.port.disconnected()
     service.port.stop()
     expect(tokens.stop).toHaveBeenCalledTimes(2)
-    expect(engines.stop).toHaveBeenCalledTimes(2)
-  })
-})
-
-describe('the Harness Team account\'s own tmux', () => {
-  it('is looked at as the service connects, and not again once there or installed; a failure again later', async () => {
-    const quiet = { githubTokens: () => ({ start: vi.fn(), stop: vi.fn() }) as never, teamEngines: () => ({ start: vi.fn(), stop: vi.fn() }) as never }
-    const installed = vi.fn(async () => 'installed' as const)
-    const service = superTabService(fakeCore(), { ...quiet, teamTmux: installed })
-    service.port.connected()
-    await Promise.resolve()
-    service.port.connected()
-    expect(installed).toHaveBeenCalledOnce()
-    const failed = vi.fn(async () => 'failed' as const)
-    const retried = superTabService(fakeCore(), { ...quiet, teamTmux: failed })
-    retried.port.connected()
-    await Promise.resolve()
-    retried.port.connected()
-    expect(failed).toHaveBeenCalledOnce()
-    vi.useFakeTimers({ now: Date.now() + 31 * 60_000 })
-    retried.port.connected()
-    vi.useRealTimers()
-    expect(failed).toHaveBeenCalledTimes(2)
   })
 })
 

@@ -1,7 +1,7 @@
 /**
  * The Windows side of guest sharing's one-time install (lib/guestHelperInstall.ts): the guest tree, the SYSTEM
- * setup task and the version file, all behind one UAC prompt through the proven Team admin runner. Loading this
- * module is what pulls the PowerShell script builders (and their Team imports) in, so lib/guestHelperInstall.ts
+ * setup task and the version file, all behind one UAC prompt (./elevated.ts). Loading this module is what pulls the
+ * PowerShell script builders in, so lib/guestHelperInstall.ts
  * imports it only when the platform is Windows: the edge host's other services must not carry that code (and
  * its zod) in the process they share (src/leanEntry.spec.ts).
  */
@@ -10,11 +10,11 @@ import { dirname } from 'node:path'
 import { ptyHostBinary } from '../ptyHost/launch.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { runGuestCommand, type GuestRunner } from '../guestAccounts.js'
-import { WHOAMI_USER_ARGS, windowsUserSid } from '../../team/windowsTeam.js'
+import { WHOAMI_USER_ARGS, windowsUserSid } from './whoami.js'
 import { WINDOWS_GUEST_SETUP_VERSION, WINDOWS_GUEST_VERSION_FILE, buildWindowsGuestInstallScript,
   buildWindowsGuestProcessorScript } from './guestScript.js'
 import { WINDOWS_GUEST_TASK } from './guestSetupClient.js'
-import type { RunAdmin } from '../../team/admin.js'
+import type { RunAdmin } from './elevated.js'
 import type { GuestHelperInstallOptions, GuestHelperInstallResult, GuestHelperStatus, GuestHelperStatusDeps } from '../guestHelperInstall.js'
 
 /** The Windows one-time install: the proven UAC runner, the guest tree/task, one prompt. */
@@ -35,10 +35,10 @@ export async function installWindowsGuestHelper(options: GuestHelperInstallOptio
   const processor = buildWindowsGuestProcessorScript({ owner, ownerHome, ownerSid, version: String(WINDOWS_GUEST_SETUP_VERSION) })
   const script = buildWindowsGuestInstallScript({ owner, ownerHome, ownerSid, processor, version: String(WINDOWS_GUEST_SETUP_VERSION),
     ptySrc: ptyHostBinary(), nodeSrc: dirname(managedNodePath()) })
-  const admin: RunAdmin = options.admin ?? (await import('../../team/admin.js')).adminRunner({ platform: 'win32', runner })
+  const admin: RunAdmin = options.admin ?? (await import('./elevated.js')).windowsAdminRunner({ runner })
   const result = await admin(() => ({ script }), prompt)
   if (result.ok) return { ok: true }
-  return { ok: false, code: result.code === 'NO_PROMPT' ? 'FAILED' : result.code, message: result.message }
+  return { ok: false, code: result.code, message: result.message }
 }
 
 /** Whether sharing is on here: the version file this CLI writes, and the setup task registered to run it. */

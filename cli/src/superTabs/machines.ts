@@ -24,8 +24,6 @@ import { git, sweepOne, WorktreeKept } from '../lib/worktreeSweep.js'
 import { projectsRoot } from '../lib/projectFolder.js'
 import { agentFolderEmpty, removableAgentFolder } from './agentFolder.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
-import { teamPrivacyObserver } from '../team/observer.js'
-import type { PrivacyObservation } from '../team/privacy.js'
 import { cleanupClosed } from './cleanupCloses.js'
 import { repositoryKey } from './repositoryKey.js'
 import { listClaudeProfiles, codexReportLabel, profileId } from '../lib/claudeProfiles.js'
@@ -39,8 +37,7 @@ const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
 // include tools from pending starts. An uncommon tool first named by a start remains unverified and is refused.
 const COMMON_TOOLS = ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3']
 const VERIFIED_TOOL_TTL_MS = 10 * 60_000
-/** After a backend refuses a new field (privacy, from before the Harness Team account; harnessProgress, from before
- *  task leases), how long the reading goes without it before the field is offered again: a backend deployed meanwhile
+/** After a backend refuses a new field (harnessProgress, from before task leases), how long the reading goes without it before the field is offered again: a backend deployed meanwhile
  *  is heard from within this long. */
 const UNVERIFIED_TOOL_TTL_MS = 60_000
 /** How long a session's folder stands as clean or not before git is asked again: a minute bounds the work to one
@@ -146,8 +143,6 @@ export interface MachineDeps {
   prepare?: (core: CoreApi, row: Record<string, unknown>, start: Record<string, unknown>) => Promise<{ requester: string } | null | void>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`): it has no git login of its own. */
   team?: () => boolean
-  /** The Harness Team account's privacy check (team/privacy.ts): null for the owner's own daemon. */
-  privacy?: () => PrivacyObservation | null
   /** What says this machine's Swarm models changed, read every pass without asking the daemon ([localModelsStamp]). */
   modelsStamp?: () => Promise<string>
   /** The machine's host form and Swarm reads, shared with its host (superTabs/host.ts). */
@@ -281,8 +276,6 @@ export class ContributedMachines {
   private readonly removals = new Map<string, Promise<void>>()
   /** Until when this machine sends one reading per Swarm, its backend having no route for all of them in one call. */
   private readingsRefusedUntil = 0
-  /** Until when the reading leaves out its privacy field, which the backend refused. */
-  private privacyRefusedUntil = 0
   /** Until when this machine's cores are left out of its resources: a backend before them refused them (sendAlone). */
   private coresRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
@@ -370,8 +363,7 @@ export class ContributedMachines {
     for (const engine of ['claude', 'codex'] as const) {
       if (!engines.includes(engine)) continue
       const defaultLeft = allowanceLeft(allowances.find(a => a.engine === engine)?.windows ?? [])
-      // A Team user's other folders are not offered: a switch there takes the default account only (leadSwitchRequest.ts).
-      const listed = [{ id: profileId(this.machineId, engine, 'default'), label: 'Default', read: 'default' }, ...((this.deps.team ?? (() => readAuthSession()?.kind === 'team'))() ? [] : accounts[engine]().map(a => ({ ...a, read: a.id })))]
+      const listed = [{ id: profileId(this.machineId, engine, 'default'), label: 'Default', read: 'default' }, ...accounts[engine]().map(a => ({ ...a, read: a.id }))]
         .filter(({ id, label }) => /^[0-9a-f]{16}$/.test(id) && label.length > 0 && label.length <= 40 && !label.includes('@')).slice(0, MAX_PROFILES_PER_ENGINE)
       for (const { id, label, read } of listed) {
         const { left, resetsAt } = read === 'default' ? defaultLeft : await this.profileAllowance(local, engine, read)
@@ -408,13 +400,6 @@ export class ContributedMachines {
         .finally(() => this.checkoutReading.delete(root))
     }
     return read?.value ?? null
-  }
-  /** This pass's privacy reading, read once a pass (the check itself runs at most every five minutes). */
-  private privacy(): PrivacyObservation | null {
-    try { return (this.deps.privacy ?? teamPrivacyObserver)() } catch (error) {
-      // A check that could not run is not a pass: a team account reports it unchecked, never private.
-      return { mode: 'account', passed: false, item: 'unchecked', detail: `The privacy check did not run: ${error instanceof Error ? error.message : String(error)}`, checkedAt: this.deps.now() }
-    }
   }
   /** The grids this machine reads, at most once a minute: every Swarm's reading shares it. */
   private gridModelsRead: { at: number; answer: unknown } | null = null
@@ -570,7 +555,6 @@ export class ContributedMachines {
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
-    const privacy = this.privacy()
     // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
     // machine's panel waited up to 15 s more for it (2026-10-26). Files only, so a pass with nothing new asks nobody.
     const modelsStamp = pools.some(row => typeof row.localGrid === 'string')
@@ -631,8 +615,6 @@ export class ContributedMachines {
         })])].slice(0, 20)
         const signature = JSON.stringify([row.reservations, pool.generation, [...running].sort(), [...stopped].sort(), [...closed].sort(), row.paused === true || pool.paused === true,
           pending.map(start => start.id).sort(), [...preparing].sort(), refusedStarts.map(r => r.startId).sort(),
-          // A privacy result that changes (a home folder opened again) is sent at once, not on the next beat.
-          privacy ? [privacy.mode, 'passed' in privacy ? privacy.passed : null, 'item' in privacy ? privacy.item : null] : null,
           row.buddySleepWanted === true,
           typeof row.localGrid === 'string' ? modelsStamp : null])
         const last = this.published.get(String(row.tabId))
@@ -716,7 +698,6 @@ export class ContributedMachines {
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),
-          ...(privacy && began >= this.privacyRefusedUntil ? { privacy } : {}),
           ...(refusedModels.length ? { refusedModels } : {}),
           ...(Object.keys(toolProbeErrors).length ? { toolProbeErrors } : {}),
           // Its logical cores, which the PM's Harness plans this machine's work against (assign/crew.ts).
@@ -781,14 +762,6 @@ export class ContributedMachines {
                 input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
             }
             try {
-              // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
-              // here as well as by the server, and never moved to the owner's account instead.
-              if (privacy?.mode === 'account' && !privacy.passed && !start.dispatched) {
-                await scoped({ action: 'command', operationId: `privacy-failed-${start.id}`,
-                  command: { type: 'agent.startFailed', startId: start.id,
-                    error: `This computer's Harness Team account is not private (${privacy.item}): ${privacy.detail}` } })
-                continue
-              }
               // Another person's project is cloned and fetched with the Harness GitHub App's token, never this machine's own
               // git login; a token that cannot be had fails the start (superTabs/projectFolder.ts).
               let github: { requester: string } | null = null
@@ -980,9 +953,9 @@ export class ContributedMachines {
 
   /**
    * One Swarm's reading through its own route, newest form first. Older backends reject the additive fields. The newest go
-   * alone first (the starts the backend refused, the starts it is preparing, uncommitted work, readiness, progress, then
-   * privacy): a backend that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an unverified tool, and a
-   * reading without privacy is never one a Team machine passes on. [refused]: the batch already refused the newest form.
+   * alone first (the starts the backend refused, the starts it is preparing, uncommitted work, readiness, then progress): a
+   * backend that takes everything else keeps the local models it reads. Their boolean-only view still safely refuses an
+   * unverified tool. [refused]: the batch already refused the newest form.
    */
   private async sendAlone({ tab, observation, localModels }: Reading, began: number, refused?: SuperTabHostError): Promise<void> {
     const path = `/api/super-tabs/${tab}/machines/${this.machineId}`
@@ -996,15 +969,14 @@ export class ContributedMachines {
     const { harnessUncommitted: _uncommitted, ...known } = unprepared
     const { readiness: _readiness, ...ready } = known
     const { harnessProgress: _progress, ...withoutProgress } = ready
-    const { privacy: _privacy, ...withoutPrivacy } = withoutProgress
-    const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutPrivacy
+    const { toolProbeErrors: _probeErrors, localModels: _served, refusedModels: _refused, ...legacy } = withoutProgress
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
-      ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
+      ? [{ ...withoutProgress, localModels: localModels.filter(m => !m.starting) }] : []
     const attempts = [...('idleBuddyHarnessIds' in observation ? [observation] : []), ...('closedHarnessIds' in withoutIdle ? [withoutIdle] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
-      ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
+      ...listedOnly,
       ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
     const refuse = (attempt: Record<string, unknown>) => {
       if ('closedHarnessIds' in attempt) this.closedRefusedUntil = began + FIELD_REFUSED_MS
@@ -1016,7 +988,6 @@ export class ContributedMachines {
       else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
       else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
       else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
-      else if ('privacy' in attempt) this.privacyRefusedUntil = began + FIELD_REFUSED_MS
     }
     // The machine's cores sit inside its resources, whose schema refuses a key it does not know, and a backend before them
     // names them in its refusal ('Unrecognized key: "cpuCores"'): that form goes again without them, and they are left out

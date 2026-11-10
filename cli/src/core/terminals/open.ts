@@ -15,7 +15,7 @@ export interface TerminalOpenerDeps {
    *  `noBackendCode`); `TMUX_UNAVAILABLE`, as before, by default. */
   noBackendCode?: string
   /** Rechecks a backend missing at boot, as an agent's create does (core/agents/create.ts): a terminal asked for after
-   *  tmux was installed while the daemon ran (a Harness Team account installs its own, team/tmux.ts) was refused until
+   *  tmux was installed while the daemon ran was refused until
    *  the daemon restarted, while an agent created at the same moment started. */
   recoverBackend?: () => Promise<TerminalOpenerDeps['createBackend']>
 }

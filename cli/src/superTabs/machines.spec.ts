@@ -15,9 +15,8 @@ import { recordCleanupClose } from './cleanupCloses.js'
 import { SwarmReads } from './swarmReads.js'
 import { object } from './wire.js'
 import { processCoreApi } from '../services/processCoreApi.js'
-import type { PrivacyObservation } from '../team/privacy.js'
 
-function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
+function fixture(env: NodeJS.ProcessEnv = {}) {
   let now = 1000, stamp = 's0', team = false
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
@@ -54,7 +53,7 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     method === 'POST' && path.endsWith('/readings') ? readings(core, path, body) : backend(core, method, path, body)
   const claudeProfiles = vi.fn((): unknown[] => [])
   const codexProfiles = vi.fn((): unknown[] => [])
-  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, privacy, modelsStamp, now: () => now }
+  const deps = { team: () => team, backend: wire, open, capabilities, claudeProfiles, codexProfiles, start, prepare, log, env, modelsStamp, now: () => now }
   const machine = new ContributedMachines(core, 'host', deps as never)
   return { setTeam: (on: boolean) => { team = on }, deps, claudeProfiles, codexProfiles, machine, pool, core, backend, readings, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
@@ -291,7 +290,7 @@ describe('contributed machine executor', () => {
       vi.stubGlobal('fetch', revoked)
       const f = fixture()
       const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
-        log: f.log, env: {}, privacy: () => null, team: () => true, now: () => now } as never)
+        log: f.log, env: {}, team: () => true, now: () => now } as never)
       let now = 1000
       Object.assign(f.pool, { githubApp: true })
       const token = vi.fn(async () => (answers.length > 1 ? answers.shift()! : answers[0]!)())
@@ -353,7 +352,7 @@ describe('contributed machine executor', () => {
     for (const team of [false, true]) {
       const f = fixture()
       const machine = new ContributedMachines(f.core, 'host', { backend: f.deps.backend, open: f.open, capabilities: f.capabilities, start: f.start,
-        log: f.log, env: {}, privacy: () => null, team: () => team, now: () => 1000 } as never)
+        log: f.log, env: {}, team: () => team, now: () => 1000 } as never)
       Object.assign(f.pool, { githubApp: true })
       f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
         : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
@@ -687,8 +686,8 @@ describe('contributed machine executor', () => {
       })
     })
 
-    it('drops only the readiness field for a backend from before it, for ten minutes, keeping privacy', async () => {
-      const f = fixture({}, () => ({ mode: 'dedicated' }))
+    it('drops only the readiness field for a backend from before it, for ten minutes', async () => {
+      const f = fixture()
       withEngines(f)
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
@@ -698,7 +697,6 @@ describe('contributed machine executor', () => {
       await f.machine.tick()
       expect(readings(f)).toHaveLength(2)
       expect(readings(f)[1]).not.toHaveProperty('readiness')
-      expect(readings(f)[1]).toMatchObject({ privacy: { mode: 'dedicated' } })
       f.advance(); await f.machine.tick()
       expect(readings(f)).toHaveLength(3)
       f.step(10 * 60_000); await f.machine.tick()
@@ -1307,8 +1305,8 @@ describe('contributed machine executor', () => {
     })
   })
 
-  it('drops readiness alone for a backend that takes progress, and both, keeping privacy, for one that takes neither', async () => {
-    const f = fixture({}, () => ({ mode: 'dedicated' }))
+  it('drops readiness alone for a backend that takes progress, and both for one that takes neither', async () => {
+    const f = fixture()
     const usage = f.request.getMockImplementation()!
     f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe' ? { engines: [{ engine: 'codex', installed: true, signedIn: true }] } : usage(type, ...rest as []))
     let refuses = ['readiness']
@@ -1320,13 +1318,13 @@ describe('contributed machine executor', () => {
     })
     const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
     const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
-    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress', 'privacy'].filter(key => key in post)
+    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress'].filter(key => key in post)
     await machine.tick()
-    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy']])
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress'], ['harnessProgress']])
     refuses = ['readiness', 'harnessProgress']
     const older = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
     f.backend.mockClear(); await older.tick()
-    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy'], ['privacy']])
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress'], ['harnessProgress'], []])
   })
 
   it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {
@@ -1514,99 +1512,26 @@ describe('contributed machine executor', () => {
     expect(read[0]!.name).toHaveLength(200)
   })
 
-  // The Harness Team account (cli/src/team/): its daemon reports its privacy check with the reading, and refuses new
-  // work while it fails, besides routing (Task 3) not sending it any.
-  describe('Harness Team privacy', () => {
-    const passed: PrivacyObservation = { mode: 'account', passed: true, checkedAt: 900 }
-    const exposed: PrivacyObservation = { mode: 'account', passed: false, item: 'gitconfig', detail: 'The team account could read ~/.gitconfig.', checkedAt: 900 }
+  describe('a reading the backend refuses', () => {
     const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
 
-    it('sends the check with the reading, and nothing from the owner\'s own daemon', async () => {
-      const team = fixture({}, () => passed)
-      await team.machine.tick()
-      expect(posts(team)[0]).toMatchObject({ privacy: passed })
-      expect(team.start).toHaveBeenCalledOnce()
-      const owner = fixture()
-      await owner.machine.tick()
-      expect(posts(owner)[0]).not.toHaveProperty('privacy')
-      const dedicated = fixture({}, () => ({ mode: 'dedicated' }))
-      await dedicated.machine.tick()
-      expect(posts(dedicated)[0]).toMatchObject({ privacy: { mode: 'dedicated' } })
-      expect(dedicated.start).toHaveBeenCalledOnce()
-    })
-
-    it('refuses a new start while the team account is not private, and never starts it anywhere else', async () => {
-      const f = fixture({}, () => exposed)
-      await f.machine.tick()
-      expect(f.start).not.toHaveBeenCalled()
-      const refusal = f.backend.mock.calls.find(c => String(c[2]).endsWith('/starts/tab/start'))![3] as { operationId: string; command: Record<string, unknown> }
-      expect(refusal.operationId).toBe('privacy-failed-start')
-      expect(refusal.command).toMatchObject({ type: 'agent.startFailed', startId: 'start' })
-      expect(String(refusal.command.error)).toContain('not private (gitconfig)')
-      // One already dispatched is reconciled as before: refusing it could orphan what it launched.
-      f.pool.starts[0]!.dispatched = true
-      f.advance(); await f.machine.tick()
-      expect(f.start).toHaveBeenCalledOnce()
-    })
-
-    it('sends a changed result at once, without waiting for the next beat', async () => {
-      let current: PrivacyObservation = passed
-      const f = fixture({}, () => current)
-      await f.machine.tick()
-      f.step(6_000); await f.machine.tick()
-      expect(posts(f)).toHaveLength(1)
-      current = exposed
-      f.step(6_000); await f.machine.tick()
-      expect(posts(f)).toHaveLength(2)
-      expect(posts(f)[1]).toMatchObject({ privacy: { passed: false, item: 'gitconfig' } })
-    })
-
-    it('reports a check that throws as unchecked, and refuses on it', async () => {
-      const f = fixture({}, () => { throw new Error('config unreadable') })
-      await f.machine.tick()
-      expect(posts(f)[0]).toMatchObject({ privacy: { mode: 'account', passed: false, item: 'unchecked' } })
-      expect(f.start).not.toHaveBeenCalled()
-    })
-
-    it('drops only the privacy field for a backend from before it, for ten minutes, keeping the local-model fields', async () => {
-      const f = fixture({}, () => passed)
-      f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
-        tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
-      const original = f.backend.getMockImplementation()!
-      f.backend.mockImplementation(async (core, method, path, body) => {
-        if (method === 'POST' && (body as Record<string, unknown>)?.privacy) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: privacy', 400)
-        return original(core, method, path, body)
-      })
-      await f.machine.tick()
-      expect(posts(f)).toHaveLength(2)
-      expect(posts(f)[1]).not.toHaveProperty('privacy')
-      expect(posts(f)[1]).toHaveProperty('toolProbeErrors')
-      f.advance(); await f.machine.tick()
-      expect(posts(f)).toHaveLength(3)
-      expect(posts(f)[2]).not.toHaveProperty('privacy')
-      f.step(10 * 60_000); await f.machine.tick()
-      expect(posts(f).at(-2)).toHaveProperty('privacy')
-      expect(posts(f).at(-1)).not.toHaveProperty('privacy')
-    })
-
-    it('falls back to the oldest reading when the backend refuses the other new fields too', async () => {
-      const f = fixture({}, () => passed)
+    it('falls back to the oldest reading when the backend refuses its newer fields', async () => {
+      const f = fixture()
       f.capabilities.mockResolvedValue({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
         tools: { git: true }, toolProbeErrors: { flutter: 'timed out' } } as never)
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
         const sent = body as Record<string, unknown>
-        if (method === 'POST' && (sent?.privacy || sent?.toolProbeErrors)) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
+        if (method === 'POST' && sent?.toolProbeErrors) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
         return original(core, method, path, body)
       })
       await f.machine.tick()
-      expect(posts(f)).toHaveLength(3)
-      expect(posts(f)[2]).not.toHaveProperty('privacy')
-      expect(posts(f)[2]).not.toHaveProperty('toolProbeErrors')
+      expect(posts(f).at(-2)).toHaveProperty('toolProbeErrors')
+      expect(posts(f).at(-1)).not.toHaveProperty('toolProbeErrors')
     })
 
     it('does not retry a refusal that is not about the fields', async () => {
-      const f = fixture({}, () => passed)
+      const f = fixture()
       const original = f.backend.getMockImplementation()!
       f.backend.mockImplementation(async (core, method, path, body) => {
         if (method === 'POST' && String(path).includes('/machines/')) throw new SuperTabHostError('FORBIDDEN', 'no', 403)
