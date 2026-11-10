@@ -156,8 +156,6 @@ Future<String?> contributeComputer(
   String machineId, {
   required String setupId,
   required bool Function() alive,
-  bool ifMissing = false,
-  bool unlessRemoved = false,
 }) async {
   final prepared = await _prepareContribution(
     c,
@@ -195,8 +193,6 @@ Future<String?> contributeComputer(
     'engines': engines,
     'maxAgents': offered is num ? _clampAgentSlots(offered) : _agentSlotsMin,
     'agents': 'memory',
-    if (ifMissing) 'ifMissing': true,
-    if (unlessRemoved) 'unlessRemoved': true,
   });
   if (result == null) {
     throw SuperTabFailure(
