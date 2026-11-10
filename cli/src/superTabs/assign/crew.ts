@@ -75,7 +75,10 @@ export interface Read {
 /** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
  *  otherwise. Without it, "pip two" and "pip-two" were two people, so an agent with a two-word name read its own pull request
  *  and the merger merged it (found by the Q3 tester, 2026-11-09). Readers are kept and skipped by it (githubMerge.ts, readerFor). */
-export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/ς/g, 'σ').replace(/[^\p{L}\p{N}]/gu, '')
+
+/** A reader as the merger and the readers' count keep it: its `sameKey`, or a name of no letters or digits as written. */
+export const readerKey = (name: string): string => sameKey(name) || name.toLowerCase()
 
 /** The label a builder's tasks carry: builder:pip for Pip, as githubMentions.ts builderLabel. */
 export const labelOf = (name: string): string => `builder:${name.trim().toLowerCase().replace(/\s+/g, '-')}`
@@ -424,7 +427,7 @@ export function readerFor(read: Read, author: string | null, skip: ReadonlySet<s
   const builders = [...read.builders.values()]
   const own = builders.find(b => author !== null && b.label === labelOf(author))
   const family = (b: CrewBuilder) => b.engine === 'codex' ? 'openai' : 'anthropic'
-  const candidates = builders.filter(b => b !== own && !skip.has(b.id) && !skip.has(sameKey(b.name)))
+  const candidates = builders.filter(b => b !== own && !skip.has(b.id) && !skip.has(readerKey(b.name)))
   candidates.sort((a, b) => Number(own && family(a) === family(own)) - Number(own && family(b) === family(own))
     || (read.open.get(a.id) ?? 0) - (read.open.get(b.id) ?? 0) || a.name.localeCompare(b.name))
   return candidates[0] ?? null

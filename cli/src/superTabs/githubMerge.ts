@@ -17,7 +17,7 @@
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
-import { labelOf, sameKey, teamOf, type Crew } from './assign/crew.js'
+import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
@@ -77,8 +77,10 @@ const VERDICT_FIRST = /^(?:READ-OK|HOLD)\b/
  *  of the team; any other is unsigned, its reader that login, and its READ-OK is `ownLogin`: it counts for no read. */
 export function verdicts(comments: Json[], body: string, people: PullPeople):
   { readers: Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean }>; twoReads: boolean } {
-  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean; at: string }>()
+  const readers = new Map<string, { verdict: 'READ-OK' | 'HOLD'; sha: string; name: string; ownLogin: boolean; signed: boolean; at: string }>()
   let twoReads = /\bTWO READS\b/.test(body)
+  // The team's names as sameKey reads them, from its builder labels: a team agent is known however it signs.
+  const team = new Set([...people.team].map(label => sameKey(label.replace(/^builder:/i, ''))))
   for (const comment of comments) {
     if (!TEAM.has(comment.author_association)) continue
     const first = String(comment.body ?? '').split('\n').find(line => line.trim()) ?? ''
@@ -89,21 +91,22 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     const fromOpener = people.opener !== '' && login.toLowerCase() === people.opener.toLowerCase()
     const pattern = SIGNATURE.exec(first)?.[1]
     const signature = people.writers.find(writer => signedAs(first, writer))
-      ?? (pattern && !VERDICT_FIRST.test(pattern) && (!fromOpener || people.team.has(labelOf(pattern))) ? pattern : undefined)
+      ?? (pattern && !VERDICT_FIRST.test(pattern) && (!fromOpener || team.has(sameKey(pattern))) ? pattern : undefined)
     const reader = signature ?? login
     if (!reader || reader === SELF) continue
     const at = String(comment.created_at ?? '')
     // One reader however it writes its name (a HOLD as "Kai Lee" is lifted by its READ-OK as "kai-lee"); a name of no letters
     // or digits, as written.
-    const key = sameKey(reader) || reader.toLowerCase()
+    const key = readerKey(reader)
     const last = readers.get(key)
-    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, ownLogin: !signature && fromOpener, at })
+    // A HOLD is lifted only by its own kind: a signature's by a signature, a login's (unsigned) by that login. A person whose
+    // login reads as an agent's name is not that agent.
+    if (last?.verdict === 'HOLD' && found[1] === 'READ-OK' && last.signed !== !!signature) continue
+    if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, ownLogin: !signature && fromOpener, signed: !!signature, at })
   }
   return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name, ownLogin: v.ownLogin }])), twoReads }
 }
 
-/** One name however it is written (assign/crew.ts), for the assigner too. */
-export { sameKey }
 
 /** Whether [name] is one of a pull request's [writers] (writersOf), however either is written. */
 export const isWriter = (writers: readonly string[], name: string): boolean => writers.some(writer => sameKey(writer) === sameKey(name))

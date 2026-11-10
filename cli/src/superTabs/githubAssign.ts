@@ -8,12 +8,12 @@
  * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
-import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
+import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readerKey, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'
 import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, sameKey, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, verdicts, type LedProject } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -269,7 +269,7 @@ export class GitHubAssign {
         const found = ownAsk(c, ASKED)
         if (!found) continue
         // Keyed as the readers are (verdicts): the one asked as "Kai Lee" is the one that answered as "kai-lee".
-        const name = sameKey(found[1]!) || found[1]!.toLowerCase()
+        const name = readerKey(found[1]!)
         written.set(name, found[1]!)
         if (head.startsWith(found[2]!)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
         const heads = asked.get(name) ?? new Map<string, number>()
@@ -303,7 +303,7 @@ export class GitHubAssign {
         // A team of one builder still has its PM, who read for it before Harness asked readers (the swarm-sandbox, where
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
-        const pm = sameKey(project.pm) || project.pm.toLowerCase()
+        const pm = readerKey(project.pm)
         const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
@@ -317,7 +317,7 @@ export class GitHubAssign {
           break
         }
         skip.add(reader.id)
-        skip.add(sameKey(reader.name))
+        skip.add(readerKey(reader.name))
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
       }
     }
@@ -391,7 +391,7 @@ export class GitHubAssign {
     const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?since=${since}&per_page=${PAGE}`, 1)
     const asks = comments.filter(c => {
       const found = ownAsk(c, /^Harness, \d\d:\d\d, to \*\*([^*]+)\*\*: (.*)$/m)
-      return found?.[1]?.toLowerCase() === name.toLowerCase() && found[2]!.startsWith(QUIET_ASKED)
+      return !!found?.[1] && readerKey(found[1]) === readerKey(name) && found[2]!.startsWith(QUIET_ASKED)
     }).map(c => Date.parse(String(c.created_at ?? ''))).filter(Number.isFinite)
     return asks.length ? Math.max(...asks) : null
   }
@@ -418,7 +418,7 @@ export class GitHubAssign {
   /** One ask of a reader, once per pull request, head and reader: a comment naming it, with the head it reads. One GitHub
    *  refuses is said, and asked again next pass. */
   private async ask(repo: string, number: number, head: string, name: string, what: string, nth = 0): Promise<void> {
-    const key = `${repo}#${number}@${head}:${name.toLowerCase()}${nth ? `:${nth}` : ''}`
+    const key = `${repo}#${number}@${head}:${readerKey(name)}${nth ? `:${nth}` : ''}`
     if (this.asks.has(key)) return
     const clock = this.clock(), sha = head.slice(0, 7)
     const reply = await this.deps.send('POST', `/repos/${repo}/issues/${number}/comments`, { body: `${SELF}, ${clock}, to **${name}**: ${what}, `
