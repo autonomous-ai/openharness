@@ -13,7 +13,7 @@ const pull = (extra: Json = {}): Json => ({ number: 4, draft: false, base: { ref
 
 /** One repository as GitHub's REST API answers for it, with ETags, and what was sent to it. */
 function fakeGitHub() {
-  const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]), reviews: new Map<number, Json[]>(),
+  const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]), reviews: new Map<number, Json[]>(), commits: new Map<number, Json[]>(),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
     state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
@@ -29,6 +29,7 @@ function fakeGitHub() {
         Number(url.searchParams.get('page') ?? 1) * Number(url.searchParams.get('per_page') ?? 30))
       : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
+      : /\/pulls\/\d+\/commits$/.test(p) ? repo.commits.get(Number(p.split('/').at(-2))) ?? [{ sha: HEAD }]
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
       : /\/pulls\/\d+$/.test(p) ? { mergeable_state: repo.state }
@@ -98,6 +99,25 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     // Both passed, but the checks changed since the last look.
     expect(f.merges()).toEqual([])
     // Half a minute later they read the same, three minutes after the head was first seen.
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  // lampOS train-bot.sh (25 Oct, #3014 and #3391 carried #3064's commit under their own): a pull request that carries another open
+  // one's commits would merge them with it, unread or held. It waits until that one merges, told once.
+  it('merges no pull request that carries another open one\'s commits, and tells its author once', async () => {
+    const UNDER = 'b0b0b0b0c0ffee000000000000000000000000ab'
+    const f = setup()
+    f.github.repo.pulls = [pull(), pull({ number: 5, draft: true, labels: [], head: { sha: UNDER, ref: 'ken/base' }, user: { login: 'kenmore' } })]
+    f.github.repo.commits.set(4, [{ sha: UNDER }, { sha: HEAD }])
+    await settle(f)
+    f.clock.now += 30_000
+    await f.merger.tick()
+    expect(f.merges()).toEqual([])
+    expect(f.comments()).toEqual([expect.stringMatching(/^Harness, \d\d:\d\d, to \*\*pip\*\*: not merged yet at f6edb44: it carries open #5's commits \(its head b0b0b0b\), so merging it would merge them too\. It waits until #5 merges; then update it from main\.$/)])
+    // Once #5 is merged it is no longer open, and this one merges.
+    f.github.repo.pulls = [pull()]
     f.clock.now += 30_000
     await f.merger.tick()
     expect(f.merges()).toHaveLength(1)
