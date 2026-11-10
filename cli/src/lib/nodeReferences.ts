@@ -10,6 +10,7 @@
  */
 import { sep } from 'node:path'
 import { env } from '../config/env.js'
+import { baseNode } from '../harnessd/baseNode.js'
 import { PlatformService, defaultPlatformDeps, platformFor } from '../harnessd/platform.js'
 import { DAEMON_LOG_FILE } from './daemonState.js'
 import { ensureLauncher } from './launchers.js'
@@ -25,10 +26,13 @@ function thisComputer(): ServiceReference {
   return { service: platform ? new PlatformService(platform, defaultPlatformDeps({ dataDir: env.ADAPTER_DATA_DIR })) : null, logFile: DAEMON_LOG_FILE }
 }
 
-/** Point the launcher and the service definition at [node], the managed Node, where they name another. */
-export function refreshNodeReferences(node: string, log: (line: string) => void, reference: ServiceReference = thisComputer()): NodeReferences {
-  // Only a Node of ours: managedNodePath falls back to this process's Node when current-node names none, and nothing
-  // is pointed at a Node somebody else installed and may remove.
+/**
+ * Point the launcher and the service definition at [node], where they name another: by default the Node this core
+ * runs on, which its start just proved. Not current-node, which can name a Node no probation judged (a master that
+ * could not put it back: masterProcess.ts, lib/selfUpdate.ts `putNodeBack`).
+ */
+export function refreshNodeReferences(log: (line: string) => void, reference: ServiceReference = thisComputer(), node: string = baseNode(process.execPath)): NodeReferences {
+  // Only a Node of ours: nothing is pointed at a Node somebody else installed and may remove.
   if (!node.startsWith(env.ADAPTER_RUNTIME_DIR + sep)) return { launcher: false, service: false }
   const launcher = ensureLauncher(node, log)
   const { service } = reference

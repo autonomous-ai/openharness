@@ -529,10 +529,11 @@ function nameNode(node: string, platform: NodeJS.Platform): void {
  * starts the daemon next reads (the master's re-execution onto the build put back; on Windows, harness-launch.exe):
  * a rolled-back update ('rolled-back'), or a master whose lean bundle did not answer on the new Node ('does-not-run',
  * ../masterProcess.ts). The Node it moves off is recorded beside [reason], and not moved to again (`startSelfUpdater`);
- * a null [reason] records nothing (a master that cannot re-execute at all). Only a Node inside the managed runtime, as
- * `managedNodePath` trusts; nothing when it is already the one named. Returns [previous] once named, else null.
+ * except for 'cannot-switch' (a master that cannot re-execute at all), which blames no Node. Only a Node inside the
+ * managed runtime, as `managedNodePath` trusts; nothing when it is already the one named. Returns [previous] once
+ * named, else null.
  */
-export function putNodeBack(dir: string, previous: string | null, reason: NodeMigration | null, platform: NodeJS.Platform = process.platform): string | null {
+export function putNodeBack(dir: string, previous: string | null, reason: NodeMigration, platform: NodeJS.Platform = process.platform): string | null {
   const moved = managedNodePath()
   if (!previous || !previous.startsWith(env.ADAPTER_RUNTIME_DIR + sep) || previous === moved) return null
   try {
@@ -541,7 +542,7 @@ export function putNodeBack(dir: string, previous: string | null, reason: NodeMi
     console.error(`[harnessd] could not put current-node back on ${previous} (${error instanceof Error ? error.message : String(error)}) — the daemon stays on the Node it names`)
     return null
   }
-  if (reason) recordNodeMigration(dir, reason, moved)
+  recordNodeMigration(dir, reason, reason === 'cannot-switch' ? failedNode(dir) : moved)
   return previous
 }
 
@@ -879,7 +880,7 @@ export function startSelfUpdater(opts: {
         if (ready.node) {
           try { nameNode(ready.node, platform) } catch (error) {
             console.error(`[update] could not name ${ready.node} in current-node (${error instanceof Error ? error.message : String(error)}) — ${ready.version} comes up on the Node the daemon runs on`)
-            recordNodeMigration(opts.dir, 'download-failed')
+            recordNodeMigration(opts.dir, 'cannot-switch')
           }
         }
         done = true

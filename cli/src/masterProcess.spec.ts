@@ -6,6 +6,7 @@ import { env } from './config/env.js'
 import { PROBE_ANSWER } from './harnessd/reexec.js'
 import { LEAN_ENTRY, leanFingerprint, type LeanBundle } from './harnessd/leanBundle.js'
 import { DAEMON_LOG_FILE, PID_FILE } from './lib/daemonState.js'
+import { NODE_MIGRATION_FILE, failedNode, nodeMigration } from './lib/nodeMigration.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import type { WindowsMasterDeps } from './masterProcess.js'
@@ -135,6 +136,35 @@ describe('a master started on cli.js', () => {
     const back: boolean[] = []
     startMasterFromBundle('/cli/cli.js', deps({ platform: 'win32', nodeBack: (failed) => { back.push(failed); return null } }).given)
     expect(back).toEqual([])
+  })
+
+  it('puts current-node back on the Node this process runs on, and records why: the Node failed, or this master cannot switch', () => {
+    // The suite's own runtime folder (vitest.setup.ts); the master runs on a name link of its managed Node 22.
+    const runtime = env.ADAPTER_RUNTIME_DIR
+    const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
+    const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
+    const execPath = process.execPath
+    try {
+      for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); writeFileSync(node, '', { mode: 0o755 }) }
+      mkdirSync(env.ADAPTER_CLI_DIR, { recursive: true })
+      process.execPath = join(runtime, 'node-v22.23.2-test', 'libexec', 'harnessd', 'harnessd')
+      const link = process.execPath
+      writeFileSync(join(runtime, 'current-node'), `${v24}\n`)
+      expect(processBundleDeps().nodeBack!(true)).toBe(link)
+      expect(readFileSync(join(runtime, 'current-node'), 'utf8')).toBe(`${v22}\n`)
+      expect({ reason: nodeMigration(env.ADAPTER_CLI_DIR), failed: failedNode(env.ADAPTER_CLI_DIR) }).toEqual({ reason: 'does-not-run', failed: v24 })
+      // Already on this one: nothing to put back.
+      expect(processBundleDeps().nodeBack!(true)).toBeNull()
+      // A master that cannot switch (lean off, no exec) blames no Node: the updater may move to it again.
+      rmSync(join(env.ADAPTER_CLI_DIR, NODE_MIGRATION_FILE), { force: true })
+      writeFileSync(join(runtime, 'current-node'), `${v24}\n`)
+      expect(processBundleDeps().nodeBack!(false)).toBe(link)
+      expect(readFileSync(join(runtime, 'current-node'), 'utf8')).toBe(`${v22}\n`)
+      expect({ reason: nodeMigration(env.ADAPTER_CLI_DIR), failed: failedNode(env.ADAPTER_CLI_DIR) }).toEqual({ reason: 'cannot-switch', failed: null })
+    } finally {
+      process.execPath = execPath
+      for (const path of [join(runtime, 'current-node'), join(env.ADAPTER_CLI_DIR, NODE_MIGRATION_FILE), dirname(dirname(v22)), dirname(dirname(v24))]) rmSync(path, { recursive: true, force: true })
+    }
   })
 
   it('runs from cli.js, with the services still from the lean bundle, where this Node cannot re-execute', () => {

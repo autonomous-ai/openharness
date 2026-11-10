@@ -2255,11 +2255,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.hookServer = hookServer
   daemonBoot.localSocket = localSocket
   console.log(`[cli] daemon pid ${process.pid} · v${VERSION}${process.env.ADAPTER_UPDATED_TO ? ' · updated' : ''} · listening on 127.0.0.1:${hookPort}`)
-  // The launcher and the service definition name the Node they were written with: once the core is up, on the Node an
-  // update may have moved, they follow it (lib/nodeReferences.ts); and on the minimum Node, why an update once held it
+  // The launcher and the service definition name the Node they were written with: once the core is up, they follow
+  // the Node it runs on, which an update may have moved (lib/nodeReferences.ts); and on the minimum Node, why an update once held it
   // back no longer applies. The installed copy only: a checkout's core never changes the real installation.
   if (isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR)) {
-    refreshNodeReferences(managedNodePath(), (line) => console.log(`[node-runtime] ${line.trim()}`))
+    refreshNodeReferences((line) => console.log(`[node-runtime] ${line.trim()}`))
     settleNodeMigration(env.ADAPTER_CLI_DIR)
   }
   // The device key log records which sign-in this machine is under: a session from before sign-in epochs

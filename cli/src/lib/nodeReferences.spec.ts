@@ -58,7 +58,7 @@ describe('refreshNodeReferences', () => {
     writeFileSync(launcher(), `#!/bin/sh\nexec '${node('22.23.2')}' '${cli()}' "$@"\n`, { mode: 0o755 })
     const { refreshNodeReferences } = await load()
     const lines: string[] = []
-    expect(refreshNodeReferences(node('24.22.2'), (line) => lines.push(line), { service: null, logFile: join(root, 'harness.log') }))
+    expect(refreshNodeReferences((line) => lines.push(line), { service: null, logFile: join(root, 'harness.log') }, node('24.22.2')))
       .toEqual({ launcher: true, service: false })
     expect(readFileSync(launcher(), 'utf8')).toBe(`#!/bin/sh\nexec '${node('24.22.2')}' '${cli()}' "$@"\n`)
     expect(lines).toEqual([`  ✓ repointed ${launcher()} at ${node('24.22.2')}`])
@@ -69,7 +69,7 @@ describe('refreshNodeReferences', () => {
     for (const name of ['launchd', 'systemd'] as const) {
       const disk = platform(name, definition(node('22.23.2')))
       const lines: string[] = []
-      expect(refreshNodeReferences(node('24.22.2'), (line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }))
+      expect(refreshNodeReferences((line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }, node('24.22.2')))
         .toEqual({ launcher: false, service: true })
       expect(disk.files[disk.service.file]).toBe(disk.service.render(definition(node('24.22.2'))))
       expect(lines).toEqual([`  ✓ repointed ${disk.service.file} at ${node('24.22.2')}`])
@@ -85,21 +85,38 @@ describe('refreshNodeReferences', () => {
     for (const name of ['launchd', 'systemd'] as const) {
       const disk = platform(name, definition(node('24.22.2')))
       const lines: string[] = []
-      expect(refreshNodeReferences(node('24.22.2'), (line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }))
+      expect(refreshNodeReferences((line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }, node('24.22.2')))
         .toEqual({ launcher: false, service: false })
       expect({ writes: disk.writes, calls: disk.calls, lines }).toEqual({ writes: [], calls: [], lines: [] })
     }
     expect(readFileSync(launcher(), 'utf8')).toBe(current)
   })
 
-  it('never points them at a Node outside the runtime folder, the one managedNodePath falls back to', async () => {
+  it('never points them at a Node outside the runtime folder', async () => {
     const before = `#!/bin/sh\nexec '${node('22.23.2')}' '${cli()}' "$@"\n`
     writeFileSync(launcher(), before, { mode: 0o755 })
     const { refreshNodeReferences } = await load()
     const disk = platform('launchd', definition(node('22.23.2')))
-    expect(refreshNodeReferences('/opt/homebrew/bin/node', () => {}, { service: disk.service, logFile: join(root, 'harness.log') }))
+    expect(refreshNodeReferences(() => {}, { service: disk.service, logFile: join(root, 'harness.log') }, '/opt/homebrew/bin/node'))
       .toEqual({ launcher: false, service: false })
     expect({ launcher: readFileSync(launcher(), 'utf8'), writes: disk.writes }).toEqual({ launcher: before, writes: [] })
+  })
+
+  it('names the Node the core runs on, not the one current-node names', async () => {
+    // current-node can name a Node no probation judged: a master that could not put it back (masterProcess.ts).
+    writeFileSync(join(runtimeDir, 'current-node'), `${node('24.22.2')}\n`)
+    writeFileSync(launcher(), `#!/bin/sh\nexec '${node('20.19.0')}' '${cli()}' "$@"\n`, { mode: 0o755 })
+    const { refreshNodeReferences } = await load()
+    const disk = platform('launchd', definition(node('20.19.0')))
+    const execPath = process.execPath
+    // The core runs on a name link of the managed Node 22 (harnessd/processName.ts).
+    process.execPath = join(runtimeDir, 'node-v22.23.2-darwin-arm64', 'libexec', 'harnessd', 'harnessd-core')
+    try {
+      expect(refreshNodeReferences(() => {}, { service: disk.service, logFile: join(root, 'harness.log') }))
+        .toEqual({ launcher: true, service: true })
+    } finally { process.execPath = execPath }
+    expect(readFileSync(launcher(), 'utf8')).toBe(`#!/bin/sh\nexec '${node('22.23.2')}' '${cli()}' "$@"\n`)
+    expect(disk.files[disk.service.file]).toBe(disk.service.render(definition(node('22.23.2'))))
   })
 
   it('says when a definition still names another Node', async () => {
@@ -107,7 +124,7 @@ describe('refreshNodeReferences', () => {
     const disk = platform('systemd', definition(node('22.23.2')))
     disk.files[disk.service.file] = disk.files[disk.service.file].replace(/^ExecStart=/m, 'ExecStart=/usr/bin/env ')
     const lines: string[] = []
-    expect(refreshNodeReferences(node('24.22.2'), (line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }))
+    expect(refreshNodeReferences((line) => lines.push(line), { service: disk.service, logFile: join(root, 'harness.log') }, node('24.22.2')))
       .toEqual({ launcher: false, service: false })
     expect(lines).toEqual([`  ✗ ${disk.service.file} was left on its Node: ${disk.service.file} does not run its Node where harness service install writes it`])
   })

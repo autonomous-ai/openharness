@@ -12,6 +12,7 @@ const REASONS = {
   'does-not-run': 'Node 24 did not start here',
   unmanaged: 'this Harness runs on a Node it does not manage; install Node 24',
   'rolled-back': 'Node 24 did not come up; back on 22',
+  'cannot-switch': 'this Harness cannot switch Node here yet',
 } as const
 
 describe('nodeRow', () => {

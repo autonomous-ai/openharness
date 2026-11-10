@@ -52,7 +52,7 @@ export type ResumePreparationKind = typeof RESUME_PREPARATION_KINDS[number]
 /** The daemon's Node, counted once a collector day (cli/src/gateway/productUsage.ts): its major, and while it is below
  *  24, why it stays there (cli/src/lib/nodeMigration.ts). How far the move to Node 24 has gone, and what holds it up. */
 export const NODE_MAJORS = ['22', '24', 'other'] as const
-export const NODE_HELD_REASONS = ['no_manifest_entry', 'manifest_unreachable', 'download_failed', 'does_not_run', 'unmanaged', 'rolled_back'] as const
+export const NODE_HELD_REASONS = ['no_manifest_entry', 'manifest_unreachable', 'download_failed', 'does_not_run', 'unmanaged', 'rolled_back', 'cannot_switch'] as const
 export const PRODUCT_HEALTH_METRICS = [
   ...CLI_REPORT_FAILURES.map(reason => `health_cli_report_failure_${reason}` as const),
   ...CLI_REPORT_FAILURES.map(reason => `health_desktop_report_failure_${reason}` as const),
