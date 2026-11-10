@@ -203,7 +203,7 @@ describe('bringing an agent after leaving and rejoining', () => {
 // A host from before Regular agents would launch one as a project's agent, in a project folder it does not have: the start is
 // listed apart, and a computer whose host cannot run one is told to update instead.
 describe('a Regular agent\'s start on its computer', () => {
-  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [] }
   const user = { sub: 'mate', email: mate.email, role: 'user', autonomousEnv: 'test' } as never
 
   it('is listed to its host apart from other starts, in no project\'s folder', async () => {

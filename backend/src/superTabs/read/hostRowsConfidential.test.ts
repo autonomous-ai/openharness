@@ -38,7 +38,7 @@ function seeded({ people, agents, conversations }: { people: number; agents: num
   })
   const lookups = (confidential: string[] = []): HostLookups => ({
     people: [{ id: owner.userId, email: owner.email }, ...persons.map(p => ({ id: p.userId, email: p.email }))],
-    confidential: new Set(confidential), agentGrant: async () => {}, githubApp: false,
+    confidential: new Set(confidential), agentGrant: async () => {},
   })
   return { state: s.state, persons, ids, lookups }
 }

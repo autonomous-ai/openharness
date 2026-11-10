@@ -2569,35 +2569,6 @@ export class SuperTabStore {
     })
   }
 
-  /**
-   * What a contributed machine's host needs to prepare a queued start's folder before the agent exists (routes/superTabs.ts,
-   * a start's `github-token`): the start's project repository, whom the work is for, and whether it is the machine owner's
-   * own project. Only the host of that start, while nothing has started or failed yet, as `start()` reads it.
-   */
-  async githubStart(user: AuthUser, tabId: string, startId: string, machineId: string) {
-    return transaction(this.db, async tx => {
-      const { state } = await this.loadStart(tx, user, tabId, startId)
-      const actor = await this.poolHostActor(tx, user, state, machineId, startId)
-      const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
-      if (start.harnessId || start.error) fail('START_SETTLED', 'This start has already started or failed; its folder is not prepared again.', 409)
-      if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
-      // Its host acts as the agent that made the start (poolHostActor), which may carry it on whatever its role.
-      const group = readConversation(state, actor, start.request.conversationId)
-      if (group.archived) fail('ARCHIVED', 'This conversation is archived.')
-      const grant = await this.contribution(tx, state, actor, start.request, true)
-      if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
-        fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
-      }
-      // A Swarm-wide Buddy's folder is made of checkouts already on its machine: there is no repository to fetch for it.
-      const project = startProject(state, start.request) ?? fail('NOT_FOUND', 'This start has no project folder to prepare.', 404)
-      const owner = await ownerAccount(tx.user, project)
-      const email = owner?.email ?? state.people.find(p => p.id === project.ownerId)?.email ?? ''
-      return { tabId, projectId: project.id, repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(),
-        startId, own: ownsProject(state, start.machineOwnerId, project),
-        requester: { name: owner?.name?.trim() || null, email } }
-    })
-  }
-
   /** Streams one file into the bucket for a later `message.send` by the same actor in the same conversation. Access is
    * checked before a byte is stored; the row that makes it sendable is written only once the whole file is. */
   async upload(user: AuthUser, tabId: string, conversationId: string, file: { name: string; mime: string; body: Readable }, asAgentId?: string) {
@@ -3883,9 +3854,9 @@ export class SuperTabStore {
       others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
   }
 
-  /** A project's repository for the route's read of its running CI jobs (github/ciLoad.ts), by a person or an agent of the
-   *  project, as any read of the project: another project's, or one this reader cannot see, is unavailable alike. A Buddy
-   *  routes nothing, so it reads none. */
+  /** Who may read a project's CI load (routes/superTabs.ts `ci-load`, retired with Swarm v4, slice S6, and answered
+   *  "unavailable"): a person or an agent of the project, as any read of the project: another project's, or one this reader
+   *  cannot see, is unavailable alike. A Buddy routes nothing, so it reads none. */
   async ciRepository(user: AuthUser, tabId: string, projectId: string, asAgentId?: string): Promise<{ repositoryUrl: string | null }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
