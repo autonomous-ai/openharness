@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, resumeCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
@@ -2409,5 +2409,224 @@ describe('harness route (a program acting for the person picks the harness)', ()
     expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'x'], h.deps)).toBe(EXIT.failed)
     expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'ROUTER_UNAVAILABLE' })
     expect(r.calls).toEqual([])
+  })
+})
+
+describe('harness resume (a program acting for the person reopens a closed harness)', () => {
+  // The lamp's lamp-tasks: no pane, no agent in its shell.
+  const program = (d: FakeDaemon, over: Partial<ClientDeps> & { others?: Record<string, FakeDaemon> } = {}) => harness(d, { pane: undefined, ...over })
+  /** The machine's `agent_resume`, answered with its receipt (core/agents/launches.ts `relaunch`). */
+  const resumes = (d: FakeDaemon, answer: (payload: Record<string, unknown>) => Record<string, unknown>) => {
+    const asked: Array<Record<string, unknown>> = []
+    d.extra.agent_resume = (payload) => { asked.push(payload); return answer(payload) }
+    return asked
+  }
+  const back = (id: string, resumed = true) => (payload: Record<string, unknown>) =>
+    ({ creationId: payload.creationId, state: 'created', agent: frame(id, { engine: 'claude' }), resumed })
+
+  beforeEach(() => { setAgentSettingsForTest(dir, { programsReply: true }) })
+
+  it('reopens a closed harness by its name on another machine, with a receipt, and says to reply next', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('weather', { engine: 'claude', status: 'stopped' })]
+    const asked = resumes(office, back('weather'))
+    const h = program(d, { others: { m2: office } })
+    h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    expect(await resumeCommand(['--machine', 'office', 'weather', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(asked).toEqual([{ agentId: 'weather', creationId: expect.stringMatching(/^[a-zA-Z0-9_-]{16,96}$/) }])
+    expect(d.requests.some((q) => q.type === 'agent_resume')).toBe(false)
+    expect(JSON.parse(h.out.join('\n'))).toEqual({ ok: true, name: 'weather', id: 'weather', state: 'idle', resumed: true,
+      effect: 'weather is open, with its conversation.', next: [{ run: 'harness reply --machine office weather -- <words>', when: 'to give it more work' }] })
+    expect(office.closed).toBe(true)
+    expect(d.closed).toBe(true)
+  })
+
+  it('says when it came back as a new conversation, and says one still running as the machine answers it', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('notes', { status: 'stopped' }), frame('weather', { engine: 'claude' })]
+    resumes(d, (payload) => back(String(payload.agentId), payload.agentId !== 'notes')(payload))
+    let h = program(d)
+    expect(await resumeCommand(['notes'], h.deps)).toBe(EXIT.ok)
+    expect(h.out.join('\n')).toBe([
+      'notes on studio: notes is open, in a new conversation: its agent could not resume the earlier one.',
+      'Next: harness reply notes -- <words>  (to give it more work)',
+    ].join('\n'))
+    h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ ok: true, id: 'weather', resumed: true, effect: 'weather is open, with its conversation.' })
+  })
+
+  it('is refused for an agent and while the switch is off, and asks the machine nothing', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('weather', { status: 'stopped' })]
+    const asked = resumes(d, back('weather'))
+    const inPane = harness(d)
+    expect(await resumeCommand(['weather', '--json'], inPane.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(inPane.out.join('\n'))).toMatchObject({ error: 'NOT_YOURS', code: 'NOT_YOURS' })
+    const outside = program(d, { env: { CLAUDECODE: '1' } })
+    expect(await resumeCommand(['weather'], outside.deps)).toBe(EXIT.refused)
+    expect(outside.err.join('\n')).toMatch(/Only the person, or a program acting for them, resumes a harness/)
+    setAgentSettingsForTest(dir, { programsReply: false })
+    const off = program(d)
+    expect(await resumeCommand(['weather'], off.deps)).toBe(EXIT.refused)
+    expect(off.err.join('\n')).toMatch(/^Programs may not open your closed harnesses again yet\. programs-reply is off\./)
+    expect(off.err.join('\n')).toMatch(/If they say no: tell them which harness to resume, and they open it in Harness\.$/)
+    expect(asked).toEqual([])
+  })
+
+  it('says a resume its machine has not confirmed, and every refusal by its code', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('weather', { status: 'stopped' })]
+    resumes(d, (payload) => ({ creationId: payload.creationId, state: 'unconfirmed' }))
+    let h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toEqual({ error: 'RESUME_UNCONFIRMED',
+      detail: 'weather was started again, but Harness has not confirmed its conversation yet. Check its terminal, then run harness resume weather again.' })
+    // A refusal its receipt recorded, in the machine's words; one with none, by its code.
+    resumes(d, (payload) => ({ creationId: payload.creationId, state: 'failed', failure: { code: 'RESUME_PREPARATION_FAILED', detail: 'Could not prepare the saved conversation. Its history has been retained.' } }))
+    h = program(d)
+    expect(await resumeCommand(['weather'], h.deps)).toBe(EXIT.failed)
+    expect(h.err).toEqual(['Could not prepare the saved conversation. Its history has been retained.'])
+    resumes(d, (payload) => ({ creationId: payload.creationId, state: 'failed', failure: { code: 'AGENT_BUSY' } }))
+    h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toEqual({ error: 'AGENT_BUSY', detail: 'weather was not resumed (AGENT_BUSY).' })
+    // Refused before any receipt.
+    resumes(d, () => ({ error: 'DELETE_IN_PROGRESS' }))
+    h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'DELETE_IN_PROGRESS' })
+    // Resumed, then gone again before its frame could be read.
+    resumes(d, (payload) => ({ creationId: payload.creationId, state: 'unavailable', createdAgentId: 'weather' }))
+    h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'AGENT_CHANGED', detail: 'weather changed while resuming. Check it with harness show weather.' })
+  })
+
+  it('asks after a lost answer by its receipt, never with a second resume', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('weather', { status: 'stopped' })]
+    const asked = resumes(d, () => { throw new AgentClientError('TIMEOUT', 'Harness did not answer agent_resume in time. Try again.') })
+    const status: Array<Record<string, unknown>> = []
+    d.extra.agent_create_status = (payload) => { status.push(payload); return back('weather')(payload) }
+    let h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(status).toEqual([{ creationId: asked[0].creationId }])
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ ok: true, id: 'weather', resumed: true })
+    // Still opening: not confirmed yet, and run again to follow it.
+    d.extra.agent_create_status = (payload) => ({ creationId: payload.creationId, state: 'pending' })
+    h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+    // The machine never had it: the request's own failure.
+    d.extra.agent_create_status = (payload) => ({ creationId: payload.creationId, state: 'missing' })
+    h = program(d)
+    expect(await resumeCommand(['weather'], h.deps)).toBe(EXIT.failed)
+    expect(h.err).toEqual(['Harness did not answer agent_resume in time. Try again.'])
+    expect(asked).toHaveLength(3)
+  })
+
+  it('takes one name, and no cloud harness', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('fo', { location: 'cloud', status: 'stopped' } as never)]
+    const asked = resumes(d, back('fo'))
+    let h = program(d)
+    expect(await resumeCommand([], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('Name the harness to resume.')
+    h = program(d)
+    expect(await resumeCommand(['a', 'b'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('Resume one harness at a time.')
+    h = program(d)
+    expect(await resumeCommand(['fo'], h.deps)).toBe(EXIT.usage)
+    expect(h.err[0]).toBe('fo runs in its maker\'s cloud: harness resume reopens a harness in a pane only.')
+    h = program(d)
+    expect(await resumeCommand(['--help'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toMatch(/^Usage: harness resume \[--machine <name>\] <name> \[--json\]/)
+    expect(asked).toEqual([])
+  })
+
+  it('means the closed harness by its exact name before a live one its name only starts, here and on another machine', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    d.frames = [frame('weather', { status: 'stopped' }), frame('weather-api')]
+    office.frames = [frame('weather', { status: 'stopped' }), frame('weather-api')]
+    const here = resumes(d, back('weather')), there = resumes(office, back('weather'))
+    let h = program(d)
+    expect(await resumeCommand(['weather'], h.deps)).toBe(EXIT.ok)
+    h = program(d, { others: { m2: office } })
+    h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    expect(await resumeCommand(['--machine', 'office', 'weather'], h.deps)).toBe(EXIT.ok)
+    expect([here, there].map((asked) => asked.map((q) => q.agentId))).toEqual([['weather'], ['weather']])
+    // A live one and a stopped one by the same name: the live one.
+    d.frames = [frame('weather', { status: 'stopped', id: 'old' } as never), frame('weather', { id: 'new' } as never)]
+    resumes(d, back('new'))
+    h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ id: 'new' })
+  })
+
+  it('is refused from a pane whose harness is gone', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('weather', { status: 'stopped' })]
+    const asked = resumes(d, back('weather'))
+    const h = harness(d, { pane: '%gone', where: () => ({ ...where, harnessPane: true }) })
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.refused)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'NOT_YOURS' })
+    expect(asked).toEqual([])
+  })
+
+  it('says every other answer it cannot take for a resume, and closes the other machine\'s line', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('weather', { status: 'stopped' })]
+    const away = () => {
+      const h = program(d, { others: { m2: office } })
+      h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+      return h
+    }
+    const said = async (answer: (payload: Record<string, unknown>) => Record<string, unknown>) => {
+      resumes(office, answer)
+      office.closed = false
+      const h = away()
+      const code = await resumeCommand(['--machine', 'office', 'weather', '--json'], h.deps)
+      expect(office.closed).toBe(true)
+      return { code, said: JSON.parse(h.out.join('\n')) }
+    }
+    // Back, but as another harness, or with no frame to read.
+    expect(await said((payload) => ({ creationId: payload.creationId, state: 'created', agent: frame('other') }))).toMatchObject({ code: EXIT.failed, said: { error: 'AGENT_CHANGED',
+      detail: 'weather changed while resuming. Check it with harness show --machine office weather.' } })
+    expect(await said((payload) => ({ creationId: payload.creationId, state: 'created' }))).toMatchObject({ said: { error: 'AGENT_CHANGED' } })
+    // A receipt in a state a resume never has (a creation cancelled), by what it is.
+    expect(await said((payload) => ({ creationId: payload.creationId, state: 'cancelled' }))).toMatchObject({ code: EXIT.failed, said: { error: 'FAILED', detail: 'weather was not resumed (FAILED).' } })
+    // The line failing otherwise than by a timeout: said as it failed, and nothing asked after.
+    expect(await said(() => { throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.') })).toMatchObject({ code: EXIT.failed,
+      said: { error: 'DISCONNECTED', detail: 'The connection to Harness closed.' } })
+    expect(office.requests.some((q) => q.type === 'agent_create_status')).toBe(false)
+  })
+
+  it('after a timeout, says a receipt not confirmed, or that asking after it failed too', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('weather', { status: 'stopped' })]
+    resumes(d, () => { throw new AgentClientError('TIMEOUT', 'Harness did not answer agent_resume in time. Try again.') })
+    d.extra.agent_create_status = (payload) => ({ creationId: payload.creationId, state: 'unconfirmed' })
+    let h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'RESUME_UNCONFIRMED' })
+    d.extra.agent_create_status = () => { throw new AgentClientError('DISCONNECTED', 'The connection to Harness closed.') }
+    h = program(d)
+    expect(await resumeCommand(['weather', '--json'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'DISCONNECTED' })
+  })
+
+  it('is what harness reply says to do for a harness that was closed', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('weather', { status: 'stopped' })]
+    const h = program(d, { record: async () => ({ id: 'm0000001', state: 'queued' }) })
+    expect(await replyCommand(['weather', '--', 'add dark mode'], h.deps)).toBe(EXIT.refused)
+    expect(h.err).toEqual(['weather is no longer running: it was closed or stopped. Resume it with harness resume weather, then reply; or start a new harness with the whole task.'])
+    const office = new FakeDaemon('m2')
+    office.frames = [frame('weather', { status: 'stopped' })]
+    const away = program(d, { record: async () => ({ id: 'm0000001', state: 'queued' }), others: { m2: office } })
+    away.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    expect(await replyCommand(['--machine', 'office', 'weather', '--', 'add dark mode'], away.deps)).toBe(EXIT.refused)
+    expect(away.err[0]).toContain('Resume it with harness resume --machine office weather, then reply')
   })
 })
