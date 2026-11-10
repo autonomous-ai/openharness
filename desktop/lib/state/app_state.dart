@@ -611,6 +611,10 @@ class MachineState {
   // opening a terminal stream against an unavailable node.
   String? pendingOfflineAgentId;
   final Set<String> processingAgentIds = {};
+
+  /// Agents a message waits on while their engine starts (the daemon's `message_waiting`, reason `engine_starting`), until
+  /// their turn starts or the daemon says it could not be typed: they read as starting, never as failed.
+  final Set<String> engineStartingAgentIds = {};
   final Set<String> unknownActivityAgentIds = {};
   final Map<String, AgentActivityOrder> activityOrder = {};
   final Set<String> legacyHeartbeatSeen = {};
@@ -15203,6 +15207,7 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.processingAgentIds.clear();
+    machine.engineStartingAgentIds.clear();
     machine.unknownActivityAgentIds.clear();
     machine.activityOrder.clear();
     machine.legacyHeartbeatSeen.clear();
@@ -15218,6 +15223,7 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.clear();
     for (final machine in machineStates.values) {
       machine.processingAgentIds.clear();
+      machine.engineStartingAgentIds.clear();
       machine.unknownActivityAgentIds.clear();
       machine.activityOrder.clear();
       machine.legacyHeartbeatSeen.clear();
@@ -22941,6 +22947,23 @@ class AppNotifier extends ChangeNotifier {
         await session.handleFrame(type, payload);
       }
       return;
+    }
+    // A message waits for its agent's engine to start: the agent reads as starting until its turn starts or the daemon's error
+    // says it could not be typed.
+    if (type == 'message_waiting') {
+      final id = _eventAgentId(machine, event, payload);
+      if (id != null &&
+          payload['reason'] == 'engine_starting' &&
+          machine.engineStartingAgentIds.add(id)) {
+        notifyListeners();
+      }
+      return;
+    }
+    if (type == 'turn_started' || type == 'turn_ended' || type == 'error') {
+      final id = _eventAgentId(machine, event, payload);
+      if (id != null && machine.engineStartingAgentIds.remove(id)) {
+        notifyListeners();
+      }
     }
     if (type == 'agent_activity' ||
         _modelAnswerEvents.contains(type) ||
