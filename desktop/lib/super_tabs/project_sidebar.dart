@@ -636,7 +636,7 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading, {
     required Widget? switcher,
   }) {
-    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
@@ -1036,10 +1036,11 @@ class ProjectSidebar extends StatelessWidget {
   ) {
     final hidden = superTabHiddenProjects(controller, app: app);
     return [
-      for (final project in ([...?snapshot?.projects]..sort(_compareProjects)))
+      for (final project in ([
+        ...?snapshot?.listedProjects,
+      ]..sort(_compareProjects)))
         if (reading.of(project) case final read
-            when !project.archived &&
-                read.lead != null &&
+            when read.lead != null &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
                 !_paneless(project, read.lead!, hidden))
           read,
@@ -1062,7 +1063,7 @@ class ProjectSidebar extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
-    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
     final reading = _SidebarReading(controller, attention, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
@@ -1356,7 +1357,7 @@ List<String> superTabSidebarOrder(
 }) {
   final snapshot = controller.snapshot;
   if (snapshot == null) return const [];
-  final projects = [...snapshot.projects]..sort(_compareProjects);
+  final projects = [...snapshot.listedProjects]..sort(_compareProjects);
   final hidden = superTabHiddenProjects(controller, app: app);
   return [
     if (controller.oneBuddy)
@@ -1364,8 +1365,7 @@ List<String> superTabSidebarOrder(
           case final chat?)
         chat.id,
     for (final project in projects)
-      if (!project.archived &&
-          snapshot.conversation(project.leadConversationId) != null &&
+      if (snapshot.conversation(project.leadConversationId) != null &&
           (controller.selectedId == project.leadConversationId ||
               !hidden.contains(project.id)))
         project.leadConversationId,

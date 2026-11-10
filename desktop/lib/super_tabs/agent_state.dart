@@ -139,9 +139,10 @@ class SwarmAgentStates extends ChangeNotifier {
                   named[agent.projectId] ??
                   SwarmGitHub.repositoryOf(localRepository?.call(agent)),
           });
+        // As many boards as projects at most: a Personal Swarm's agents name theirs one by one.
         final repositories = {
           for (final repository in _repositories.values) ?repository,
-        };
+        }.take(maxProjects).toSet();
         _forget(
           agents: agents.keys.toSet(),
           channels: {for (final p in projects) p.leadConversationId},

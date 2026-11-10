@@ -123,9 +123,22 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
   /// The repository being read now: a refresh that comes while its read is still going waits for the next.
   String? _reading;
 
+  /// A Personal project's repository becomes known on this Desktop after the board may have opened: read it then.
+  void _personalMoved() {
+    final repository = SwarmTaskBoard.repositoryOf(
+      widget.controller,
+      widget.conversationId,
+      app: widget.app,
+    );
+    if (repository != _repository) _read();
+  }
+
   @override
   void initState() {
     super.initState();
+    if (widget.app case final app?) {
+      PersonalProjects.of(app).addListener(_personalMoved);
+    }
     _read();
     if (widget.refreshEvery case final every?) {
       _refresh = Timer.periodic(every, (_) => _read());
@@ -145,6 +158,9 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
 
   @override
   void dispose() {
+    if (widget.app case final app?) {
+      PersonalProjects.of(app).removeListener(_personalMoved);
+    }
     _refresh?.cancel();
     super.dispose();
   }

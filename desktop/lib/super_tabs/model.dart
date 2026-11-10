@@ -1182,6 +1182,12 @@ class SuperTabSnapshot {
       _machines = _machineRows(rows);
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
+
+  /// The projects a list offers: an archived one (a v3 tab's project kept read-only, personal_projects.dart) is no
+  /// longer worked in.
+  late final List<SuperTabProject> listedProjects = List.unmodifiable(
+    projects.where((p) => !p.archived),
+  );
   final List<Map<String, dynamic>> invitations;
 
   /// Each agent start's outcome so far, by its id: the harness it made, or

@@ -11,6 +11,7 @@ import '../state/swarm.dart';
 import '../state/terminal_pane.dart';
 import 'controller.dart';
 import 'model.dart';
+import 'my_agents.dart';
 import 'swarm_switcher.dart' show PersonalSwarm;
 
 /// A person's repos as the projects of their Personal Swarm (Swarm v4, anh Dee 2026-11-09): every pane of theirs in a
@@ -208,6 +209,13 @@ class PersonalProjects extends ChangeNotifier {
     return _reposOf(c.accountId, c.tabId, projectId).firstOrNull;
   }
 
+  /// The repos the person's panes and their agents in [c] work in: an agent started in the Swarm has no pane in a tab.
+  Set<String> _repos(SuperTabController c) => {
+    for (final pane in personalPanes(app)) pane.repo,
+    for (final agent in superTabMyAgents(c.snapshot!, c.accountId))
+      ?agentRepository(c, agent),
+  };
+
   /// The repo agent [agent] of [c]'s own pane works in (`github.com/owner/name`): where its tasks are, since the project
   /// it is in, Your Team's, names none. Null outside the person's Personal Swarm, or for a session in no repo.
   String? agentRepository(SuperTabController c, SuperTabAgent agent) {
@@ -260,13 +268,16 @@ class PersonalProjects extends ChangeNotifier {
   /// empty for it.
   Set<String> hiddenIn(SuperTabController c) {
     if (!eligible(c)) return const {};
+    // v3's tab projects leave the list now, whether or not their close is through ([_closeTabs]).
+    final closing = _tabs[c.accountId]?[c.tabId]?.values ?? const <String>[];
     final known = _known[c.accountId]?[c.tabId];
     if (known == null || known.isEmpty || _unresolvedPanes(app)) {
-      return const {};
+      return {...closing};
     }
-    final shown = {for (final entry in personalPanes(app)) ?known[entry.repo]};
+    final shown = {for (final repo in _repos(c)) ?known[repo]};
     final snapshot = c.snapshot!;
     return {
+      ...closing,
       for (final id in known.values)
         if (id != null &&
             !shown.contains(id) &&
@@ -408,7 +419,7 @@ class PersonalProjects extends ChangeNotifier {
         if (await _closeTabs(c) && eligible(c)) await _reread(c);
         if (!eligible(c)) return;
         final projects = _projects(account, swarm);
-        final wanted = {for (final p in personalPanes(app)) p.repo};
+        final wanted = _repos(c);
         var made = false;
         for (final repo in wanted) {
           if (projects.containsKey(repo)) continue;
@@ -484,12 +495,35 @@ class PersonalProjects extends ChangeNotifier {
     return null;
   }
 
-  /// Closes each of v3's tab projects this computer made, once: gone from the server, or kept read-only when one of its
+  /// v3's tab projects still to close in [c], desk tab id to project id: those this computer kept, and those of the desk's
+  /// tabs now, found by the id the server made each with (backend `project.create`: the Swarm, its person and the request),
+  /// so one another computer made is found too.
+  Map<String, String> _tabProjects(SuperTabController c) {
+    final kept = (_tabs[c.accountId] ??= {})[c.tabId] ??= {};
+    final snapshot = c.snapshot;
+    if (snapshot == null) return kept;
+    for (final tab in app.swarms) {
+      if (tab.isSuperTab || tab.isUtility || kept.containsKey(tab.id)) continue;
+      final id = stableId([
+        c.tabId,
+        'person:${c.accountId}',
+        _tabOperation(tab.id),
+      ]);
+      if (snapshot.projectById(id) != null) kept[tab.id] = id;
+    }
+    return kept;
+  }
+
+  /// Closes each of v3's tab projects ([_tabProjects]), once: gone from the server, or kept read-only when one of its
   /// chats has a message (backend `project.closeTab`). One the server no longer lists, or will not close as a tab's, is
-  /// forgotten. A failure waits as a refused create does; whether any closed.
+  /// forgotten. One with an agent in it waits: a close would take its agents out of the Swarm. A failure waits as a
+  /// refused create does; whether any closed.
+  ///
+  /// Compatibility with v3's tab projects only: goes once Desktops older than 2026-11-10 can no longer make one
+  /// (2026-12-10).
   Future<bool> _closeTabs(SuperTabController c) async {
-    final tabs = _tabs[c.accountId]?[c.tabId];
-    if (tabs == null || tabs.isEmpty) return false;
+    final tabs = _tabProjects(c);
+    if (tabs.isEmpty) return false;
     var changed = false;
     for (final MapEntry(key: tab, value: id) in tabs.entries.toList()) {
       final key = '${c.accountId}/${c.tabId}/$_tabPrefix$tab';
@@ -497,6 +531,7 @@ class PersonalProjects extends ChangeNotifier {
       if (retryAt != null && clock.now().isBefore(retryAt)) continue;
       final project = c.snapshot?.projectById(id);
       if (project != null && !project.archived) {
+        if (c.snapshot!.agents.any((a) => a.projectId == id)) continue;
         try {
           await c.request(
             'POST',

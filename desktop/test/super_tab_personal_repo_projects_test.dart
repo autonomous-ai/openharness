@@ -10,6 +10,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/swarm.dart';
 import 'package:harness/state/terminal_pane.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart' show stableId;
 import 'package:harness/super_tabs/personal_projects.dart';
 import 'package:harness/super_tabs/swarm_switcher.dart';
 import 'package:harness/super_tabs/workspace.dart';
@@ -296,6 +297,94 @@ void main() {
       );
       expect(kept[tabId], isNot(contains('layouts')));
       expect(kept[tabId], isNot(contains('order')));
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'a tab project another computer made is found by its desk tab and closed; one with an agent in it waits, out of the list',
+    (tester) async {
+      // Tab `one`'s project, which this computer has no record of: the server made its id from the Swarm, the person and
+      // the request (backend `project.create`).
+      final other = stableId([tabId, 'person:owner', tabOperation('one')]);
+      final (:f, :c, gh: _) = await open(
+        tester,
+        before: (f) async {
+          final server = f.connection.server.state;
+          final projects = server['projects'] ??= [
+            projectFixture('lead', 'Personal', 'lead'),
+          ];
+          final chats = server['conversations'] as List;
+          for (final (id, name) in [(other, 'one'), ('tab-two', 'two')]) {
+            (projects as List).add(
+              projectFixture(id, name, 'chat-$id', visibility: 'private'),
+            );
+            chats.add({
+              ...conversationFixture('chat-$id', 'Lead'),
+              'projectId': id,
+            });
+          }
+          // Tab `two`'s project has a PM in it: closing it would take the PM out of the Swarm.
+          (server['agents'] ??= <dynamic>[]).add({
+            'id': 'pm-two',
+            'projectId': 'tab-two',
+            'name': 'River',
+            'displayName': 'River',
+            'machineId': 'm',
+            'harnessId': 'pm-two',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'claude'},
+            'kind': 'pm',
+          });
+          await f.app.superTabs.storage.write(
+            PersonalProjects.storageKey('owner'),
+            jsonEncode({
+              tabId: {
+                'projects': {'tab:two': 'tab-two'},
+                'renamed': <String>[],
+              },
+            }),
+          );
+        },
+      );
+      expect(sent(f, 'project.closeTab'), [
+        {
+          'type': 'project.closeTab',
+          'projectId': other,
+          'tabOperation': tabOperation('one'),
+        },
+      ]);
+      expect(listed(c), unorderedEquals(['Personal', 'api', 'web']));
+      expect(c.snapshot!.projectById('tab-two'), isNotNull);
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'an agent started in the Swarm, with no pane in a tab, makes the repo it works in a project',
+    (tester) async {
+      final (:f, :c, gh: _) = await open(
+        tester,
+        before: (f) async {
+          f.app.machineStates['m']!.agents = [
+            ...f.app.machineStates['m']!.agents,
+            session('docs', 'Docs bot', remote: 'git@github.com:acme/docs.git'),
+          ];
+          (f.connection.server.state['agents'] ??= <dynamic>[]).add({
+            'id': 'docs-bot',
+            'projectId': 'lead',
+            'name': 'Docs bot',
+            'displayName': 'Docs bot',
+            'machineId': 'm',
+            'harnessId': 'docs',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'claude'},
+            'kind': 'regular',
+            'myAgent': true,
+          });
+        },
+      );
+      expect(listed(c), unorderedEquals(['Personal', 'api', 'docs', 'web']));
       await close(tester, f, c);
     },
   );
