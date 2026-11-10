@@ -61,6 +61,10 @@ describe('terminal WebRTC data channel', () => {
 
       expect(responder.send('source-1', Buffer.from([0x48, 0x54, 0x52, 0x4d]))).toBe(true)
       expect(await initiatorData).toEqual(Buffer.from([0x48, 0x54, 0x52, 0x4d]))
+      // The answering side reads the nominated pair too: an agent browser's stream is paced by it (gateway.ts).
+      expect(responder.transport('source-1')).toBe(initiator.transport)
+      expect(responder.transport('source-1')).toBe('direct')
+      expect(responder.transport('nobody')).toBeNull()
     } finally {
       log.mockRestore()
       await initiator.stop('test_complete', false)

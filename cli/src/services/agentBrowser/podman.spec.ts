@@ -279,5 +279,15 @@ describe('createPodman', () => {
     const podman = createPodman({ resolve: async () => null, exists: () => false, platform: 'linux' })
     expect((await failure(podman.run(['ps']))).state).toBe('needs_setup')
     expect(() => podman.spawn(['events'])).toThrow(PodmanError)
+    expect(() => podman.argv(['exec'])).toThrow(PodmanError)
+  })
+
+  // A browser stream's exec is started by the core, which has no Podman of its own (core/browserStreams.ts).
+  it('argv is the found podman on its connection', async () => {
+    const podman = found()
+    await podman.path()
+    expect(podman.argv(['exec', '-i', 'c'])).toEqual([fake.path, 'exec', '-i', 'c'])
+    podman.useConnection('harness')
+    expect(podman.argv(['exec', '-i', 'c'])).toEqual([fake.path, '--connection', 'harness', 'exec', '-i', 'c'])
   })
 })

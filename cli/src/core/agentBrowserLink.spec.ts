@@ -90,6 +90,36 @@ describe('the agent browser in its own process, as the core sees it', () => {
     expect(gone.sync).not.toHaveBeenCalled()
   })
 
+  // A viewer's open is answered in line (core/browserStreams.ts), from what the process last said of the browser.
+  it('streamCommand answers from the last state and command the process told', async () => {
+    const { link } = setup([row('a1')])
+    const argv = ['/opt/podman/bin/podman', 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900']
+    expect(link.port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
+    link.port.attached(row('a1'))
+    await link.answer('browser_state', { agentId: 'a1', state: { state: 'starting' } })
+    expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
+    // Ready without a command it can run is not ready.
+    expect(await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: [1] })).toEqual({ error: 'INVALID_REQUEST' })
+    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' } })
+    expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
+    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: argv })
+    expect(link.port.streamCommand('a1')).toEqual({ argv })
+    await link.answer('browser_state', { agentId: 'a1', state: { state: 'failed', error: 'browser_stopped' } })
+    expect(link.port.streamCommand('a1')).toEqual({ error: 'NOT_READY' })
+    await link.answer('browser_state', { agentId: 'a1', state: { state: 'ready' }, command: argv })
+    link.port.stopped('a1')
+    expect(link.port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
+  })
+
+  it('a stop and a delete close the browser\'s viewers at once', () => {
+    const { link } = setup()
+    const closed: string[] = []
+    link.port.onCloseViewers(agentId => closed.push(agentId))
+    link.port.stopped('a1')
+    link.port.deleted('a2')
+    expect(closed).toEqual(['a1', 'a2'])
+  })
+
   it('answers the ids of its agents and the agent of a pane', async () => {
     const { link, ids, ofPane } = setup()
     expect(await link.answer('agent_ids', {})).toEqual({ live: ['a1'], stopped: ['a2'] })

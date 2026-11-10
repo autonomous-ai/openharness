@@ -15,7 +15,10 @@ describe('the agent browser in its own process', () => {
     let options: ServiceProcessOptions | null = null
     let api: CoreApi | null = null
     let given: AgentBrowserOptions | undefined
-    const port: AgentBrowserPort = { attached: vi.fn(), stopped: vi.fn(), deleted: vi.fn(), frameContext: vi.fn(), stop: vi.fn() }
+    const port: AgentBrowserPort = {
+      attached: vi.fn(), stopped: vi.fn(), deleted: vi.fn(), frameContext: vi.fn(), stop: vi.fn(), onCloseViewers: vi.fn(),
+      streamCommand: vi.fn((agentId: string) => (agentId === 'a9' ? { argv: ['podman', 'exec'] } : { error: 'NOT_READY' as const })),
+    }
     const requests = { agent_browser_available: vi.fn() }
     const stop = vi.fn()
     const service = runAgentBrowserService({
@@ -62,6 +65,19 @@ describe('the agent browser in its own process', () => {
     expect(next.mock.calls).toEqual([['browser_state', { agentId: 'a1', state: { state: 'ready' } }]])
     given.told!('a3', { state: 'starting' })
     await Promise.resolve()
+  })
+
+  // The core answers a viewer's open in line, so a ready browser's state carries the exec that reaches it.
+  it('a ready browser\'s state carries its stream command', () => {
+    const { options, given } = setup()
+    const query = vi.fn(async (_query: string, _payload?: Record<string, unknown>) => ({}))
+    options.onConnected!({ query } satisfies CoreConnection)
+    given.told!('a9', { state: 'ready' })
+    given.told!('a1', { state: 'ready' })
+    expect(query.mock.calls).toEqual([
+      ['browser_state', { agentId: 'a9', state: { state: 'ready' }, command: ['podman', 'exec'] }],
+      ['browser_state', { agentId: 'a1', state: { state: 'ready' } }],
+    ])
   })
 
   it('asks the core for its agents\' ids, and a pane\'s agent, and gets no answer when the core cannot say', async () => {

@@ -67,12 +67,14 @@ export function agentBrowserCoreApi(dataDir: string, ask: Ask): CoreApi {
 export function runAgentBrowserService(options: AgentBrowserServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
   const ask: Ask = (query, payload) => (core ? core.query(query, payload) : Promise.reject(new Error('no core to ask')))
+  const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
   /** What each browser last showed: a new core, or the same one after this link dropped, hears all of it again. */
   const shown = new Map<string, BrowserState>()
   const tell = (agentId: string, state: BrowserState | undefined) => {
-    void ask('browser_state', { agentId, ...(state ? { state } : {}) }).catch(() => {})
+    // A ready browser's exec goes with its state: the core opens a viewer's stream with it, in line.
+    const command = state?.state === 'ready' ? ports.agentBrowser?.streamCommand(agentId) : undefined
+    void ask('browser_state', { agentId, ...(state ? { state } : {}), ...(command && 'argv' in command ? { command: command.argv } : {}) }).catch(() => {})
   }
-  const ports: Pick<CorePorts, 'agentBrowser'> = { agentBrowser: null }
   const requests = (options.start ?? startAgentBrowser)(agentBrowserCoreApi(options.dataDir, ask), ports, {
     told: (agentId, state) => {
       if (state) shown.set(agentId, state)

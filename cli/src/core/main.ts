@@ -205,6 +205,7 @@ import { createStoreLink } from './storeLink.js'
 import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
 import { createAgentBrowserLink, wakeAgentBrowser } from './agentBrowserLink.js'
+import { BROWSER_PACING_BYTES_PER_SECOND, BROWSER_WINDOW, BrowserStreamManager } from './browserStreams.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
 import { AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -239,7 +240,7 @@ import { wifiDoors } from './wifiAgents.js'
 import { autonomousDeviceLocalRequest, deviceAddonRoutes, machineAddonRoutes } from '../lib/deviceManagementHttp.js'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
 import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
-import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
+import { BROWSER_CHUNK_BYTES, TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { isInstalledCopy } from '../lib/installedCopy.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
@@ -1250,6 +1251,18 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     moveGate,
   })
   backend.setTerminalStreamManager(terminalStreams)
+  // An agent browser's screen, to the panels open on it (core/browserStreams.ts), on the terminals' transport.
+  const browserStreams = new BrowserStreamManager({
+    command: (agentId) => ports.agentBrowser?.streamCommand(agentId) ?? { error: 'NO_BROWSER' },
+    asker: (connId) => backend.askerFor(connId),
+    sendTarget: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
+    sendBinaryTarget: (connId, frame) => backend.sendTerminalBinaryTo(connId, frame),
+    measure: (metric) => backend.countUsage(metric),
+    pacing: { bytesPerSecond: BROWSER_PACING_BYTES_PER_SECOND },
+    window: BROWSER_WINDOW,
+    chunkBytes: BROWSER_CHUNK_BYTES,
+  })
+  backend.setBrowserStreams(browserStreams)
   // What a harness's pane runs and where, and the desktop's pane colours (core/terminals/requests.ts). A
   // theme is applied only for a frame, well after `agentReconciler` below exists (connect() comes last).
   const terminalRequests = createTerminalRequests({
@@ -1790,6 +1803,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (outOfProcess.has('agentBrowser')) ports.agentBrowser = agentBrowserLink.port
   else serviceHost.start('agentBrowser', inline!.startAgentBrowser, coreApi, AGENT_BROWSER_FALLBACKS, AGENT_BROWSER_REQUESTS)
   browserFrameRef = (agentId) => ports.agentBrowser?.frameContext(agentId)
+  ports.agentBrowser?.onCloseViewers((agentId) => browserStreams.closeAgent(agentId))
   backend.browserFrameProvider = browserFrameRef
   // Models: grid access and its pin, the model pictures on agents' frames, the keystroke prewarm, where an
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):

@@ -1077,11 +1077,18 @@ export interface AgentBrowserPort {
   /** The agent was purged: its browser and its profile go. */
   deleted(agentId: string): void
   frameContext(agentId: string): AgentBrowserFrame | undefined
+  /** How the core reaches a ready browser's screen for a viewer (core/browserStreams.ts): Podman's path, then
+   *  `exec -i harness-browser-<id> socat STDIO TCP:127.0.0.1:5900`. Read in line, as `frameContext` is. */
+  streamCommand(agentId: string): { argv: string[] } | { error: 'NO_BROWSER' | 'NOT_READY' }
+  /** [listener] hears an agent whose browser stops or goes: its viewers' streams end with it. */
+  onCloseViewers(listener: (agentId: string) => void): void
   stop(): void
 }
-/** What the core gets when the agent browser fails: nothing told, and frames without a browser. A purge it misses is
- *  finished when it next starts, which deletes the browser of every agent that is gone. */
-export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = { attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, stop: undefined }
+/** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream to open. A
+ *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. */
+export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
+  attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, streamCommand: { error: 'NOT_READY' }, onCloseViewers: undefined, stop: undefined,
+}
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
 export interface ViewersPort {
@@ -1722,6 +1729,10 @@ export interface GatewayPort {
   stop(): Promise<void>
 }
 
+/** The wire an agent browser's stream rides, fixed when it opens: a direct P2P link, a P2P link through TURN (billed per
+ *  GB), or the backend's relay. */
+export type BrowserRoute = 'direct' | 'turn' | 'relay'
+
 /** What the gateway tells the core. In the core's process these are calls; in the gateway's own, frames
  *  on the link the master started it with, which no other process can open. */
 export interface GatewayEvents {
@@ -1767,6 +1778,12 @@ export interface GatewayEvents {
   toWindows(frame: Record<string, unknown>): void
   /** What a shared tab's relay said (`GatewayOps.tabRelay`), for Agent Messages. */
   tabFrame(event: TabFrame): void
+  /** The route an agent browser's stream opened on, which it keeps (core/browserStreams.ts): its profile and pacing. */
+  browserRoute(streamId: string, route: BrowserRoute): void
+  /** A browser stream's route went away, or one of its frames could not be sent on it: it ends. */
+  browserRouteLost(streamId: string): void
+  /** The backend refused one of this machine's relayed browser frames (`agent_browser_transport_error`). */
+  browserTransportError(): void
 }
 
 /**

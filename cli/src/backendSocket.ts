@@ -7,6 +7,7 @@ import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type 
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import { countWindows } from './lib/windowSurfaces.js'
 import type { ViewerStreams } from './core/viewerStreams.js'
+import type { BrowserStreamManager } from './core/browserStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
 import type { WifiCore } from './core/wifi.js'
@@ -127,6 +128,7 @@ export class BackendSocket {
   /** The windows that are `harness tui`, not the desktop app: each surface is its own presence. */
   private readonly tuiClients = new Set<string>()
   private terminalStreams: TerminalStreamManager | null = null
+  private browserStreams: BrowserStreamManager | null = null
   private onStatus: (connected: boolean) => void
   /** Cross-instance commander (device) client count, as the gateway reads it from the backend. */
   private commanderCount = 0
@@ -452,11 +454,13 @@ export class BackendSocket {
       }
       if (!this.remoteClients.delete(connId)) return
       this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+      this.browserStreams?.closeConnection(connId)
     },
     disconnected: async (connId) => {
       this.wifi?.dropped(connId)
       this.remoteClients.delete(connId)
       this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
+      this.browserStreams?.closeConnection(connId)
       await this.terminalStreams?.closeConnection(
         connId,
         'client connection closed',
@@ -475,6 +479,7 @@ export class BackendSocket {
     linkDown: () => {
       this.observers?.closeAll()
       this.viewerStreams?.closedAll(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
+      for (const connId of this.remoteClients.keys()) this.browserStreams?.closeConnection(connId)
       void this.terminalStreams?.closeConnectionsWhere(
         (connId) => !isLocalClientId(connId),
         'backend disconnected',
@@ -515,6 +520,9 @@ export class BackendSocket {
     deviceRevoked: (identity) => this.wifi?.revoked(identity),
     toWindows: (frame) => this.sendLocal(frame),
     tabFrame: (event) => this.onTabFrame?.(event),
+    browserRoute: (streamId, route) => this.browserStreams?.route(streamId, route),
+    browserRouteLost: (streamId) => this.browserStreams?.routeLost(streamId),
+    browserTransportError: () => this.browserStreams?.transportError(),
   }
 
   /** The Wi-Fi device's sessions and requests, as the gateway hands them on, for its service with the
@@ -535,6 +543,10 @@ export class BackendSocket {
 
   setTerminalStreamManager(manager: TerminalStreamManager): void {
     this.terminalStreams = manager
+  }
+
+  setBrowserStreams(manager: BrowserStreamManager): void {
+    this.browserStreams = manager
   }
 
   /** The account's private harness grid name, as the backend last reported it. Null until the first
@@ -809,6 +821,7 @@ export class BackendSocket {
     // is concerned, and the gateway does not tell a later link otherwise.
     this.gatewayPort?.localClients(this.localWindows())
     this.downChains.delete(connId)
+    this.browserStreams?.closeConnection(connId)
     await this.terminalStreams?.closeConnection(connId, 'local client disconnected', false)
   }
 
@@ -834,6 +847,7 @@ export class BackendSocket {
   /** Route an authenticated local terminal frame without applying cloud E2EE. */
   async handleLocalBinary(connId: string, frame: TerminalBinaryClear): Promise<void> {
     if (!this.localClients.has(connId)) return
+    if (frame.kind === TerminalBinaryKind.browser) { this.browserStreams?.input(connId, frame.streamId, frame.bytes); return }
     await this.terminalStreams?.handleBinary(connId, frame)
   }
 
@@ -915,6 +929,8 @@ export class BackendSocket {
    * stay in line with its begin and cancel.
    */
   private enqueueTerminalBinary(connId: string, clear: TerminalBinaryClear): Promise<void> {
+    // A viewer's keys and mouse, written at once in the order they came: the stream's exec waits on nothing else.
+    if (clear.kind === TerminalBinaryKind.browser) { this.browserStreams?.input(connId, clear.streamId, clear.bytes); return Promise.resolve() }
     const traced = env.TYPING_TRACE && clear.kind === TerminalBinaryKind.input
     const queuedAt = traced ? performance.now() : 0
     return this.inStreamLane(connId, clear.streamId, async () => {
@@ -1091,6 +1107,11 @@ export class BackendSocket {
       if (VIEWER_DOWN_TYPES.has(type) && owner) this.viewerStreams?.frame(connId, type, payload)
       return
     }
+
+    // An agent browser's stream (core/browserStreams.ts), which decides who may open one. Its route is the gateway's.
+    if (type === 'agent_browser_open') { this.browserStreams?.open(connId, payload); return }
+    if (type === 'agent_browser_ack') { this.browserStreams?.ack(connId, payload); return }
+    if (type === 'agent_browser_close') { this.browserStreams?.close(connId, payload); return }
 
     // Which of a remote client's terminal streams ride its P2P channel is the gateway's, which noted this
     // frame's route as it opened it.

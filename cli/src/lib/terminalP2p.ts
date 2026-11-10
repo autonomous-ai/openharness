@@ -635,6 +635,19 @@ export class TerminalP2pResponderPool {
     return true
   }
 
+  /** Which path ICE nominated for this connection's channel, as the initiator's `transport` reads it: 'relay' is
+   *  Cloudflare TURN, billed per GB. Null while it negotiates, or when werift exposes no pair. */
+  transport(connId: string): 'direct' | 'relay' | null {
+    const entry = this.entries.get(connId)
+    if (!entry?.ready) return null
+    for (const iceTransport of entry.pc.iceTransports) {
+      const pair = iceTransport.getSelectedCandidatePair?.()
+      if (!pair?.local?.candidate) continue
+      return isRelayedPair(pair.local.candidate, pair.remote?.candidate) ? 'relay' : 'direct'
+    }
+    return null
+  }
+
   send(connId: string, data: TerminalP2pData): boolean {
     const entry = this.entries.get(connId)
     const channel = entry?.channel ?? null

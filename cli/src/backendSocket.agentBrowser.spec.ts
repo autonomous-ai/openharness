@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BackendSocket } from './backendSocket.js'
 import { env } from './config/env.js'
 import type { Asker, RemoteClient } from './core/api.js'
+import type { BrowserStreamManager } from './core/browserStreams.js'
+import { TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import * as logModule from './lib/log.js'
-import { gatewayOf, relaySocket } from './testing/relaySocket.js'
+import { dispatchDown, gatewayOf, relaySocket } from './testing/relaySocket.js'
 
 type Frame = { type: string; payload: Record<string, unknown> }
 const SETTLED = { timeout: 10_000 }
@@ -78,5 +80,83 @@ describe('the agent browser through the socket', () => {
     expect(socket.askerFor('guest-1')).toEqual({ local: false, owner: false, accountOwner: false, guest: 'kim@acme.io', connection: 'guest-1' })
     expect(socket.askerFor('dial-1')).toEqual({ local: false, owner: false, accountOwner: false, connection: 'dial-1' })
     expect(socket.askerFor('gone')).toEqual({ local: false, owner: false, accountOwner: false, connection: 'gone' })
+  })
+})
+
+// A browser stream is wired beside the terminal's (core/browserStreams.ts): every way a terminal stream ends, it ends too.
+describe('agent browser streams through the socket', () => {
+  const STREAM = '00000000-0000-4000-8000-0000000000d1'
+  const screen: TerminalBinaryClear = { kind: TerminalBinaryKind.browser, streamId: STREAM, seq: 1, compressed: false, bytes: new Uint8Array([1, 2]) }
+  const web: RemoteClient = { role: 'web', label: null, identity: 'i', direct: false, accountOwner: true }
+  let socket: BackendSocket
+  let streams: { [K in 'open' | 'ack' | 'close' | 'input' | 'closeConnection' | 'route' | 'routeLost' | 'transportError']: ReturnType<typeof vi.fn> }
+  let terminals: { handleBinary: ReturnType<typeof vi.fn>; handleFrame: ReturnType<typeof vi.fn>; closeConnection: ReturnType<typeof vi.fn>; closeConnectionsWhere: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }
+
+  beforeEach(() => {
+    socket = relaySocket('fixture')
+    streams = { open: vi.fn(), ack: vi.fn(), close: vi.fn(), input: vi.fn(), closeConnection: vi.fn(), route: vi.fn(), routeLost: vi.fn(), transportError: vi.fn() }
+    socket.setBrowserStreams(streams as unknown as BrowserStreamManager)
+    terminals = { handleBinary: vi.fn(async () => {}), handleFrame: vi.fn(async () => false), closeConnection: vi.fn(async () => {}), closeConnectionsWhere: vi.fn(async () => {}), stop: vi.fn(async () => {}) }
+    socket.setTerminalStreamManager(terminals as never)
+  })
+  afterEach(async () => {
+    await socket.stop()
+    vi.restoreAllMocks()
+  })
+
+  it('a window\'s and a remote client\'s stream frames reach the streams, and nothing else answers them', async () => {
+    socket.registerLocalClient('local:w', { sendFrame: () => true, sendBinary: () => true })
+    const routed = vi.fn(() => false)
+    socket.serviceRouter = routed
+    socket.handleLocalFrame('local:w', { type: 'agent_browser_open', payload: { requestId: 'r1', agentId: 'a1' } })
+    socket.handleLocalFrame('local:w', { type: 'agent_browser_ack', payload: { streamId: STREAM, bytes: 65536 } })
+    await socket.fromGateway.frame('mac-2', { type: 'agent_browser_close', payload: { streamId: STREAM } }, 'relay', 'web')
+    await vi.waitFor(() => expect(streams.ack).toHaveBeenCalledWith('local:w', { streamId: STREAM, bytes: 65536 }), SETTLED)
+    expect(streams.open).toHaveBeenCalledWith('local:w', { requestId: 'r1', agentId: 'a1' })
+    expect(streams.close).toHaveBeenCalledWith('mac-2', { streamId: STREAM })
+    expect(routed).not.toHaveBeenCalled()
+    expect(terminals.handleFrame).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:w')
+  })
+
+  it('local agent: kind 8 from the app reaches handleLocalBinary', async () => {
+    socket.registerLocalClient('local:w', { sendFrame: () => true, sendBinary: () => true })
+    await socket.handleLocalBinary('local:w', screen)
+    expect(streams.input).toHaveBeenCalledWith('local:w', STREAM, screen.bytes)
+    expect(terminals.handleBinary).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:w')
+  })
+
+  it('a remote client\'s kind 8 reaches the streams, and a terminal\'s bytes still reach the terminals', async () => {
+    await socket.fromGateway.binary('mac-2', screen)
+    const keystroke = { ...screen, kind: TerminalBinaryKind.input }
+    await socket.fromGateway.binary('mac-2', keystroke)
+    expect(streams.input.mock.calls).toEqual([['mac-2', STREAM, screen.bytes]])
+    expect(terminals.handleBinary.mock.calls).toEqual([['mac-2', keystroke]])
+  })
+
+  it('client disconnected, link down and local window gone each close that connection\'s streams and kill the execs', async () => {
+    socket.fromGateway.client('mac-2', web)
+    socket.fromGateway.client('mac-2', null)
+    await socket.fromGateway.disconnected('mac-3')
+    socket.fromGateway.client('mac-4', web)
+    socket.fromGateway.linkDown()
+    socket.registerLocalClient('local:w', { sendFrame: () => true, sendBinary: () => true })
+    await socket.unregisterLocalClient('local:w')
+    expect(streams.closeConnection.mock.calls).toEqual([['mac-2'], ['mac-3'], ['mac-4'], ['local:w']])
+  })
+
+  it('the gateway\'s route, lost route and transport error reach the streams', () => {
+    socket.fromGateway.browserRoute(STREAM, 'turn')
+    socket.fromGateway.browserRouteLost(STREAM)
+    socket.fromGateway.browserTransportError()
+    expect(streams.route).toHaveBeenCalledWith(STREAM, 'turn')
+    expect(streams.routeLost).toHaveBeenCalledWith(STREAM)
+    expect(streams.transportError).toHaveBeenCalledTimes(1)
+  })
+
+  it('the backend\'s agent_browser_transport_error reaches transportError', async () => {
+    await dispatchDown(socket, { type: 'agent_browser_transport_error', payload: { code: 'RATE' } }, '')
+    expect(streams.transportError).toHaveBeenCalledTimes(1)
   })
 })

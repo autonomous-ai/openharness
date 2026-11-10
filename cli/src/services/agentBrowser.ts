@@ -34,6 +34,8 @@ type Reply = Record<string, unknown>
 const RESTART_TIMEOUT_MS = 30_000
 const RESTART_ARGS = ['/r', '/t', '10', '/c', 'Harness is restarting Windows to finish setting up Browser']
 const LOCAL_ONLY = { error: 'LOCAL_ONLY' }
+// Xvnc listens on 5900 inside the container only (no published port): a viewer's bytes reach it through an exec.
+const VNC_PIPE = ['socat', 'STDIO', 'TCP:127.0.0.1:5900']
 
 export interface AgentBrowserOptions {
   /** How the core hears a browser's state when this runs in a process of its own (services/agentBrowserProcess.ts);
@@ -78,6 +80,9 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   const state = new StateFile(statePath)
   const runHere = options.setup?.run ?? run
 
+  const containers = new Containers(podman, daemonId, log)
+  /** The core's streams to this machine's browsers (core/browserStreams.ts), told when one stops or goes. */
+  const viewerListeners: Array<(agentId: string) => void> = []
   // Built after setup, which tells it each step.
   let browsers: Browsers
   const setup = new Setup({
@@ -89,7 +94,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
   })
   browsers = new Browsers({
     podman, setup, state, log,
-    containers: new Containers(podman, daemonId, log),
+    containers,
     image: () => ensureImage(podman, now(), log),
     host: options.host ?? machineHost(),
     exitZone: proxy => exitZone(proxy, options.lookup),
@@ -98,8 +103,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       const session = core.agents.byAgent(agentId)
       if (session) core.agents.sync(session)
     },
-    // No stream reaches a browser yet, so there is no viewer to close.
-    closeViewers: () => {},
+    closeViewers: agentId => { for (const listener of viewerListeners) listener(agentId) },
     measure: count,
   })
 
@@ -151,6 +155,14 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       void browsers.delete(agentId)
     },
     frameContext: agentId => browsers.state(agentId),
+    streamCommand(agentId) {
+      const shown = browsers.state(agentId)
+      if (!shown) return { error: 'NO_BROWSER' }
+      if (shown.state !== 'ready') return { error: 'NOT_READY' }
+      // Ready means Podman was found: it started this container.
+      return { argv: podman.argv(containers.execArgs(agentId, VNC_PIPE)) }
+    },
+    onCloseViewers: listener => { viewerListeners.push(listener) },
     stop() {
       stopped = true
       events?.close()

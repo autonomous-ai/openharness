@@ -48,6 +48,7 @@ function rig(options: Rig = {}) {
       return { stdout: args[1] === 'list' ? JSON.stringify(options.machines ?? []) : '', stderr: '' }
     }),
     spawn: () => { throw new Error('setup never spawns') },
+    argv: () => { throw new Error('setup never spawns') },
     available: async (): Promise<Availability> => ({ state: 'needs_setup', restart: platform === 'win32' && !options.wsl2, ...(options.ownMachine ? { ownMachine: true as const } : {}) }),
     startMachine: vi.fn(async () => { podmanRuns.push(['machine', 'start']); startedOn.push(connection) }),
     memoryBytes: async () => 0,

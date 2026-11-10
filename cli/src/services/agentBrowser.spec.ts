@@ -149,6 +149,31 @@ describe('the agent browser service', () => {
     expect(asked()).toHaveLength(before)
   })
 
+  // The core pipes a viewer to the container's VNC through this command (core/browserStreams.ts).
+  it('streamCommand is NO_BROWSER, NOT_READY, then the exec into the ready browser', async () => {
+    const { port } = start()
+    expect(port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
+    port.attached(session('a1'))
+    await ready(port, 'a1')
+    expect(port.streamCommand('a1')).toEqual({ argv: [fake.path, 'exec', '-i', 'harness-browser-a1', 'socat', 'STDIO', 'TCP:127.0.0.1:5900'] })
+    fake.reply('info --format json', { stdout: JSON.stringify({ version: { Version: '4.3.0' }, host: { memTotal: 8 * GiB } }) })
+    const old = start(fakeCore({ dataDir: mkdtempSync(join(dataDir, 'old-')) }))
+    old.port.attached(session('a2'))
+    await eventually(() => expect(old.port.frameContext('a2')).toEqual({ state: 'failed', error: 'podman_old' }))
+    expect(old.port.streamCommand('a2')).toEqual({ error: 'NOT_READY' })
+  })
+
+  it('a stop and a delete close the browser\'s viewers', async () => {
+    const { port } = start()
+    const closed: string[] = []
+    port.onCloseViewers(agentId => closed.push(agentId))
+    port.attached(session('a1'))
+    await ready(port, 'a1')
+    port.stopped('a1')
+    port.deleted('a1')
+    expect(closed).toEqual(['a1', 'a1'])
+  })
+
   it('frameContext follows state and calls core.agents.sync on change', async () => {
     const row = session('a1')
     const sync = vi.fn()

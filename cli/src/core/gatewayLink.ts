@@ -480,6 +480,18 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         if (event) events.tabFrame(event)
         return
       }
+      case 'browserRoute': {
+        const streamId = text(payload.streamId)
+        const route = payload.route
+        if (streamId && (route === 'direct' || route === 'turn' || route === 'relay')) events.browserRoute(streamId, route)
+        return
+      }
+      case 'browserRouteLost':
+        if (text(payload.streamId)) events.browserRouteLost(text(payload.streamId))
+        return
+      case 'browserTransportError':
+        events.browserTransportError()
+        return
       case 'windowOpened': {
         const window = windows.get(text(payload.id))
         if (!window?.opening) return

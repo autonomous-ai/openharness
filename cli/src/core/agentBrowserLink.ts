@@ -8,7 +8,8 @@
  * for the process, which runs only once a browser is wanted here, or as the core starts when its state file is there.
  *
  * An agent's frame reads its browser in line, and cannot wait on another process: the process tells the core each
- * browser's state as it changes (`browser_state`), and the port answers from the last of them. The core keeps them
+ * browser's state as it changes (`browser_state`, with the exec into it once it is ready), and the port answers from the
+ * last of them, a viewer's stream command too. The core keeps them
  * only for the agents it attached and has not since stopped or deleted, so a late word never brings a browser back.
  *
  * The process asks the core what only the core knows: its agents' ids (`agent_ids`), the agent of a pane
@@ -36,6 +37,11 @@ function browserState(value: unknown): AgentBrowserFrame | null {
   return { state: state as AgentBrowserFrame['state'], ...(step !== undefined ? { step } : {}), ...(error !== undefined ? { error } : {}) }
 }
 
+/** A command line the process gave, or null for anything else: the core starts it as it is. */
+function argvOf(value: unknown): string[] | null {
+  return Array.isArray(value) && value.length > 0 && value.every(part => typeof part === 'string' && part) ? value as string[] : null
+}
+
 export function createAgentBrowserLink(deps: {
   core: Pick<CoreApi, 'agents' | 'count'>
   notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean
@@ -45,11 +51,17 @@ export function createAgentBrowserLink(deps: {
   const { core, notify } = deps
   const attached = new Set<string>()
   const states = new Map<string, AgentBrowserFrame>()
+  /** The exec into each ready browser, as the process said it with that state. */
+  const commands = new Map<string, string[]>()
+  const viewerListeners: Array<(agentId: string) => void> = []
   let up = false
   const event = (payload: Payload, opts?: { untilDelivered?: boolean }) => { notify({ type: 'service_event', payload }, opts) }
+  // A stop or a purge ends the browser's viewers here and now, whether or not the process is there to hear it.
   const forget = (agentId: string) => {
     attached.delete(agentId)
     states.delete(agentId)
+    commands.delete(agentId)
+    for (const listener of viewerListeners) listener(agentId)
   }
 
   const port: AgentBrowserPort = {
@@ -68,6 +80,13 @@ export function createAgentBrowserLink(deps: {
       event({ kind: 'deleted', agentId }, { untilDelivered: true })
     },
     frameContext: agentId => states.get(agentId),
+    streamCommand: (agentId) => {
+      const shown = states.get(agentId)
+      if (!shown) return { error: 'NO_BROWSER' }
+      const argv = commands.get(agentId)
+      return shown.state === 'ready' && argv ? { argv } : { error: 'NOT_READY' }
+    },
+    onCloseViewers: listener => { viewerListeners.push(listener) },
     stop: () => {},
   }
 
@@ -75,10 +94,13 @@ export function createAgentBrowserLink(deps: {
     if (query === 'browser_state') {
       const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
       const state = payload.state === undefined ? undefined : browserState(payload.state)
-      if (!agentId || state === null) return INVALID
+      const command = payload.command === undefined ? undefined : argvOf(payload.command)
+      if (!agentId || state === null || command === null) return INVALID
       if (!attached.has(agentId)) return { ok: true }
       if (state) states.set(agentId, state)
       else states.delete(agentId)
+      if (command && state?.state === 'ready') commands.set(agentId, command)
+      else commands.delete(agentId)
       const session = core.agents.byAgent(agentId)
       if (session) core.agents.sync(session)
       return { ok: true }
