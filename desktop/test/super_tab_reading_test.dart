@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/profile_model.dart';
 import 'package:harness/super_tabs/reading.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -345,26 +344,14 @@ void main() {
         final c = _controller(reads, reading: SuperTabReading.desktop)..start();
         async.elapse(const Duration(seconds: 3));
         reads.clear();
-        // Someone reacts on another device.
-        server.messages.single['reactions'] = [
-          {
-            'emoji': 'thumbs_up',
-            'count': 1,
-            'by': [
-              {'kind': 'person', 'id': 'peer'},
-            ],
-          },
-        ];
-        _conversation(server, 'lead')['reactionSeq'] = 1;
+        // Someone edits it on another device.
+        server.editMessage('message-1', 'Hello again');
         async.elapse(const Duration(seconds: 30));
         expect(leadReads(reads), [
           '/api/super-tabs/tab/conversations/lead/messages?after=1',
           '/api/super-tabs/tab/conversations/lead/messages?before=2',
         ]);
-        expect(
-          c.messages('lead').single.reactions.single.emoji,
-          SuperTabReactionEmoji.thumbsUp,
-        );
+        expect(c.messages('lead').single.text, 'Hello again');
         c.dispose();
       });
     });
@@ -444,7 +431,7 @@ void main() {
           async.elapse(const Duration(seconds: 60));
           expect(reads.states, 4);
           expect(reads.tails, 20);
-          // The page is read again only for a changed reaction.
+          // The page is read again only for an edit or a delete.
           expect(reads.pages, 0);
           c.dispose();
         });

@@ -196,6 +196,73 @@ void main() {
       expect((f.connection.joins.single['command'] as Map)['name'], 'Docs bot');
     });
 
+    // anh Dee 2026-11-10, attaching juno and pip: "they got different name?"
+    test('keeps the name it was started with', () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.journaled = false;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      await swarmAttachAgent(
+        f.app,
+        tabId,
+        'm',
+        running(name: 'juno', chosen: false),
+        wait: (_) async {},
+      );
+      expect(
+        _commands(f).singleWhere((c) => c['type'] == 'agent.new')['name'],
+        'juno',
+      );
+      expect((f.connection.joins.single['command'] as Map)['name'], 'juno');
+    });
+
+    test('a name the Swarm already uses gives way to one of its own', () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.journaled = false;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      (f.connection.server.state['agents'] as List).add({
+        'id': 'other',
+        'machineId': 'm2',
+        'harnessId': 'other-harness',
+        'name': 'Juno',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'codex'},
+      });
+      await swarmAttachAgent(
+        f.app,
+        tabId,
+        'm',
+        running(name: 'juno'),
+        wait: (_) async {},
+      );
+      final name = _commands(f)
+          .singleWhere((c) => c['type'] == 'agent.new')['name'];
+      expect(agentNames, contains(name));
+      expect(name, isNot('Juno'));
+      expect((f.connection.joins.single['command'] as Map)['name'], name);
+    });
+
+    test('a name the server refuses gives way to one of its own', () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.journaled = false;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      f.connection.failNew = const SuperTabFailure(
+        'AGENT_NAME_TAKEN',
+        'juno is taken in this Swarm. Choose another.',
+        statusCode: 409,
+      );
+      await swarmAttachAgent(
+        f.app,
+        tabId,
+        'm',
+        running(name: 'juno'),
+        wait: (_) async {},
+      );
+      final name = _commands(f)
+          .singleWhere((c) => c['type'] == 'agent.new')['name'];
+      expect(agentNames, contains(name));
+      expect((f.connection.joins.single['command'] as Map)['name'], name);
+    });
+
     test(
       'a session of another engine is refused before anything is sent',
       () async {

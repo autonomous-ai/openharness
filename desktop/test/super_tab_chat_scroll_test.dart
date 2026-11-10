@@ -63,10 +63,11 @@ void main() {
   void fromAgent(ConversationServer server) => server.messages.last['author'] =
       {'kind': 'agent', 'id': 'lead-agent', 'name': 'Lead'};
 
-  /// A reaction changes somewhere in the conversation: the next read takes
-  /// the page shown again, with every receipt in it as it is now. A receipt
-  /// alone is no reason to (spec 2026-11-02-poll-cost, Part 2).
-  void reacted(ConversationServer server) {
+  /// A row changes somewhere in the conversation (an edit or a delete moves
+  /// the counter): the next read takes the page shown again, with every
+  /// receipt in it as it is now. A receipt alone is no reason to (spec
+  /// 2026-11-02-poll-cost, Part 2).
+  void rowChanged(ConversationServer server) {
     final group = (server.state['conversations'] as List).first as Map;
     group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
   }
@@ -144,7 +145,7 @@ void main() {
       server.messages.first['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
-      reacted(server);
+      rowChanged(server);
       await c.refresh();
       await tester.pumpAndSettle();
 
@@ -175,7 +176,7 @@ void main() {
       server.messages.last['deliveries'] = [
         {'id': 'delivery-1', 'agentId': 'lead-agent', 'status': 'uncertain'},
       ];
-      reacted(server);
+      rowChanged(server);
       await c.refresh();
       await tester.pumpAndSettle();
       expect(find.text("Couldn't confirm delivery"), findsOneWidget);
