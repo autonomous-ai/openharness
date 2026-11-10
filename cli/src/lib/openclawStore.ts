@@ -4,8 +4,9 @@
  * The state folder is not in the TUI's arguments (it renames its process to a bare `openclaw`) and not in the
  * transcript. What the TUI does show is the file it holds open: `<stateDir>/state/openclaw.sqlite` (`ps-*.txt`,
  * Linux `/proc/<pid>/fd`, macOS `lsof`). That is the one exact answer, and it also covers a `--profile` or `--dev`
- * TUI, whose state folder is `~/.openclaw-<name>`. Where open files cannot be read (Windows), or for a session
- * whose TUI has exited, OpenClaw's own default is used: `OPENCLAW_STATE_DIR`, else `~/.openclaw`.
+ * TUI, whose state folder is `~/.openclaw-<name>`. A session whose TUI has exited is read from the folder its TUI held
+ * when it was bound (`RegisteredSession.openclawStateDir`). Where neither is known (Windows reads no open files),
+ * OpenClaw's own default is used: `OPENCLAW_STATE_DIR`, else `~/.openclaw`.
  *
  * The agent's folder is `<stateDir>/agents/<agentId>/agent/` unless `openclaw.json` moves it
  * (`agents.entries.<id>.agentDir`). The config is read, never written.
@@ -36,20 +37,19 @@ export function stateDirOfOpenFiles(files: readonly string[]): string | null {
   return database ? dirname(dirname(database)) : null
 }
 
-/** The state folder of the TUI with this pid: its open state database, else OpenClaw's default. */
-export async function openclawStateDir(pid: number, openFiles: (pid: number) => Promise<string[]> = nativeOpenFiles): Promise<string> {
+/** The state folder the TUI with this pid holds open, or null when it holds none or its files cannot be read. */
+export async function openclawStateDir(pid: number, openFiles: (pid: number) => Promise<string[]> = nativeOpenFiles): Promise<string | null> {
   const hit = cache.get(pid)
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.stateDir
+  if (pid <= 0) return null
   let held: string | null = null
-  if (pid > 0) {
-    try {
-      held = stateDirOfOpenFiles(await openFiles(pid))
-    } catch (error) {
-      // Windows has neither /proc nor lsof; a TUI that exited has no files. The default is still right for most.
-      once(`[openclaw] open files of ${pid} unreadable · ${error instanceof Error ? error.message : String(error)} · using ${env.OPENCLAW_STATE_DIR}`)
-    }
+  try {
+    held = stateDirOfOpenFiles(await openFiles(pid))
+  } catch (error) {
+    // Windows has neither /proc nor lsof; a TUI that exited has no files.
+    once(`[openclaw] open files of ${pid} unreadable · ${error instanceof Error ? error.message : String(error)}`)
   }
-  if (!held) return env.OPENCLAW_STATE_DIR
+  if (!held) return null
   if (cache.size >= CACHE_LIMIT) cache.clear()
   cache.set(pid, { stateDir: held, at: Date.now() })
   return held
@@ -72,10 +72,17 @@ async function configuredAgentDir(stateDir: string, agentId: string): Promise<st
   }
 }
 
-/** The agent database that holds `key` (`agent:<agentId>:<key>`), for the TUI with this pid; null for no key. */
-export async function openclawSessionDb(key: string, pane: { pid: number }, openFiles?: (pid: number) => Promise<string[]>): Promise<string | null> {
+/**
+ * The agent database that holds `key` (`agent:<agentId>:<key>`): in the state folder the TUI with this pid holds open,
+ * else the one it held when bound, else OpenClaw's default. Null for no key.
+ */
+export async function openclawSessionDb(
+  key: string,
+  pane: { pid: number; stateDir?: string | null },
+  openFiles?: (pid: number) => Promise<string[]>,
+): Promise<string | null> {
   const agentId = OPENCLAW_KEY.exec(key)?.[1]
   if (!agentId) return null
-  const stateDir = await openclawStateDir(pane.pid, openFiles)
+  const stateDir = await openclawStateDir(pane.pid, openFiles) ?? (pane.stateDir || env.OPENCLAW_STATE_DIR)
   return openclawAgentDb(stateDir, agentId, await configuredAgentDir(stateDir, agentId))
 }

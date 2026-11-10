@@ -29,7 +29,7 @@ export const databaseHistory = (s: RegisteredSession): (() => Promise<readonly L
     case 'devin': return async () => devinMessagesToEvents(await readDevinMessages(join(env.DEVIN_HOME, 'sessions.db'), s.sessionId))
     case 'hermes': return async () => hermesMessagesToEvents(await readHermesMessages(await hermesDbForSession(s), s.sessionId))
     case 'openclaw': return async () => {
-      const db = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0 })
+      const db = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
       return db ? openclawMessagesToEvents(await readOpenclawHistory(db, s.sessionId)) : []
     }
     default: return undefined

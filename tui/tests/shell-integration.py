@@ -323,6 +323,10 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                     result = s.request('pi','route','grid one\nmodel/test')
                     assert b'cm routing is not supported for pi' in result
                     assert len(s.calls()) == before, 'Pi must not silently use a different model'
+                    # OpenClaw's maintenance commands are not agents: they run as they are, and never ask cm for a route.
+                    for command,args in [('openclaw gateway run',['gateway','run']),('openclaw onboard',['onboard']),('openclaw logs --follow',['logs','--follow'])]:
+                        s.send(command+'\r'); s.read_until(b'READY> ')
+                        assert Path(s.calls()[-1][0]).name == 'openclaw' and s.calls()[-1][1:] == args, (command, s.calls()[-1])
                     s.send('command pi --version\r'); s.read_until(b'READY> ')
                     assert Path(s.calls()[-1][0]).name == 'pi' and s.calls()[-1][1:] == ['--version']
                     s.request('codex "a task with spaces"','route')

@@ -60,7 +60,7 @@ export interface EngineAvailability {
  */
 async function runtimeUnavailable(engine: AgentEngine, command: string): Promise<string | null> {
   if (engine !== 'openclaw') return null
-  const ran = await commandOutputInInteractiveShell(command, OPENCLAW_RUNTIME_PROBE).catch(() => null)
+  const ran = await commandOutputInInteractiveShell(engine, command, OPENCLAW_RUNTIME_PROBE).catch(() => null)
   return ran ? openclawRuntimeState(ran.output) : null
 }
 

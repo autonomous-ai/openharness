@@ -229,6 +229,12 @@ export interface RegisteredSession {
    */
   hermesHome?: string | null
   /**
+   * OpenClaw only: the state folder its TUI held open when the session was bound (lib/openclawStore.ts). A `--profile`
+   * or `--dev` TUI keeps its store outside the default folder, and once the TUI has exited this is where its history,
+   * usage and checkpoint are read from.
+   */
+  openclawStateDir?: string | null
+  /**
    * The domain-specific harness this agent was created as (`autonomous/copper`), or null for a plain
    * engine. NOT a second engine: `engine` stays the base (`claude`, `codex`, …) and every normalizer,
    * probe and install path keys on that. Chosen at creation, carried forward, and re-read off the
@@ -1425,6 +1431,7 @@ class Registry {
           codexHome: typeof rawCodexHome === 'string' && rawCodexHome ? rawCodexHome : null,
           claudeHome: typeof raw?.claudeHome === 'string' && raw.claudeHome ? raw.claudeHome : null,
           hermesHome: typeof raw?.hermesHome === 'string' && raw.hermesHome ? raw.hermesHome : null,
+          ...(typeof raw?.openclawStateDir === 'string' && raw.openclawStateDir ? { openclawStateDir: raw.openclawStateDir } : {}),
           ...normalizedForkedFrom((raw as { forkedFrom?: unknown }).forkedFrom),
           dsh: normalizedDshId((raw as { dsh?: unknown }).dsh),
           dshRuntime: typeof raw.dshRuntime === 'string' && raw.dshRuntime ? raw.dshRuntime : null,
@@ -2169,6 +2176,8 @@ class Registry {
       // forward like every field here: a bind REBUILDS the row, and a home dropped at the first hook
       // would send the mirror back to the default store (openharness#191).
       hermesHome: input.hermesHome ?? existing?.hermesHome ?? null,
+      // Carried forward too: `/new` rebinds the same TUI, and its store is where it was.
+      ...(existing?.openclawStateDir && engine === 'openclaw' ? { openclawStateDir: existing.openclawStateDir } : {}),
       dsh: existing?.dsh ?? null,
       dshRuntime: existing?.dshRuntime ?? null,
       ...(existing?.swarmSkill ? { swarmSkill: existing.swarmSkill } : {}),
@@ -2644,6 +2653,16 @@ class Registry {
     const session = this.agents.get(agentId)
     if (!session || session.engine !== 'hermes' || session.hermesHome) return false
     session.hermesHome = hermesHome
+    session.touchedAt = Date.now()
+    this.save()
+    return true
+  }
+
+  /** Where an OpenClaw session's TUI keeps its state, read off the TUI while it runs: the one it holds now wins. */
+  setOpenclawStateDir(agentId: string, stateDir: string): boolean {
+    const session = this.agents.get(agentId)
+    if (!session || session.engine !== 'openclaw' || session.openclawStateDir === stateDir) return false
+    session.openclawStateDir = stateDir
     session.touchedAt = Date.now()
     this.save()
     return true

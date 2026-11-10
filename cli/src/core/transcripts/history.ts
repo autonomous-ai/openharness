@@ -36,7 +36,7 @@ export interface HistoryDeps {
   pages: Pick<TranscriptPager, 'page' | 'lineCount'>
   readerFor: (engine: string) => EngineTranscript | undefined
   /** The database engines' stores. OpenClaw's is the state folder of the session's own TUI (lib/openclawStore.ts). */
-  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number }) => Promise<string | null> }
+  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number; stateDir?: string | null }) => Promise<string | null> }
   /** Hermes keeps a store per profile: the one this session's lives in. */
   hermesDb: (session: RegisteredSession) => Promise<string>
 }
@@ -119,7 +119,7 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
     ['openclaw', async () => {
       const m = await loadEngine('openclaw')
       return m && databasePage(async (s) => {
-        const db = await dbs.openclaw(s.sessionId, { pid: s.processIdentity?.pid ?? 0 })
+        const db = await dbs.openclaw(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
         return db ? m.readOpenclawHistory(db, s.sessionId) : []
       }, m.openclawMessagesToEvents, m.windowOpenclawEvents)
     }],

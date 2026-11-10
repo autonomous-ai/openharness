@@ -191,6 +191,19 @@ _hn_agent() {
         resume|fork|login|logout|auth|update|completion|mcp|mcp-server|doctor)
             _hn_native "$_hn_engine" "$@"; return $? ;;
     esac
+    # Every OpenClaw command but its TUI is maintenance: the Gateway, onboarding, logs, sessions
+    # (`openclaw --help`, 2026.11.2).
+    if [ "$_hn_engine" = openclaw ]; then
+        case "${1-}" in
+            acp|agent|agents|approvals|attach|audit|automations|backup|browser|capability|channels|chat|clawbot|config|\
+            configure|connect|cron|daemon|dashboard|database|devices|directory|dns|docs|exec-approvals|exec-policy|\
+            file-transfer|gateway|googlemeet|health|help|hooks|infer|logs|memory|message|migrate|models|node|nodes|\
+            onboard|pairing|plugins|promos|proxy|qr|reset|sandbox|secrets|security|sessions|setup|skills|status|\
+            storage|system|teamsmeetings|telemetry|terminal|transcripts|triage|uninstall|users|webhooks|worker|\
+            worktrees|zoommeetings)
+                _hn_native "$_hn_engine" "$@"; return $? ;;
+        esac
+    fi
     for _hn_arg in "$@"; do
         case "$_hn_arg" in
             --) break ;;

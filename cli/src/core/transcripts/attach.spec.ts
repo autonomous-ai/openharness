@@ -101,6 +101,7 @@ function setup(over: Partial<AttachDeps> = {}) {
   const deps: AttachDeps = {
     liveFor,
     announceSession: vi.fn(),
+    setIdentityHold: () => false,
     setInterpretationHold: (id, revision, reason, create) => {
       const row = bindings.get(id)
       if (!row || row.evidenceRevision !== revision || row.identityHold || (!row.interpretationHold && !(create && reason))) return false

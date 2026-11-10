@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as zlib from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sid } from '../../lib/log.js'
 import { builtinSqlite, closeSqliteHandles, type DatabaseLike } from '../../lib/sqliteBuiltin.js'
-import { OpenclawReader, readOpenclawEvents, readOpenclawHistory, type OpenclawEvent } from './reader.js'
+import { OpenclawReader, readOpenclawHistory, readOpenclawSince, type OpenclawEvent } from './reader.js'
 
 vi.mock('node:zlib', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:zlib') & { zstdDecompressSync: (data: Uint8Array) => Buffer }>()
@@ -64,22 +65,42 @@ function reader(path: string, key: string) {
   const deps = {
     db: path, key, pollMs: 10,
     onEvents: vi.fn((batch: OpenclawEvent[]) => { events.push(...batch) }),
-    onTurnStarted: vi.fn(), onStatus: vi.fn(), onFatal: vi.fn(),
+    onHydrated: vi.fn(), onStatus: vi.fn(), onFatal: vi.fn(), onRecovered: vi.fn(),
   }
   return { reader: new OpenclawReader(deps), deps, events }
 }
 
-describe('readOpenclawEvents', () => {
+/** The rows of `key` past `seq` in its current window, as a count by cursor reads them. */
+async function since(path: string, key: string, seq: number | null): Promise<OpenclawEvent[]> {
+  if (seq === null) return (await readOpenclawSince(path, key, null))?.events ?? []
+  const whole = await readOpenclawSince(path, key, null)
+  const read = await readOpenclawSince(path, key, { ...whole!.cursor, seq })
+  return read!.events
+}
+
+describe('readOpenclawSince', () => {
   it('reads only rows past the cursor', async () => {
     const { path, db } = store('plain')
     const windowId = windowOf(db, 'agent:main:plain')
     // 4 runtime-context, 5 system prompt and 7 bootstrap context are hidden.
-    expect(seqs(await readOpenclawEvents(path, 'agent:main:plain', null))).toEqual([0, 1, 2, 3, 6])
-    const after = await readOpenclawEvents(path, 'agent:main:plain', { windowId, seq: 3 })
+    const whole = await readOpenclawSince(path, 'agent:main:plain', null)
+    expect(whole).toMatchObject({ whole: true, cursor: { windowId, seq: 7 } })
+    expect(seqs(whole!.events)).toEqual([0, 1, 2, 3, 6])
+    const after = await since(path, 'agent:main:plain', 3)
     expect(seqs(after)).toEqual([6])
     expect(after[0]).toMatchObject({ windowId, record: { type: 'message', message: { role: 'assistant', stopReason: 'stop' } } })
-    expect(await readOpenclawEvents(path, 'agent:main:plain', { windowId, seq: 7 })).toEqual([])
-    expect(await readOpenclawEvents(path, 'agent:main:nobody', null)).toEqual([])
+    expect(await readOpenclawSince(path, 'agent:main:plain', whole!.cursor)).toMatchObject({ events: [], whole: false, cursor: whole!.cursor })
+    expect(await readOpenclawSince(path, 'agent:main:nobody', null)).toBeNull()
+  })
+
+  it('reads the whole conversation again when the window or its rewrite changed', async () => {
+    const { path, db } = store('plain')
+    const { cursor } = (await readOpenclawSince(path, 'agent:main:plain', null))!
+    db.exec(`UPDATE transcript_rewrite_watermarks SET generation = 'g-next' WHERE session_id = '${cursor.windowId}'`)
+    const rewritten = await readOpenclawSince(path, 'agent:main:plain', cursor)
+    expect(rewritten).toMatchObject({ whole: true, cursor: { generation: 'g-next' } })
+    expect(seqs(rewritten!.events)).toEqual([0, 1, 2, 3, 6])
+    expect(await readOpenclawSince(path, 'agent:main:plain', { ...rewritten!.cursor, windowId: 'another' })).toMatchObject({ whole: true })
   })
 
   it('decompresses zstd assistant rows', async () => {
@@ -88,7 +109,7 @@ describe('readOpenclawEvents', () => {
     const compressed = db.prepare("SELECT seq FROM transcript_events WHERE message_role = 'assistant' AND event_zstd IS NOT NULL")
       .all().map((row) => Number(row.seq))
     expect(compressed.length).toBeGreaterThan(0)
-    const events = await readOpenclawEvents(path, 'agent:main:plain', null)
+    const events = await since(path, 'agent:main:plain', -1)
     for (const seq of compressed) {
       expect(events.find((event) => event.seq === seq)?.record).toMatchObject({ type: 'message', message: { role: 'assistant' } })
     }
@@ -96,7 +117,7 @@ describe('readOpenclawEvents', () => {
 
   it('filters hidden rows before decompressing', async () => {
     const { path } = store('main-heartbeat')
-    const events = await readOpenclawEvents(path, 'agent:main:main', null)
+    const events = await since(path, 'agent:main:main', -1)
     expect(decompress).toHaveBeenCalled()
     const real = (await vi.importActual<{ zstdDecompressSync: (data: Uint8Array) => Buffer }>('node:zlib')).zstdDecompressSync
     for (const [blob] of decompress.mock.calls) {
@@ -107,18 +128,20 @@ describe('readOpenclawEvents', () => {
     expect(custom).toEqual(['model-snapshot'])
   })
 
-  it('skips a row that does not decompress and logs once', async () => {
+  it('skips a row that does not decompress and logs once, by a short id', async () => {
     const { path, db } = store('plain')
     db.exec("UPDATE transcript_events SET event_zstd = X'00112233' WHERE seq = 6; UPDATE transcript_events SET event_json = '{bad' WHERE seq = 2")
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    expect(seqs(await readOpenclawEvents(path, 'agent:main:plain', null))).toEqual([0, 1, 3])
-    expect(seqs(await readOpenclawEvents(path, 'agent:main:plain', null))).toEqual([0, 1, 3])
+    expect(seqs(await since(path, 'agent:main:plain', -1))).toEqual([0, 1, 3])
+    expect(seqs(await since(path, 'agent:main:plain', -1))).toEqual([0, 1, 3])
     const lines = error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('unreadable'))
-    expect(lines).toHaveLength(2)
-    expect(lines[0]).toMatch(/^\[openclaw\] agent:main:plain seq 2 unreadable · /)
-    expect(lines[1]).toMatch(/^\[openclaw\] agent:main:plain seq 6 unreadable · /)
-    // No row text reaches the log.
+    expect(lines).toEqual([
+      expect.stringMatching(new RegExp(`^\\[openclaw\\] ${sid('agent:main:plain')} seq 2 unreadable · `)),
+      expect.stringMatching(new RegExp(`^\\[openclaw\\] ${sid('agent:main:plain')} seq 6 unreadable · `)),
+    ])
+    // No row text and no key reaches the log.
     expect(lines.join('\n')).not.toContain('{bad')
+    expect(lines.join('\n')).not.toContain('agent:main:plain')
   })
 })
 
@@ -146,7 +169,7 @@ describe('OpenclawReader', () => {
     const release = holdBack(db, windowId, 7)
     const { reader: tail, events, deps } = reader(path, 'agent:main:reset')
     await tail.start()
-    expect(deps.onTurnStarted).not.toHaveBeenCalled()
+    expect(deps.onHydrated).toHaveBeenCalledTimes(1)
     release()
     await vi.waitFor(() => expect(seqs(events)).toEqual([8, 9, 12]))
     expect(events.map((event) => event.record.type)).toEqual(['reset', 'message', 'message'])
@@ -193,19 +216,60 @@ describe('OpenclawReader', () => {
     tail.stop()
   })
 
-  it('reports a missing column as unsupported', async () => {
+  it('reports a missing column as unsupported, and reads again once an upgrade changes the store', async () => {
     const { path, db } = store('plain')
+    const windowId = windowOf(db, 'agent:main:plain')
     db.exec('ALTER TABLE session_nodes RENAME COLUMN label TO label_renamed')
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    const { reader: tail, deps } = reader(path, 'agent:main:plain')
+    const { reader: tail, deps, events } = reader(path, 'agent:main:plain')
     await tail.start()
     expect(deps.onFatal).toHaveBeenCalledWith('unsupported')
     expect(error.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringContaining('session_nodes.label'))
-    await expect(readOpenclawEvents(path, 'agent:main:plain', null)).rejects.toMatchObject({ reason: 'unsupported' })
+    await expect(readOpenclawSince(path, 'agent:main:plain', null)).rejects.toMatchObject({ reason: 'unsupported' })
+    // OpenClaw upgraded to a store the reader reads: its rows are history, and what comes after is live.
+    db.exec('ALTER TABLE session_nodes RENAME COLUMN label_renamed TO label')
+    await vi.waitFor(() => expect(deps.onRecovered).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(deps.onHydrated).toHaveBeenCalledTimes(1))
+    expect(seqs(deps.onHydrated.mock.calls[0][0])).toEqual([0, 1, 2, 3, 6])
+    db.exec(`INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES
+      ('${windowId}', 8, '{"type":"message","id":"u-next","message":{"role":"user","content":"next"}}', 1)`)
+    await vi.waitFor(() => expect(userTexts(events)).toEqual(['next']))
     tail.stop()
+    expect(deps.onFatal).toHaveBeenCalledTimes(1)
   })
 
-  it('start emits turn started when attached mid-run', async () => {
+  it('a first read that failed hydrates on the first good one, never replaying the history live', async () => {
+    // The store is not there yet when the reader attaches (being replaced, or locked): a transient failure.
+    const { path: written, db } = store('plain', 'written.sqlite')
+    const path = join(dir, 'openclaw-agent.sqlite')
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { reader: tail, deps, events } = reader(path, 'agent:main:plain')
+    await tail.start()
+    expect(deps.onFatal).not.toHaveBeenCalled()
+    db.exec(`VACUUM INTO '${path}'`)
+    expect(written).not.toBe(path)
+    await vi.waitFor(() => expect(deps.onHydrated).toHaveBeenCalledTimes(1))
+    expect(seqs(deps.onHydrated.mock.calls[0][0])).toEqual([0, 1, 2, 3, 6])
+    expect(deps.onHydrated.mock.calls[0][1]).toBe('done')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    tail.stop()
+    expect(events).toEqual([])
+  })
+
+  it('a key that was not there yet is read live from its start', async () => {
+    const { path, db } = store('plain')
+    const windowId = windowOf(db, 'agent:main:plain')
+    // The writer moves the key aside, as if `fresh` had not been created yet.
+    db.exec(`PRAGMA foreign_keys = OFF; UPDATE session_nodes SET session_key = 'agent:main:later' WHERE session_key = 'agent:main:plain'`)
+    const later = reader(path, 'agent:main:fresh')
+    await later.reader.start()
+    db.exec(`UPDATE session_nodes SET session_key = 'agent:main:fresh' WHERE current_session_id = '${windowId}'`)
+    await vi.waitFor(() => expect(seqs(later.events)).toEqual([0, 1, 2, 3, 6]))
+    later.reader.stop()
+    expect(later.deps.onHydrated).not.toHaveBeenCalled()
+  })
+
+  it('hands the hydrated rows over with the status, and says nothing live about them', async () => {
     const { path, db } = store('tool')
     const windowId = windowOf(db, 'agent:main:tool')
     // Mid-run: the user row and the assistant's tool call, with no answer yet.
@@ -214,27 +278,22 @@ describe('OpenclawReader', () => {
     const mid = reader(path, 'agent:main:tool')
     await mid.reader.start()
     mid.reader.stop()
-    expect(mid.deps.onTurnStarted).toHaveBeenCalledTimes(1)
+    expect(mid.deps.onHydrated).toHaveBeenCalledTimes(1)
+    expect(mid.deps.onHydrated.mock.calls[0][1]).toBe('running')
     expect(mid.deps.onEvents).not.toHaveBeenCalled()
-
-    // Finished, or ended without an answer (an abort leaves its tool call open): nothing to open.
-    for (const [scenario, key] of [['plain', 'agent:main:plain'], ['abort', 'agent:main:abort'], ['main-heartbeat', 'agent:main:main']]) {
-      closeSqliteHandles()
-      const done = reader(store(scenario, `${scenario}.sqlite`).path, key)
-      await done.reader.start()
-      done.reader.stop()
-      expect(done.deps.onTurnStarted, scenario).not.toHaveBeenCalled()
-    }
   })
 
-  it('reports the run status as it changes', async () => {
+  it('reports the run status on every read that caught up', async () => {
     const { path, db } = store('abort')
     db.exec("UPDATE session_nodes SET status = 'running' WHERE session_key = 'agent:main:abort'")
     const { reader: tail, deps } = reader(path, 'agent:main:abort')
     await tail.start()
+    expect(deps.onStatus).toHaveBeenLastCalledWith('running')
     db.exec("UPDATE session_nodes SET status = 'killed' WHERE session_key = 'agent:main:abort'")
     await vi.waitFor(() => expect(deps.onStatus).toHaveBeenCalledWith('killed'))
+    // The same status again on the next read: a run killed within one poll never shows `running`.
+    const killed = deps.onStatus.mock.calls.filter(([status]) => status === 'killed').length
+    await vi.waitFor(() => expect(deps.onStatus.mock.calls.filter(([status]) => status === 'killed').length).toBeGreaterThan(killed))
     tail.stop()
-    expect(deps.onStatus).toHaveBeenCalledTimes(1)
   })
 })

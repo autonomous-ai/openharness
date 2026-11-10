@@ -74,7 +74,7 @@ import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLa
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
 import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
-import { openclawSessionDb } from '../lib/openclawStore.js'
+import { openclawSessionDb, openclawStateDir } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
 import { createHandoffDependencies } from './handoffDependencies.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
@@ -1355,6 +1355,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/transcripts/attach.ts).
   const attach = createAttach({
     setInterpretationHold: registry.setInterpretationHold.bind(registry),
+    setIdentityHold: registry.setIdentityHold.bind(registry),
     announceSession,
     liveFor,
     resolve: id => registry.resolve(id),
@@ -1969,9 +1970,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     input,
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
-    // OpenClaw's session key is on its TUI's header and nowhere else: the visible screen and the scrollback just
-    // above it, where the header of a long conversation has moved.
+    // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,
+    // the only place a Gateway on another host shows, a while longer into a conversation.
     capturePane: (agentId) => captureTerminal(agentId, 200),
+    openclawPaneReady: (sessionId, ready) => normalizers.openclawReaders.get(sessionId)?.paneReady(ready),
+    openclawStateDir: (pid) => openclawStateDir(pid),
   })
   binding.whileChanging((agentId) => restorePanes.busy(agentId))
   const pendingForkInherit = binding.pendingForkInherit

@@ -1438,13 +1438,25 @@ export async function commandAvailableInInteractiveShell(
 
 /**
  * What `command args…` prints on both streams, and its exit status, run in the interactive shell a new agent launches
- * through, so it finds the Node and PATH the engine will. Null when it gave no answer within 5 seconds.
+ * through, so it finds the Node and PATH the engine will. Windows has no such shell: there it is run as a pane would run
+ * [engine] (an npm shim as node on its script, lib/windows/launch.ts), with its console hidden (docs/windows-rules.md).
+ * Null when it gave no answer within 5 seconds, or could not be started.
  */
-export async function commandOutputInInteractiveShell(command: string, args: readonly string[], shell: string | undefined = undefined): Promise<{ code: number; output: string } | null> {
+export async function commandOutputInInteractiveShell(engine: AgentEngine, command: string, args: readonly string[], shell: string | undefined = undefined): Promise<{ code: number; output: string } | null> {
   const interactive = interactiveEngineShell(shell)
-  const [file, ...argv] = interactive ? engineShellArgv(interactive, ['"$@" 2>&1', 'harness-engine-output', command, ...args]) : [command, ...args]
+  let run: string[]
+  try {
+    run = interactive
+      ? engineShellArgv(interactive, ['"$@" 2>&1', 'harness-engine-output', command, ...args])
+      : windowsEngineArgv(engine, [command, ...args])
+  } catch (error) {
+    // A shim Windows will not run (lib/windows/launch.ts): the launch itself says why.
+    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${error instanceof Error ? error.message : error}`)
+    return null
+  }
+  const [file, ...argv] = run
   return await new Promise((resolve) => {
-    execFile(file, argv, { timeout: 5_000, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
+    execFile(file, argv, { timeout: 5_000, maxBuffer: 64 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       const code = !error ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
       resolve(code === null || error?.killed ? null : { code, output: `${stdout}\n${stderr}` })
     })

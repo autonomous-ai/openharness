@@ -104,7 +104,8 @@ describe('OpenclawNormalizer: turns from the recorded fixtures', () => {
     expect(out.filter((e) => e.type === 'turn_started').map((e) => e.type === 'turn_started' && e.payload.userMessage))
       .toEqual(['Reply with exactly: one', 'Reply with exactly: two', 'Reply with exactly: three'])
     expect(out[5]).toMatchObject({ type: 'text_delta', payload: { content: expect.stringContaining('This model was not found') } })
-    expect(out[6]).toEqual({ type: 'turn_ended', payload: { aborted: true } })
+    // A failed run was not interrupted: its failure is the turn's text, and it ends as a turn does.
+    expect(out[6]).toEqual({ type: 'turn_ended', payload: {} })
     expect(normalizer.turnOpen).toBe(false)
   })
 
@@ -115,7 +116,7 @@ describe('OpenclawNormalizer: turns from the recorded fixtures', () => {
       type: 'text_delta',
       payload: { content: "Your request couldn't be completed: ⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`." },
     })
-    expect(out[2]).toEqual({ type: 'turn_ended', payload: { aborted: true } })
+    expect(out[2]).toEqual({ type: 'turn_ended', payload: {} })
     expect(normalizer.closeTurn('failed')).toEqual([])
     expect(normalizer.turnOpen).toBe(false)
   })
@@ -134,7 +135,9 @@ describe('OpenclawNormalizer: turns from the recorded fixtures', () => {
 
   it('a timeout ends an unanswered card as an error', () => {
     const { normalizer } = live(fixture('abort'))
-    expect(normalizer.closeTurn('timeout')[0]).toMatchObject({ type: 'tool_end', payload: { output: 'Tool timed out', isError: true } })
+    const closed = normalizer.closeTurn('timeout')
+    expect(closed[0]).toMatchObject({ type: 'tool_end', payload: { output: 'Tool timed out', isError: true } })
+    expect(closed.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
     expect(normalizer.turnOpen).toBe(false)
   })
 

@@ -15,6 +15,7 @@ import { pollsQuestions, type QuestionWatcher } from '../../lib/questionControll
 import { attachTranscript, type AttachRead } from '../../lib/attachTranscript.js'
 import { AttachTracker } from '../../lib/attachTracker.js'
 import type { WifiFeed } from '../wifi.js'
+import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { sid } from '../../lib/log.js'
 import { foldTranscript, TranscriptFold } from '../../engines/kit/transcriptFold.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
@@ -40,6 +41,8 @@ export interface AttachDeps {
   normalizers: SessionNormalizers
   watcher: Pick<Watcher, 'addSession' | 'removeSession' | 'pollSession' | 'hold' | 'tails'>
   setInterpretationHold: (agentId: string, revision: number | undefined, reason?: string, create?: boolean) => boolean
+  /** What the agent says while its engine's store cannot be read (OpenClaw's named states); undefined clears it. */
+  setIdentityHold: (agentId: string, reason?: string) => boolean
   announceSession: (session: RegisteredSession) => void
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'add'>
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
@@ -55,7 +58,7 @@ export interface AttachDeps {
   /** How a session's terminal is named in the log. */
   terminalLabel: (session: RegisteredSession) => string
   /** The database engines' stores. OpenClaw's is the state folder of the session's own TUI (lib/openclawStore.ts). */
-  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number }) => Promise<string | null> }
+  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number; stateDir?: string | null }) => Promise<string | null> }
   devinHome: string
   /** Hermes keeps a store per profile: the one this session's lives in. */
   hermesDb: (session: RegisteredSession) => Promise<string>
@@ -74,7 +77,7 @@ export interface AttachDeps {
 export function createAttach({
   liveFor, resolve, remoteLive, terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
   announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
-  wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled, readerLoadWaitMs, setInterpretationHold, announceSession,
+  wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled, readerLoadWaitMs, setInterpretationHold, setIdentityHold, announceSession,
 }: AttachDeps) {
   const {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
@@ -439,19 +442,32 @@ export function createAttach({
       // OpenClaw has no transcript file either: its Gateway writes every row to the agent database under the state
       // folder its TUI holds open. Polled like OpenCode's; the window's header names the workspace OpenClaw's tools
       // run in, shown on the agent as a label.
-      const db = await dbs.openclaw(session.sessionId, { pid: session.processIdentity?.pid ?? 0 })
+      const db = await dbs.openclaw(session.sessionId, { pid: session.processIdentity?.pid ?? 0, stateDir: session.openclawStateDir })
       if (!current()) return false
       if (!db) {
         console.warn(`[openclaw] ${sid(session.sessionId)} not an OpenClaw session key · not read`)
         return true
+      }
+      // A store this OpenClaw cannot be read from is said on the agent, as the screen's named states are (bind.ts), and
+      // cleared once it reads again.
+      const say = (hold: string | undefined): void => {
+        const latest = resolve(session.agentId)
+        if (latest?.sessionId !== session.sessionId) return
+        if (hold === undefined && latest.identityHold !== OPENCLAW_STATES.unsupported) return
+        if (setIdentityHold(session.agentId, hold)) announceSession(resolve(session.agentId)!)
       }
       const live = new (engine('openclaw')!).OpenclawLive({
         db,
         key: session.sessionId,
         onEvents: (events) => emit(session.sessionId, events),
         onHeader: (record) => { runtimeProfiles.ingest(session, JSON.stringify(record), true) },
-        onFatal: (reason) => console.warn(`[openclaw] ${sid(session.sessionId)} ${reason === 'unsupported'
-          ? 'This OpenClaw version is not supported yet.' : 'OpenClaw needs Node 24.'}`),
+        onFailed: (message) => announceTurnAborted(session.sessionId, 'openclaw', message),
+        onFatal: (reason) => {
+          const hold = reason === 'unsupported' ? OPENCLAW_STATES.unsupported : OPENCLAW_STATES.oldNode
+          console.warn(`[openclaw] ${sid(session.sessionId)} ${hold}`)
+          say(hold)
+        },
+        onRecovered: () => say(undefined),
       })
       openclawReaders.set(session.sessionId, live)
       await live.start()

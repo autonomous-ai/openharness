@@ -61,7 +61,7 @@ describe('an engine installed where it cannot run', () => {
     expect(await probeEngines(['openclaw'])).toEqual([
       { engine: 'openclaw', installed: true, command: 'openclaw', installable: false, unavailable: 'OpenClaw needs Node 24.' },
     ])
-    expect(commandOutputInInteractiveShell).toHaveBeenCalledWith('openclaw', ['--version'])
+    expect(commandOutputInInteractiveShell).toHaveBeenCalledWith('openclaw', 'openclaw', ['--version'])
     vi.mocked(commandOutputInInteractiveShell).mockResolvedValue({ code: 1, output: recorded('version-node20-darwin.txt') })
     expect((await probeEngines(['openclaw']))[0]).toMatchObject({ unavailable: 'OpenClaw needs Node 24.' })
   })

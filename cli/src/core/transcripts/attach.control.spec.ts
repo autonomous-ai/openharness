@@ -46,6 +46,7 @@ function setup(mode: 'inline' | 'worker', content = prompt('T1')) {
     reattach: session => attach.attachSession(session, true), hold: (session, reason) => attach.holdInterpretation(session, reason) })
   const profile = { ingest: vi.fn(), commit: vi.fn(), config: vi.fn(async () => {}) }
   const attach = createAttach({ liveFor, normalizers, remoteLive: live, watcher, resolve: () => row,
+    setIdentityHold: () => false,
     setInterpretationHold: (_id, revision, reason, create) => {
       if (row.identityHold || row.evidenceRevision !== revision || (!row.interpretationHold && !(create && reason))) return false
       if (!row.interpretationHold) row.evidenceRevision = (row.evidenceRevision ?? 0) + 1

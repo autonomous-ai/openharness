@@ -1224,11 +1224,11 @@ describe('commandOutputInInteractiveShell', () => {
     writeFileSync(join(binDir, 'stuck'), '#!/bin/sh\nexec /bin/sleep 30\n')
     chmodSync(join(binDir, 'stuck'), 0o700)
     process.env.HARNESS_ENGINE_TEST_PATH = `${binDir}:/usr/bin:/bin`
-    const ran = await commandOutputInInteractiveShell('openclaw', ['--version'], bashProbeShell())
+    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], bashProbeShell())
     expect(ran?.code).toBe(3)
     expect(ran?.output).toContain('OpenClaw --version')
     expect(ran?.output).toContain('a warning')
-    await expect(commandOutputInInteractiveShell('stuck', [], bashProbeShell())).resolves.toBeNull()
+    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], bashProbeShell())).resolves.toBeNull()
   }, 8_000)
 })
 

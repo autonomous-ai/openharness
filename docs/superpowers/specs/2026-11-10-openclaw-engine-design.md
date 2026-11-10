@@ -199,7 +199,7 @@ The fixtures (`cli/src/engines/openclaw/__fixtures__/`) override anything above 
 - **Footer and screen.** The footer's token count lags after a turn, the thinking level shows next to the model, and tool calls are not drawn on screen.
 
 Decisions that follow from the corrections:
-- The binding follows a pane's key when its header changes (`/new`). The new key becomes the agent's session.
+- The binding follows a pane's key when its footer changes (`/new`). The new key becomes the agent's session.
 - The reader drops events whose `id` it has already emitted, so a rewind's copied rows are not shown twice.
 - Hidden rows are recognised from the decoded record, not only from `navigation_custom_type`.
 
@@ -214,8 +214,11 @@ These are my calls unless marked as Ken's.
    **Resume** is `openclaw tui agent:<agentId>:<key>`. `tui` is a base argument that `contract.ts` declares, the way
    `claude/adoption.ts` declares its session flags. The launch keeps a folder: the pane opens in the folder New chose,
    as for every engine.
-3. **Binding a pane.** The TUI hides its argv, so a pane is bound from its screen. `contract.ts` declares the header
-   pattern (`session agent:<agentId>:<key>`) as data, and `bind.ts` applies it to the pane capture. `main` is bound
+3. **Binding a pane.** The TUI hides its argv, so a pane is bound from its screen. `contract.ts` declares the footer
+   pattern (`agent <agentId> | session <key> |`, drawn last, word-wrapped at the pane's width) as data, and `bind.ts`
+   applies it to the pane capture: only while the composer is the last thing under it, and only when the title, if it
+   is on screen, names the same session. The `session agent:<agentId>:<key>` line is a chat line an answer can print,
+   and the title scrolls off a long conversation, so neither binds. `main` is bound
    like any other key, even though it existed before the process started (decided by Ken: shown like any other
    session, channel messages included). When a second pane shows a key that an agent already holds, that pane stays
    unbound. It never takes the session from the first.

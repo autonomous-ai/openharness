@@ -78,16 +78,23 @@ function attachTo(db: string, row: RegisteredSession, emit: AttachDeps['emit']) 
   }
   const normalizers = createSessionNormalizers()
   const opened = vi.fn(async (_key: string, _pane: { pid: number }) => db)
+  const setIdentityHold = vi.fn((_id: string, reason?: string) => {
+    if (row.identityHold === reason) return false
+    if (reason) row.identityHold = reason
+    else delete row.identityHold
+    return true
+  })
+  const announceTurnAborted = vi.fn(), announceSession = vi.fn()
   const attach = createAttach({
     liveFor, resolve: (id) => (id === row.agentId ? row : undefined), terminalGone: async () => false, normalizers,
     watcher: { addSession: vi.fn(async () => {}), removeSession: vi.fn(async () => {}), pollSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
-    setInterpretationHold: () => false, announceSession: vi.fn(), cursorDiscovery: { add: vi.fn(async () => {}) }, device: () => undefined,
+    setInterpretationHold: () => false, setIdentityHold, announceSession, cursorDiscovery: { add: vi.fn(async () => {}) }, device: () => undefined,
     runtimeProfiles: runtimeProfiles as unknown as AttachDeps['runtimeProfiles'], captureTerminal: vi.fn(async () => null), emit,
-    announceTurnAborted: vi.fn(), questionWatcher: { start: vi.fn() }, terminalLabel: () => 'tmux:%1',
+    announceTurnAborted, questionWatcher: { start: vi.fn() }, terminalLabel: () => 'tmux:%1',
     dbs: { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened },
     devinHome: '/devin', hermesDb: async () => '/db/hermes.db', concurrency: 1,
   })
-  return { attach, normalizers, runtimeProfiles, opened }
+  return { attach, normalizers, runtimeProfiles, opened, setIdentityHold, announceTurnAborted, announceSession }
 }
 
 describe('an OpenClaw pane, through the core', () => {
@@ -111,6 +118,40 @@ describe('an OpenClaw pane, through the core', () => {
       .toEqual(['turn_started', 'tool_start', 'tool_end', 'text_delta', 'turn_ended'])
     expect(events.find((event) => event.type === 'tool_start')?.payload).toMatchObject({ tool: 'Bash' })
     expect(run.normalizers.sessionTurnOpen('agent:main:tool')).toBe(false)
+    run.normalizers.forget('agent:main:tool')
+  })
+
+  it('a store this OpenClaw cannot be read from is said on the agent, and cleared once an upgrade makes it readable', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store('plain')
+    db.exec('ALTER TABLE session_nodes RENAME COLUMN label TO label_renamed')
+    const row = pane('agent:main:plain')
+    const run = attachTo(path, row, () => {})
+    await run.attach.attachSession(row)
+    expect(row.identityHold).toBe('This OpenClaw version is not supported yet.')
+    expect(run.announceSession).toHaveBeenCalledWith(row)
+    db.exec('ALTER TABLE session_nodes RENAME COLUMN label_renamed TO label')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(row).not.toHaveProperty('identityHold')
+    expect(run.announceSession).toHaveBeenCalledTimes(2)
+    run.normalizers.forget('agent:main:plain')
+  })
+
+  it('a run that timed out with no row of its own is told to the person, and its turn ends', async () => {
+    vi.useFakeTimers()
+    const { path, db } = store('tool')
+    const window = String(db.prepare("SELECT current_session_id AS id FROM session_nodes WHERE session_key = 'agent:main:tool'").all()[0].id)
+    db.exec(`DELETE FROM session_transcript_active_events WHERE session_id = '${window}' AND event_seq > 6;
+      DELETE FROM transcript_events WHERE session_id = '${window}' AND seq > 6;
+      UPDATE session_nodes SET status = 'running' WHERE session_key = 'agent:main:tool'`)
+    const events: LiveEvent[] = []
+    const row = pane('agent:main:tool')
+    const run = attachTo(path, row, (_sessionId, batch) => { events.push(...batch) })
+    await run.attach.attachSession(row)
+    db.exec("UPDATE session_nodes SET status = 'timeout' WHERE session_key = 'agent:main:tool'")
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(events.at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+    expect(run.announceTurnAborted).toHaveBeenCalledWith('agent:main:tool', 'openclaw', 'The OpenClaw run timed out.')
     run.normalizers.forget('agent:main:tool')
   })
 

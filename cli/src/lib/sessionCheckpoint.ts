@@ -40,7 +40,7 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
       selections = [['sessions', 'id = ?'], ['message_nodes', 'session_id = ?']]
       break
     case 'openclaw': {
-      const found = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0 })
+      const found = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
       if (!found) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
       database = found
       // Every window the key has had, with each row as the reader reads it. A compressed row is kept as hex: JSON has

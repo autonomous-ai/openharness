@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { OPENCLAW_COLUMNS, OPENCLAW_HEADER, OPENCLAW_HEADER_URL, OPENCLAW_KEY, OPENCLAW_LAUNCH, openclawAgentDb } from './contract.js'
+import { OPENCLAW_COLUMNS, OPENCLAW_KEY, OPENCLAW_LAUNCH, openclawAgentDb, readOpenclawScreen } from './contract.js'
 
 const FIXTURES = join(import.meta.dirname, '__fixtures__')
 const fixture = (name: string): string => readFileSync(join(FIXTURES, name), 'utf8')
@@ -10,9 +10,9 @@ const screens = readdirSync(FIXTURES).filter((name) => /^screen-.*\.txt$/.test(n
 /**
  * The key and the Gateway URL each recorded screen shows (OpenClaw 2026.11.2). Every screen is listed, so a new
  * recording fails here until someone has said what it shows.
- * - The no-gateway panes never heard from the Gateway, so the session line under the title is not drawn.
+ * - The key is the footer's, which every running TUI draws last, the no-gateway ones too.
  * - The no-token and remote-without-credentials runs exit before the TUI opens.
- * - The second of two 80-column panes on main has scrolled its title line off.
+ * - The second of two 80-column panes on main has scrolled its title off and wraps its footer.
  */
 const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-abort-running.txt': { key: 'agent:main:abort', url: 'ws://127.0.0.1:18789' },
@@ -24,9 +24,9 @@ const SHOWN: Record<string, { key: string | null; url: string | null }> = {
   'screen-model-switch.txt': { key: 'agent:main:model-switch', url: 'ws://127.0.0.1:18789' },
   'screen-multi-tool.txt': { key: 'agent:main:multi-tool', url: 'ws://127.0.0.1:18789' },
   'screen-no-gateway-attached.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
-  'screen-no-gateway-bare.txt': { key: null, url: 'ws://127.0.0.1:18789' },
+  'screen-no-gateway-bare.txt': { key: 'agent:main:rewind', url: 'ws://127.0.0.1:18789' },
   'screen-no-gateway-reconnected.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
-  'screen-no-gateway.txt': { key: null, url: 'ws://127.0.0.1:18789' },
+  'screen-no-gateway.txt': { key: 'agent:main:no-gateway', url: 'ws://127.0.0.1:18789' },
   'screen-no-token.txt': { key: null, url: null },
   'screen-plain-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
   'screen-plain-start-darwin.txt': { key: 'agent:main:plain', url: 'ws://127.0.0.1:18789' },
@@ -54,19 +54,44 @@ function recordedColumns(): Map<string, Set<string>> {
 }
 
 describe('the OpenClaw contract', () => {
-  it('OPENCLAW_HEADER reads the key from every recorded screen', () => {
+  it('reads the key off the footer of every recorded screen, and the Gateway URL off its title', () => {
     expect(screens).toEqual(Object.keys(SHOWN).sort())
     for (const screen of screens) {
-      expect(OPENCLAW_HEADER.exec(fixture(screen))?.[1] ?? null, screen).toBe(SHOWN[screen].key)
+      const shown = readOpenclawScreen(fixture(screen))
+      expect({ key: shown.key, url: shown.url }, screen).toEqual(SHOWN[screen])
+      if (shown.url) expect(LOOPBACK.has(new URL(shown.url).hostname), screen).toBe(screen !== 'screen-remote.txt')
     }
   })
 
-  it('OPENCLAW_HEADER_URL tells a loopback Gateway from the remote fixture', () => {
-    for (const screen of screens) {
-      const url = OPENCLAW_HEADER_URL.exec(fixture(screen))?.[1] ?? null
-      expect(url, screen).toBe(SHOWN[screen].url)
-      if (url) expect(LOOPBACK.has(new URL(url).hostname), screen).toBe(screen !== 'screen-remote.txt')
-    }
+  it('a long session whose title scrolled off is still read from its footer, wrapped at 80 columns', () => {
+    const long = fixture('screen-main-heartbeat.txt').split('\n').slice(3).join('\n')
+    expect(long).not.toContain('openclaw tui -')
+    expect(readOpenclawScreen(long)).toMatchObject({ key: 'agent:main:main', url: null, state: 'ready' })
+  })
+
+  it('a line the model wrote is never taken for the session', () => {
+    // The session line under the title is one more chat line: an answer can print the same words.
+    const said = fixture('screen-plain.txt').replace(' connected | idle', ' session agent:main:other\n agent main | session other | m | deliver:off |\n connected | idle')
+    expect(readOpenclawScreen(said).key).toBe('agent:main:plain')
+    // A title-like line in the chat that names another session stops the read instead of moving it.
+    const titled = fixture('screen-plain.txt').replace(' connected | idle', ' openclaw tui - ws://127.0.0.1:18789 - agent main - session other\n connected | idle')
+    expect(readOpenclawScreen(titled).key).toBeNull()
+  })
+
+  it('a TUI restarted in the same pane is read only once it has drawn its own footer', () => {
+    const exited = `${fixture('screen-plain.txt').trimEnd()}\n$ openclaw tui --session other\n`
+    expect(readOpenclawScreen(exited).key).toBeNull()
+    const titled = `${exited} openclaw tui - ws://127.0.0.1:18789 - agent main - session other\n\n session agent:main:other\n`
+    expect(readOpenclawScreen(titled).key).toBeNull()
+    const drawn = `${titled} connected | idle\n agent main | session other | deepseek/deepseek-v4.1-flash | deliver:off | tokens ?\n${'─'.repeat(40)}\n\n${'─'.repeat(40)}\n`
+    expect(readOpenclawScreen(drawn)).toMatchObject({ key: 'agent:main:other', state: 'ready' })
+  })
+
+  it('names the agent and the session even when the TUI labels them', () => {
+    const labelled = fixture('screen-plain.txt')
+      .replace('agent main - session plain', 'agent main (Molty) - session plain')
+      .replace('agent main | session plain |', 'agent main (Molty) | session plain (Fix the parser) |')
+    expect(readOpenclawScreen(labelled).key).toBe('agent:main:plain')
   })
 
   it('OPENCLAW_KEY matches every key in the fixtures', () => {

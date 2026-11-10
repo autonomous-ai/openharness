@@ -10,7 +10,7 @@ import { stat } from 'node:fs/promises'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
-import { OPENCLAW_HEADER, OPENCLAW_HEADER_URL, OPENCLAW_LOOPBACK } from '../../engines/openclaw/contract.js'
+import { OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, readOpenclawScreen } from '../../engines/openclaw/contract.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
@@ -35,15 +35,8 @@ const REPAIR_RETRY_MS = 60_000
  *  then settle into the slow rhythm for processes that will never resolve. */
 const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 
-/** Decision 4 of the OpenClaw design: a TUI attached to a Gateway on another host writes nothing to this machine. */
-const OPENCLAW_REMOTE = 'This OpenClaw runs on another machine.'
-
-/** The last match of a multiline pattern: after `/new` the old title can still be in the scrollback above the new one. */
-function lastMatch(pattern: RegExp, text: string): string | null {
-  let found: string | null = null
-  for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) found = match[1]
-  return found
-}
+/** What an OpenClaw agent says while its pane shows a screen its TUI cannot work for Harness on. */
+const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
 
 /** Birth time of a transcript in ms, or 0 when it cannot be read (treated as "not newer than the agent").
  *  A filesystem that keeps no birth time reports 0 for it: the change time, then the write time, stand in. */
@@ -66,7 +59,7 @@ export type RegisteredMeta = {
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding'>
+  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding' | 'setOpenclawStateDir'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
@@ -83,11 +76,15 @@ export interface BindDeps {
   owners?: Pick<ConversationOwners, 'settle'>
   /** The agent's pane as it shows now, or null when it cannot be read: OpenClaw's TUI names its session nowhere else. */
   capturePane: (agentId: string) => Promise<string | null>
+  /** Tells an OpenClaw session's live stream whether its pane reads idle on this pass (engines/openclaw/live.ts). */
+  openclawPaneReady: (sessionId: string, ready: boolean) => void
+  /** The state folder an OpenClaw TUI holds open, or null when its open files cannot be read (lib/openclawStore.ts). */
+  openclawStateDir: (pid: number) => Promise<string | null>
 }
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, deviceInput, homes, owners, capturePane,
+  input, deviceInput, homes, owners, capturePane, openclawPaneReady, openclawStateDir,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -297,23 +294,37 @@ export function createBinding({
     // directory. It writes nothing to the transcript and fires no hook until the next prompt.
     if (agent.resumeOnly && agent.launch && agent.launch.state !== 'ready') return
     if (observed.engine === 'openclaw') {
-      // The TUI renames its process to a bare `openclaw`, so its session is read off its header, on every pass: `/new`
-      // moves a running pane to a new key, and the new key becomes the agent's session. A key that existed before the
-      // process (`main`, a resume) is the pane's all the same, so nothing is compared with the process's start. A key
-      // another agent holds stays that agent's: two panes on `main` share one conversation, and the first keeps it.
-      const screen = await read(() => capturePane(agent.agentId))
-      const shown = screen?.value
-      if (!shown || !current()) return
-      const key = lastMatch(OPENCLAW_HEADER, shown)
-      const url = lastMatch(OPENCLAW_HEADER_URL, shown)
-      if (url && !OPENCLAW_LOOPBACK.test(url)) {
-        if (registry.setIdentityHold(agent.agentId, OPENCLAW_REMOTE)) {
-          console.log(`[discovery] ${sid(agent.agentId)} openclaw · ${OPENCLAW_REMOTE}`)
+      // The TUI renames its process to a bare `openclaw`, so its session is read off its footer (contract.ts), on every
+      // pass: `/new` moves a running pane to a new key, and the new key becomes the agent's session. A key that existed
+      // before the process (`main`, a resume) is the pane's all the same, so nothing is compared with the process's
+      // start. A key another agent holds stays that agent's: two panes on `main` share one conversation, and the first
+      // keeps it.
+      const captured = await read(() => capturePane(agent.agentId))
+      if (!captured?.value || !current()) return
+      const screen = readOpenclawScreen(captured.value)
+      const held = screen.state ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
+      const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold)
+      if (held) {
+        // A hold another reason set (the store unreadable, an identity read that failed) is that reason's to clear.
+        if (ours && registry.setIdentityHold(agent.agentId, held)) {
+          console.log(`[discovery] ${sid(agent.agentId)} openclaw · ${held}`)
           announceSession(agent)
         }
         return
       }
-      if (agent.identityHold === OPENCLAW_REMOTE && registry.setIdentityHold(agent.agentId, undefined)) announceSession(agent)
+      if (agent.identityHold && ours) {
+        // A remote TUI's title scrolls off a long conversation: only a title naming this machine's Gateway clears it.
+        if (agent.identityHold === OPENCLAW_STATES.remote && !screen.url) return
+        if (registry.setIdentityHold(agent.agentId, undefined)) {
+          console.log(`[discovery] ${sid(agent.agentId)} openclaw · working again`)
+          announceSession(agent)
+          // A hold that came up while the agent woke kept its stream from attaching; an attached one is left as it is.
+          if (agent.sessionId) void attachSession(agent).catch((error) => console.error(
+            `[agent] ${sid(agent.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
+        }
+      }
+      if (agent.sessionId) openclawPaneReady(agent.sessionId, screen.state === 'ready')
+      const key = screen.key
       if (!key || key === agent.sessionId || isRecentlyDeleted(key)) return
       const owner = registry.bySession(key)
       if (owner && owner.agentId !== agent.agentId) return
@@ -322,15 +333,18 @@ export function createBinding({
         engine: 'openclaw',
         sessionId: key,
         cwd: observed.cwd,
-        source: moved ? 'openclaw-new' : 'openclaw-header',
+        source: moved ? 'openclaw-new' : 'openclaw-footer',
         runtimes: observed.runtimes,
         primaryRuntimeKey: observed.primaryRuntimeKey,
         processIdentity: observed.processIdentity,
-        hookEvent: moved ? 'OpenclawNew' : 'OpenclawHeader',
+        hookEvent: moved ? 'OpenclawNew' : 'OpenclawFooter',
       })
       if (!bound?.isNew) return
       followRegistered(bound.entry, bound)
       console.log(`[discovery] ${moved ? `${sid(agent.agentId)} openclaw session moved ${sid(agent.sessionId)} → ` : 'bound openclaw session '}${sid(key)} via ${observed.primaryRuntimeKey}`)
+      // Where its store is once this TUI is gone (a `--profile` TUI's is not the default): read while it runs.
+      const stateDir = await openclawStateDir(observed.processIdentity.pid).catch(() => null)
+      if (stateDir) registry.setOpenclawStateDir(bound.entry.agentId, stateDir)
       return
     }
     if (agent.sessionId) {

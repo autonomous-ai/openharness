@@ -19,7 +19,7 @@ export interface LastTurnDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
   readerFor: (engine: string) => EngineTranscript | undefined
   /** The database engines' stores. OpenClaw's is the state folder of the session's own TUI (lib/openclawStore.ts). */
-  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number }) => Promise<string | null> }
+  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number; stateDir?: string | null }) => Promise<string | null> }
   /** Hermes keeps a store per profile: the one this session's lives in. */
   hermesDb: (s: RegisteredSession) => Promise<string>
 }
@@ -47,7 +47,7 @@ export function createLastTurnReader({ bySession, dbs, hermesDb, readerFor }: La
     if (s.engine === 'devin') { const m = await loadEngine('devin'); return m ? m.lastDevinTurnText(await m.readDevinMessages(dbs.devin, sessionId)) : null }
     if (s.engine === 'openclaw') {
       const m = await loadEngine('openclaw')
-      const db = m && await dbs.openclaw(sessionId, { pid: s.processIdentity?.pid ?? 0 })
+      const db = m && await dbs.openclaw(sessionId, { pid: s.processIdentity?.pid ?? 0, stateDir: s.openclawStateDir })
       return m && db ? m.lastOpenclawTurnText(await m.readOpenclawHistory(db, sessionId)) : null
     }
     if (!s.transcriptPath) return null

@@ -652,11 +652,13 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
     basenames: [/^copilot$/],
     entrypoints: [/@github[\/\\]copilot[\/\\](?:npm-loader\.js|index\.js|bin[\/\\]copilot)$/],
   },
-  // The TUI renames itself to a bare `openclaw`: `comm` and the whole argv (`ps-*.txt`), so no entrypoint is ever
-  // seen. Its Gateway is `openclaw-gateway` (`openclaw-gatewa` under Linux's 15-byte cap) and is never a pane's agent.
+  // On macOS and Linux every `openclaw` command renames itself to a bare `openclaw`: `comm` and the whole argv
+  // (`ps-*.txt`), its maintenance commands (`onboard`, `logs`) too, so a pane is taken for OpenClaw only once its screen
+  // shows the TUI (core/agents/discovery.ts). Its Gateway is `openclaw-gateway` (`openclaw-gatewa` under Linux's 15-byte
+  // cap) and is never a pane's agent. Windows renames nothing: there it is node.exe running the package's openclaw.mjs.
   openclaw: {
     basenames: [/^openclaw$/],
-    entrypoints: [],
+    entrypoints: [/(?:^|[\/\\])openclaw[\/\\]openclaw\.mjs$/],
   },
   // A terminal is a shell, and a shell is what every pane starts as — so nothing matches it, ever.
   // Discovery walks PROCESS_ENGINES and never asks; this entry exists for the Record's sake.

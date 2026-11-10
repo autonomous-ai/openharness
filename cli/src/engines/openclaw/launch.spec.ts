@@ -1,8 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, supportsLaunchResume } from '../../lib/engineLaunch.js'
-import { OPENCLAW_STATES, openclawRuntimeState } from './contract.js'
-import { openclawScreenState } from './launch.js'
+import { OPENCLAW_SCREEN_HOLDS, OPENCLAW_STATES, openclawRuntimeState, readOpenclawScreen } from './contract.js'
 
 /**
  * How Harness starts and reopens an OpenClaw TUI, and the named states a launch can end in, from the recordings of
@@ -40,6 +39,7 @@ describe('OpenClaw launch', () => {
   })
 
   it('no Gateway gives the named state', () => {
+    const openclawScreenState = (capture: string): string | null => OPENCLAW_SCREEN_HOLDS[readOpenclawScreen(capture).state ?? 'ready'] ?? null
     expect(OPENCLAW_STATES.noGateway).toBe('OpenClaw Gateway is not running. Start it with openclaw gateway.')
     // The TUI opens anyway and reconnects by itself, fresh or already attached.
     for (const screen of ['screen-no-gateway.txt', 'screen-no-gateway-bare.txt', 'screen-no-gateway-attached.txt']) {

@@ -10,11 +10,8 @@
  */
 import type { PaneInspection } from '../facets/screen.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../facets/inlineRuntime.js'
-import { stripAnsi } from '../kit/pane.js'
 import { RUNTIME_EFFORTS } from '../kit/runtime.js'
-import { OPENCLAW_HEADER_URL, OPENCLAW_LOOPBACK } from './contract.js'
-
-export type OpenclawPaneState = 'ready' | 'busy' | 'no-gateway' | 'no-token' | 'remote'
+import { OPENCLAW_RULE, openclawScreenLines, readOpenclawScreen, type OpenclawPaneState } from './contract.js'
 
 export interface OpenclawFooter {
   model: string
@@ -24,43 +21,10 @@ export interface OpenclawFooter {
   tokens: string | null
 }
 
-const FOOTER_START = /^\s*agent \S+ \| session \S+ \| /
-const RULE = /^\s*─{8,}\s*$/
-const FOOTER = /^agent \S+ \| session \S+ \| (\S+)(?: (\S+))? \| deliver:\S+ \| tokens (\S+)/
-// The status line says what the TUI is doing: `connected | idle`, `gateway reconnected | idle`, `connected | aborted`,
-// `⠏ running • 6s | connected`, `gateway disconnected: <error> | idle`.
-const READY = /^(?:gateway )?(?:connected|reconnected) \| (?:idle|aborted|error)$/
-const BUSY = /^\S{1,2} (?:running|streaming|connecting)\b/
-
-function clean(capture: string): string[] {
-  return stripAnsi(capture).split('\n').map((line) => line.replace(/\s+$/, ''))
-}
-
-function footerStart(lines: readonly string[]): number {
-  for (let i = lines.length - 1; i >= 0; i--) if (FOOTER_START.test(lines[i])) return i
-  return -1
-}
-
-/** The status line is the last non-blank line above the footer. */
-function statusLine(lines: readonly string[], footer: number): string {
-  for (let i = footer - 1; i >= 0; i--) if (lines[i].trim()) return lines[i].trim()
-  return ''
-}
+const MODEL = /^agent \S+(?: \([^)]*\))? \| session \S+(?: \([^)]*\))? \| (\S+)(?: (\S+))? \| (?:.* \| )?deliver:\S+ \| tokens (\S+)/
 
 export function openclawPaneState(capture: string): OpenclawPaneState | null {
-  const lines = clean(capture)
-  const text = lines.join('\n')
-  // Before a TUI exists: `openclaw tui` exits with this under a banner, and nothing else on screen is OpenClaw's.
-  if (/^Missing gateway auth token\./m.test(text)) return 'no-token'
-  const url = OPENCLAW_HEADER_URL.exec(text)?.[1]
-  // The title scrolls off a long conversation; the footer, drawn last, does not.
-  if (url && !OPENCLAW_LOOPBACK.test(url)) return 'remote'
-  const footer = footerStart(lines)
-  if (footer < 0) return null
-  const status = statusLine(lines, footer)
-  if (/^gateway disconnected\b/.test(status)) return 'no-gateway'
-  if (BUSY.test(status)) return 'busy'
-  return READY.test(status) ? 'ready' : null
+  return readOpenclawScreen(capture).state
 }
 
 /**
@@ -68,12 +32,8 @@ export function openclawPaneState(capture: string): OpenclawPaneState | null {
  * still `unknown` (no Gateway has answered).
  */
 export function parseOpenclawFooter(capture: string): OpenclawFooter | null {
-  const lines = clean(capture)
-  const start = footerStart(lines)
-  if (start < 0) return null
-  let joined = lines[start].trim()
-  for (let i = start + 1; i < lines.length && lines[i].trim() && !RULE.test(lines[i]); i++) joined += ` ${lines[i].trim()}`
-  const match = FOOTER.exec(joined)
+  const footer = readOpenclawScreen(capture).footer
+  const match = footer ? MODEL.exec(footer) : null
   if (!match || match[1] === 'unknown') return null
   const level = match[2]?.toLowerCase()
   const used = match[3].split('/')[0]
@@ -86,11 +46,11 @@ export function parseOpenclawFooter(capture: string): OpenclawFooter | null {
 
 /** Idle is a ready TUI with nothing typed in the composer, the band between the two rules under the footer. */
 export function inspectOpenclawPane(capture: string): PaneInspection {
-  const lines = clean(capture)
-  const footer = footerStart(lines)
-  const rules = lines.flatMap((line, index) => (index > footer && RULE.test(line) ? [index] : []))
-  const draft = footer >= 0 && rules.length >= 2 && lines.slice(rules[rules.length - 2] + 1, rules[rules.length - 1]).join('').trim().length > 0
-  return { idle: openclawPaneState(capture) === 'ready' && !draft, plan: false, dialog: false, draft }
+  const screen = readOpenclawScreen(capture)
+  const lines = openclawScreenLines(capture)
+  const rules = lines.flatMap((line, index) => (OPENCLAW_RULE.test(line) ? [index] : []))
+  const draft = screen.footer !== null && lines.slice(rules[rules.length - 2] + 1, rules[rules.length - 1]).join('').trim().length > 0
+  return { idle: screen.state === 'ready' && !draft, plan: false, dialog: false, draft }
 }
 
 /**

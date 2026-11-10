@@ -157,8 +157,9 @@ export class OpenclawNormalizer {
     this.pendingTools.clear()
     this.open = false
     this.answered = false
-    // A run cut short produced no answer to recap.
-    events.push({ type: 'turn_ended', payload: { aborted: true } })
+    // `aborted` is the interrupt (Esc), with no answer to recap. A run that failed or timed out was not interrupted: the
+    // turn event has no failed flag, so its failure is in the turn (the run-failed row's text) or told beside it (live.ts).
+    events.push({ type: 'turn_ended', payload: reason === 'aborted' ? { aborted: true } : {} })
     return events
   }
 
