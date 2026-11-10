@@ -11,7 +11,10 @@ import 'support/super_tab_fixture.dart';
 void main() {
   ConversationServer server() {
     final server = ConversationServer.chat();
-    final now = DateTime.now().toUtc();
+    // Noon yesterday, not now: from 00:10 to 00:28 "now" put the messages
+    // on two days, and a new day has no pause time (CI at 00:13 UTC).
+    final today = DateTime.now();
+    final now = DateTime(today.year, today.month, today.day - 1, 12).toUtc();
     for (final (text, minutesAgo) in [
       ('First', 30),
       ('Two minutes on', 28),
