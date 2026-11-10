@@ -408,4 +408,11 @@ describe('terminal WebRTC data channel', () => {
     expect(TERMINAL_P2P_UP_TYPES.has('terminal_paste_image_result')).toBe(true)
     expect(TERMINAL_P2P_UP_TYPES.has('terminal_paste_file_result')).toBe(true)
   })
+
+  it('p2p lists carry the browser control frames', () => {
+    for (const type of ['agent_browser_open', 'agent_browser_ack', 'agent_browser_close']) expect(TERMINAL_P2P_DOWN_TYPES.has(type), type).toBe(true)
+    for (const type of ['agent_browser_open_result', 'agent_browser_close']) expect(TERMINAL_P2P_UP_TYPES.has(type), type).toBe(true)
+    expect(TERMINAL_P2P_DOWN_TYPES.has('agent_browser_open_result')).toBe(false)
+    expect(TERMINAL_P2P_UP_TYPES.has('agent_browser_open')).toBe(false)
+  })
 })
