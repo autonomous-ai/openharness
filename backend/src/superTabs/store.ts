@@ -12,7 +12,7 @@ import { isRetiredCommand, retiredAnswer } from './retired.js'
 import { metrics } from '../lib/metrics.js'
 import { writeReplyActivity } from './activity.js'
 import type { ReactionTarget } from './reactions.js'
-import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
+import { chatNotices, phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
 import type { AccountRename } from './accountRenames.js'
@@ -5242,11 +5242,13 @@ export class SuperTabStore {
   private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[]; decisions?: DecisionRow[] },
     messages: MessageDraft[]): void {
     const tell = this.hooks.phoneNotices
-    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length)) return
+    // An agent's post may be its words in its 1:1 chat (push/notices.ts chatNotices): nothing else is looked at for a write without.
+    const posted = messages.some(m => m.author.kind === 'agent' && m.post)
+    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length && !posted)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {
-      notices = phoneNotices(tabId, state, written, messages)
+      notices = [...phoneNotices(tabId, state, written, messages), ...posted ? chatNotices(tabId, state, messages) : []]
     } catch (error) {
       logger.warn('phone push failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       return

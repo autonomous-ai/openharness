@@ -528,9 +528,7 @@ void main() {
       await capture('mentions');
       await filter('threads');
       await capture('threads');
-      await filter('reactions');
-      await capture('reactions');
-      await captureTargets('reactions-targets', [
+      await captureTargets('threads-targets', [
         'swarm-activity-filter-',
         'swarm-activity-reply-',
       ]);

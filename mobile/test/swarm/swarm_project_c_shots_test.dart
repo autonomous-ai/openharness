@@ -204,11 +204,7 @@ void main() {
         ...load,
         'members': [
           part(me, 1, person(me)),
-          part('diego', 1, {
-            ...person('diego', role: 'collaborator'),
-            // No emoji: the test engine draws none.
-            'status': {'text': 'Reviewing PRs'},
-          }),
+          part('diego', 1, person('diego', role: 'collaborator')),
           part('ken', 1, person('ken', role: 'collaborator')),
         ],
       };

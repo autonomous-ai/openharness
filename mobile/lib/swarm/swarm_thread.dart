@@ -602,24 +602,6 @@ class SwarmThread extends ChangeNotifier
     if (!_disposed) notifyListeners();
   }
 
-  /// Adds the person's [emoji] to [message], or takes it back (the chat's
-  /// [SwarmConversation.react]), then reads the thread's newest page again:
-  /// a reply the chat has not read shows the backend's counts too. A refused
-  /// reaction has the chat read again, which tells whether it is still open.
-  Future<bool> react(
-    SuperTabMessage message,
-    SuperTabReactionEmoji emoji,
-  ) async {
-    final done = await chat.react(message, emoji);
-    if (_disposed) return done;
-    if (done && _read) {
-      await _reread();
-    } else if (!done && chat.error != null) {
-      unawaited(chat.load());
-    }
-    return done;
-  }
-
   /// Puts [text] in place of [message]'s ([SwarmConversation.editMessage]),
   /// then reads the thread's newest page again so it shows here at once.
   /// Answers why it was refused; null once done or when nothing changed.

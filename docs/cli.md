@@ -198,6 +198,22 @@ it answers `ROUTER_UNAVAILABLE` (exit 1): nothing was decided, and the caller ac
 - **Cost and time:** one decision is about $0.00017 and 0.4 to 0.7 s on Harness's key (bounded at 8 s), capped per
   account at 30 a minute and 1,000 a day.
 
+`harness resume [--machine <name>] <name> [--json]` opens a closed harness again for such a program, so the words it
+then sends with `harness reply` reach the session the person named instead of a new one (`reply` refuses a closed one
+with `NOT_RUNNING`, and says so). It sends the machine's `agent_resume`, as Resume Harness does: the same harness id,
+name and folder, and its conversation where its agent can resume one (Claude Code, Codex). `--json` answers
+`{"ok": true, "name", "id", "state", "resumed", "effect", "next"}`; `"resumed": false` means it is open again in a new
+conversation. One still running is left as it is and answered the same way. A name is found as `show` finds it (`ps
+--all` lists those closed in the last week); an id finds any closed one the machine still keeps.
+
+- **Only a resume:** launch flags and a permission mode stay the person's to change in the app.
+- **A receipt:** the request carries a `creationId`. An answer that does not come within two minutes is asked after
+  with `agent_create_status`, never with a second launch. `RESUME_UNCONFIRMED` (exit 1) means the machine has not
+  confirmed the conversation yet: check its terminal, then run it again, which checks the same harness.
+- **The caller policy is `reply`'s:** the person's `programs-reply` switch (exit 5 while it is off), and never an agent
+  (`NOT_YOURS`). Any other refusal is the machine's code in `error` (exit 1), such as `AGENT_NOT_FOUND`,
+  `AGENT_BUSY` or `DELETE_IN_PROGRESS`.
+
 `harness watch <name>` follows one harness for a program that acts on it: a line each time it changes, one JSON
 object a line with `--json`, until it stops or is gone (exit 4) or `--timeout` passes (exit 124; `0`, the default,
 follows it as long as it lives). It decides as `wait` does: the maker's state for a cloud harness; the daemon's

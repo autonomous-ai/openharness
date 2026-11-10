@@ -82,7 +82,6 @@ void main() {
       // A word a screen reader says, on the phone (2026-11-03).
       ('mentions', 'Mentions', '1'),
       ('threads', 'Threads', '1'),
-      ('reactions', 'Reactions', '0'),
     ]) {
       final pill = key('swarm-activity-filter-$name');
       expect(
@@ -377,28 +376,13 @@ void main() {
     expect(page.threadId, 'root-1');
   });
 
-  testWidgets("Reactions: who reacted how to the person's message", (
-    tester,
-  ) async {
+  testWidgets('Activity offers no Reactions, and lists none', (tester) async {
     final store = MemoryKeyValueStore()
       ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
     await pump(tester, activityBackend(page: activityPage), store: store);
-    await filter(tester, 'reactions');
-
-    final row = key('swarm-activity-row-reaction:$tab:mine-2');
-    expect(
-      find.descendant(of: row, matching: find.text('Copy is fixed.')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: row, matching: find.textContaining('River')),
-      findsWidgets,
-    );
-    expect(
-      find.descendant(of: row, matching: find.textContaining('✅ 1')),
-      findsOneWidget,
-    );
-    expect(key('swarm-activity-row-reaction:$tab:own-only'), findsNothing);
+    expect(key('swarm-activity-filter-reactions'), findsNothing);
+    expect(find.text('Reactions'), findsNothing);
+    expect(key('swarm-activity-row-reaction:$tab:mine-2'), findsNothing);
   });
 
   testWidgets('the same agent id in two Swarms: each row is named in its '
@@ -421,10 +405,10 @@ void main() {
 
   testWidgets('a filter with nothing in it says so', (tester) async {
     await pump(tester, activityBackend());
-    await filter(tester, 'reactions');
+    await filter(tester, 'threads');
 
     expect(key('swarm-activity-none'), findsOneWidget);
-    expect(find.text('No reactions to you yet.'), findsOneWidget);
+    expect(find.text('No threads with you yet.'), findsOneWidget);
   });
 
   testWidgets('a Swarm the person can no longer read leaves the screen at '

@@ -2,12 +2,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/super_tabs/message_row.dart';
-import 'package:harness/super_tabs/view.dart';
 
 import 'support/focus_in.dart';
+import 'support/swarm_v4_channel.dart';
 import 'support/swarm_v4_data.dart';
 
 /// Every menu of the v4 chat closes on Escape, however it was opened, and its control has focus again, so the
@@ -15,31 +14,13 @@ import 'support/swarm_v4_data.dart';
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
-  Future<void> show(WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(1440, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final c = swarmV4Server().controller(
-      account: 'owner',
-      initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': 'lead'},
-    );
-    addTearDown(c.dispose);
-    await tester.runAsync(c.refresh);
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: SuperTabView(
-            controller: c,
-            onAddAgent: (_) {},
-            onOpenTerminal: (_) {},
-            machineName: (_) => 'Mac Studio',
-            github: swarmV4GitHub(),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-  }
+  Future<void> show(WidgetTester tester) => openSwarmV4(
+    tester,
+    swarmV4Server(),
+    saved: 'lead',
+    size: const Size(1440, 900),
+    github: swarmV4GitHub(),
+  );
 
   Future<void> escape(WidgetTester tester) async {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);

@@ -92,8 +92,8 @@ void main() {
       fake.paths.where((p) => p.startsWith(activityChatPath)).length;
 
   group('the server list', () {
-    test('Replies and Reactions are the server rows, newest first, and no '
-        'project chat is read for them', () async {
+    test('Replies are the server rows, newest first, no project chat is '
+        'read for them, and a reaction an older server lists is left out', () async {
       final fake = server(
         () => [
           activityRow('r2', minute: 9, text: 'Merged it'),
@@ -110,12 +110,12 @@ void main() {
         'activity:$tab:r2',
         'activity:$tab:r1',
       ]);
-      expect(keys(activity, SwarmActivityFilter.reactions), [
-        'activity:$tab:x1',
-      ]);
+      expect(
+        swarmActivityAll(activity).map((item) => item.key),
+        isNot(contains('activity:$tab:x1')),
+      );
       expect(activity.label(SwarmActivityFilter.threads), 'Replies');
       expect(activity.count(SwarmActivityFilter.threads), 1);
-      expect(activity.count(SwarmActivityFilter.reactions), 1);
       expect(chatReads(fake), 0, reason: 'the server lists them');
       final reply = activity.items(SwarmActivityFilter.threads).first;
       expect(activity.unread(reply), isTrue);
@@ -230,10 +230,10 @@ void main() {
     );
 
     test('a row Activity never had open is not marked read with the others: '
-        'a newer reaction behind another filter stays unread', () async {
+        'a newer reply not shown stays unread', () async {
       final fake = server(
         () => [
-          activityRow('x1', kind: 'reaction', emoji: 'check', minute: 9),
+          activityRow('r3', minute: 9),
           activityRow('r2', minute: 6),
           activityRow('r1', minute: 3),
         ],
@@ -242,34 +242,34 @@ void main() {
       final activity = session.activity..watch();
       await settle();
 
-      // Only Replies was open.
-      activity.showing(activity.items(SwarmActivityFilter.threads));
+      // The newest was never on screen.
+      activity.showing(activity.items(SwarmActivityFilter.threads).skip(1));
       activity.unwatch();
       await settle();
 
       expect(marks(fake), [
         {'through': DateTime.utc(2026, 11, 1, 7, 6).toIso8601String()},
       ]);
-      expect(activity.count(SwarmActivityFilter.reactions), 1);
+      expect(activity.count(SwarmActivityFilter.threads), 1);
     });
 
     test('an unread row older than those open holds them all back', () async {
       final fake = server(
         () => [
           activityRow('r2', minute: 6),
-          activityRow('x1', kind: 'reaction', emoji: 'check', minute: 3),
+          activityRow('r1', minute: 3),
         ],
       );
       final session = await start(fake);
       final activity = session.activity..watch();
       await settle();
 
-      activity.showing(activity.items(SwarmActivityFilter.threads));
+      activity.showing(activity.items(SwarmActivityFilter.threads).take(1));
       activity.unwatch();
       await settle();
 
-      expect(marks(fake), isEmpty, reason: 'through would take x1 with it');
-      expect(activity.count(SwarmActivityFilter.threads), 1);
+      expect(marks(fake), isEmpty, reason: 'through would take r1 with it');
+      expect(activity.count(SwarmActivityFilter.threads), 2);
     });
 
     test('leaving with nothing open marks nothing', () async {
@@ -308,7 +308,7 @@ void main() {
 
   group('a server before Activity', () {
     test(
-      'answering 404, it keeps the phone-built Threads and Reactions',
+      'answering 404, it keeps the phone-built Threads',
       () async {
         final fake = activityBackend(
           page: activityPage,
@@ -324,9 +324,6 @@ void main() {
         expect(keys(activity, SwarmActivityFilter.threads), [
           'thread:$tab:root-1',
           'thread:$tab:root-old',
-        ]);
-        expect(keys(activity, SwarmActivityFilter.reactions), [
-          'reaction:$tab:mine-2',
         ]);
         expect(activity.badge, 2, reason: 'what needs the person, as before');
       },
@@ -553,7 +550,8 @@ void main() {
       expect(
         told,
         ['r2'],
-        reason: 'the same row again, a read reply and a reaction tell nothing',
+        reason: 'the same row again, a read reply and a reaction an older '
+            'server lists tell nothing',
       );
     });
 

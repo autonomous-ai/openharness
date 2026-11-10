@@ -140,7 +140,7 @@ void main() {
 
   group('faces kept', () {
     /// A Swarm where River wears an uploaded photo, Nova the owl, and the
-    /// person the fox and a status.
+    /// person the fox.
     SuperTabSnapshot faces() {
       final load = firstLoad(
         agents: [
@@ -164,7 +164,6 @@ void main() {
         part(me, 1, {
           ...person(me),
           'avatar': {'kind': 'preset', 'key': 'fox'},
-          'status': {'text': 'At the dentist', 'emoji': null, 'until': null},
         }),
       ];
       return SuperTabSnapshot.fromJson(SuperTabParts.firstLoad(load).state);
@@ -203,7 +202,7 @@ void main() {
       );
     });
 
-    test('a photo, its link and a status are never kept', () {
+    test('a photo and its link are never kept', () {
       final snapshot = faces();
       expect(
         snapshot.agent('agent-lead')!.avatar,
@@ -214,10 +213,8 @@ void main() {
       expect(text, isNot(contains('storage.googleapis.com')));
       expect(text, isNot(contains('sig=secret')));
       expect(text, isNot(contains('upload')));
-      expect(text, isNot(contains('At the dentist')));
       final back = SuperTabSnapshot.fromJson(kept);
       expect(back.agent('agent-lead')!.avatar, isNull);
-      expect(back.people.single.status, isNull);
     });
   });
 

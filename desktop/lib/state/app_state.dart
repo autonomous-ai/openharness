@@ -9,6 +9,7 @@ import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
 import 'browser_copies.dart';
+import 'harness_activity.dart' show HarnessActivity, harnessActivity;
 import 'harness_attachments.dart';
 import 'task_route.dart';
 import '../core/permission_modes.dart';
@@ -604,9 +605,6 @@ class MachineState {
   String? pendingOfflineAgentId;
   final Set<String> processingAgentIds = {};
 
-  /// Agents a message waits on while their engine starts (the daemon's `message_waiting`, reason `engine_starting`), until
-  /// their turn starts or the daemon says it could not be typed: they read as starting, never as failed.
-  final Set<String> engineStartingAgentIds = {};
   final Set<String> unknownActivityAgentIds = {};
   final Map<String, AgentActivityOrder> activityOrder = {};
   final Set<String> legacyHeartbeatSeen = {};
@@ -11174,6 +11172,7 @@ class AppNotifier extends ChangeNotifier {
           prev.createdAt != agent.createdAt ||
           prev.closeSupported != agent.closeSupported ||
           prev.nameChosen != agent.nameChosen ||
+          prev.waitingFor != agent.waitingFor ||
           prev.closePlanState != agent.closePlanState ||
           prev.closePlanDetail != agent.closePlanDetail ||
           prev.lastOpenedAt != agent.lastOpenedAt ||
@@ -14965,32 +14964,10 @@ class AppNotifier extends ChangeNotifier {
     modelStarts.start(machineId, agentId);
   }
 
-  /// How long an agent reads as starting at most after its daemon said a message waits for its engine: a wait that ended
-  /// without a word (the agent stopped, the delivery replaced) must not say starting for good.
-  static const engineWaitFor = Duration(minutes: 2);
-  final Map<String, Timer> _engineWaits = {};
-
-  void _startEngineWait(MachineState machine, String agentId) {
-    final key = _turnActivityKey(machine.machine.machineId, agentId);
-    _engineWaits.remove(key)?.cancel();
-    _engineWaits[key] = Timer(engineWaitFor, () {
-      if (_endEngineWait(machine, agentId) && !_disposed) notifyListeners();
-    });
-    if (machine.engineStartingAgentIds.add(agentId)) notifyListeners();
-  }
-
-  /// Ends [agentId]'s wait for its engine; whether it was waiting.
-  bool _endEngineWait(MachineState machine, String agentId) {
-    _engineWaits
-        .remove(_turnActivityKey(machine.machine.machineId, agentId))
-        ?.cancel();
-    return machine.engineStartingAgentIds.remove(agentId);
-  }
-
-  /// Whether a message waits for [agentId]'s engine to start on [machineId] (the daemon's `message_waiting`).
+  /// Whether [agentId] on [machineId] reads as starting (a message waits for its engine, its frame's `waitingFor`, or it is
+  /// launching): [harnessActivity]'s one answer, so a computer that is off or an agent stopped never says it.
   bool engineStarting(String machineId, String agentId) =>
-      machineStates[machineId]?.engineStartingAgentIds.contains(agentId) ??
-      false;
+      harnessActivity(this, machineId, agentId) == HarnessActivity.starting;
 
   void _cancelTurnActivity(
     String machineId,
@@ -14999,10 +14976,6 @@ class AppNotifier extends ChangeNotifier {
   }) {
     final key = _turnActivityKey(machineId, agentId);
     _turnActivityWatchdogs.remove(key)?.cancel();
-    // A turn that ended, an agent stopped or deleted, a disconnect: no message waits for its engine any more.
-    if (machineStates[machineId] case final machine?) {
-      _endEngineWait(machine, agentId);
-    }
     // Every ordinary end of a turn comes through here — `turn_ended`, a
     // disconnect, a deleted agent — so this is where the clock stops. An end for
     // a turn this process never saw start contributes nothing (see
@@ -15024,9 +14997,6 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.processingAgentIds.clear();
-    for (final agentId in machine.engineStartingAgentIds.toList()) {
-      _endEngineWait(machine, agentId);
-    }
     machine.unknownActivityAgentIds.clear();
     machine.activityOrder.clear();
     machine.legacyHeartbeatSeen.clear();
@@ -15040,13 +15010,8 @@ class AppNotifier extends ChangeNotifier {
     }
     _turnActivityWatchdogs.clear();
     modelStarts.clear();
-    for (final timer in _engineWaits.values) {
-      timer.cancel();
-    }
-    _engineWaits.clear();
     for (final machine in machineStates.values) {
       machine.processingAgentIds.clear();
-      machine.engineStartingAgentIds.clear();
       machine.unknownActivityAgentIds.clear();
       machine.activityOrder.clear();
       machine.legacyHeartbeatSeen.clear();
@@ -22698,28 +22663,6 @@ class AppNotifier extends ChangeNotifier {
         await session.handleFrame(type, payload);
       }
       return;
-    }
-    // A message waits for its agent's engine to start: the agent reads as starting until its turn starts or the daemon's error
-    // says it could not be typed.
-    if (type == 'message_waiting') {
-      final id = _eventAgentId(machine, event, payload);
-      if (id != null && payload['reason'] == 'engine_starting') {
-        _startEngineWait(machine, id);
-      }
-      return;
-    }
-    if (type == 'turn_started' || type == 'turn_ended' || type == 'error') {
-      final id = _eventAgentId(machine, event, payload);
-      final agent = machine.agents.where((a) => a.id == id).firstOrNull;
-      final sessionId = _eventSessionId(event, payload);
-      // Another conversation's late frame, or a sub-agent's, is not the turn the message waits for.
-      final other =
-          sessionId != null &&
-          agent?.sessionId != null &&
-          sessionId != agent!.sessionId;
-      if (id != null && !other && _endEngineWait(machine, id)) {
-        notifyListeners();
-      }
     }
     if (type == 'agent_activity' ||
         _modelAnswerEvents.contains(type) ||
