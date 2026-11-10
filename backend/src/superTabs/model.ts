@@ -823,7 +823,7 @@ export const NOTICE_READERS = {
   // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
   // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
   'machine-left': 'agent',
-  // A task's one line in its project chat, no longer written (Swarm v4, 2026-11-10): people read a task's state there.
+  // A task's one line in its project chat, where people read its state; no longer written (Swarm v4, 2026-11-10).
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, no longer written (task #4558: only the person and their own agent
   // post there): its person reads the rows stored before.
