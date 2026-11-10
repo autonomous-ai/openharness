@@ -38,15 +38,15 @@ void main() {
       (row.widget as SuperTabQuietRow).name,
   ];
 
-  /// lampOS's Swarm with 36 more agents of the person's, `agent 01` to `agent 36`, each with its own chat. `agent 33`
-  /// wrote something the person has not read.
-  ConversationServer world() {
+  /// lampOS's Swarm with [more] more agents of the person's, `agent 01` on, each with its own chat. `agent 33`, when
+  /// there is one, wrote something the person has not read.
+  ConversationServer world({int more = 36}) {
     final server = swarmV4Server();
     final agents = (server.state['agents'] as List)
         .cast<Map<String, dynamic>>();
     final chats = (server.state['conversations'] as List)
         .cast<Map<String, dynamic>>();
-    for (var i = 1; i <= 36; i++) {
+    for (var i = 1; i <= more; i++) {
       final id = 'agent ${i.toString().padLeft(2, '0')}';
       agents.add({
         'id': id,
@@ -67,22 +67,45 @@ void main() {
         'agentIds': [id],
       });
     }
-    server.append('Done with #12.', conversationId: 'agent-chat-agent 33');
-    server.messages.last['author'] = {
-      'kind': 'agent',
-      'id': 'agent 33',
-      'name': 'agent 33',
-    };
+    if (more >= 33) {
+      server.append('Done with #12.', conversationId: 'agent-chat-agent 33');
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'agent 33',
+        'name': 'agent 33',
+      };
+    }
     return server;
+  }
+
+  /// The view settles: the agent states' reader rests, and the rows draw what it found.
+  Future<void> settled(WidgetTester tester) async {
+    bool busy() => switch (find.byType(ProjectSidebar).evaluate().isEmpty
+        ? null
+        : tester
+              .widget<ProjectSidebar>(find.byType(ProjectSidebar))
+              .agentStates) {
+      final states? => states.busy,
+      null => false,
+    };
+    for (var round = 0; round < 100; round++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      if (!busy()) return;
+    }
+    fail('the reader never rested');
   }
 
   Future<SuperTabController> show(
     WidgetTester tester, {
+    int more = 36,
     String selected = 'lead',
     Size size = const Size(880, 560),
     Brightness brightness = Brightness.light,
   }) async {
-    final c = world().controller(
+    final c = world(more: more).controller(
       account: 'owner',
       initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': selected},
     );
@@ -111,12 +134,7 @@ void main() {
         ),
       ),
     );
-    for (var i = 0; i < 6; i++) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)),
-      );
-      await tester.pump(const Duration(milliseconds: 500));
-    }
+    await settled(tester);
     return c;
   }
 
@@ -165,8 +183,20 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(rows(), hasLength(8));
     expect(c.agentsAllShown, isFalse);
-    // The choice is saved a moment later.
-    await tester.pump(const Duration(seconds: 2));
+    // The choice is kept with the reader's other folds: open again, it reads as open.
+    await tester.tap(key('super-team-more'));
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(c.savedForTest['agentsAllShown'], isTrue);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('nine agents fold none: a fold that hides one saves no room', (
+    tester,
+  ) async {
+    // Four agents of lampOS's and five more; the last one's chat open.
+    await show(tester, more: 5, selected: 'agent-chat-agent 05');
+    expect(rows(), hasLength(9));
+    expect(key('super-team-more'), findsNothing);
   });
 
   testWidgets('the agent whose chat is open stays in sight, folded', (

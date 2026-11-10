@@ -24,6 +24,7 @@ import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/personal_agents.dart';
+import 'package:harness/super_tabs/project_sidebar.dart' show SuperTabFoldRow;
 import 'package:harness/super_tabs/reply_box.dart';
 import 'package:harness/terminal/terminal_typography.dart';
 
@@ -453,15 +454,7 @@ class _Gallery extends StatelessWidget {
                           onTap: () {},
                         ),
                         // Past the first eight: the rest, a click away.
-                        SuperTabQuietRow(
-                          leading: Icon(
-                            AppIcons.chevronDown,
-                            size: AppIcons.inlineSize,
-                            color: grid.SidebarInk.inkMuted,
-                          ),
-                          name: '32 more',
-                          onTap: () {},
-                        ),
+                        SuperTabFoldRow(hidden: 32, onTap: () {}),
                         // Open by itself: a computer is off.
                         SuperTabQuietHeading(
                           'Your Machines',

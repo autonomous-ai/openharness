@@ -872,55 +872,59 @@ class ProjectSidebar extends StatelessWidget {
   /// every one to reach a project).
   static const teamShown = 8;
 
-  /// Your Team's rows: all of them up to [teamShown] or when the reader opened the rest, else the [teamShown] that matter
-  /// most (something new first, then on a task, then the rest; a pane not in the Swarm yet last), each where it stands in
-  /// the list, plus the open one, and "N more".
+  /// Your Team's rows: every one when at most one more than [teamShown] would show, or once the reader opened them all;
+  /// else the [teamShown] that matter most (something new first, then on a task, then the rest; a pane not in the Swarm
+  /// yet last), each where it stands in the list, plus the open one, and "N more". Only the rows shown are built.
   List<Widget> _teamRows(SuperTabSnapshot snapshot, _SidebarReading reading) {
-    final rows = <({Widget row, int rank, bool open})>[
-      for (final (agent, chat) in reading.myAgents)
-        (
-          row: _agentRow(snapshot, agent, chat),
-          rank: chat != null && controller.unreadShown(chat)
-              ? 0
-              : agentStates?.of(agent)?.startsWith('on #') == true
-              ? 1
-              : 2,
-          open: _chatLit(chat),
-        ),
-      for (final pane in reading.panes)
-        (row: _paneRow(pane), rank: 3, open: false),
-    ];
-    if (rows.length <= teamShown) return [for (final r in rows) r.row];
+    final agents = reading.myAgents;
+    final count = agents.length + reading.panes.length;
+    bool unread(SuperTabConversation? chat) =>
+        chat != null && controller.unreadShown(chat);
+    Widget build(int i) => i < agents.length
+        ? _agentRow(snapshot, agents[i].$1, agents[i].$2)
+        : _paneRow(reading.panes[i - agents.length]);
+    final all = [for (var i = 0; i < count; i++) i];
+    if (count <= teamShown + 1) return [for (final i in all) build(i)];
     if (controller.agentsAllShown) {
       return [
-        for (final r in rows) r.row,
-        _moreRow('Show fewer', AppIcons.chevronUp),
+        for (final i in all) build(i),
+        SuperTabFoldRow(open: true, onTap: controller.toggleAllAgents),
       ];
     }
-    final order = [for (var i = 0; i < rows.length; i++) i]
+    int rank(int i) {
+      if (i >= agents.length) return 3;
+      final (agent, chat) = agents[i];
+      if (unread(chat)) return 0;
+      return agentStates?.taskOf(agent) != null ? 1 : 2;
+    }
+
+    final ranks = [for (final i in all) rank(i)];
+    final order = [...all]
       ..sort((a, b) {
-        final byRank = rows[a].rank.compareTo(rows[b].rank);
+        final byRank = ranks[a].compareTo(ranks[b]);
         return byRank != 0 ? byRank : a.compareTo(b);
       });
     final shown = {
       ...order.take(teamShown),
-      for (var i = 0; i < rows.length; i++)
-        if (rows[i].open) i,
+      for (var i = 0; i < agents.length; i++)
+        if (_chatLit(agents[i].$2)) i,
     };
+    final hidden = [
+      for (final i in all)
+        if (!shown.contains(i)) i,
+    ];
+    if (hidden.length < 2) return [for (final i in all) build(i)];
     return [
-      for (var i = 0; i < rows.length; i++)
-        if (shown.contains(i)) rows[i].row,
-      _moreRow('${rows.length - shown.length} more', AppIcons.chevronDown),
+      for (final i in all)
+        if (shown.contains(i)) build(i),
+      SuperTabFoldRow(
+        hidden: hidden.length,
+        // Something new behind it says so, as a row's bold name does.
+        unread: hidden.any((i) => i < agents.length && unread(agents[i].$2)),
+        onTap: controller.toggleAllAgents,
+      ),
     ];
   }
-
-  /// "N more" under Your Team's first rows, and "Show fewer" once they are all open.
-  Widget _moreRow(String name, IconData icon) => _iconRow(
-    key: 'super-team-more',
-    icon: icon,
-    name: name,
-    onTap: controller.toggleAllAgents,
-  );
 
   /// A pane of the person's own in their Personal Swarm, an agent of theirs that has not joined it: its face as it will be,
   /// its name and its computer.
@@ -1436,3 +1440,33 @@ Set<String> superTabHiddenProjects(
 /// An agent's one quiet detail in the Desktop's My agents (task #4466): "offline", else the project a Lead [leads].
 String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>
     activity == HarnessActivity.offline ? 'offline' : leads;
+
+/// Under Your Team's first rows (`teamShown`): "N more", which opens every row, and once they are open "Show fewer", which
+/// folds them again. Bold while a row it folds has something new.
+class SuperTabFoldRow extends StatelessWidget {
+  const SuperTabFoldRow({
+    super.key = const ValueKey('super-team-more'),
+    this.hidden = 0,
+    this.open = false,
+    this.unread = false,
+    required this.onTap,
+  });
+
+  /// How many rows it folds; none once [open].
+  final int hidden;
+  final bool open;
+  final bool unread;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => SuperTabQuietRow(
+    leading: Icon(
+      open ? AppIcons.chevronUp : AppIcons.chevronDown,
+      size: AppIcons.inlineSize,
+      color: grid.SidebarInk.inkMuted,
+    ),
+    name: open ? 'Show fewer' : '$hidden more',
+    unread: unread,
+    onTap: onTap,
+  );
+}
