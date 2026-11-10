@@ -94,8 +94,10 @@ export const PRODUCT_USAGE_PHONE_OFFER_SKIP_METRICS = PRODUCT_USAGE_PHONE_OFFER_
 export const PRODUCT_USAGE_ADD_PHONE_PAIRED_METRICS = PRODUCT_USAGE_ADD_PHONE_OPENINGS
   .map(opening => `ui_desktop_add_phone_paired_${opening}` as const)
 
+/** `team_account_removal`: how a Team account's removal from the computer ended (anh Dee, 2026-11-10: every Team account goes),
+ *  counted by the Desktop: ok removed or already gone, failed when the system refused or kept it, cancelled at the admin prompt. */
 export const PRODUCT_USAGE_FLOWS = [...PRODUCT_USAGE_SETUP_FLOWS,
-  'workspace_connect', 'computer_link', 'remote_connect', 'viewer_open', 'update_check', 'update_stage',
+  'workspace_connect', 'computer_link', 'remote_connect', 'viewer_open', 'update_check', 'update_stage', 'team_account_removal',
   ...HEALTH_FLOWS, ...PRODUCT_USAGE_ONBOARDING_FLOWS, ...PRODUCT_USAGE_DESKTOP_FLOWS] as const
 export const PRODUCT_USAGE_FLOW_MEASURES = ['started', 'ok', 'failed', 'cancelled', 'unknown',
   'under_1s', '1s_to_10s', '10s_to_1m', 'over_1m'] as const
