@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { closeBus, pub, redisSwarmStamps } from './lib/bus.js'
+import { closeBus, pub, publishSwarmAccessChanged, redisSwarmStamps } from './lib/bus.js'
 import { configureSwarmStamps } from './superTabs/cache.js'
 import { reconcileCommunityLikeCounts } from './lib/db/communityLikeCounts.js'
 import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
@@ -21,6 +21,7 @@ import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startAccountNames } from './superTabs/migration/accountNamesJob.js'
 import { startTeamMachines } from './superTabs/migration/teamMachinesJob.js'
+import { startSwarmWipe } from './superTabs/migration/wipeJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { startDeliveryRepush } from './superTabs/deliveryRepush.js'
 import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
@@ -74,6 +75,7 @@ async function start(): Promise<void> {
   let stopLegacyDrop = (): void => {}
   let stopAccountNames = (): void => {}
   let stopTeamMachines = (): void => {}
+  let stopSwarmWipe = (): void => {}
   let stopTimeChecks = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
@@ -94,6 +96,7 @@ async function start(): Promise<void> {
     stopLegacyDrop()
     stopAccountNames()
     stopTeamMachines()
+    stopSwarmWipe()
     stopTimeChecks()
     stopDeliveries()
     stopRepush()
@@ -133,7 +136,9 @@ async function start(): Promise<void> {
   const phones = phoneSendersFromEnv(env)
   const rings = redisRingMemory(pub)
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
-    swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices, rings) } })
+    swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices, rings) },
+    // A Swarm its jobs delete closes its observer sockets, on any instance (store.ts accessChanged).
+    accessChanged: tabId => { void publishSwarmAccessChanged(tabId) } })
   stopSweeps = startSwarmSweeps(prisma)
   // The collections of what Swarm v4 removed, the Leads conversations through the store's own write, and the dead old state of
   // migrated Swarms, go by themselves, a few rows at a time (superTabs/migration/dropLegacyJob.ts).
@@ -143,6 +148,9 @@ async function start(): Promise<void> {
   // Once after this release: Harness Team accounts' machines leave every Swarm, and their account rows go
   // (superTabs/migration/teamMachinesJob.ts).
   stopTeamMachines = startTeamMachines(prisma, swarms)
+  // Once after this release: every Swarm from before Swarm v4 is deleted, its hosts stop its agents, and then everything it kept
+  // goes (superTabs/migration/wipeJob.ts).
+  stopSwarmWipe = startSwarmWipe(prisma, swarms, env)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
   // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
   stopTimeChecks = startTimeChecks(prisma, swarms)

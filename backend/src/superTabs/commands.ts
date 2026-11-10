@@ -492,6 +492,9 @@ export interface CommandContext {
   computerMove?: { to: { machineId: string; ownerId: string; name: string | null } }
   /** For `machine.teamGone`: set by the store's one-time job alone (store.ts takeOutTeamMachines), never from a request. */
   teamMachineGone?: true
+  /** For `swarm.delete`: set by the store's one-time wipe of every Swarm from before Swarm v4 alone (store.ts wipeSwarm), never
+   *  from a request. */
+  wipe?: true
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** The name the machine's owner gave it, from its account row (machines.ts accountMachineName); absent when it has none. */
@@ -2088,8 +2091,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     case 'swarm.delete': {
       // Its owner alone; a member, an agent or anyone else is answered as for a Swarm that does not exist (deletion.ts).
       if (actor.kind !== 'person' || actor.userId !== state.ownerId) notThere()
-      if (isPersonalSwarm(state)) fail('PERSONAL_SWARM', 'Your Personal Swarm cannot be deleted.', 409)
-      if (command.name.trim() !== state.name.trim()) fail('NAME_MISMATCH', 'Type the Swarm\'s name exactly to delete it.', 400)
+      // The wipe of every Swarm from before Swarm v4 (migration/wipeJob.ts) takes Personal Swarms too, and nobody types a name.
+      if (!context.wipe && isPersonalSwarm(state)) fail('PERSONAL_SWARM', 'Your Personal Swarm cannot be deleted.', 409)
+      if (!context.wipe && command.name.trim() !== state.name.trim()) fail('NAME_MISMATCH', 'Type the Swarm\'s name exactly to delete it.', 400)
       // A launch already under way would arrive with nowhere to go; it finishes in moments (removeMachine says the same).
       if (state.starts?.some(s => s.dispatched && !s.harnessId && !s.error)) fail('STARTS_PENDING', 'An agent is starting in this Swarm. Try again in a moment.')
       // Every machine leaves as its owner removing it would: its agents' sessions close and its host deletes the Swarm's
