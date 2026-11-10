@@ -3016,13 +3016,17 @@ describe('the profiles a machine reports', () => {
     expect(read.join()).not.toContain(id('b'))
   })
 
-  it('a Team daemon reports its default accounts only', async () => {
-    const f = both()
-    f.setTeam(true)
-    await f.machine.tick()
-    const profiles = posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>
-    expect(profiles.map(p => [p.engine, p.label])).toEqual([['claude', 'Default'], ['codex', 'Default']])
-    expect(f.request.mock.calls.filter(c => (c[1] as { profile?: unknown } | undefined)?.profile)).toEqual([])
+  // Team machines went (backend 1.4.52): a computer still signed in for team work is its person's, and offers its accounts.
+  it('a computer signed in for team work reports its accounts as any other', async () => {
+    const labels = async (team: boolean) => {
+      const f = both()
+      f.setTeam(team)
+      await f.machine.tick()
+      return (posted(f).at(-1)!.profiles as Array<{ engine: string; label: string }>).map(p => [p.engine, p.label])
+    }
+    const own = await labels(false)
+    expect(own.length).toBeGreaterThan(2)
+    expect(await labels(true)).toEqual(own)
   })
 
   it("reports the default Codex home once, as Default", async () => {
