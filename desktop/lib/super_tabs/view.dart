@@ -106,6 +106,7 @@ import 'voice_row.dart';
 import 'voice_send.dart';
 import 'voice_take.dart';
 import 'swarm_type.dart';
+import '../terminal/terminal_font_store.dart';
 import 'visible_tick.dart';
 import 'chat/chat_card.dart';
 import 'chat/chat_time.dart';
@@ -3269,8 +3270,16 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The project's task list, open beside its channel (Swarm v4).
   bool _taskListOpen = false;
 
-  /// The task open beside its channel, in place of the list: its project's channel, repository and issue number.
-  ({String channel, String repository, int number})? _issue;
+  /// Which list the pane beside the channel shows: its tasks (▦), or its pull requests (⑂, anh Dee 2026-11-10).
+  bool _boardPulls = false;
+
+  /// The task open beside its channel, in place of the list: its project's channel, repository and issue number. Or a pull
+  /// request opened from its task's row ([pull]), with the task it was opened from ([back]), which closing it goes back to.
+  ({String channel, String repository, int number, bool pull, int? back})?
+  _issue;
+
+  /// The pull request open in place of Pull requests.
+  ({String channel, String repository, int number})? _pullOpen;
 
   late final SwarmGitHub _github = widget.github ?? SwarmGitHub();
 
@@ -3311,6 +3320,13 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// Closes a project's tasks; the task open among them stays, where the person left it. Within setState.
   void _closeTaskList() => _taskListOpen = false;
+
+  /// ▦ or ⑂: shows that list beside the channel, or closes the pane when it already shows it. Within setState.
+  void _showBoard({required bool pulls}) {
+    if (_taskListOpen && _boardPulls == pulls) return _closeTaskList();
+    _taskListOpen = true;
+    _boardPulls = pulls;
+  }
 
   /// Chat, over a terminal in the chat's place: the terminal closes, and a pane beside stays.
   void _closeTerminalInPlace() {
@@ -3612,13 +3628,23 @@ class _SuperTabViewState extends State<SuperTabView>
                 icon: AppIcons.squareKanban,
                 size: AppIcons.inlineSize,
                 tooltip: 'Tasks',
-                selected: _taskListOpen,
-                color: _taskListOpen
+                selected: _taskListOpen && !_boardPulls,
+                color: _taskListOpen && !_boardPulls
                     ? DesktopChrome.foreground
                     : DesktopChrome.muted,
-                onPressed: () => setState(
-                  () => _taskListOpen ? _closeTaskList() : _taskListOpen = true,
-                ),
+                onPressed: () => setState(() => _showBoard(pulls: false)),
+              ),
+              const SizedBox(width: 4),
+              AppIconButton(
+                key: const ValueKey('swarm-pulls-button'),
+                icon: AppIcons.gitPullRequest,
+                size: AppIcons.inlineSize,
+                tooltip: 'Pull requests',
+                selected: _taskListOpen && _boardPulls,
+                color: _taskListOpen && _boardPulls
+                    ? DesktopChrome.foreground
+                    : DesktopChrome.muted,
+                onPressed: () => setState(() => _showBoard(pulls: true)),
               ),
             ],
             if (!isProject) ...[
@@ -5449,9 +5475,13 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget build(BuildContext context) {
     _syncThreadPane();
     _recordPlace();
-    return SuperTabFiles(
-      fresh: widget.controller.readFileLink,
-      child: SuperTabImageStage(open: _openImages, child: _swarm(context)),
+    // Every pane here reads at the terminal's size, and is drawn again when it changes (anh Dee, 2026-11-10).
+    return SwarmTextSize(
+      notifier: terminalFontStore,
+      child: SuperTabFiles(
+        fresh: widget.controller.readFileLink,
+        child: SuperTabImageStage(open: _openImages, child: _swarm(context)),
+      ),
     );
   }
 
@@ -5463,7 +5493,18 @@ class _SuperTabViewState extends State<SuperTabView>
       // Swarm v4: a project's tasks beside its channel, and a task opened from them in their place.
       final taskList =
           _taskListOpen && c.snapshot?.isProjectLead(c.selectedId) == true;
-      final opened = _issue;
+      final pullOpen = _pullOpen;
+      final opened = _boardPulls
+          ? pullOpen == null
+                ? null
+                : (
+                    channel: pullOpen.channel,
+                    repository: pullOpen.repository,
+                    number: pullOpen.number,
+                    pull: true,
+                    back: null,
+                  )
+          : _issue;
       final issue = taskList && opened != null && opened.channel == c.selectedId
           ? KeyedSubtree(
               key: _issueKey,
@@ -5475,8 +5516,36 @@ class _SuperTabViewState extends State<SuperTabView>
                 github: _github,
                 repository: opened.repository,
                 number: opened.number,
+                pull: opened.pull,
                 refreshEvery: kUnderTest ? null : const Duration(seconds: 30),
-                onClose: () => setState(() => _issue = null),
+                // A task's pull request row opens the pull request's own chat in the task's place.
+                onOpenPull: opened.pull
+                    ? null
+                    : (number) => setState(
+                        () => _issue = (
+                          channel: opened.channel,
+                          repository: opened.repository,
+                          number: number,
+                          pull: true,
+                          back: opened.number,
+                        ),
+                      ),
+                onClose: () => setState(() {
+                  if (_boardPulls) {
+                    _pullOpen = null;
+                  } else {
+                    _issue = switch (opened.back) {
+                      final back? => (
+                        channel: opened.channel,
+                        repository: opened.repository,
+                        number: back,
+                        pull: false,
+                        back: null,
+                      ),
+                      null => null,
+                    };
+                  }
+                }),
               ),
             )
           : null;
@@ -5487,15 +5556,25 @@ class _SuperTabViewState extends State<SuperTabView>
               conversationId: c.selectedId,
               github: _github,
               app: widget.app,
-              openNumber: _issue?.number,
+              pulls: _boardPulls,
+              openNumber: _boardPulls ? null : _issue?.number,
               refreshEvery: kUnderTest ? null : const Duration(minutes: 1),
               onOpen: (repository, opened) => setState(() {
                 _issue = (
                   channel: c.selectedId,
                   repository: repository,
                   number: opened.number,
+                  pull: false,
+                  back: null,
                 );
               }),
+              onOpenPull: (repository, number) => setState(
+                () => _pullOpen = (
+                  channel: c.selectedId,
+                  repository: repository,
+                  number: number,
+                ),
+              ),
               onClose: () => setState(_closeTaskList),
             )
           : null;

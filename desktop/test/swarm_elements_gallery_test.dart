@@ -179,7 +179,7 @@ Future<List<SuperTabController>> _show(
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 4071);
+  tester.view.physicalSize = const Size(760, 4242);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
@@ -571,6 +571,24 @@ class _Gallery extends StatelessWidget {
                   controller: swarm,
                   conversationId: 'lead',
                   github: swarmV4GitHub(),
+                  refreshEvery: null,
+                  now: () => DateTime.utc(2026, 11, 9, 9),
+                  onOpen: (_, _) {},
+                  onClose: () {},
+                ),
+              ),
+              // Its pull requests, what ⑂ opens (anh Dee 2026-11-10): three columns by who acts next, as lampOS's train bot sorts them.
+              title(
+                'Pull requests: To read, To fix, Merging; a card opens its chat',
+              ),
+              SizedBox(
+                width: 760,
+                height: 250,
+                child: SwarmTaskBoard(
+                  controller: swarm,
+                  conversationId: 'lead',
+                  github: swarmV4GitHub(),
+                  pulls: true,
                   refreshEvery: null,
                   now: () => DateTime.utc(2026, 11, 9, 9),
                   onOpen: (_, _) {},

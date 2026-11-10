@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
+import 'package:collection/collection.dart' show mergeSort;
 
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
@@ -91,20 +92,36 @@ class SwarmIssue {
   }
 }
 
-/// One comment on an issue: an agent's post, signed by its name in its first words ("Migrate, 09:3x GMT+7: …"), as
-/// lampOS's builders sign theirs, under its person's GitHub account.
+/// What a post in a GitHub chat is: a comment, or on a pull request a review, a line comment, or its merge.
+enum SwarmTalk { comment, review, line, merged }
+
+/// One comment on an issue or a pull request: an agent's post, signed by its name in its first words ("Migrate, 09:3x GMT+7:
+/// …"), as lampOS's builders sign theirs, under its person's GitHub account. On a pull request, also a review with its verdict,
+/// a line comment with its place, or when it merged ([talk]).
 class SwarmIssueComment {
   const SwarmIssueComment({
     required this.body,
     this.author,
     this.createdAt,
     this.url,
+    this.talk = SwarmTalk.comment,
+    this.verdict,
+    this.path,
+    this.line,
   });
 
   final String body;
   final String? author;
   final DateTime? createdAt;
   final String? url;
+  final SwarmTalk talk;
+
+  /// A review's verdict in GitHub's words: `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`.
+  final String? verdict;
+
+  /// The file and line a line comment is on.
+  final String? path;
+  final int? line;
 
   /// The name it is signed with: the words before its first comma, when they read as a name. Null otherwise.
   String? get signedBy {
@@ -114,7 +131,8 @@ class SwarmIssueComment {
   }
 }
 
-/// An issue opened beside its project's channel: its text and its comments, oldest first.
+/// An issue, or a pull request, opened beside its project's channel: its text and its comments, oldest first, and a pull
+/// request's reviews.
 class SwarmIssueThread {
   const SwarmIssueThread({
     required this.issue,
@@ -123,6 +141,9 @@ class SwarmIssueThread {
     required this.open,
     this.createdAt,
     this.earlier,
+    this.branch,
+    this.mergedAt,
+    this.reviews = const [],
   });
 
   final SwarmIssue issue;
@@ -135,6 +156,16 @@ class SwarmIssueThread {
 
   /// Where the comments before [comments] start, or null when it holds them all.
   final String? earlier;
+
+  /// A pull request's branch; null for an issue.
+  final String? branch;
+
+  /// When a pull request merged; null for one that has not, and for an issue.
+  final DateTime? mergedAt;
+
+  /// A pull request's newest [SwarmGitHub.pullReviews] reviews, each with its first [SwarmGitHub.reviewLines] line comments,
+  /// and its merge, oldest first: its chat shows them among its comments by time. Empty for an issue.
+  final List<SwarmIssueComment> reviews;
 }
 
 /// A page of the comments before the ones a thread holds, oldest first.
@@ -178,6 +209,10 @@ class SwarmGitHub {
   /// How many comments one "earlier" read brings.
   static const earlierComments = 100;
 
+  /// How many of a pull request's newest reviews its chat reads, and the line comments of each: lampOS's builder pull
+  /// requests held 4 comments and reviews at the median, 13 at p90 and 41 at most (2026-11-10, its last 197).
+  static const pullReviews = 30, reviewLines = 20;
+
   /// How many threads are kept to open again at once.
   static const threadsKept = 60;
 
@@ -200,6 +235,7 @@ class SwarmGitHub {
 
   final _lists = <String, List<SwarmIssue>>{};
   final _pulls = <String, Map<int, SwarmPull>>{};
+  final _pullLists = <String, List<SwarmPull>>{};
   final _threads = <String, SwarmIssueThread>{};
   final _reading = <String>{};
 
@@ -208,6 +244,9 @@ class SwarmGitHub {
 
   /// [repository]'s open pull requests by the task each is for, as they were last read. Null before the first.
   Map<int, SwarmPull>? keptPulls(String repository) => _pulls[repository];
+
+  /// [repository]'s open pull requests as last read, newest activity first, those that are no task's included.
+  List<SwarmPull>? keptPullList(String repository) => _pullLists[repository];
 
   /// Issue [number]'s thread as it was last read, to show at once while [thread] reads it again. Null before the first.
   SwarmIssueThread? keptThread(String repository, int number) =>
@@ -325,6 +364,7 @@ class SwarmGitHub {
         ? branch['name'] as String
         : null;
     final byTask = <int, SwarmPull>{};
+    final all = <SwarmPull>[];
     for (final row in _nodes(map['pullRequests'])) {
       final pull = SwarmPull.read(
         row,
@@ -332,26 +372,35 @@ class SwarmGitHub {
         team: team,
       );
       if (pull == null) continue;
+      all.add(pull);
       for (final task in pull.tasks) {
         byTask.putIfAbsent(task, () => pull);
       }
     }
     _pulls.remove(repository);
     _pulls[repository] = byTask;
+    _pullLists.remove(repository);
+    _pullLists[repository] = all;
     while (_pulls.length > listsKept) {
+      _pullLists.remove(_pulls.keys.first);
       _pulls.remove(_pulls.keys.first);
     }
     return byTask;
   }
 
-  /// Issue [number] of [repository]: its text, and its newest [lastComments] comments, oldest first.
-  Future<SwarmIssueThread> thread(String repository, int number) async {
+  /// Issue [number] of [repository], or its pull request [number] when [pull]: its text, and its newest [lastComments]
+  /// comments, oldest first; a pull request's reviews beside them.
+  Future<SwarmIssueThread> thread(
+    String repository,
+    int number, {
+    bool pull = false,
+  }) async {
     final (owner, name) = _split(repository);
     final answer = await _call([
       'api',
       'graphql',
       '-f',
-      'query=$_threadQuery',
+      'query=${pull ? _pullThreadQuery : _threadQuery}',
       '-f',
       'owner=$owner',
       '-f',
@@ -361,20 +410,27 @@ class SwarmGitHub {
       '-F',
       'last=$lastComments',
     ], repository);
-    final map = _data(answer, ['repository', 'issue']);
+    final map = _data(answer, ['repository', pull ? 'pullRequest' : 'issue']);
     final issue =
         SwarmIssue.read(map) ??
         (throw const SwarmGitHubError(
           'GitHub sent something unreadable. Try again.',
         ));
     final comments = _commentsOf(map['comments']);
+    final mergedAt = _time(map['mergedAt']);
     final thread = SwarmIssueThread(
       issue: issue,
       body: map['body'] is String ? map['body'] as String : '',
-      open: map['state'] != 'CLOSED',
+      // A pull request is open until it merges or closes; an issue until it closes.
+      open: map['state'] != 'CLOSED' && map['state'] != 'MERGED',
       createdAt: issue.createdAt,
       comments: comments.comments,
       earlier: comments.earlier,
+      branch: map['headRefName'] is String
+          ? map['headRefName'] as String
+          : null,
+      mergedAt: mergedAt,
+      reviews: pull ? _reviewsOf(map['reviews'], mergedAt) : const [],
     );
     final key = '$repository#$number';
     _threads.remove(key);
@@ -385,18 +441,20 @@ class SwarmGitHub {
     return thread;
   }
 
-  /// The [earlierComments] comments before [cursor] (a thread's or an earlier page's `earlier`), oldest first.
+  /// The [earlierComments] comments before [cursor] (a thread's or an earlier page's `earlier`), oldest first: of issue
+  /// [number], or of its pull request [number] when [pull].
   Future<SwarmIssueEarlier> earlier(
     String repository,
     int number,
-    String cursor,
-  ) async {
+    String cursor, {
+    bool pull = false,
+  }) async {
     final (owner, name) = _split(repository);
     final answer = await _call([
       'api',
       'graphql',
       '-f',
-      'query=$_earlierQuery',
+      'query=${pull ? _pullEarlierQuery : _earlierQuery}',
       '-f',
       'owner=$owner',
       '-f',
@@ -409,7 +467,7 @@ class SwarmGitHub {
       'before=$cursor',
     ], repository);
     final page = _commentsOf(
-      _data(answer, ['repository', 'issue'])['comments'],
+      _data(answer, ['repository', pull ? 'pullRequest' : 'issue'])['comments'],
     );
     return SwarmIssueEarlier(comments: page.comments, earlier: page.earlier);
   }
@@ -484,6 +542,64 @@ class SwarmGitHub {
     );
   }
 
+  /// A pull request's reviews ([value], its `reviews`) and their line comments, and its merge at [mergedAt], oldest first. A
+  /// review with no words of its own is its line comments alone, or its verdict when it has none: an approval is said.
+  static List<SwarmIssueComment> _reviewsOf(Object? value, DateTime? mergedAt) {
+    final talk = <SwarmIssueComment>[];
+    for (final review in _nodes(value)) {
+      if (review is! Map) continue;
+      final body = review['body'] is String
+          ? (review['body'] as String).trim()
+          : '';
+      final verdict = review['state'] is String
+          ? review['state'] as String
+          : null;
+      final lines = [
+        for (final row in _nodes(review['comments']))
+          if (row is Map && row['body'] is String)
+            SwarmIssueComment(
+              body: row['body'] as String,
+              author: _login(row['author']),
+              createdAt: _time(row['createdAt']),
+              url: row['url'] is String ? row['url'] as String : null,
+              talk: SwarmTalk.line,
+              path: row['path'] is String ? row['path'] as String : null,
+              line: row['line'] is int ? row['line'] as int : null,
+            ),
+      ];
+      if (body.isNotEmpty ||
+          (lines.isEmpty && verdict != null && verdict != 'COMMENTED')) {
+        talk.add(
+          SwarmIssueComment(
+            body: body,
+            author: _login(review['author']),
+            createdAt: _time(review['submittedAt']),
+            url: review['url'] is String ? review['url'] as String : null,
+            talk: SwarmTalk.review,
+            verdict: verdict,
+          ),
+        );
+      }
+      talk.addAll(lines);
+    }
+    if (mergedAt != null) {
+      talk.add(
+        SwarmIssueComment(
+          body: '',
+          createdAt: mergedAt,
+          talk: SwarmTalk.merged,
+        ),
+      );
+    }
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    // Stable, so two posts of one second keep GitHub's order.
+    mergeSort(
+      talk,
+      compare: (a, b) => (a.createdAt ?? epoch).compareTo(b.createdAt ?? epoch),
+    );
+    return talk;
+  }
+
   /// The value [path] names in a GraphQL answer's `data`; unreadable when the answer, or it, is not what was asked for.
   static Map<Object?, Object?> _data(String answer, List<String> path) {
     Object? value;
@@ -528,7 +644,7 @@ class SwarmGitHub {
       r'repository(owner:$owner,name:$name){defaultBranchRef{name} '
       r'pullRequests(states:OPEN,first:$first,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{'
       'number title url isDraft headRefName headRefOid baseRefName body mergeable author{login} '
-      'labels(first:20){nodes{name}} closingIssuesReferences(first:5){nodes{number}} '
+      'updatedAt labels(first:20){nodes{name}} closingIssuesReferences(first:5){nodes{number}} '
       'commits(last:1){nodes{commit{statusCheckRollup{state}}}} '
       'comments(last:30){nodes{body createdAt authorAssociation author{login}}}}}}}';
 
@@ -540,6 +656,21 @@ class SwarmGitHub {
       r'repository(owner:$owner,name:$name){issue(number:$number){'
       '$_issueFields body state '
       'comments(last:\$last){totalCount $_commentFields}}}}';
+
+  static const _talkFields = 'body createdAt url author{login}';
+
+  static const _pullThreadQuery =
+      r'query($owner:String!,$name:String!,$number:Int!,$last:Int!){'
+      r'repository(owner:$owner,name:$name){pullRequest(number:$number){'
+      '$_issueFields body state mergedAt headRefName '
+      'comments(last:\$last){totalCount $_commentFields} '
+      'reviews(last:$pullReviews){nodes{state submittedAt body url author{login} '
+      'comments(first:$reviewLines){nodes{$_talkFields path line}}}}}}}';
+
+  static const _pullEarlierQuery =
+      r'query($owner:String!,$name:String!,$number:Int!,$last:Int!,$before:String){'
+      r'repository(owner:$owner,name:$name){pullRequest(number:$number){'
+      'comments(last:\$last,before:\$before){$_commentFields}}}}';
 
   static const _earlierQuery =
       r'query($owner:String!,$name:String!,$number:Int!,$last:Int!,$before:String){'
