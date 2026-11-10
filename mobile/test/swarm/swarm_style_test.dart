@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' show AppControl;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/swarm/swarm_style.dart';
@@ -126,6 +127,81 @@ void main() {
               as RoundedRectangleBorder;
       expect(shape.borderRadius, BorderRadius.circular(10));
       expect(shape.side, isNot(BorderSide.none));
+    });
+
+    /// What [button] draws: its face, inside the box it is laid out in.
+    Rect drawn(WidgetTester tester, Finder button) => tester.getRect(
+      find.descendant(of: button, matching: find.byType(Material)).first,
+    );
+
+    testWidgets('is drawn 44 tall; compact, drawn at a control\'s height in a '
+        'box 44 tall', (tester) async {
+      await show(tester, SwarmButton(label: 'Reply', onPressed: () {}));
+      final button = find.byType(SwarmButton);
+      expect(drawn(tester, button).height, minTouchTarget);
+
+      await show(
+        tester,
+        SwarmButton(label: 'Reply', compact: true, onPressed: () {}),
+      );
+      expect(drawn(tester, button).height, AppControl.height);
+      expect(tester.getSize(button).height, minTouchTarget);
+      expect(drawn(tester, button).center, tester.getCenter(button));
+    });
+
+    testWidgets('compact, has 12 points of room either side', (tester) async {
+      for (final style in SwarmButtonStyle.values) {
+        await show(
+          tester,
+          SwarmButton(
+            label: 'Reply',
+            style: style,
+            compact: true,
+            onPressed: () {},
+          ),
+        );
+        expect(
+          drawn(tester, find.byType(SwarmButton)).width -
+              tester.getSize(find.text('Reply')).width,
+          2 * 12,
+          reason: '$style',
+        );
+      }
+    });
+
+    testWidgets('compact, is pressed across its 44-point box, in a row as '
+        'tall as its words too, and not past it', (tester) async {
+      var presses = 0;
+      // A row shorter than a thumb, as an Activity row's words can be.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 36, child: Text('Fix login')),
+                  SwarmButton(
+                    label: 'Reply',
+                    compact: true,
+                    onPressed: () => presses++,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      final face = drawn(tester, find.byType(SwarmButton));
+      final reach = (minTouchTarget - face.height) / 2;
+
+      await tester.tapAt(face.topCenter - Offset(0, reach - 1));
+      await tester.tapAt(face.bottomCenter + Offset(0, reach - 1));
+      expect(presses, 2);
+
+      await tester.tapAt(face.topCenter - Offset(0, reach + 2));
+      await tester.tapAt(face.bottomCenter + Offset(0, reach + 2));
+      expect(presses, 2);
     });
 
     testWidgets('writes the main action in white on the accent', (

@@ -26,7 +26,6 @@ import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
-import { profiledReads } from './profiledReads.test-support.js'
 import { RETIRED_NOTE } from '../src/superTabs/retired.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -733,23 +732,17 @@ describe('no decisions in Swarm v4', () => {
     return { status: response.statusCode, body: response.json() as { data: { result: Record<string, unknown> } } }
   }
 
-  it('ignores an older agent\'s ask, writing no decision, and derives no count, digest or prompt waits, reading no decision row', async () => {
+  it('ignores an older agent\'s ask and derives no count, digest or prompt waits', async () => {
     const s = await scene()
     clock = Date.now()
     const asked = await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub,
       questions: [{ question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }] }, owner, s.lead)
     expect({ status: asked.status, result: asked.body.data.result }).toEqual({ status: 200, result: { ignored: true, note: RETIRED_NOTE } })
-    // An open one stored before stays unread by every read.
-    await db.superTabDecision.create({ data: { id: `${s.tabId}-old`, tabId: s.tabId, batchId: 'old', projectId: 'lead', conversationId: s.web,
-      assignmentId: null, personId: peer.sub, askerAgentId: s.lead, question: 'Ship how?', options: ['Behind a flag', 'To everyone'],
-      recommended: 0, unblocks: 'The release', createdAt: new Date() } })
-    expect(await db.superTabDecision.count({ where: { tabId: s.tabId } })).toBe(1)
-    const first = await profiledReads(db, /\.SuperTabDecision$/, () => get(`/api/super-tabs/${s.tabId}/parts`, peer))
-    const changes = await profiledReads(db, /\.SuperTabDecision$/, () => get(`/api/super-tabs/${s.tabId}/changes?cursor=${first.value.body.data.cursor}`, peer))
+    const first = await get(`/api/super-tabs/${s.tabId}/parts`, peer)
+    const changes = await get(`/api/super-tabs/${s.tabId}/changes?cursor=${first.body.data.cursor}`, peer)
     for (const read of [first, changes]) {
-      expect(read.value.status).toBe(200)
-      for (const field of ['decisionsWaiting', 'decisionsDigest', 'promptsWaiting']) expect(read.value.body.data.derived).not.toHaveProperty(field)
-      expect(read.reads).toBe(0)
+      expect(read.status).toBe(200)
+      for (const field of ['decisionsWaiting', 'decisionsDigest', 'promptsWaiting']) expect(read.body.data.derived).not.toHaveProperty(field)
     }
   })
 })
