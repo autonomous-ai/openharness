@@ -539,10 +539,10 @@ describe('Super Tab collaboration policy', () => {
       const build = f.group(), engineer = f.add('engineer', 'owner', build), other = f.group()
       const before = [...f.state.conversations.find(c => c.id === other)!.agentIds]
       const react = (conversationId: string) => f.run({ type: 'message.react', conversationId, messageId: 'm1', emoji: 'tada', on: true },
-        as(engineer), { reaction: { messageId: 'm1', reacted: false } })
+        as(engineer), { reaction: { messageId: 'm1' } })
       expect(() => react(other)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
       expect(f.state.conversations.find(c => c.id === other)!.agentIds).toEqual(before)
-      expect(react(build).result).toMatchObject({ changed: true })
+      expect(react(build).settles).toEqual({ messageId: 'm1', agentId: engineer })
     })
 
     it('keeps a person\'s message from adding agents', () => {
@@ -2232,7 +2232,7 @@ describe('any agent of the project', () => {
       for (const [agentId, code] of refusals) {
         expect(() => f.run(post('Hello room.'), actorOf(agentId))).toThrow(expect.objectContaining({ code }))
         expect(() => f.run({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji: 'eyes', on: true }, actorOf(agentId),
-          { reaction: { messageId: 'm1', reacted: false } }))
+          { reaction: { messageId: 'm1' } }))
           .toThrow(expect.objectContaining({ code }))
       }
       // Adding one by hand is refused as before (#2207).
@@ -2267,14 +2267,14 @@ describe('any agent of the project', () => {
       expect(effects.messages).toHaveLength(1)
     })
 
-    // River, 2026-11-04 (#2924): an agent with work in the project reacts there (👀 on an ask it takes), with no other right.
+    // River, 2026-11-04 (#2924): an agent with work in the project acknowledges there with a reaction, with no other right.
     it('lets it react there without joining', () => {
       const { f, engineer, reviewer, chat } = working()
       const asked = f.run(post('Can someone check the login bug?')).messages[0]!
       const members = [...chat().agentIds]
       for (const agentId of [engineer, reviewer]) {
         expect(f.run({ type: 'message.react', conversationId: 'lead', messageId: asked.id, emoji: 'eyes', on: true }, actorOf(agentId),
-          { reaction: { messageId: asked.id, reacted: false } }).result.changed).toBe(true)
+          { reaction: { messageId: asked.id } }).settles).toEqual({ messageId: asked.id, agentId })
       }
       expect(chat().agentIds).toEqual(members)
     })
