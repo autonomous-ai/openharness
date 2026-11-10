@@ -184,11 +184,8 @@ class TerminalSession extends ChangeNotifier {
   UploadProgress? lastStalledUpload;
   final bool _readOnly;
   bool get readOnly => _readOnly || _watchOnly;
-  String? _inputContext;
-  String? _openedInputContext;
   bool _watchOnly;
   bool _openedWatchOnly = false;
-  String? get inputContext => _inputContext;
 
   // A controllable clock keeps coalescing tests independent of host scheduling.
   final DateTime Function() _now;
@@ -250,7 +247,6 @@ class TerminalSession extends ChangeNotifier {
     this.onOpenStalled,
     this.takeover = true,
     bool readOnly = false,
-    String? inputContext,
     bool watchOnly = false,
     this.resyncTimeout = const Duration(seconds: 4),
     this.uploadStallTimeout = const Duration(seconds: 30),
@@ -259,8 +255,6 @@ class TerminalSession extends ChangeNotifier {
        // ignore: prefer_initializing_formals
        _readOnly = readOnly,
        // The public parameter deliberately omits the private field's underscore.
-       // ignore: prefer_initializing_formals
-       _inputContext = inputContext,
        // ignore: prefer_initializing_formals
        _watchOnly = watchOnly {
     terminal = _newTerminal();
@@ -357,7 +351,6 @@ class TerminalSession extends ChangeNotifier {
       !readOnly &&
       !_watchOnly &&
       !watching &&
-      _inputContext == _openedInputContext &&
       _watchOnly == _openedWatchOnly &&
       status == TerminalSessionStatus.controlling &&
       streamId != null;
@@ -386,21 +379,18 @@ class TerminalSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// An opaque provenance hint, never an access grant. Staging a new scope
-  /// immediately withholds input until its replacement stream is ready.
-  void stageInputContext(String? value, {bool watchOnly = false}) {
-    if (_inputContext == value && _watchOnly == watchOnly) return;
-    _inputContext = value;
+  /// Whether this view only watches. Staging a change immediately withholds
+  /// input until its replacement stream is ready.
+  void stageWatchOnly(bool watchOnly) {
+    if (_watchOnly == watchOnly) return;
     _watchOnly = watchOnly;
     _inputBytes.clear();
   }
 
-  Future<void> setInputContext(String? value, {bool watchOnly = false}) async {
-    stageInputContext(value, watchOnly: watchOnly);
-    if (_disposed ||
-        (_openedInputContext == value && _openedWatchOnly == watchOnly)) {
-      return;
-    }
+  /// [stageWatchOnly], then a stream opened as that, unless one already is.
+  Future<void> setWatchOnly(bool watchOnly) async {
+    stageWatchOnly(watchOnly);
+    if (_disposed || _openedWatchOnly == watchOnly) return;
     await _open(
       initialCols: _measuredViewport?.cols ?? cols,
       initialRows: _measuredViewport?.rows ?? rows,
@@ -532,14 +522,12 @@ class TerminalSession extends ChangeNotifier {
       'rows': rows,
       'compression': const ['zlib', 'none'],
       if (client != null) 'client': client!.toJson(),
-      if (_inputContext != null) 'inputContext': _inputContext,
       if (_watchOnly) 'watchOnly': true,
       // Absent is the takeover an open has always been; `false` asks the daemon
       // to leave whoever holds the terminal alone and hand this one a watcher.
       if (!takeover) 'takeover': false,
     };
     _openAskedTakeover = takeover;
-    _openedInputContext = _inputContext;
     _openedWatchOnly = _watchOnly;
     var sent = await send('terminal_open', openPayload);
     if (!_isCurrent(generation) ||
@@ -1135,7 +1123,6 @@ class TerminalSession extends ChangeNotifier {
       'content': content,
       'agentId': agentId,
       'mode': 'auto',
-      if (_inputContext != null) 'inputContext': _inputContext,
       if (!kIsWeb && client?.kind == 'desktop') 'usageIntent': 'interactive',
     });
   }

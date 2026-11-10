@@ -148,7 +148,8 @@ try {
     TERMINAL_P2P_ROLLOUT_PERCENT: '0', HARNESS_CREDENTIAL_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }
   await exec(join(repo, 'backend/node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], { cwd: join(repo, 'backend'), env: backendEnv, timeout: 60_000 })
   run('backend', join(repo, 'backend'), ['--import', 'tsx', 'src/server.ts'], backendEnv)
-  await until('backend', async () => fetch(`${backendUrl}/api/health`).then(r => r.ok).catch(() => false))
+  // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
+  await until('backend', async () => fetch(`${backendUrl}/api/ready`, { signal: AbortSignal.timeout(5_000) }).then(r => r.ok).catch(() => false))
   const engine = join(root, 'codex')
   await writeFile(engine, `#!${process.execPath}\nif (process.argv.includes('--version')) { console.log('codex-cli 1.0.0'); process.exit(0) }\nif (process.argv.includes('--help')) { console.log('--approve-for-me --dangerously-bypass-approvals-and-sandbox --ask-for-approval'); process.exit(0) }\nconst { appendFileSync } = require('node:fs'); process.title = 'codex'; process.stdin.setRawMode?.(true); console.log('SHARING_READY'); process.stdin.on('data', x => { appendFileSync(${JSON.stringify(join(root, 'fixture-input.bin'))}, x); process.stdout.write('ECHO:' + x + '\\r\\n'); }); setInterval(() => {}, 1000);\n`, { mode: 0o700 })
   const fixture = join(root, 'harness-source')
