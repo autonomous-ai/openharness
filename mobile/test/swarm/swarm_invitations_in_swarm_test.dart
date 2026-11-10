@@ -214,6 +214,26 @@ void main() {
       expect(key('swarm-invitation-i1'), findsOneWidget);
     });
 
+    testWidgets('a Home pushed over another page lists none', (tester) async {
+      await pump(
+        tester,
+        backend(),
+        page: Builder(
+          builder: (context) => TextButton(
+            key: const ValueKey('open-home'),
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute<void>(builder: (_) => const SwarmPage())),
+            child: const Text('Open'),
+          ),
+        ),
+      );
+      await tester.tap(key('open-home'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmPage), findsOneWidget);
+      expect(key('swarm-invitation-i1'), findsNothing);
+    });
+
     testWidgets('with none, no section', (tester) async {
       final fake = backend();
       fake.routes[invitations] = (_) => <Object>[];

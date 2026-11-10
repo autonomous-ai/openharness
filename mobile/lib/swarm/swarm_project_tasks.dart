@@ -197,7 +197,6 @@ class _SwarmProjectTasksState extends State<SwarmProjectTasks> {
                     for (final need in tasks.waiting)
                       SwarmWaitingRow(
                         key: ValueKey('swarm-waiting-${need.key}'),
-                        session: session,
                         snapshot: snapshot,
                         need: need,
                         personName: personName,
@@ -338,7 +337,6 @@ String? swarmWorkStatusWords(
 class SwarmWaitingRow extends StatelessWidget {
   const SwarmWaitingRow({
     super.key,
-    required this.session,
     required this.snapshot,
     required this.need,
     required this.now,
@@ -346,7 +344,6 @@ class SwarmWaitingRow extends StatelessWidget {
     this.personName,
   });
 
-  final SwarmSession session;
   final SuperTabSnapshot snapshot;
   final SwarmNeed need;
   final DateTime now;

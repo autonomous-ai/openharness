@@ -156,7 +156,6 @@ class SwarmConversationPage extends StatefulWidget {
     this.threadId,
     this.threadFocus,
     this.mention,
-    this.swarmSwitch,
   });
 
   final String swarmId, conversationId;
@@ -187,10 +186,6 @@ class SwarmConversationPage extends StatefulWidget {
   /// holds it, for its own header's menu; null makes the chat its own while
   /// it is their Buddy chat.
   final SwarmBuddyActions? buddy;
-
-  /// The Swarm it is in and how to pick another, for its Buddy menu; null with
-  /// no other Swarm to pick.
-  final SwarmBuddySwitch? swarmSwitch;
 
   @override
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
@@ -1429,7 +1424,6 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 chatId: widget.conversationId,
                 onFind: _openFind,
                 swarmId: widget.swarmId,
-                swarmSwitch: widget.swarmSwitch,
               ),
               null => SwarmChatMenuButton(
                 reader: c.reader,
@@ -1653,9 +1647,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     ],
   );
 
-  /// From an old chat, back to the person's one Buddy: the Buddy tab, in this
-  /// Swarm, with what covered it gone; its chat as its own page with no tabs
-  /// up.
+  /// From an old chat, back to the person's one Buddy: its chat, as its own
+  /// page.
   void _openBuddy(SwarmConversation c) => unawaited(
     openSwarmBuddy(context, c.reader, widget.swarmId, swarmBuddyKey),
   );
@@ -3782,8 +3775,7 @@ class SwarmMessageField extends StatelessWidget {
   /// takes text alone.
   final SwarmImagePaste? imagePaste;
 
-  /// The field's key: the chat's, a thread's and New message's are told
-  /// apart by it.
+  /// The field's key: the chat's and a thread's are told apart by it.
   final Key fieldKey;
 
   /// The X's key.

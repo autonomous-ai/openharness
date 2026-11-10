@@ -372,14 +372,21 @@ class _SwarmPageState extends State<SwarmPage> {
       ];
     }
     return [
-      ..._invitations(context, inbox),
-      ..._projects(context, session, _shown(session), widget.now()),
+      if (!pushed) ..._invitations(context, inbox),
+      ..._projects(
+        context,
+        session,
+        _shown(session),
+        widget.now(),
+        first: pushed || inbox.invitations.isEmpty,
+      ),
     ];
   }
 
   /// The invitations to a Swarm waiting on the person's answer, over the
-  /// projects: Join, or Not now. None, nothing. With no Swarm yet, the start
-  /// screen has them ([swarmStartView]).
+  /// projects: Join, or Not now. None, nothing; nor on a Home pushed over
+  /// another page. With no Swarm yet, the start screen has them
+  /// ([swarmStartView]).
   List<Widget> _invitations(BuildContext context, SwarmInbox inbox) {
     if (inbox.invitations.isEmpty) return const [];
     final tty = Tty.of(context);
@@ -418,13 +425,15 @@ class _SwarmPageState extends State<SwarmPage> {
   /// quiet for a day folded. A Swarm still to be read has rows on their way
   /// under its heading, a failed read still trying too, as it is in the log;
   /// one no read will bring says so. A filter on says so first, with Show
-  /// all, as Home has no filter icon to show it.
+  /// all, as Home has no filter icon to show it. [first]: nothing is over
+  /// them on the screen.
   List<Widget> _projects(
     BuildContext context,
     SwarmSession session,
     List<SwarmListing> shown,
-    DateTime now,
-  ) {
+    DateTime now, {
+    required bool first,
+  }) {
     final inbox = session.inbox;
     const top = SizedBox(height: AppSpace.s);
     if (inbox.swarms.isEmpty) {
@@ -565,7 +574,7 @@ class _SwarmPageState extends State<SwarmPage> {
         SwarmCaption(
           swarm.name,
           key: ValueKey('swarm-heading-${swarm.id}'),
-          first: notices.isEmpty && swarm == firstDrawn,
+          first: first && notices.isEmpty && swarm == firstDrawn,
         )
       else if (notices.isNotEmpty)
         const SizedBox(height: AppSpace.s),

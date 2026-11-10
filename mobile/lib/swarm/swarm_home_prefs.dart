@@ -15,7 +15,6 @@ typedef _SwarmHomeKept = ({
   SwarmHomeFilter filter,
   SwarmHomeSort sort,
   bool unreadsFirst,
-  String? buddySwarm,
 });
 
 /// What the person chose for Swarm Home on this phone (Tony, 2026-10-29):
@@ -24,7 +23,7 @@ typedef _SwarmHomeKept = ({
 /// ([sort], [unreadsFirst]); and the projects whose
 /// status card is folded ([folded]), as the desktop keeps it on its computer.
 /// Neither the server nor the desktop has pins, so they stay on this phone,
-/// under the account ([store]): ids and a time only, nothing read of a Swarm,
+/// under the account ([store]): ids only, nothing read of a Swarm,
 /// and at most [keptPins] pins and [keptFolds] folds. A Swarm the account no
 /// longer has takes its pins, folds and choice with it ([keepOnly]).
 class SwarmHomePrefs extends ChangeNotifier {
@@ -67,11 +66,6 @@ class SwarmHomePrefs extends ChangeNotifier {
   String? get swarmId => _swarmId;
   String? _swarmId;
 
-  /// The Swarm the Buddy tab last showed, the person's latest pick among
-  /// their Swarms there or on Home; null before they use one.
-  String? get buddySwarmId => _buddySwarmId;
-  String? _buddySwarmId;
-
   /// Which projects Home lists ([swarmHomeFiltered]), kept on this phone as
   /// the desktop keeps its unread filter on its computer.
   SwarmHomeFilter get filter => _filter;
@@ -102,8 +96,7 @@ class SwarmHomePrefs extends ChangeNotifier {
   bool _shownChosen = false,
       _filterChosen = false,
       _sortChosen = false,
-      _unreadsChosen = false,
-      _buddyChosen = false;
+      _unreadsChosen = false;
 
   /// The account's Swarms, as [keepOnly] last heard them; null before. What
   /// is read back is held to them too.
@@ -195,23 +188,9 @@ class SwarmHomePrefs extends ChangeNotifier {
       _shownChosen = true;
       _touched = true;
     }
-    final buddy = swarmId != null && swarmId != _buddySwarmId;
-    if (buddy) _chooseBuddySwarm(swarmId);
-    if (_swarmId == swarmId && !buddy) return;
+    if (_swarmId == swarmId) return;
     _swarmId = swarmId;
     _changed();
-  }
-
-  /// The Buddy tab shows Swarm [swarmId], from now on until another is used.
-  void showBuddy(String swarmId) {
-    if (_buddySwarmId == swarmId) return;
-    _chooseBuddySwarm(swarmId);
-    _changed();
-  }
-
-  void _chooseBuddySwarm(String swarmId) {
-    if (!_loaded) _buddyChosen = true;
-    _buddySwarmId = swarmId;
   }
 
   /// Home lists the projects [filter] lets through.
@@ -265,12 +244,7 @@ class SwarmHomePrefs extends ChangeNotifier {
     _aside.removeWhere(other);
     final gone = _swarmId != null && !swarmIds.contains(_swarmId);
     if (gone) _swarmId = null;
-    final buddyGone =
-        _buddySwarmId != null && !swarmIds.contains(_buddySwarmId);
-    if (buddyGone) _buddySwarmId = null;
-    return gone ||
-        buddyGone ||
-        _pins.length + _folds.length + _aside.length != before;
+    return gone || _pins.length + _folds.length + _aside.length != before;
   }
 
   /// At most [keptPins] pins and [keptFolds] folds, the oldest going first;
@@ -325,7 +299,6 @@ class SwarmHomePrefs extends ChangeNotifier {
     if (!_filterChosen) _filter = read.filter;
     if (!_sortChosen) _sort = read.sort;
     if (!_unreadsChosen) _unreadsFirst = read.unreadsFirst;
-    if (!_buddyChosen) _buddySwarmId = read.buddySwarm;
     _unpinned.clear();
     _unfolded.clear();
     _unaside.clear();
@@ -345,7 +318,6 @@ class SwarmHomePrefs extends ChangeNotifier {
     filter: SwarmHomeFilter.all,
     sort: SwarmHomeSort.sections,
     unreadsFirst: false,
-    buddySwarm: null,
   );
 
   /// What was kept: written before folds were, it has none; before the
@@ -374,9 +346,6 @@ class SwarmHomePrefs extends ChangeNotifier {
             ? SwarmHomeSort.newest
             : SwarmHomeSort.sections,
         unreadsFirst: json['unreadsFirst'] == true,
-        buddySwarm: json['buddySwarm'] is String
-            ? json['buddySwarm'] as String
-            : null,
       );
     } on FormatException {
       return _nothingKept;
@@ -391,7 +360,6 @@ class SwarmHomePrefs extends ChangeNotifier {
           _folds.isEmpty &&
           _aside.isEmpty &&
           _swarmId == null &&
-          _buddySwarmId == null &&
           !viewChanged) {
         await store.delete(_key);
       } else {
@@ -402,7 +370,6 @@ class SwarmHomePrefs extends ChangeNotifier {
             if (_folds.isNotEmpty) 'folded': [..._folds],
             if (_aside.isNotEmpty) 'aside': [..._aside],
             'swarm': ?_swarmId,
-            'buddySwarm': ?_buddySwarmId,
             if (_filter == SwarmHomeFilter.unread) 'unread': true,
             if (_filter == SwarmHomeFilter.mentions) 'filter': 'mentions',
             if (_sort == SwarmHomeSort.newest) 'sort': 'newest',

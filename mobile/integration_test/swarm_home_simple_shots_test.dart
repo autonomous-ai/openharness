@@ -186,7 +186,7 @@ void main() {
       );
       for (
         var i = 0;
-        i < 100 && key('swarm-title-button').evaluate().isEmpty;
+        i < 100 && key('swarm-project-$tab-openharness').evaluate().isEmpty;
         i++
       ) {
         await tester.pump(const Duration(milliseconds: 100));

@@ -703,6 +703,31 @@ void main() {
       expect(onBoard(tester), ['person-me', 'diego']);
     });
 
+    testWidgets('a project made private to others while it is open closes '
+        'it, with what it held', (tester) async {
+      final fake = backend();
+      final first = await fake.routes['/api/super-tabs/$tab/parts']!(null);
+      await leaderboard(tester, fake);
+      expect(find.byType(SwarmLeaderboardPage), findsOneWidget);
+
+      final head = Map<String, dynamic>.of(
+        ((first! as Map)['head'] as Map)['data'] as Map<String, dynamic>,
+      );
+      head['projects'] = [
+        for (final p in (head['projects'] as List).cast<Map>())
+          {...p, 'ownerId': 'diego', 'visibility': 'private', 'members': []},
+      ];
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c2', lastChangedAt: 102),
+        'head': part('head', 2, head),
+      };
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmLeaderboardPage), findsNothing);
+      expect(onBoard(tester), isEmpty);
+    });
+
     testWidgets('shows only the points: no change against last week, up or '
         'down, drawn or heard', (tester) async {
       final fake = backend();

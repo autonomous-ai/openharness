@@ -51,13 +51,11 @@ String swarmHomeTitle(SwarmInbox inbox, List<SwarmListing> shown) =>
     (shown.length > 1 ? 'All Swarms' : 'Swarm');
 
 /// The Swarms Home can show, from its title: All Swarms over several, each
-/// Swarm, the one shown ticked and what waits in each other one counted,
-/// then Sort and filter ([onView]) and the agents on the person's computers
+/// Swarm, the one shown ticked, then Sort and filter ([onView]) and the agents on the person's computers
 /// ([agents]), where Home has them — moved here from Home's filter icon and
 /// Agents tile (anh Dee, 2026-11-04: less on Home) — then New project, for
-/// someone who may write in a Swarm Home shows ([offersNewProject]; moved
-/// from the foot of Home, River 2026-11-04: Home keeps one +, New
-/// message's), and Join or create a Swarm. A Swarm the account loses, or whose read is taken away, while it
+/// someone who may write in a Swarm Home shows ([offersNewProject]), and
+/// Join or create a Swarm. A Swarm the account loses, or whose read is taken away, while it
 /// is open leaves it, and a tap on it shows nothing. A Swarm with a menu for
 /// the person ([swarmHasMenu]) shows a ⋮ on its row; the ⋮, or holding the
 /// row, closes it for that menu over Home ([showSwarmMenu]). Each of the

@@ -66,16 +66,10 @@ class _Agents extends ChangeNotifier implements SwarmAgents {
   @override
   int? get working => 2;
 
-  @override
-  List<SwarmAgentRef> get agents => const [];
-
   var lists = 0;
 
   @override
   void openList(BuildContext context) => lists++;
-
-  @override
-  void open(BuildContext context, SwarmAgentRef agent) {}
 }
 
 /// Computers that also have the person's agents, as the app's do.
