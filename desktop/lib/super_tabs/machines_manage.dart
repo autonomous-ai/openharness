@@ -418,8 +418,12 @@ class _ManageMachineLine extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
-              Expanded(
-                flex: narrow ? 2 : 5,
+              // Wide enough for its faces and "12 asleep" (a narrow row's chip alone, at most an eighth of it), one column
+              // down the list: the rest is the name's.
+              SizedBox(
+                width: narrow
+                    ? (constraints.maxWidth / 8).clamp(0, 72).toDouble()
+                    : 128,
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Row(

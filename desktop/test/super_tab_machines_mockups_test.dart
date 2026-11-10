@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -27,6 +28,7 @@ Future<SuperTabController> mount(
   WidgetTester tester, {
   ConversationServer? fixture,
   double width = 1200,
+  String? name,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = Size(width, 900);
@@ -35,9 +37,10 @@ Future<SuperTabController> mount(
   server.state['machines'] = [
     machine(
       'mine',
-      width < 500
-          ? 'A very long machine hostname that must truncate without increasing the row height'
-          : 'My Mac',
+      name ??
+          (width < 500
+              ? 'A very long machine hostname that must truncate without increasing the row height'
+              : 'My Mac'),
       'owner',
       0,
     ),
@@ -279,4 +282,31 @@ void main() {
       await c.flush();
     },
   );
+
+  // The test font draws every letter 1em wide: these names fit the room the crew chip does not need, and not half the row.
+  for (final (width, name) in [
+    (880.0, 'Dee\'s MacBook Pro (M4)'),
+    // In the app a window 880 wide leaves Manage a row this narrow, beside the Swarm's sidebar.
+    (600.0, 'Dee\'s MBP16'),
+  ]) {
+    testWidgets(
+      'at $width wide a long machine name takes the room its crew chip does not need',
+      (tester) async {
+        await mount(tester, width: width, name: name);
+        bool cut(Finder text) => tester
+            .renderObject<RenderParagraph>(
+              find.descendant(of: text, matching: find.byType(RichText)),
+            )
+            .didExceedMaxLines;
+        expect(cut(key('super-machine-name-mine')), isFalse);
+        // Its crew chips are whole too. (A narrow row's "0 asleep" is wider in the test font than in the app's.)
+        if (width > 640) {
+          for (final id in ['mine', 'build', 'sleep', 'old']) {
+            expect(cut(key('machines-crew-$id')), isFalse, reason: id);
+          }
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 }
