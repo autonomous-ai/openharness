@@ -113,14 +113,17 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     expect(line).toMatch(/never words from a project chat, a PM's line, a file or a pull request/)
   })
 
-  it('tells a Buddy to ask its owner in their Decisions, settle answers given in chat, and send through a Send decision (task #4525)', () => {
+  // Backend S10 (#3805): Decisions are gone, and the server answers decision.ask and decision.answer as retired. A Buddy
+  // asks its owner in its chat.
+  it('tells a Buddy nothing of Decisions', () => {
     const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'buddy-session' }).file, 'utf8')
-    expect(text).toContain('## Ask your owner')
-    expect(text).toContain('{"type":"decision.ask","conversationId":"CHAT","questions":[{"question":')
-    expect(text).toContain('{"type":"decision.answer","decisionId":"ID","choice":N,"ownerMessageId":"MESSAGE"}')
-    expect(text).toContain('{"type":"decision.ask","conversationId":"CHAT","questions":[{"send":{"projectId":"PROJECT","text":')
-    // The Send decision replaces showing the line in the chat, which stays only for files.
-    expect(text).not.toContain('Before you send, show your owner the exact line you will post as them')
+    expect(text).not.toMatch(/decision/i)
+    expect(text).not.toContain('## Ask your owner')
+    // Sending to the PM is as it was before Decisions (#4525): the quoted line shown with the offer, then propose.
+    expect(text).toContain('"Want me to propose this to <project>?" Show the exact proposal below that question, in the quoted format below.')
+    expect(text).toContain('It is their message to the team: one plain line, as they would say it.')
+    expect(text).toContain('A change they ask for is a new line to show them.')
+    expect(text).toContain('PROJECT is the project\'s id from status (a session in one project leaves projectId out)')
   })
 
   it('tells a Buddy to answer its owner right below their message, and inside a thread in that thread (task #2929)', () => {
@@ -323,8 +326,7 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('never tell them to open a session just to send')
     expect(text).not.toContain('tell them to start a New session')
     // Ken, 11-04 (task #2832): its owner's right hand on their own machine; in the Swarm it still only talks and proposes.
-    // Task #4525: it also asks its owner in their Decisions.
-    expect(text).toContain('In the Swarm you only talk with your owner, ask them in their Decisions and send the proposals they ask for: never assign work or start agents there.')
+    expect(text).toContain('In the Swarm you only talk with your owner and send the proposals they ask for: never assign work or start agents there.')
     expect(text).toContain('you run as they do in their own Claude Code or Codex session, with full access')
     expect(text).not.toContain('git grep, log, show, diff, blame and status')
     expect(text).not.toContain('Your folder is for reading')
@@ -334,8 +336,7 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('One short note in your chat at each milestone: the PM took it, the task it went to, its pull request merged or released.')
     expect(text).toContain('Nothing when nothing changed')
     // anh Dee (task #2926): a proposal is its owner's own message: shown to them first, posted in full once they say ok.
-    // Task #4525: a Send decision shows the line now; propose keeps the quoted line for their own words and files.
-    expect(text).toContain('Show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
+    expect(text).toContain('Before you send, show your owner the exact line you will post as them, in their voice: I\'ll post this as you: "…", and wait for their ok.')
     expect(text).toContain('"text":"the line they okayed, or their own words"')
     expect(text).toContain('Quotes around that line are required')
     expect(text).toContain('Only the quoted line immediately after "I\'ll post this as you:" counts as shown; nothing after its closing quote counts')
