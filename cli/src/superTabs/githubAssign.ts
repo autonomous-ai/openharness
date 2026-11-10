@@ -5,7 +5,7 @@
  * big and urgent it is (part:, needs:, size:, p0-p2); this reads those with the project's builders and what their machines
  * last reported, plans with the solver (assign/search.ts), and gives each builder what it starts next, two deep:
  * `builder:<name>` on the issue and one line saying why. GitHub news (githubMentions.ts) then brings the task to its
- * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, with their gh.
+ * builder. It runs where the merger runs: in the Harness of the person whose agent is the project's PM, running or stopped there, with their gh.
  * A task its PM or a person gave by hand is never moved.
  */
 import { DEEP, labelOf, machineHas, nextPicks, outOfQuota, teamOf, QUIET_ASK_MS, QUIET_BACK_MS, learnedMinutes, readerFor, readProblem, reasonOf, startedAt, takeBacks, takenTasks, tasksOf, worksOnOf, type AwayBuilder, type Crew, type Read } from './assign/crew.js'

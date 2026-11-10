@@ -1,13 +1,14 @@
 /**
  * A task whose own merge is recorded is finished work (task #4032, Stepos 11-06): the lane dispatch handed out lost tasks
  * already merged (#3819 9 minutes after PR #3384 merged, #3818 52 minutes after PR #3383), each time an agent spent only to set
- * the task done, and their steps were revived the same way. Such a task is never handed out again (dispatch.ts openTasks); a
- * lost one is set done by the sweep (liveness.ts sweepLiveness), as the merge record sets done one whose builder is gone
- * (commands.ts conversation.merged), and its open steps close with it.
+ * the task done, and their steps were revived the same way. Such a task is never handed out again (dispatch.ts openTasks), and the
+ * merge record sets done one whose builder is gone (commands.ts conversation.merged), its open steps closing with it. A task
+ * already lost when its merge is recorded is no longer closed by a sweep (Swarm v4 runs none): it stays lost, until the task
+ * records go (slice S13).
  */
 import { recordStatus } from './leaderboard/record.js'
-import { codePullRequests, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { endSteps, isStep, stepEndedRows, stepsOf } from './steps.js'
+import { codePullRequests, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { endSteps, stepEndedRows, stepsOf } from './steps.js'
 
 /** What a step of a merged task is told, and keeps as its result. */
 export const STEP_MERGED = 'Its task merged, so this step is closed.'
@@ -51,13 +52,4 @@ export function closeMerged(state: SuperTabState, task: Conversation, url: strin
   const done: MessageDraft[] = author ? [{ id: id('merged-done'), conversationId: task.id, author, text: `Done\n\n${assignment.result}`, replyTo: null,
     recipients: [], source: { kind: 'system', status: 'done' } }] : []
   return [...done, ...stepEndedRows(state, steps, STEP_MERGED, author, step => id(`merged-step-${step.id}`))]
-}
-
-/** The lost tasks whose own merge is recorded, set done (closeMerged), each written as [authorOf] it; their rows. */
-export function closeMergedLost(state: SuperTabState, now: number, authorOf: (task: Conversation) => Author | null): MessageDraft[] {
-  return state.conversations.flatMap(task => {
-    if (task.archived || isStep(task) || task.assignment?.status !== 'lost') return []
-    const url = ownMerge(task)
-    return url ? closeMerged(state, task, url, now, authorOf(task), part => stableId('merged-lost', task.assignment!.id, part)) : []
-  })
 }

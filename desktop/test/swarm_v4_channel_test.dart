@@ -241,10 +241,9 @@ void main() {
       swarmV4Talk(server);
       final c = await openSwarmV4(tester, server);
       expect(rowOf('Reading #12 now'), findsOneWidget);
-      // Juno's laptop is off: the left pane says so under Your Machines, once it is opened.
-      await tester.tap(key('project-sidebar-machines'));
-      await tester.pumpAndSettle();
+      // Juno's laptop is off: the left pane says so under Your Machines, which opens by itself while a computer is off.
       await tester.runAsync(c.flush);
+      await tester.pumpAndSettle();
       expect(
         find.descendant(
           of: key('super-machine-laptop'),
