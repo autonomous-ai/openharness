@@ -64,7 +64,6 @@ void main() {
       'alert': 'prompt',
       'agentId': 'pm',
     },
-    'ship': {'kind': 'ship', 'title': 'Shipped it'},
   };
 
   group('the rule', () {
