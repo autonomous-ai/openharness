@@ -14,6 +14,9 @@ function fixture() {
   const first = state.people[0]!
   state.people.push(...['dee', 'ken-a', 'ken-b', 'stranger'].map(id => ({ ...first, id, email: `${id}@example.com`, username: id, role: 'collaborator' as const })))
   const project = projectsOf(state)[0]!
+  // dee's 1:1 chat with an agent of theirs: in no project.
+  state.conversations.push({ id: 'own-chat', kind: 'agent-chat', title: 'Ada', leadId: null, agentIds: [], archived: false, brief: '', checks: [],
+    assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'dee', generation: first.generation }] } })
   const check = (approvals = [row()], named = ['yes'], config: typeof authority | null = authority, sender = { kind: 'agent' as Author['kind'], id: 'pm' }, text = after) =>
     allowedDrops(state, project, before, text, sender, named, approvals, 500, {}, config)
   return { state, project, check }
@@ -22,24 +25,16 @@ function fixture() {
 describe('configured instruction approval authority', () => {
   it('accepts only the named decider’s own recent approval for another person’s removed or reworded rule', () => {
     const f = fixture()
-    expect([...f.check().told.keys()]).toEqual(['dee', 'ken-a', 'ken-b'])
+    expect(f.check().rules).toHaveLength(1)
     expect(f.check([row()], ['yes'], authority, undefined, before.replace('before', 'after')).rules).toHaveLength(1)
     expect(() => f.check([], [])).toThrow(/dee/i)
     expect(() => f.check([row('yes', 'stranger')])).toThrow(/rules people gave/)
     expect(() => f.check([row()], ['yes'], null)).toThrow(/rules people gave/)
   })
 
-  it('notifies affected accounts only while they can still read the project', () => {
+  it.each(['ken-a', 'ken-b'])('accepts %s for the explicit Ken attribution', id => {
     const f = fixture()
-    f.project.visibility = 'private'
-    f.project.members = ['owner', 'dee', 'ken-a'].map(id => ({ id, generation: f.state.people.find(p => p.id === id)!.generation }))
-    expect([...f.check().told.keys()]).toEqual(['dee', 'ken-a'])
-    expect([...f.check([row()], ['yes'], authority, { kind: 'person', id: 'ken-a' }).told.keys()]).toEqual(['dee'])
-  })
-
-  it.each(['ken-a', 'ken-b'])('accepts %s for the explicit Ken attribution and tells only the account that approved', id => {
-    const f = fixture()
-    expect([...f.check([row('yes', id)]).told.keys()]).toEqual([id])
+    expect(f.check([row('yes', id)]).rules).toHaveLength(1)
     expect(f.check([], [], authority, { kind: 'person', id }).rules).toHaveLength(1)
   })
 
@@ -58,14 +53,15 @@ describe('configured instruction approval authority', () => {
     const check = (id: string) => allowedDrops(f.state, f.project, attributed, after, { kind: 'agent', id: 'pm' },
       ['yes'], [row('yes', id)], 500, {}, authority)
     expect(() => check('stranger')).toThrow(/rules people gave/)
-    expect([...check('ken-b').told.keys()]).toEqual(['ken-b'])
+    expect(check('ken-b').rules).toHaveLength(1)
   })
 
   it.each([
     ['agent', row('yes', 'dee', { author: { kind: 'agent', id: 'dee', name: 'dee' } })],
-    ['Buddy relay', row('yes', 'dee', { source: true })],
+    ['relayed', row('yes', 'dee', { source: true })],
     ['old', row('yes', 'dee', { createdAt: 499 })],
     ['another project', row('yes', 'dee', { conversationId: 'elsewhere' })],
+    ['private 1:1 chat', row('yes', 'dee', { conversationId: 'own-chat' })],
   ])('rejects a %s approval even when it carries the decider ID', (_name, approval) => {
     expect(() => fixture().check([approval])).toThrow(/rules people gave/)
   })

@@ -25,11 +25,8 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
  *  invitations filtered (invitations only for the Swarm owner). `autoJoin`: people at the owner's domain join by themselves
  *  (autoJoin.ts), from the sharing the head holds; who declined is never sent. */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'buddies' | 'removedMachines'
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'removedMachines'
   | 'autoJoin'> & {
-  /** How many Buddies each person may have (task #3818): always sent, 5 unless the Swarm's owner set another. An older backend
-   *  sends none, so an app offers several Buddies only where this is present. */
-  buddyCap: number
   /** Fixed columns for the chosen preset (task #3896); an older server omits both, meaning Full. */
   projects?: Array<import('../projects.js').SwarmProject & {
     process: import('../process.js').ProjectProcess; columns: readonly import('../process.js').BoardColumn[]
@@ -50,9 +47,7 @@ export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'reportSe
   /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */
   held?: import('../heldReason.js').HeldView
 }
-  & { messageSeq: number; dormant?: true; audience?: Audience
-    /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
-    buddyOwnerId?: string }
+  & { messageSeq: number; dormant?: true; audience?: Audience }
 /** A contribution as `state.machines[]` has it, privacy detail only for its contributor, harness ids cut to what the
  *  reader can see. Machines without a contribution are never sent. */
 export type MachineView = ContributedMachine
@@ -72,7 +67,7 @@ export interface ProgressView {
 export interface Derived {
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
-  /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
+  /** `kind`: a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
    *  (agentKind.ts, task #4116). Absent from an older backend. */
   /** `myAgent`: whether it is in the reader's My agents (agentKind.ts inMyAgents, task #4192). Absent from an older backend. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null; roleName: string;
@@ -115,17 +110,6 @@ export interface Derived {
   /** Present, and false, only from a backend that held Harness Team accounts to listed owners' Swarms (2026-10-27 to 11-02):
    *  this Mac's daemon and Desktop then offered no team account for it. No longer sent: every Swarm takes part. */
   teamAccounts?: false
-  /** This server takes a thread reply's `newSession` (buddySessions.ts): Desktop offers New session only where it is
-   *  true and the Buddy's machine reports it can run sessions. Absent from an older backend, whose strict schema refuses
-   *  the field. */
-  threadSessions?: true
-  /** This server also takes `newSession` on a person's top-level message in their own Buddy chat: the message roots its
-   *  own thread, which gets the session (commands.ts routeBuddySession). Desktop offers New session in that chat's main
-   *  composer only where it is true. Absent from an older backend, which refuses it. */
-  sessionsFromChat?: true
-  /** One Buddy per person per Swarm (Dee, 10-31): a person's one Buddy chat, its Buddy reading every project they read, and New
-   *  session in one project. An older server says nothing, and its app keeps a Buddy per project. */
-  swarmBuddy?: true
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null
@@ -275,8 +259,6 @@ export type HostRosterRow =
   | { tabId: string; agent: { id: string; harnessId: string; machineId: string }; closeSession: true; active: false }
   | { tabId: string; cleanup: { machineId: string; removalId: string } }
 export interface HostAgentRow {
-  /** A main Buddy's private chat, used only by its own host to restart it on another engine. */
-  buddyConversationId?: string
   tabId: string
   tabName: string
   lastChangedAt: number | null
@@ -286,9 +268,6 @@ export interface HostAgentRow {
   /** Always null since Swarm v4 (no task resumes after a usage limit); an older host still reads it. Goes after 2026-12-09. */
   resume: null
   agent: Agent
-  /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
-   *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
-  buddyChatId?: string | null
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
@@ -317,8 +296,6 @@ export interface HostPool {
   paused: boolean
   machine: ContributedMachine
   starts: AgentStart[]
-  /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
-  buddyStarts?: AgentStart[]
   /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
   leadStarts?: AgentStart[]
   /** Regular agents' starts (commands.ts agent.new, task #4116), apart for the same reason. */

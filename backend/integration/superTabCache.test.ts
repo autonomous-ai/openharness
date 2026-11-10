@@ -129,13 +129,13 @@ function pod(options: { cache?: SwarmCache | null } = {}) {
   return { store, reads: new SwarmReads(store), cache }
 }
 
-/** The rich fixture Swarm in parts, with a conversation private to `peer`: their Buddy chat. */
+/** The rich fixture Swarm in parts, with a conversation private to `peer`: their 1:1 chat with an agent. */
 async function privateScene(extra: (s: ReturnType<typeof richSwarm>) => void = () => {}) {
   const s = richSwarm(Date.now())
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peerActor.userId)!.generation
-    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peerActor.userId, generation }] } })
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'agent-chat', audience: { people: [{ id: peerActor.userId, generation }] } })
   })
   extra(s)
   const tabId = `tab-${randomUUID()}`

@@ -34,7 +34,7 @@ function swarm() {
   const pool = (machineId: string, contributorId: string, extra: Partial<ContributedMachine> = {}): ContributedMachine => ({
     machineId, name: machineId, contributorId, membershipGeneration: generation(contributorId), generation: 'g1', cwd: '/swarm', scope: 'swarm',
     engines: ['claude', 'codex'], maxAgents: 4, paused: false, observation: reading, ...extra })
-  state.machines = [pool('owner-mac', 'owner'), pool('mate-mac', 'mate'), pool('mate-buddy', 'mate', { buddyOnly: true, maxAgents: 1 })]
+  state.machines = [pool('owner-mac', 'owner'), pool('mate-mac', 'mate')]
   const add = (extra: Record<string, unknown>, actor: Actor = mate, context: Partial<CommandContext> = own(actor.kind === 'person' ? actor.userId : 'x')) =>
     run({ type: 'agent.new', engine: 'claude', machineId: 'mate-mac', ...extra } as Command, actor, context)
   return { run, add, get state() { return state } }
@@ -71,7 +71,7 @@ describe('+ New agent, Regular', () => {
     expect((f.state.projects ?? []).filter(p => p.id !== 'lead')).toHaveLength(0)
   })
 
-  it('asks an agent\'s memory, not a Buddy\'s smaller one: it takes tasks (#3738)', () => {
+  it('asks an agent\'s memory: it takes tasks (#3738)', () => {
     const f = swarm()
     const made = f.add({ kind: 'regular', name: 'Ada' })
     expect(f.state.starts!.find(s => s.id === made.result.startId)!.request.requirements.memoryBytes).toBe(AGENT_MEMORY_BYTES)
@@ -91,12 +91,11 @@ describe('+ New agent, Regular', () => {
 })
 
 describe('+ New agent, on whose computer', () => {
-  it('runs only on the person\'s own listed computer, never another person\'s, a Buddy-only one or one not listed', () => {
+  it('runs only on the person\'s own listed computer, never another person\'s or one not listed', () => {
     const f = swarm()
     for (const kind of ['pm', 'regular']) {
       const extra = { kind, projectName: 'P', name: 'A' }
       expect(code(() => f.add({ ...extra, machineId: 'owner-mac' }, mate, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }))).toBe('AGENT_OWN_MACHINE')
-      expect(code(() => f.add({ ...extra, machineId: 'mate-buddy' }))).toBe('MACHINE_NOT_LISTED')
       expect(code(() => f.add({ ...extra, machineId: 'nowhere' }))).toBe('MACHINE_NOT_LISTED')
       expect(code(() => f.add(extra, { kind: 'agent', agentId: 'x', machineOwnerId: 'mate' }))).not.toBeNull()
     }
@@ -124,7 +123,7 @@ describe('a Regular agent\'s chat', () => {
     f.run(say(f.chat, 'Hello'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' })
   })
 
-  // Task #4252 (audit 29): it is a talk with its person, as a Buddy's is, where a short reply is the answer.
+  // Task #4252 (audit 29): it is a talk with its person, where a short reply is the answer.
   it('takes the agent\'s short reply to its person, which a task would refuse as only an acknowledgement', () => {
     const f = running()
     expect(code(() => f.run(say(f.chat, 'Thanks!'), { kind: 'agent', agentId: f.agentId, machineOwnerId: 'mate' }))).toBeNull()
@@ -140,63 +139,15 @@ describe('a Regular agent\'s chat', () => {
   })
 })
 
-// Swarm v3 FLOW (anh Dee 11-07): join the org, bring your agent on the computer you are on, and it becomes your Buddy. The
-// computer registers as part of it: no add-machine step.
-describe('joining by bringing your own agent', () => {
-  it('makes a new member\'s agent their Buddy on the computer they are on, which the Swarm did not list', () => {
-    const f = swarm()
-    expect(f.state.machines!.some(m => m.machineId === 'mate-laptop')).toBe(false)
-    const made = f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
-      setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
-    const start = f.state.starts!.find(s => s.id === made.result.startId)!
-    expect(start.request).toMatchObject({ machineId: 'mate-laptop', engine: 'codex', buddyOf: { personId: 'mate' }, buddyScope: 'swarm' })
-    expect(f.state.machines!.find(m => m.machineId === 'mate-laptop')).toMatchObject({ contributorId: 'mate', buddyOnly: true })
-    expect(f.state.conversations.find(c => c.id === made.result.conversationId)).toMatchObject({ kind: 'swarm-buddy' })
-    // Its computer is its own: nobody else's agent starts there.
-    expect(code(() => f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
-      setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, owner, { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } }))).not.toBeNull()
-  })
-})
-
-// Task #4252 (audit 12): join, Bring agent, then + New agent before the Buddy settles. Desktop lists the computer first.
-describe('listing your computer while your Buddy is starting there', () => {
+// Task #4252 (audit 12): saving a computer's contribution waits for the starts on it.
+describe('listing your computer while an agent is starting there', () => {
   const contribute = (machineId: string) => ({ type: 'machine.contribute', machineId, name: machineId, cwd: '/home/mate/swarm', scope: 'swarm',
     engines: ['claude', 'codex'], maxAgents: 2 }) as Command
-  const configuration = { engine: 'codex' as const, model: 'gpt-6.1-sol', effort: 'high', contextWindow: null, engineVersion: null }
-
-  it('lists it, and the Buddy still starts there', () => {
-    const f = swarm()
-    const made = f.run({ type: 'buddy.create', machineId: 'mate-laptop', engine: 'codex',
-      setup: { name: 'Mate laptop', cwd: '/home/mate/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
-    const startId = made.result.startId as string
-    f.run(contribute('mate-laptop'), mate, own('mate'))
-    const listed = f.state.machines!.find(m => m.machineId === 'mate-laptop')!
-    expect(listed.buddyOnly).toBeUndefined()
-    expect(f.state.starts!.find(s => s.id === startId)!.poolGeneration).toBe(listed.generation)
-    listed.observation = reading // its host's next report
-    f.run({ type: 'agent.startDispatch', startId }, mate, own('mate'))
-    expect(f.run({ type: 'agent.started', startId, harnessId: 'h-buddy', configuration }, mate, own('mate')).result.agentId).toBeTruthy()
-  })
 
   it('is still refused while any other start is pending there', () => {
     const f = swarm()
     f.add({ kind: 'regular', name: 'Ada' })
     expect(code(() => f.run(contribute('mate-mac'), mate, own('mate')))).toBe('STARTS_PENDING')
-  })
-})
-
-// Task #4252 (audit 15): leave with the host online, get invited again, then Bring agent before the host reports its cleanup.
-describe('bringing an agent after leaving and rejoining', () => {
-  it('says the computer is finishing its cleanup, not that its contribution was withdrawn', () => {
-    const f = swarm()
-    f.run({ type: 'member.remove', userId: 'mate' }, mate)
-    const invited = f.run({ type: 'invite.create', email: mate.email, role: 'collaborator', conversationId: 'lead' }, owner)
-    f.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, mate)
-    let refusal: unknown
-    try {
-      f.run({ type: 'buddy.create', machineId: 'mate-mac', engine: 'codex', setup: { name: 'mate-mac', cwd: '/swarm', engines: ['codex'] } } as Command, mate, own('mate'))
-    } catch (error) { refusal = error }
-    expect(refusal).toMatchObject({ code: 'MACHINE_CLEANING', message: expect.stringContaining('cleaning up') })
   })
 })
 

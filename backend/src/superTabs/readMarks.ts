@@ -1,7 +1,7 @@
 /** How far each person has read each conversation, and each thread in one: the newest message sequence they saw there, so
  *  unread state follows them across devices. Marks live in SuperTabReadMark and SuperTabThreadMark, never in the tab state:
  *  writing one wakes no other reader, and an older backend reads and writes a tab that has them (it never reads the thread
- *  marks' collection). A person's marks go only to their own reads (read/service.ts); agents, Buddies included, have none. */
+ *  marks' collection). A person's marks go only to their own reads (read/service.ts); agents have none. */
 import { Prisma, type PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { removeChunk, startChunkSweep } from '../lib/chunkSweep.js'

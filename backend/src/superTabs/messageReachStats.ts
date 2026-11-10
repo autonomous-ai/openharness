@@ -14,7 +14,7 @@ import { logger } from '../utils/logger.js'
  */
 
 export interface MessageReachKey {
-  reader: 'person' | 'agent' | 'buddy'
+  reader: 'person' | 'agent'
   via: 'read' | 'delivery'
 }
 

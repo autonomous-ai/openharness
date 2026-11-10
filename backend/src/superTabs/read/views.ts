@@ -5,8 +5,7 @@
  */
 import { machineSuspensionReason, suspendedEngines } from '../engineHealth.js'
 import { heldView } from '../heldReason.js'
-import { buddyCapOf, isBuddyChat, isBuddyReader } from '../buddies.js'
-import { agentForBuddy, agentWithoutMachine, groupForBuddy, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { availableSlots, slotCounter, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
@@ -38,9 +37,7 @@ export interface ReadExtras {
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
-  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'buddies', 'removedMachines', 'autoJoin',
-  // How many Buddies each person may have (task #3818): apps offer a new one below it.
-  'buddyCap'] as const
+  'routingPolicy', 'rules', 'paused', 'invitations', 'localModels', 'removedMachines', 'autoJoin'] as const
 
 export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, data: T): LivePart<T> =>
   ({ key: part.key, version: part.version, changedAt: part.changedAt, data })
@@ -60,9 +57,7 @@ export function groupView(group: Conversation, seenMachines: ReadonlySet<string>
   const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, releasing: _releasing,
     pullRequestHeads: _heads, pullRequestEvents: _events, pullRequestChecks: _checks, stepIds: _steps, waitingLinuxStep: _linux, waitingWindowsStep: _windows, openedBy: _opened,
     dormant, audience, ...rest }: Conversation & Unwritten = withSeenRequirement(group, seenMachines)
-  // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
-  // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
-  const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
+  const readers = audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)
   // A check's verdicts, from before Swarm v4, which records none: its stored evidence and who passed it say what a reader shows.
@@ -102,11 +97,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   // Swarm v3's `schedule`, `processNote` and release list (`releases`) are still stored on old projects: no reader gets them (the stored copies can go from 2026-12-09).
   if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, schedule: _schedule, processNote: _note, ...project }: NonNullable<typeof head.projects>[number] & { schedule?: unknown; processNote?: unknown; releases?: unknown }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
-  // Always, its default too (task #3818): an app offers several Buddies only where the head says how many, so an older backend,
-  // which sends none, is never taken for one that makes them.
-  head.buddyCap = buddyCapOf(state)
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
-  const buddy = isBuddyReader(state, actor)
   return {
     state,
     parts: {
@@ -114,13 +105,8 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       // Each person's username as the Swarm shows it, worked out in join order (the reassembled state's), never the order
       // member parts happen to load in.
       members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...personView(m.data!), username: names.get(m.key) } as MemberView)),
-      agents: visible.agents.map(a => {
-        const stored = state.agents.find(s => s.id === a.id)!
-        const view = agentView(stored)
-        return envelope(agentPart(a.id), buddy && actor.kind === 'agent' ? agentForBuddy(view, actor.agentId)
-          : machineHiddenFrom(state, actor, stored) ? agentWithoutMachine(view) : view)
-      }),
-      groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupForBuddy(g) : g, seen))),
+      agents: visible.agents.map(a => envelope(agentPart(a.id), agentView(state.agents.find(s => s.id === a.id)!))),
+      groups: groups.map(g => envelope(groupPart(g.id), groupView(g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
       starts: (visible.starts ?? []).filter(s => readable.has(s.request.conversationId)).map(s => envelope(startPart(s.id), s)),
       progress: parts.progress.filter(p => !p.deleted && projects.has(p.key)).map(p => envelope(p, progressView(p.data!))),
@@ -178,9 +164,5 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(visible.pmAccounts ? { pmAccounts: visible.pmAccounts } : {}),
     ...(visible.ownerlessProjects ? { ownerlessProjects: visible.ownerlessProjects } : {}),
-    threadSessions: true as const,
-    sessionsFromChat: true as const,
-    // One Buddy per person per Swarm (Dee, 10-31): an app shows # buddy and New session in a project only when the server says so.
-    swarmBuddy: true as const,
   }
 }

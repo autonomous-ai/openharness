@@ -2037,15 +2037,6 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const account = await app.inject({ url: '/api/super-tabs/routing-policy', headers: { authorization: `Bearer ${owner.sub}` } })
     expect(account.json().data).toEqual({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true })
     expect(await db.routingPolicy.count({ where: { id } })).toBe(1)
-
-    // A Buddy reads no routing.
-    const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
-      name: 'Helper', configuration: config, lead: false })).result.agentId as string
-    const row = await db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: helper } })
-    const people = (await store.read(owner, tab)).state.people
-    await db.swarmAgent.update({ where: { id: row.id }, data: { data: { ...row.data as object,
-      buddyOf: { personId: owner.sub, generation: people.find(p => p.id === owner.sub)!.generation } } } })
-    await expect(store.tabPolicy(host, tab, helper)).rejects.toMatchObject({ code: 'BUDDY_FORBIDDEN' })
   })
 
   it('records, supersedes and lets a person change a route decision; a closed one refuses', async () => {
@@ -4064,7 +4055,7 @@ describe('Swarm parts storage', () => {
   })
 })
 
-describe('a closed Chat with PM through the store (Buddies replaced it, 10-29)', () => {
+describe('a closed Chat with PM through the store', () => {
   it('is never opened again, by a person or the PM', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)

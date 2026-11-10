@@ -7,7 +7,7 @@ import * as store from './parts/index.js'
 import { readerView } from './read/views.js'
 
 // Task #4540 (spec 2026-11-07-members-and-leads, build task 4): every agent has a main project and is a Lead or a Member.
-// + New agent and Bring agent take a main project; New project makes its Lead. `kind` keeps its values for older clients.
+// + New agent takes a main project; New project makes its Lead. `kind` keeps its values for older clients.
 const NOW = 50_000_000
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
@@ -15,7 +15,7 @@ const outsider: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '
 const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 const reading = { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [],
-  stoppedHarnessIds: [], capabilities: ['leadStart', 'regularAgent', 'swarmBuddy'] }
+  stoppedHarnessIds: [], capabilities: ['leadStart', 'regularAgent'] }
 const configuration = { engine: 'claude' as const, model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const own = (userId: string) => ({ contribution: { machineOwnerId: userId, contributorId: userId } })
 const code = (body: () => unknown): string | null => {
@@ -96,23 +96,6 @@ describe('New project', () => {
     const made = f.newAgent({ kind: 'pm', projectName: 'Docs site' })
     const agentId = f.started(made.result.startId as string, 'h-lead')
     expect(f.derived(mate, agentId)).toMatchObject({ kind: 'pm', role: 'lead', mainProjectId: made.result.projectId })
-  })
-})
-
-describe('Bring agent with a main project', () => {
-  it('makes the new person\'s agent a Member of the project they picked', () => {
-    const f = swarm()
-    const harness = f.project('harness')
-    const made = f.run({ type: 'buddy.create', machineId: 'mate-mac', engine: 'claude', mainProjectId: harness } as Command, mate, own('mate'))
-    expect(f.state.starts!.find(s => s.id === made.result.startId)!.request.mainProjectId).toBe(harness)
-    const agentId = f.started(made.result.startId as string, 'h-buddy')
-    expect(f.derived(mate, agentId)).toMatchObject({ kind: 'buddy', role: 'member', mainProjectId: harness })
-  })
-
-  it('refuses a project the person cannot read', () => {
-    const f = swarm()
-    const secret = f.project('secret', 'private')
-    expect(code(() => f.run({ type: 'buddy.create', machineId: 'mate-mac', engine: 'claude', mainProjectId: secret } as Command, mate, own('mate')))).toBe('NOT_FOUND')
   })
 })
 

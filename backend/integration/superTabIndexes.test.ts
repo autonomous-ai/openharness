@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { inConversationOrder, noteBackfilled, pageDeliveries, pageThreads, refreshThreads } from '../src/superTabs/pageReads.js'
+import { inConversationOrder, pageDeliveries, pageThreads } from '../src/superTabs/pageReads.js'
 import { costRows } from '../src/superTabs/costs/read.js'
 import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
@@ -116,13 +116,13 @@ describe('message page reads', () => {
     expect(threads).toHaveLength(120)
     expect(threads.filter(row => row.id !== row.thread).slice(0, 2).map(row => [row.id, row.count])).toEqual([['t0-m100-r1', 0], ['t0-m100-r3', 3]])
     expect(threads[0]).toEqual({ thread: 't0-m100', id: 't0-m100', author: expect.objectContaining({ id: 'owner' }), mentions: [],
-      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false, routing: false, count: 1 })
+      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false, count: 1 })
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 130, returned: 1 })
   })
 
   it('sums up a 500-reply thread from a few rows: what each reader may see, counted in the database', async () => {
-    // One long thread: 500 replies. Every tenth an agent-only note to another agent (no reader counts it), five route rows
-    // (a Buddy never reads them), a person who is not in the Swarm writing every third, the owner renamed after reply 100,
+    // One long thread: 500 replies. Every tenth an agent-only note to another agent (no reader counts it), five route rows,
+    // a person who is not in the Swarm writing every third, the owner renamed after reply 100,
     // and the last two replies written by one command (one sequence). Beside it, a thread whose only reply is hidden, and a
     // short one. Each reader's summaries are the ones every reply read gave before (written out here by hand).
     const s = richSwarm()
@@ -156,40 +156,9 @@ describe('message page reads', () => {
         people: [owner.userId, outsider.userId, peer.userId] },
       { id: 'qc-root', replies: 1, lastSequence: 20_001, lastAt: new Date(T0 + 20_001_000), authors: [person(peer.userId)], people: [peer.userId] },
     ])
-    // A Buddy's page leaves the route rows out first (store.ts messages).
-    expect(threadSummaries(s.state, group, threads.filter(row => !row.routing))[0]).toEqual({ id: 'qa-root', replies: 445, ...last,
-      authors: [person(owner.userId, 'Owner before'), agent('a1')], people: [owner.userId, peer.userId, outsider.userId] })
     // A few rows per author and kind of row, however long the thread: the database counts, not the server.
     expect(threads.length).toBeLessThan(30)
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 505, returned: 1 })
-  })
-
-  it('says where an ask stands from the real rows, summed up in the database and from a stored summary alike', async () => {
-    const s = richSwarm()
-    const chat = { ...s.state.conversations.find(c => c.id === s.web)!, leadId: 'pm' }
-    const person = { kind: 'person' as const, id: owner.userId, name: owner.userId, membershipGeneration: 'gen' }
-    const agent = (id: string) => ({ kind: 'agent' as const, id, name: id, membershipGeneration: 'gen' })
-    const row = (id: string, thread: string, sequence: number, author: object, source?: object) => ({ id, tabId: 'ASK', conversationId: 'chat', thread, sequence,
-      author, text: 'x', recipientIds: [], mentions: [], createdAt: new Date(T0 + sequence * 1000), ...source ? { source } : {} })
-    await db.superTabMessage.createMany({ data: [
-      row('asked', 'asked', 1, person, { kind: 'buddy-proposal' }), row('asked-1', 'asked', 2, agent('buddy')),
-      row('declined', 'declined', 3, person, { kind: 'buddy-proposal' }), row('declined-1', 'declined', 4, agent('buddy')), row('declined-2', 'declined', 5, agent('pm')),
-      row('own', 'own', 6, person), row('own-1', 'own', 7, agent('pm'), { kind: 'system', ask: 'on-it' }),
-      row('merged', 'merged', 8, person), row('merged-1', 'merged', 9, agent('pm'), { kind: 'system', ask: 'on-it' }),
-      row('merged-2', 'merged', 10, agent('pm'), { kind: 'system', ask: 'shipped' }), row('merged-3', 'merged', 11, person),
-      row('plain', 'plain', 12, person), row('plain-1', 'plain', 13, agent('pm')),
-      // A proposal a task took, its mark written by a coordinator since replaced: the mark alone clears the tag.
-      row('taken', 'taken', 14, person, { kind: 'buddy-proposal' }), row('taken-1', 'taken', 15, agent('buddy')),
-      row('taken-2', 'taken', 16, agent('former-pm'), { kind: 'system', ask: 'on-it' }),
-    ] })
-    const roots = ['asked', 'declined', 'own', 'merged', 'plain', 'taken']
-    const asks = async () => Object.fromEntries(threadSummaries(s.state, chat, await pageThreads(db, 'ASK', 'chat', roots)).map(t => [t.id, t.ask]))
-    // No On it / Shipped: a task's agent reacts on the row instead (anh Dee, 11-04, #2925); only an unanswered proposal is tagged.
-    const expected = { asked: 'proposal', declined: undefined, own: undefined, merged: undefined, plain: undefined, taken: undefined }
-    expect(await asks()).toEqual(expected)
-    await refreshThreads(db, 'ASK', 'chat', roots)
-    noteBackfilled('ASK')
-    expect(await asks()).toEqual(expected)
   })
 
   it('returns each delivery as the Prisma read did: ids, dates as Dates, absent fields as null', async () => {

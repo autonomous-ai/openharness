@@ -1,4 +1,3 @@
-import { isBuddy } from './buddies.js'
 import { MACHINE_FRESH_MS, teamWorkCheck, type MachineObservation } from './machines.js'
 import { activeWork, type Agent, type RemovedSession, type SuperTabState } from './model.js'
 import { agentProjectId, canReadProject, isConfidential, ledProject, projectsOf } from './projects.js'
@@ -16,10 +15,11 @@ export const REMOVED_KEEP_MS = 30 * 24 * 60 * 60_000
  *  one stopped for a moment before it is back (security reviews of #2569). */
 export const STOPPED_REMOVE_MS = 30_000
 
-/** Whether [target] could ever leave this way: not a coordinator, a Buddy, a Regular agent, one kept or being stopped. A Regular agent is its person's, as a Buddy is: removed, it never came back, since its own
- *  chat made it confidential and it has no project to restore into (task #4218). Its person stops it. */
+/** Whether [target] could ever leave this way: not a coordinator, a Regular agent, one kept or being stopped. A Regular agent is
+ *  its person's: removed, it never came back, since its own chat made it confidential and it has no project to restore into
+ *  (task #4218). Its person stops it. */
 const removable = (state: SuperTabState, target: Agent): boolean =>
-  !isBuddy(target) && !target.regular && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
+  !target.regular && target.workDecision !== 'keep' && target.workDecision !== 'stop' && !ledProject(state, target.id)
 
 /** Whether [report] proves [target]'s session stopped: listed stopped and, for a reservation a resume renewed, stopped in that
  *  very generation, since an older host lists the earlier run stopped and cannot say which. */
@@ -45,7 +45,7 @@ export function sessionClosed(state: SuperTabState, target: Agent, now: number):
  * not listed for DOWN_REMOVE_MS while the machine's other sessions still run. The last reading must be fresh and not list
  * them running either, so one report after a silence never removes anyone, and a report whose running list is empty never
  * removes by time (a fault in the host's listing would empty a whole machine). Never a coordinator (a project's end is the
- * only removal that takes one), a Buddy or a Regular agent (its person stops it), an agent someone chose to keep: it stays, shown as closed, or
+ * only removal that takes one), a Regular agent (its person stops it), an agent someone chose to keep: it stays, shown as closed, or
  * one being stopped: its host closes it and takes it out (commands.ts agent.remove). Whether a task is still held is judged by
  * removeClosedAgents, after the loss of tasks.
  */
@@ -67,9 +67,7 @@ export function closedAgents(state: SuperTabState, machineId: string, report: Pi
  *  agent.sessionClosed). */
 export function recordClosing(state: SuperTabState, target: Agent): void {
   if (state.closingSessions?.some(c => c.agentId === target.id && c.harnessId === target.harnessId)) return
-  // Its machine part outlives the Buddy-only record while this closes: it stays as private as the record (read/changes.ts).
-  const hidden = state.machines?.some(m => m.machineId === target.machineId && m.buddyOnly) ? { buddyOnly: true as const } : {}
-  ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId, ...hidden })
+  ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId })
 }
 
 /** Removes those of [closed] that hold no task now: from the agents and from every group's members and leads, as commands.ts
@@ -101,7 +99,7 @@ function keepRecord(state: SuperTabState, target: Agent, now: number): void {
     return
   }
   const { downSince: _down, lostTask: _lost, releaseId: _release, idleStop: _idle, idleNoticedAt: _noticed, workDecision: _decision,
-    switchRequest: _switch, switchLanded: _landed, modelRequest: _model, alerting: _alerting, ...agent } = target
+    switchRequest: _switch, switchLanded: _landed, alerting: _alerting, ...agent } = target
   const mine = others.filter(r => r.machineId === target.machineId)
   const over = mine.length + 1 - REMOVED_KEPT
   const dropped = new Set(over > 0 ? [...mine].sort((a, b) => a.removedAt - b.removedAt).slice(0, over) : [])

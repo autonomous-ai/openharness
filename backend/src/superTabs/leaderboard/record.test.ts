@@ -27,11 +27,11 @@ function fixture() {
   const create = (actor: Actor = owner, extra: Record<string, unknown> = {}) =>
     run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, priority: 'P2', ...actor.kind === 'agent' ? { requesterId: 'owner' } : {}, ...extra }), actor).result.conversationId as string
   const group = (id: string): Conversation => state.conversations.find(c => c.id === id)!
-  /** The owner's Buddy chat in the Swarm's project, as adding a Buddy opens it: the one private chat (buddies.ts). */
-  const buddyChat = () => {
-    state.conversations.push({ id: 'owner-buddy', kind: 'buddy', title: 'Owner\'s Buddy', leadId: null, agentIds: [], archived: false, brief: '',
+  /** The owner's 1:1 chat with an agent of theirs: a private chat. */
+  const privateChat = () => {
+    state.conversations.push({ id: 'owner-chat', kind: 'agent-chat', title: 'Ada', leadId: null, agentIds: [], archived: false, brief: '',
       checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: state.people[0]!.generation }] } })
-    return 'owner-buddy'
+    return 'owner-chat'
   }
   /** [worker] on [id] as a Swarm from before Swarm v4 stored it: its assignment, and the attempt the leaderboard recorded with
    *  what it ran on. Returns the assignment id. */
@@ -46,7 +46,7 @@ function fixture() {
   }
   const say = (id: string, actor: Actor, text = 'Go with the flag.', replyTo: string | null = null, reply?: CommandContext['reply']) =>
     run({ type: 'message.send', conversationId: id, text, replyTo, recipientIds: [] }, actor, reply ? { reply } : {})
-  return { run, invitePeer, add, asAgent, create, group, buddyChat, stored, say,
+  return { run, invitePeer, add, asAgent, create, group, privateChat, stored, say,
     get state() { return state }, at(ms: number) { now = ms } }
 }
 
@@ -100,9 +100,9 @@ describe('who asked for a group', () => {
     expect(f.group(id).requesterId).toBe('owner')
   })
 
-  it('never names a requester for a Buddy chat: private chats never count', () => {
+  it('never names a requester for a private chat: private chats never count', () => {
     const f = fixture()
-    const id = f.buddyChat()
+    const id = f.privateChat()
     expect(f.group(id).requesterId).toBeUndefined()
     expect(f.group(id).ledger).toBeUndefined()
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: 'owner' })).toThrow('chat only')
@@ -157,7 +157,7 @@ describe('how a person unblocks work: approvals', () => {
 
   it('never credits a private conversation', () => {
     const f = fixture()
-    const chat = f.buddyChat()
+    const chat = f.privateChat()
     posted(f, chat, 'GO')
     expect(f.group(chat).ledger?.unblocks).toBeUndefined()
   })
@@ -266,16 +266,4 @@ describe('the model an agent reports for its stored attempts (roadmap, Dec: abou
     expect(f.group(handedOn!.id).ledger!.runs![0]!.model).toBeNull()
   })
 
-})
-
-// Proposals are gone (2026-11-10): an older CLI's PM still names one when it opens a task, which credits no Buddy and asks nobody.
-describe('a group an older PM opens naming a Buddy\'s proposal', () => {
-  it('opens as any other, for the person who opens it, crediting nobody for the proposal', () => {
-    const f = fixture()
-    f.at(5_000)
-    const id = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Dark mode', brief: 'Add it.', checks, proposalMessageId: 'm-proposal' }), owner)
-      .result.conversationId as string
-    expect(f.group(id).ledger).toEqual({ askedAt: 5_000 })
-    expect(f.group(id).requesterId).toBe('owner')
-  })
 })

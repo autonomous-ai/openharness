@@ -74,7 +74,7 @@ export function addedAgentName(state: SuperTabState, actor: Actor, input: string
  * The name `agent.new` gives a person's new agent (task #4568, anh Dee: every agent has a real name): the one they chose, with
  * the rename checks, or a free one from the agent names when they chose none, or only its engine's or a role's (Desktop's
  * Cmd-N names every Member "Claude Code"). A free name is free across the whole Swarm, people, every agent, the starts still
- * waiting and the names chosen in Buddy chats, so it never repeats one the person cannot read either. [seed] fixes the pick.
+ * waiting, so it never repeats one the person cannot read either. [seed] fixes the pick.
  */
 export function newAgentName(state: SuperTabState, actor: Actor, input: string | undefined, seed: string): string {
   const given = input?.normalize('NFKC').trim()
@@ -88,7 +88,7 @@ export function newAgentName(state: SuperTabState, actor: Actor, input: string |
   const usernames = swarmUsernames(state)
   const taken = new Set([...state.people.flatMap(p => [p.name, usernames.get(p.id), p.email, p.email.split('@')[0]]),
     ...shown.map(a => a.displayName), ...(state.starts ?? []).filter(s => !s.harnessId && !s.error).map(s => s.request.name),
-    ...state.conversations.map(c => c.buddyName), ...state.conversations.filter(c => c.kind === 'agent-chat').map(c => c.title)]
+    ...state.conversations.filter(c => c.kind === 'agent-chat').map(c => c.title)]
     .filter((name): name is string => !!name).map(nameKey))
   return freeAgentName(name => taken.has(nameKey(name)), seed)
 }

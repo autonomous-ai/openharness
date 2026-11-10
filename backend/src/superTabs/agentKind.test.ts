@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab, type Actor, type Agent, type Person } from './model.js'
 import { agentChatId, agentKind, inMyAgents } from './agentKind.js'
-import { openSwarmBuddyChat } from './buddies.js'
 
-// Task #4116 (Swarm v3, anh Dee 11-07): the left pane lists "My agents": the person's Buddy first, then their other agents,
+// Task #4116 (Swarm v3, anh Dee 11-07): the left pane lists "My agents": the person's agents,
 // a crown beside a PM, bold for an agent whose chat has news. Each agent says what it is and the chat its person talks to it in.
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 
@@ -21,15 +20,6 @@ function setup() {
 }
 
 describe('an agent\'s kind and chat', () => {
-  it('is a Buddy in its Buddy chat', () => {
-    const { state, peer, agent } = setup()
-    const buddy = agent('buddy', { buddyOf: { personId: 'peer', generation: 'second' }, buddyScope: 'swarm' })
-    const chat = openSwarmBuddyChat(state, peer)
-    chat.agentIds.push(buddy.id)
-    expect(agentKind(state, buddy)).toBe('buddy')
-    expect(agentChatId(state, buddy)).toBe(chat.id)
-  })
-
   it('is a PM in its project\'s Lead chat', () => {
     const { state, agent } = setup()
     const pm = agent('pm')
@@ -64,23 +54,13 @@ describe('an agent\'s kind and chat', () => {
 })
 
 // Task #4192 (anh Dee 11-07, Desktop 1.3.87): his My agents showed about 30 rows, agents he never started among them. It lists
-// only the reader's Buddy and the agents running on their own account: Team-account, stopped and finished agents leave it.
+// only the agents running on their own account: Team-account, stopped and finished agents leave it.
 describe('the reader\'s My agents', () => {
   const peerReads: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 
   it('holds an agent they brought that runs on their own account', () => {
     const { state, agent } = setup()
     expect(inMyAgents(state, peerReads, agent('mine'))).toBe(true)
-  })
-
-  it('holds their own Buddy, never another person\'s or a thread session', () => {
-    const { state, agent } = setup()
-    const buddy = agent('buddy', { buddyOf: { personId: 'peer', generation: 'second' }, buddyScope: 'swarm' })
-    const session = agent('session', { buddyOf: { personId: 'peer', generation: 'second' }, buddySession: { thread: 't', from: 1 } } as Partial<Agent>)
-    const owners = agent('owners', { contributorId: 'owner', machineOwnerId: 'owner', buddyOf: { personId: 'owner', generation: 'test' } })
-    expect(inMyAgents(state, peerReads, buddy)).toBe(true)
-    expect(inMyAgents(state, peerReads, session)).toBe(false)
-    expect(inMyAgents(state, peerReads, owners)).toBe(false)
   })
 
   it('leaves out another person\'s agent and an agent reader', () => {
@@ -90,10 +70,9 @@ describe('the reader\'s My agents', () => {
     expect(inMyAgents(state, { kind: 'agent', agentId: 'theirs', machineOwnerId: 'peer' }, agent('mine'))).toBe(false)
   })
 
-  it('leaves out a stopped, asleep, finished or stopping agent', () => {
+  it('leaves out a stopped, finished or stopping agent', () => {
     const { state, agent } = setup()
     expect(inMyAgents(state, peerReads, agent('down', { downSince: new Date(0).toISOString() }))).toBe(false)
-    expect(inMyAgents(state, peerReads, agent('asleep', { asleep: { since: 0 } }))).toBe(false)
     expect(inMyAgents(state, peerReads, agent('finished', { workDecision: 'awaiting' }))).toBe(false)
     expect(inMyAgents(state, peerReads, agent('stopping', { workDecision: 'stop' }))).toBe(false)
     expect(inMyAgents(state, peerReads, agent('kept', { workDecision: 'keep' }))).toBe(true)

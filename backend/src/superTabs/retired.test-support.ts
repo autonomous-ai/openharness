@@ -51,8 +51,6 @@ export const OLD_PAYLOADS = {
   'proposal.answer': { conversationId: 'card-1', questionId: 'q-1', text: 'Phones too' },
   'proposal.merge': { conversationId: 'card-1', intoConversationId: 'card-2', reason: 'Same ask' },
   'proposal.close': { projectId: 'lead', messageId: 'm-3', reason: 'Built already' },
-  'buddy.propose': { conversationId: 'buddy-chat', ownerMessageId: 'm-4', projectId: 'lead', text: 'Sync my edits', title: 'Sync edits',
-    goal: 'Edits sync', scope: 'Desktop and phone', priority: 'normal', attachmentIds: ['file-1'] },
 } satisfies Record<RetiredCommand, object>
 
 /** How many [type] commands the retired-commands counter holds for [client]. */

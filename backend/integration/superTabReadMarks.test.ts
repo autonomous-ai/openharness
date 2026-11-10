@@ -284,7 +284,7 @@ describe('thread marks (one per person and thread)', () => {
     await markThread(s.tabId, s.web, s.root, 12, peer)
     expect(await threadMarksOf(s.tabId, peer)).toEqual({ [s.web]: { [s.root]: 12 } })
     expect(await threadMarksOf(s.tabId, owner)).toEqual({ [s.web]: { [s.root]: 11 } })
-    // An agent reading as itself (a Buddy is one) has none, though its owner has.
+    // An agent reading as itself has none, though its owner has.
     const asAgent = await call('GET', `/api/super-tabs/${s.tabId}/parts?asAgentId=${s.worker}`, owner)
     expect(asAgent.status, JSON.stringify(asAgent.body.error)).toBe(200)
     expect(asAgent.body.data.derived.threadMarks).toBeUndefined()

@@ -29,7 +29,7 @@ export const RETIRED_COMMANDS = [
   // suggestion.
   'project.process', 'project.boardMode', 'project.canChat', 'project.decider', 'member.approvalMode', 'task.suggest', 'task.approve', 'task.reject',
   // Proposals (2026-11-10): a person asks an agent in their 1:1 chat, and a task is the project's GitHub issue.
-  'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close', 'buddy.propose',
+  'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
@@ -78,7 +78,7 @@ export const NO_PERSONAL_TASKS = { approvalMode: 'autoApprove', reset: true, ups
 export const RETIRED_READS: Readonly<Record<string, object>> = {
   // The daily scorecard (2026-11-09): an older Desktop's Scorecard tab.
   '/api/super-tabs/:tabId/scorecard': { days: [] },
-  // Decisions (2026-11-10): an older Desktop's and phone's Decisions, and an older host's or Buddy's own asks.
+  // Decisions (2026-11-10): an older Desktop's and phone's Decisions, and an older host's own asks.
   '/api/super-tabs/:tabId/decisions': { more: false, decisions: [] },
   // Tags, Activity, reminders, followed threads, the inbox and catch-up (2026-11-10): an older Desktop's and phone's.
   '/api/super-tabs/:tabId/mentions': { mentions: [] },

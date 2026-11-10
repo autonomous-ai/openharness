@@ -8,7 +8,6 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { agentRole, fail, type Agent, type SuperTabState } from './model.js'
 import { agentSetRole, agentProjectId, ledProject, projectsOf, skillSetOf, type SwarmProject } from './projects.js'
-import { isBuddy } from './buddies.js'
 import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 
 /** One role's text could already be 64 KB (commands.ts role); the whole document keeps that limit. Only saves check it: the
@@ -93,12 +92,11 @@ export function appendRouting(text: string, line: string): string {
 
 export const coordinatorNameOf = (project: Pick<SwarmProject, 'coordinatorName'>): string => project.coordinatorName ?? DEFAULT_COORDINATOR_NAME
 
-/** The role name [target] goes by: the one it was started in, else what it is. A Buddy keeps its own role; the coordinator
+/** The role name [target] goes by: the one it was started in, else what it is. The coordinator
  *  is the template's PM; an agent of a custom role set its role's name (the migration's rule, design Migration); any other
  *  is a Reviewer or an Engineer by its kind. Read only, so agents from before role names need no write. */
 export function roleNameOf(state: SuperTabState, target: Agent): string {
   if (target.roleName) return target.roleName
-  if (isBuddy(target)) return 'Buddy'
   const project = projectsOf(state).find(p => p.id === agentProjectId(state, target))
   const custom = project && skillSetOf(project) === 'custom' ? agentSetRole(state, project, target) : null
   if (custom) return custom.name

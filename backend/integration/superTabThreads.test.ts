@@ -9,7 +9,6 @@ import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
-import { buddyChatId } from '../src/superTabs/buddies.js'
 import { foldReplies, refreshThreads, threadFacet } from '../src/superTabs/pageReads.js'
 import { backfillThreads } from '../src/superTabs/threadBackfill.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -50,9 +49,9 @@ const person = (actor: AuthUser) => ({ kind: 'person', id: actor.sub, name: acto
 const agent = (id: string) => ({ kind: 'agent', id, name: id, membershipGeneration: 'gen' })
 let sequence = 10, scenes = 0
 
-/** A migrated Swarm: a Lead, a worker in Web, and peer's Buddy, in the project chat and in its own Buddy chat. Web holds a lone
- *  root and threads with every kind of reply a reader may skip: a note to the Lead alone, a route row (no Buddy reads it), a
- *  tag. Its root `w-b` is a note to the worker alone. The Buddy chat holds a thread with replies of a Buddy session. */
+/** A migrated Swarm: a Lead, a worker in Web, and the owner's own agent in its 1:1 chat with them. Web holds a lone root and
+ *  threads with every kind of reply a reader may skip: a note to the Lead alone, a route row, a tag. Its root `w-b` is a note
+ *  to the worker alone. The 1:1 chat holds a thread too. */
 async function scene() {
   const s = swarm(MIGRATED)
   s.join(peerActor)
@@ -60,15 +59,11 @@ async function scene() {
   const lead = s.add('lead-harness', 'lead', true, ownerActor, 'host', owner.sub)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  const buddy = s.add('buddy-harness', 'lead', false, ownerActor, 'host', owner.sub)
-  let buddyChat = ''
+  const own = s.add('own-harness', 'lead', false, ownerActor, 'host', owner.sub), ownChat = 'own-chat'
   s.edit(state => {
-    const generation = state.people.find(p => p.id === peer.sub)!.generation
-    const projectId = state.projects![0]!.id
-    state.agents.find(a => a.id === buddy)!.buddyOf = { personId: peer.sub, generation }
-    buddyChat = buddyChatId(projectId, { id: peer.sub, generation })
-    state.conversations.push({ id: buddyChat, kind: 'buddy', projectId, title: 'Buddy', leadId: null, agentIds: [buddy], archived: false,
-      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: peer.sub, generation }] } })
+    const generation = state.people.find(p => p.id === owner.sub)!.generation
+    state.conversations.push({ id: ownChat, kind: 'agent-chat', title: 'Own', leadId: null, agentIds: [own], archived: false,
+      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.sub, generation }] } })
   })
   const tabId = `tab-${randomUUID()}`
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 })
@@ -89,19 +84,18 @@ async function scene() {
     { id: 'w-b1', conversationId: web, thread: 'w-b', author: agent(worker) },
     { id: 'w-c', conversationId: web, thread: 'w-c', author: person(owner) },
     { id: 'w-c1', conversationId: web, thread: 'w-c', author: agent(lead), source: { kind: 'route' } },
-    { id: 'b-root', conversationId: buddyChat, thread: 'b-root', author: person(peer) },
-    { id: 'b-r1', conversationId: buddyChat, thread: 'b-root', author: agent(buddy) },
-    { id: 'b-r2', conversationId: buddyChat, thread: 'b-root', author: person(peer), buddySession: true },
-    { id: 'b-r3', conversationId: buddyChat, thread: 'b-root', author: agent(buddy), buddySession: true },
+    { id: 'b-root', conversationId: ownChat, thread: 'b-root', author: person(owner) },
+    { id: 'b-r1', conversationId: ownChat, thread: 'b-root', author: agent(own) },
+    { id: 'b-r2', conversationId: ownChat, thread: 'b-root', author: person(owner) },
+    { id: 'b-r3', conversationId: ownChat, thread: 'b-root', author: agent(own) },
   ]
   await insert(tabId, prefix, rows)
   const readers: Array<[string, string, AuthUser, string?]> = [['owner', web, owner], ['peer', web, peer], ['outsider', web, outsider],
-    ['Buddy', web, owner, buddy], ['worker', web, owner, worker], ['Lead', web, owner, lead], ['peer in the Buddy chat', buddyChat, peer],
-    ['Buddy in its chat', buddyChat, owner, buddy]]
-  return { tabId, web, buddyChat, lead, worker, buddy, readers, prefix, id }
+    ['worker', web, owner, worker], ['Lead', web, owner, lead], ['owner in their 1:1 chat', ownChat, owner], ['agent in its chat', ownChat, owner, own]]
+  return { tabId, web, ownChat, lead, worker, own, readers, prefix, id }
 }
 
-interface Row { id: string; conversationId: string; thread: string; author: object; mentions?: string[]; source?: object; recipientIds?: string[]; buddySession?: boolean }
+interface Row { id: string; conversationId: string; thread: string; author: object; mentions?: string[]; source?: object; recipientIds?: string[] }
 /** Rows written as an older release writes them, no summary touched; ids and threads named without the scene's prefix. */
 async function insert(tabId: string, prefix: string, rows: Row[]) {
   await db.superTabMessage.createMany({ data: rows.map(row => ({ recipientIds: [], mentions: [], ...row, id: prefix + row.id, thread: prefix + row.thread,
@@ -123,10 +117,10 @@ describe('thread summaries (spec 5 phase D)', () => {
     const s = await scene()
     const before = await pages(s)
     // Each reader skips its own kinds of reply: no summary counts a note to agents alone (a reader of `w-b`'s root still counts
-    // its reply), and a Buddy no route row, nor the session's replies in its own chat.
+    // its reply).
     expect(Object.fromEntries(Object.entries(before).map(([name, page]) => [name, replies(page)]))).toEqual({
-      owner: { 'w-a': 4, 'w-c': 1 }, peer: { 'w-a': 4, 'w-c': 1 }, outsider: { 'w-a': 4, 'w-c': 1 }, Buddy: { 'w-a': 3 },
-      worker: { 'w-a': 4, 'w-b': 1, 'w-c': 1 }, Lead: { 'w-a': 4, 'w-c': 1 }, 'peer in the Buddy chat': { 'b-root': 3 }, 'Buddy in its chat': { 'b-root': 1 } })
+      owner: { 'w-a': 4, 'w-c': 1 }, peer: { 'w-a': 4, 'w-c': 1 }, outsider: { 'w-a': 4, 'w-c': 1 },
+      worker: { 'w-a': 4, 'w-b': 1, 'w-c': 1 }, Lead: { 'w-a': 4, 'w-c': 1 }, 'owner in their 1:1 chat': { 'b-root': 3 }, 'agent in its chat': { 'b-root': 3 } })
     expect(await db.superTabThread.count({ where: { tabId: s.tabId } })).toBe(0)
 
     await backfillThreads(db, Date.now())
@@ -196,14 +190,14 @@ describe('thread summaries (spec 5 phase D)', () => {
         tabId: s.tabId, text: row.id, sequence: ++sequence, createdAt: new Date() })) })
       await foldReplies(tx, s.tabId, s.web, more.map(row => ({ id: s.id(row.id), thread: s.id(row.thread) })))
     })
-    const chat = [{ id: s.id('b-r4'), conversationId: s.buddyChat, thread: s.id('b-root'), author: agent(s.buddy), buddySession: true }]
+    const chat = [{ id: s.id('b-r4'), conversationId: s.ownChat, thread: s.id('b-root'), author: agent(s.own) }]
     await transaction(db, async tx => {
       await tx.superTabMessage.createMany({ data: chat.map(row => ({ recipientIds: [], mentions: [], ...row, tabId: s.tabId, text: 'x', sequence: ++sequence })) })
-      await foldReplies(tx, s.tabId, s.buddyChat, chat)
+      await foldReplies(tx, s.tabId, s.ownChat, chat)
     })
     const folded = await rawSummaries([...roots, s.id('b-root')])
     await refreshThreads(db, s.tabId, s.web, roots)
-    await refreshThreads(db, s.tabId, s.buddyChat, [s.id('b-root')])
+    await refreshThreads(db, s.tabId, s.ownChat, [s.id('b-root')])
     expect(folded).toEqual(await rawSummaries([...roots, s.id('b-root')]))
     expect(Object.keys(folded[0]!).sort()).toEqual(['_id', 'conversationId', 'mentions', 'parts', 'tabId'])
   })
