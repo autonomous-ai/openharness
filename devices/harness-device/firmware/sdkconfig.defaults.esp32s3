@@ -17,3 +17,10 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # --- CPU ---
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
+
+# --- Kernel, heap and ringbuffer code runs from flash (cached), not IRAM ---
+# Code executes from PSRAM/flash through the cache, and the cache is never disabled
+# (SPI_FLASH_CACHE_NO_DISABLE), so these need not sit in IRAM. Frees ~24 KB of DIRAM.
+CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
+CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y
