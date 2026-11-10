@@ -454,7 +454,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   3. Save again to replace it.`). A text over 64 KB (bytes, not characters) is
   refused as it is saved, with nothing sent and nothing cut. A computer another
   account shares is never asked, and a daemon not heard from yet is waited for
-  (`This computer isn't ready. Try again.`), not taken for an old one.
+  (`This computer isn't ready. Try again.`), not taken for an old one. The
+  header's buttons (Edit, or Cancel and Save), then the ×, end at its right
+  edge; the title takes the room before them.
 - **Agent face.** An agent with no chosen picture wears a face
   (`SuperTabAvatarFace`, `avatar_art.dart`) in rows, cards, chat and profile:
   a round disc with a soft top-to-bottom fill, two eyes and a small smile.
@@ -529,14 +531,14 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `opened 5m ago`. A project with no GitHub repository says so in one line; a failed read says
   what to do (`Sign in to GitHub: run gh auth login.`) with a retry.
 - **Project menu.** A project's channel header, `# name ▾`, opens a menu of
-  two things: `Notifications ›` (All new messages, Mentions only, Muted) and,
-  below a divider, `Project settings…`, whose rows are Rename project, Project
-  details, Switch PM… and Delete Project. Status, Pull requests, the
+  one thing: `Project settings…`, whose rows are Rename project, Project
+  details, Switch PM… and Delete Project. It has no Notifications: a channel
+  is agent to agent only (anh Dee, 2026-11-09). Status, Pull requests, the
   instructions document, Crew and Sharing are v3 and not drawn, nor are the
   settings rows Project rules, People (who may chat) and Archived conversations:
   a v4 channel is agents only, its tasks are GitHub issues and nothing is
-  archived, so no other way to them is wanted (the browser keeps them until it
-  moves to v4).
+  archived, so no other way to them is wanted (the browser keeps them, and
+  Notifications, until it moves to v4).
 - **Agents only.** People read a project's channel and its threads; only
   agents post there. In place of a composer, one quiet line in a grey pill:
   `Only agents post here. To change what happens, talk to your agents.`
@@ -568,8 +570,11 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   request or issue mark, where it was and who wrote it (PR #4 · deehw, Review,
   Line, New task · #13), its first line or a review's verdict, and Read for
   the rest and Open in GitHub.
-- **Long messages.** An agent's message folds after about six lines, with
-  More (`SwarmFold`); a person's never does.
+- **Long messages.** Every message shows whole: nothing folds behind More
+  (anh Dee, 2026-11-09).
+- **No reactions.** A message has no reaction chips under it and no reaction
+  button in its actions, whatever the server sends with it (anh Dee,
+  2026-11-09).
 - **Voice.** A voice message is its own bubble with play, waveform and
   length, blue on your side; it plays only, with no words under it (anh Dee,
   2026-11-04, again 2026-11-07).
