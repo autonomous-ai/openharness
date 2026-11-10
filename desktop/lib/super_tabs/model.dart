@@ -1463,10 +1463,6 @@ class SuperTabMessage {
   /// session (spec 2026-10-30-buddy-thread-sessions).
   final bool buddySession;
 
-  /// A task's own message, the server keeps current as the task moves (Quiet
-  /// Swarm 2/6): its text is the task's name.
-  bool get isTaskLine => source['kind'] == 'task-line';
-
   bool get threadReply => thread != null && thread != id;
 
   /// A Buddy chat message that started its own thread's session from the
@@ -1543,9 +1539,6 @@ class SuperTabMessage {
   bool get terminalEvent =>
       source['kind'] == 'terminal-input' || source['kind'] == 'terminal-alert';
 
-  /// The project chat's line when linked work is Done (ship_row.dart).
-  bool get shipLine => source['kind'] == 'ship';
-
   /// A line the backend posted for an instructions save: no chat row and
   /// nothing unread, since it gives a person nothing to do (Dee 11-05, task
   /// #3165). The backend posts none since #3132; the History keeps every
@@ -1554,7 +1547,7 @@ class SuperTabMessage {
 
   /// A line the chat draws as its own row, with no sender's header (view.dart):
   /// a message after it has no header to join (Diego, #2547).
-  bool get drawsOwnRow => shipLine || terminalEvent;
+  bool get drawsOwnRow => terminalEvent;
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

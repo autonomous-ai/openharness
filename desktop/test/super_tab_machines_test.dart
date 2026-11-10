@@ -550,7 +550,7 @@ void main() {
     });
 
     testWidgets(
-      'tapping the line lists every agent, Working, Waiting, then Idle, with name, role and status',
+      'tapping the line lists every agent, Working, Waiting, Idle, then Closed, with name, role and status',
       (tester) async {
         final f = SuperTabLaunchFixture();
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -569,14 +569,17 @@ void main() {
           agent('dev', 'Nova'),
           agent('rev', 'Sage'),
           agent('idle', 'Iris'),
+          // Its session gone on a machine that is there: Closed, never Idle.
+          agent('gone', 'Kai')
+            ..['downSince'] = DateTime.now().toUtc().toIso8601String(),
         ];
         (server.state['agents'] as List)[2]['role'] = 'reviewer';
         (server.state['conversations'] as List)[0]
           ..['leadId'] = 'pm'
-          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle'];
+          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle', 'gone'];
         f.app.machineStates['m']!
           ..agents = [
-            for (final id in ['pm', 'dev', 'rev', 'idle'])
+            for (final id in ['pm', 'dev', 'rev', 'idle', 'gone'])
               Agent.fromJson({
                 'id': 'native-$id',
                 'name': id,
@@ -606,7 +609,7 @@ void main() {
         expect(
           find.descendant(
             of: line,
-            matching: find.text('4 agents · 2 working'),
+            matching: find.text('5 agents · 2 working'),
           ),
           findsOneWidget,
         );
@@ -619,7 +622,7 @@ void main() {
         expect(list, findsOneWidget);
         double top(Finder finder) => tester.getTopLeft(finder).dy;
         final headings = [
-          for (final group in ['Working', 'Waiting', 'Idle'])
+          for (final group in ['Working', 'Waiting', 'Idle', 'Closed'])
             find.descendant(of: list, matching: find.text(group)),
         ];
         for (final heading in headings) {
@@ -636,6 +639,8 @@ void main() {
           row('rev'),
           headings[2],
           row('idle'),
+          headings[3],
+          row('gone'),
         ];
         for (var i = 1; i < order.length; i++) {
           expect(top(order[i]), greaterThan(top(order[i - 1])));

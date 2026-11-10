@@ -2647,7 +2647,7 @@ class SuperTabController extends ChangeNotifier {
       Map.unmodifiable(_mentions[conversationId] ?? const {});
 
   /// Makes conversation [id] part of [snapshot]: one not held (a closed
-  /// group a link or Work details names) is read by id. False when it cannot
+  /// group a link names) is read by id. False when it cannot
   /// be read.
   Future<bool> loadGroup(String id) async {
     if (snapshot == null) return false;

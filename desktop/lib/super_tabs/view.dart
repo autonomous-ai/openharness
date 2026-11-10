@@ -2825,7 +2825,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _menuNamesViews && _terminalsVisible ? 'Group terminals' : null;
 
   /// The line under the header's title: on a phone, the open view.
-  Widget? _subtitle(SuperTabConversation? group) => switch (_openViewName) {
+  Widget? get _subtitle => switch (_openViewName) {
     final view? => Text(
       view,
       key: const ValueKey('super-open-view'),
@@ -2836,8 +2836,6 @@ class _SuperTabViewState extends State<SuperTabView>
     null => null,
   };
 
-  /// A project's channel or one of its tasks' chats: agents post there, people read (Swarm v4). A person's chat with their
-  /// own agent is the one place they write.
   /// The project's task list, open beside its channel (Swarm v4).
   bool _taskListOpen = false;
 
@@ -2925,6 +2923,8 @@ class _SuperTabViewState extends State<SuperTabView>
       ? c.snapshot?.agent(group.agentIds.first)
       : null;
 
+  /// A project's channel: agents post there, people read (Swarm v4). A person's chat with their own agent is the one
+  /// place they write.
   bool _agentsOnly(SuperTabConversation group) =>
       c.snapshot?.isProjectLead(group.id) == true;
   bool _agentsOnlyId(String id) => switch (c.snapshot?.conversation(id)) {
@@ -2932,8 +2932,7 @@ class _SuperTabViewState extends State<SuperTabView>
     null => false,
   };
 
-  /// Whether [id] is where Swarm v4's agents talk to each other: a project's channel or one of its tasks' chats, drawn as the
-  /// board draws them.
+  /// Whether [id] is where Swarm v4's agents talk to each other: a project's channel, drawn as the board draws them.
   bool _agentTalk(String id) => _agentsOnlyId(id);
 
   /// The teammates [message] is to, by the name their tags read: each its words do not tag opens its bubble.
@@ -3106,8 +3105,7 @@ class _SuperTabViewState extends State<SuperTabView>
                     )
                   else
                     _title(group),
-                  if (!_devicesVisible && !_listViewHoldsThePane)
-                    ?_subtitle(group),
+                  if (!_devicesVisible && !_listViewHoldsThePane) ?_subtitle,
                 ],
               ),
             ),

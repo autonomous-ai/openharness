@@ -413,7 +413,7 @@ class SuperTabParts {
     ];
   }
 
-  /// Takes dormant groups read on demand (section 4.5): a page of the dormant list, or one group by id. Each is kept
+  /// Takes dormant groups read on demand (section 4.5), one group by id. Each is kept
   /// unless this reader already holds a newer version of it; one that is active here at a lower version moves out.
   SuperTabPartsChange addDormant(List groups) {
     var changed = false;
