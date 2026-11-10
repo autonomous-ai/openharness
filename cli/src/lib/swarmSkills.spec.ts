@@ -338,7 +338,9 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
   it('tells a Buddy nothing of sending proposals', () => {
     const text = readFileSync(prepareBuddy(fixture(), { role: 'buddy', key: 'session' }).file, 'utf8')
     expect(text).not.toContain('## Send to the PM')
-    expect(text).not.toMatch(/\bpropose\b|send(ing)? (their|the) proposal|a proposal only|In a proposal/i)
+    expect(text).not.toMatch(/propos/i)
+    // A Buddy running since before keeps its old start note, which offered proposals: the refreshed skill overrides it.
+    expect(text).toContain('Never offer to send anything to a project\'s PM: nothing you write reaches one. Your owner asks the PM in their own chat with it.')
   })
 })
 
