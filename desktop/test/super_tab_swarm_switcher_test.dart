@@ -459,7 +459,27 @@ void main() {
     late _Backend backend;
     await tester.runAsync(() async {
       (app, backend) = await _twoTabs();
-      backend.servers['beta']!.state['mentionsWaiting'] = 2;
+      // Two of the reader's agents wrote to them in their own chats: what waits in Beta.
+      final server = backend.servers['beta']!;
+      for (final id in ['pip', 'juno']) {
+        (server.state['agents'] as List).add({
+          'id': id,
+          'name': id,
+          'machineId': 'host',
+          'harnessId': 'session-$id',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+          'kind': 'regular',
+          'chatId': 'agent-chat-$id',
+          'myAgent': true,
+        });
+        (server.state['conversations'] as List).add({
+          ...conversationFixture('agent-chat-$id', id),
+          'kind': 'agent-chat',
+          'agentIds': [id],
+          'lastMessageSequence': 1,
+        });
+      }
       final beta = await app.superTabs.open('beta');
       await beta.refresh();
     });
