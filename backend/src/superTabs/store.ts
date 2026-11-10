@@ -14,6 +14,7 @@ import { writeReactionActivity, writeReplyActivity } from './activity.js'
 import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
+import type { AccountRename } from './accountRenames.js'
 import { authorForAgent, lazyUsernames, nameFromAccount, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
@@ -1208,7 +1209,7 @@ export class SuperTabStore {
         summary: FIRST_SUMMARY, writtenBy: { kind: 'person', id: user.sub }, askedBy: user.sub, at: this.now() })
       await tx.superTabOperation.create({ data: { id, tabId: id, actorKey: `person:${user.sub}`, requestHash, revision: 0, result: { id } } })
       return { id, revision: 0 }
-    })
+    }).then(async made => { await this.joined(made.id, user.sub); return made })
   }
 
   async list(user: AuthUser, after?: string) {
@@ -1270,7 +1271,7 @@ export class SuperTabStore {
       // People per Swarm is what warns first at scale (spec, Design 4).
       logger.info('[super-tab] auto-join', { tabId, userId: user.sub, people: state.people.length })
       return 'joined' as const
-    }).catch(error => {
+    }).then(async outcome => { if (outcome === 'joined') await this.joined(tabId, user.sub); return outcome }).catch(error => {
       // A Swarm deleted since the read is found by nobody.
       if (error instanceof SuperTabError && error.code === 'NOT_FOUND') return 'skipped' as const
       throw error
@@ -1295,15 +1296,24 @@ export class SuperTabStore {
     })
   }
 
-  /** Account [user] was renamed (routes/auth.ts): their name follows it in every Swarm they are in, 100 at a time. A Swarm that
-   *  fails is logged and the rest go on; how many Swarms changed and how many failed. */
-  async accountRenamed(user: AuthUser): Promise<{ changed: number; failed: number }> {
+  /** A person who just joined [tabId] takes their account's name once more, outside the join: a rename committed while the join
+   *  ran listed their Swarms before this one held them. Writes only when the name changed meanwhile; a failure is logged. */
+  private async joined(tabId: string, userId: string): Promise<void> {
+    await this.followAccountNames(tabId, userId).catch(error => {
+      logger.warn('[super-tab] a Swarm name did not follow its account', { tabId, code: error instanceof SuperTabError ? error.code : 'unknown' })
+    })
+  }
+
+  /** An account was renamed (UserService, accountRenames.ts): the person's name follows it in every Swarm they are in, 100 at a time;
+   *  a Swarm still in one row waits for its split, which reads names as they are then. A Swarm that fails is logged and the rest go
+   *  on; how many Swarms changed and how many failed. */
+  async accountRenamed({ userId, autonomousEnv }: AccountRename): Promise<{ changed: number; failed: number }> {
     let changed = 0, failed = 0, after: string | undefined
     for (;;) {
-      const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 100 })
-      for (const row of rows) {
+      const rows = await memberSwarms(this.db, autonomousEnv, userId, { after, limit: 100 })
+      for (const row of rows.filter(r => r.format === 2)) {
         try {
-          if (await this.followAccountNames(row.id, user.sub) === 1) changed++
+          if (await this.followAccountNames(row.id, userId) === 1) changed++
         } catch (error) {
           failed++
           logger.warn('[super-tab] a Swarm name did not follow its account', { tabId: row.id, code: error instanceof SuperTabError ? error.code : 'unknown' })
@@ -1414,7 +1424,7 @@ export class SuperTabStore {
         parts: json(receiptParts(written, stamp)),
         result: { sharingGeneration: sharing.generation, membershipGeneration: member.generation ?? null, alreadyMember } } })
       return { id: tabId, role: member.role, alreadyMember }
-    })
+    }).then(async joined => { if (!joined.alreadyMember) await this.joined(tabId, user.sub); return joined })
   }
 
   async read(user: AuthUser, tabId: string, asAgentId?: string) {
@@ -1479,6 +1489,7 @@ export class SuperTabStore {
       // Buddy thread sessions' first warning (spec Design 4): starts, refusals by code and ends by reason, ids only, in the
       // server log that prod watch reads.
       if (input.command?.type === 'message.send' && input.command.newSession && done.result.startId) logger.info('Buddy session started', { tabId, startId: done.result.startId })
+      if (input.command?.type === 'invite.accept') await this.joined(tabId, user.sub)
       return done
     } catch (error) {
       // Its code and type, and whose: the Swarm, the agent and the client, never the command's words. A Swarm refusing a machine

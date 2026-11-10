@@ -125,15 +125,25 @@ describe('a name that follows the account', () => {
     expect(nameFromAccount(chose, 'Minh Tran')).toBe(false)
   })
 
-  it('shows the username when the account has no name, and keeps no chosen name where there was none', () => {
+  it('shows the username when the account has no name, writes nothing where nothing would show otherwise, and keeps no chosen '
+    + 'name where there was none', () => {
     const plain = someone()
-    expect(nameFromAccount(plain, null)).toBe(true)
-    expect(plain).toEqual({ ...someone(), nameFollowsAccount: true })
+    expect(nameFromAccount(plain, null)).toBe(false)
     expect(nameFromAccount(plain, '  ')).toBe(false)
+    expect(plain).toEqual(someone())
     const named: Person = { ...someone(), name: 'Minh' }
     nameFromAccount(named, null)
     expect(named).not.toHaveProperty('name')
     expect(named.chosenName).toBe('Minh')
+  })
+
+  // An SSO or an admin can set what Harness's own editor refuses (lib/accountName.ts): a Swarm never shows it.
+  it('shows the username instead of a name a Swarm may not show: a role\'s, a web address, hidden characters', () => {
+    for (const refused of ['PM', 'https://ev.il', 'Ken\u202Eadmin']) {
+      const person = { ...someone(), name: 'Minh' }
+      expect(nameFromAccount(person, refused), refused).toBe(true)
+      expect(person, refused).not.toHaveProperty('name')
+    }
   })
 
   it('names them so everywhere the Swarm shows them, and an agent reads it', () => {

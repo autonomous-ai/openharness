@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js'
 import { ADMIN_EMAILS } from '../config/env.js'
 import { hashPassword } from '../lib/password.js'
 import { signInsChanged } from '../lib/harnessAuthCache.js'
+import { accountRenamed } from '../superTabs/accountRenames.js'
 import { ConflictError, NotFoundError } from '../errors/index.js'
 import type { AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import type { SignInAttribution } from '../lib/signInAttribution.js'
@@ -133,6 +134,8 @@ export const userService = {
       })
       // Its email or role may have changed: a Harness sign-in each pod remembers answers them (lib/harnessAuthCache.ts).
       await signInsChanged(existing.id)
+      // A name filled from SSO: the person's Swarms show it (superTabs/accountRenames.ts).
+      if ('name' in data) await accountRenamed({ userId: existing.id, autonomousEnv: updated.autonomousEnv })
       return updated
     }
 
@@ -263,7 +266,8 @@ export const userService = {
   },
 
   async update(id: string, input: { name?: string; password?: string; role?: string; autonomousEnv?: AutonomousEnvironment }): Promise<User> {
-    if (!(await prisma.user.findUnique({ where: { id } }))) throw new NotFoundError('User')
+    const before = await prisma.user.findUnique({ where: { id } })
+    if (!before) throw new NotFoundError('User')
     const updated = await prisma.user.update({
       where: { id },
       data: {
@@ -274,6 +278,8 @@ export const userService = {
       },
     })
     await signInsChanged(id)
+    // By the person or an admin: the person's name in each of their Swarms follows it (superTabs/accountRenames.ts).
+    if (input.name !== undefined && input.name !== before.name) await accountRenamed({ userId: id, autonomousEnv: updated.autonomousEnv })
     return updated
   },
 

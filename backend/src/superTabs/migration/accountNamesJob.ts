@@ -1,12 +1,14 @@
 /**
  * Once, after the release that made a person's name in a Swarm follow their account's (personNames.ts nameFromAccount; anh Dee,
  * 2026-11-10): every Swarm's people take their accounts' names, so names chosen in a Swarm before show no longer. It runs in the
- * singleton worker a Swarm at a time with a pause between, logs only counts, tries again after a failure and stops once a pass
- * found nothing left to change. Two runners do no harm: each Swarm is read again in its own transaction, and a name that already
- * follows is not written. It can go with `chosenName`, from 2026-12-10.
+ * singleton worker a Swarm at a time, pausing after each write, logs only counts and the Swarms that failed, tries again after a
+ * failure and stops once a pass changed nothing and failed nowhere. A worker that starts again walks the Swarms once more (one read
+ * each, no write when nothing changed) until this goes, with `chosenName`, from 2026-12-10. Two runners do no harm: each Swarm is
+ * read again in its own transaction, and a name that already follows is not written.
  */
 import type { PrismaClient } from '@prisma/client'
 import { logger } from '../../utils/logger.js'
+import { SuperTabError } from '../model.js'
 import type { SuperTabStore } from '../store.js'
 import { sleeper, START_DELAY_MS } from './dropLegacyJob.js'
 
@@ -16,27 +18,31 @@ export const RETRY_MS = 3_600_000
 
 export interface AccountNamesPass { swarms: number; changed: number; failed: number }
 
-/** One pass over every live Swarm, in id order. */
+/** One pass over every live Swarm in parts, in id order. A raw match: Prisma's `deletedAt: null` misses a row that never had the
+ *  field, and a Swarm still in one row is split first (its split reads names as they are then). */
 export async function followAccountNamesOnce(db: PrismaClient, store: Pick<SuperTabStore, 'followAccountNames'>,
   { pause = async () => {}, signal }: { pause?: () => Promise<void>; signal?: AbortSignal } = {}): Promise<AccountNamesPass> {
   const pass: AccountNamesPass = { swarms: 0, changed: 0, failed: 0 }
   let after: string | undefined
   while (!signal?.aborted) {
-    const rows = await db.superTab.findMany({ where: { deletedAt: null, ...after ? { id: { gt: after } } : {} }, select: { id: true },
-      orderBy: { id: 'asc' }, take: PAGE })
-    for (const { id } of rows) {
+    const rows = await db.superTab.aggregateRaw({ pipeline: [{ $match: { format: 2, deletedAt: null, ...after ? { _id: { $gt: after } } : {} } },
+      { $sort: { _id: 1 } }, { $limit: PAGE }, { $project: { _id: 1 } }] }) as unknown as Array<{ _id: string }>
+    for (const { _id: id } of rows) {
       if (signal?.aborted) break
       try {
         const changed = await store.followAccountNames(id)
         pass.swarms++
-        if (typeof changed === 'number') pass.changed += changed
-      } catch {
+        if (typeof changed === 'number' && changed > 0) {
+          pass.changed += changed
+          await pause()
+        }
+      } catch (error) {
         pass.failed++
+        logger.warn('[account-names] a Swarm did not follow', { tabId: id, code: error instanceof SuperTabError ? error.code : 'unknown' })
       }
-      await pause()
     }
     if (rows.length < PAGE) break
-    after = rows.at(-1)!.id
+    after = rows.at(-1)!._id
   }
   return pass
 }

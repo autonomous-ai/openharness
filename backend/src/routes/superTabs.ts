@@ -320,7 +320,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // A rename in Machines reaches the Swarms the machine is in at once (MachineService.rename).
   onMachineRenamed(rename => store.machineRenamed(rename))
   // An account's rename: the person's name in each of their Swarms follows it (personNames.ts followAccountName).
-  onAccountRenamed(user => store.accountRenamed(user))
+  onAccountRenamed(rename => store.accountRenamed(rename))
   // Another account's sign-in on a computer moves the computer's Swarm entries to it (computerMoves.ts).
   onComputerSignedIn(signIn => store.computerSignedIn(signIn))
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })

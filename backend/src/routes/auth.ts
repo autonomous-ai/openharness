@@ -36,7 +36,6 @@ import { pub } from '../lib/bus.js'
 import { TEAM_CONVERSION_PROOF_MS, teamConversionMessage } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { parseAccountName } from '../lib/accountName.js'
-import { accountRenamed } from '../superTabs/accountRenames.js'
 
 /**
  * Whether [user] is the computer [computerId] itself, which alone may turn itself into a team machine
@@ -443,10 +442,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const parsed = parseAccountName(req.body?.name)
     if (!parsed.ok) return sendError(reply, parsed.message, parsed.code, 400)
     // A row gone since sign-in answers 404 (UserService.update's NotFoundError).
+    // The person's name in each of their Swarms follows it (UserService.update, superTabs/personNames.ts).
     const user = await userService.update(req.user!.sub, { name: parsed.name })
-    // The person's name in each of their Swarms follows it (superTabs/personNames.ts), before the answer, so their apps' next
-    // read shows it.
-    await accountRenamed(req.user!)
     return sendSuccess(reply, { user: userService.toPublic(user), avatarUrl: null, description: null })
   })
 }

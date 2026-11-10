@@ -1,4 +1,5 @@
 import { isRoleName } from './agentNames.js'
+import { printable } from './profile.js'
 import { reserved } from './buddies.js'
 import type { Author, Person, SuperTabState } from './model.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
@@ -22,11 +23,13 @@ export function nameRefusal(name: string): { code: 'INVALID_NAME' | 'NAME_RESERV
 }
 
 /** Makes [person]'s name in a Swarm their account's [accountName] (anh Dee, 2026-11-10: with no editor left, a person's name follows
- *  their account), or none when the account has none, so their username shows. A name they chose in the Swarm before is kept in
- *  `chosenName`, read by nothing. True when anything changed. */
+ *  their account), or none when the account has none or one a Swarm may not show (nameRefusal, hidden characters: an SSO or an
+ *  admin can set what Harness's own editor refuses), so their username shows. A name they chose in the Swarm before is kept in
+ *  `chosenName`, read by nobody. True when the stored person changed; one already showing that name is not written. */
 export function nameFromAccount(person: Person, accountName: string | null | undefined): boolean {
-  const name = accountName?.trim() || undefined
-  if (person.nameFollowsAccount && person.name === name) return false
+  const trimmed = accountName?.replace(/\s+/g, ' ').trim()
+  const name = trimmed && printable(trimmed) && !nameRefusal(trimmed) ? trimmed : undefined
+  if (person.name === name) return false
   if (!person.nameFollowsAccount && person.name !== undefined) person.chosenName = person.name
   person.nameFollowsAccount = true
   if (name === undefined) delete person.name
