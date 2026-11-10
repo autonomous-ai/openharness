@@ -25,9 +25,9 @@ import { exactTranscript, exactWorkspaces } from '../engines/kit/exactTranscript
 import { readSessionHeader } from '../engines/kit/sessionIdentity.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
-import { HERMES_HOMES, HERMES_HISTORY_ID_RE, HERMES_ID_SQL, HERMES_SOURCE, HERMES_SOURCE_SQL } from '../engines/hermes/contract.js'
+import { HERMES_CREATED_SOURCE_SQL, HERMES_HOMES, HERMES_HISTORY_ID_RE, HERMES_ID_SQL, HERMES_SOURCE, HERMES_SOURCE_SQL } from '../engines/hermes/contract.js'
 import { readStorePool } from '../engines/kit/storePool.js'
-import { isInteractiveSource } from '../engines/kit/storeSource.js'
+import { isInteractiveSource, rowSessionSource } from '../engines/kit/storeSource.js'
 import { museSessionIdentity, piSessionFolder, readPiHead } from '../engines/repairIdentities.js'
 import { PI_HEADER, PI_SESSION_ID } from '../engines/pi/contract.js'
 import { transcriptOf, processSessionOf as nativeProcessSession } from '../engines/identities.js'
@@ -408,6 +408,15 @@ async function storeSession(
   return found
 }
 
+/**
+ * How long a Hermes unified-runtime row may go without its creator before discovery stops waiting for it. A local
+ * CLI or TUI session's row is inserted with its creator in the same statement (hermes_state_local.py, `created_surface`),
+ * and a row an auxiliary-usage write created first is stamped by the creator's upsert when the session is created
+ * (hermes_state_sessions.py), so a real CLI session is not left unstamped past its creation. Not measured; 30s is a
+ * margin for a loaded machine, and a session that does stay unstamped is skipped after it, not bound.
+ */
+const HERMES_UNSTAMPED_GRACE_S = 30
+
 export async function findLiveSession(
   engine: AgentEngine,
   cwd: string,
@@ -514,14 +523,20 @@ export async function findLiveSession(
       // never rebind a profile agent after a restart (openharness#191). Each store is asked on its
       // own and the answers are pooled, so two homes claiming the same cwd is ambiguous — exactly as
       // two rows in one store already are — rather than "whichever home was listed first".
+      //
+      // Hermes 0.23's unified runtime keeps a CLI or TUI session as `source='local'` with its creator in
+      // `created_source` (contract.ts `HERMES_SOURCE`), a column a store from before it lacks, so each
+      // store is asked for it only when it has one.
       const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
-        sql: `SELECT ${HERMES_ID_SQL} AS id, ${HERMES_SOURCE_SQL} AS source, started_at, typeof(cwd) AS cwd_type,`
+        sql: columns => `SELECT ${HERMES_ID_SQL} AS id, ${HERMES_SOURCE_SQL} AS source, started_at, typeof(cwd) AS cwd_type,`
+          + (columns.has('created_source') ? ` ${HERMES_CREATED_SOURCE_SQL} AS created_source,` : '')
           + " CASE WHEN typeof(cwd) = 'text' AND length(CAST(cwd AS BLOB)) <= 4096 AND instr(CAST(cwd AS BLOB), x'00') = 0 THEN cwd END AS cwd"
           + ' FROM sessions LIMIT 8193;',
         params: [], maxRows: 8192, maxBuffer: 40 * 1024 * 1024,
         columns: ['id', 'source', 'cwd', 'started_at'], knownHome: opts?.hermesHome,
       })
       const candidates: RepairedSession[] = []
+      let pending = false
       for (const { home, aliases, row } of found) {
         // Editor/gateway rows may have no working directory; they cannot claim this process's cwd.
         if (row.cwd === null && row.cwd_type === 'null') continue
@@ -533,16 +548,29 @@ export async function findLiveSession(
           throw new IdentityReadUnavailable('a Hermes store contains invalid discovery evidence')
         }
         if (row.started_at < Math.trunc(sinceMs / 1000)) continue
-        if (typeof row.source !== 'string') throw new IdentityReadUnavailable('a Hermes session source is unavailable')
-        if (!isInteractiveSource(HERMES_SOURCE, row.source)) continue
+        const source = rowSessionSource(HERMES_SOURCE, row)
+        if (source !== null && typeof source !== 'string') throw new IdentityReadUnavailable('a Hermes session source is unavailable')
+        if (source !== null && !isInteractiveSource(HERMES_SOURCE, source)) continue
+        // An unstamped row is no pane's own until it is; one without a pane's id shape never will be.
+        if (source === null && (typeof row.id !== 'string' || !HERMES_SOURCE.id.test(row.id))) continue
         if (typeof row.id !== 'string' || !HERMES_HISTORY_ID_RE.test(row.id)) {
           throw new IdentityReadUnavailable('a Hermes store contains an invalid conversation id')
         }
         if (opts?.hermesHome && !aliases.includes(opts.hermesHome)) continue
         if (row.id === opts?.excludedSessionId) continue
+        // A creator not stamped yet may still be this process's CLI: no answer this pass, rather than
+        // binding a sibling while it is unknown, and the next pass reads the stamp. Only while the row is
+        // new: a row can stay unstamped for good (an auxiliary-usage insert writes 'unknown', and only the
+        // creator upsert, the managed-worker heal or the ancestor stamp repairs it), and one such row must
+        // not hold every later bind in its folder. Past the window it is no pane's own, as Hermes's own
+        // CLI and TUI listings never match it.
+        if (source === null) {
+          if (Date.now() / 1000 - row.started_at < HERMES_UNSTAMPED_GRACE_S) pending = true
+          continue
+        }
         candidates.push({ sessionId: row.id, hermesHome: opts?.hermesHome ?? home })
       }
-      return candidates.length === 1 ? candidates[0] : null
+      return !pending && candidates.length === 1 ? candidates[0] : null
     }
     case 'devin':
       // created_at is epoch SECONDS (integer).

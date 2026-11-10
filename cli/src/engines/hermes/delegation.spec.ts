@@ -120,4 +120,39 @@ describe('hermes sub-agent sessions are not agents of their own', () => {
     expect(await isHermesSubagentSession(join(dir, 'nope.db'), '20260805_111618_8e3027')).toBe(false)
     rmSync(dir, { recursive: true, force: true })
   })
+
+  const local = (n: number) => `local-${String(n).padStart(2, '0').repeat(32)}`
+
+  t('reads a Hermes 0.23 local row by the surface that created it, beside the old shapes', async () => {
+    // hermes_state_common.py `_source_match_clause`: source='local' is the CLI's or the TUI's when
+    // created_source says so; 'unknown' is the placeholder until the creator is stamped.
+    const dir = mkdtempSync(join(tmpdir(), 'hm-local-'))
+    const db = join(dir, 'state.db')
+    const rows: Array<[string, string, string | null]> = [
+      ['20260731_161017_999143', 'cli', null], // resumed from before the unified runtime: old id, old label
+      [local(1), 'local', 'cli'], [local(2), 'local', 'tui'], [local(3), 'local', 'acp'], [local(4), 'local', 'gui'],
+      [local(5), 'local', 'kanban'], [local(6), 'subagent', null], [local(7), 'local', 'unknown'], [local(8), 'local', null],
+    ]
+    execFileSync('sqlite3', [db, 'CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, created_source TEXT);'
+      + rows.map(([id, source, created]) => `INSERT INTO sessions VALUES ('${id}','${source}',${created === null ? 'NULL' : `'${created}'`});`).join('')])
+    expect(await hermesSessionSource(db, '20260731_161017_999143')).toBe('cli')
+    expect(await hermesSessionSource(db, local(1))).toBe('cli')
+    expect(await hermesSessionSource(db, local(2))).toBe('tui')
+    for (const n of [1, 2]) expect(await isHermesSubagentSession(db, local(n))).toBe(false)
+    for (const n of [3, 4, 5, 6]) expect(await isHermesSubagentSession(db, local(n))).toBe(true)
+    // Not stamped yet: the same "ask again shortly" as a row not written yet.
+    for (const n of [7, 8, 9]) expect(await hermesSessionSource(db, local(n))).toBeNull()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  t('reads a store without created_source as before: a local row is no pane\'s own', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hm-legacy-'))
+    const db = join(dir, 'state.db')
+    execFileSync('sqlite3', [db, 'CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL);'
+      + `INSERT INTO sessions VALUES ('20260731_161017_999143','cli');INSERT INTO sessions VALUES ('${local(1)}','local');`])
+    expect(await hermesSessionSource(db, '20260731_161017_999143')).toBe('cli')
+    expect(await hermesSessionSource(db, local(1))).toBe('local')
+    expect(await isHermesSubagentSession(db, local(1))).toBe(true)
+    rmSync(dir, { recursive: true, force: true })
+  })
 })
