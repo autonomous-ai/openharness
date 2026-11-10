@@ -132,11 +132,11 @@ const RULES: Rule[] = [
   { kind: 'password', group: 1, accept: value => secretValue(value.replace(/[.!?:]+$/, '')) && value.replace(/[.!?:]+$/, '').length,
     pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])${KEY}${ASSIGN}([^\s"'\x60<>()[\]{}$%&,;\\]{12,})`, 'dgi') },
   // A bare Harness join or link token (sharing.ts: 32 random bytes as base64url, 43 characters), with no label to find it by
-  // (task #3595: one was logged in #2480). Last, so a token a rule above knows keeps its own kind. Upper case, lower case and
-  // digits all in it: a commit id is hex, a message id 24 hex, a UUID has dashes in fixed places. Never a segment of a dotted
-  // token or a path, nor inside base64; a sentence may end right after it.
-  { kind: 'link-token', accept: token => /[A-Z]/.test(token) && /[a-z]/.test(token) && /\d/.test(token) && entropy(token) >= 3.5,
-    pattern: /(?<![A-Za-z0-9_\-+/.])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_\-+/=]|\.[A-Za-z0-9_-])/dg },
+  // (task #3595: one was logged in #2480). Last, so a token a rule above knows keeps its own kind. Random as the generic rules
+  // judge it (secretValue), so a 43-character identifier made of words is not one. Never a segment of a dotted token or a path,
+  // nor inside base64; a sentence may end right after it, and a percent-encoded link's `%3D` may come right before it.
+  { kind: 'link-token', accept: token => secretValue(token, 43, true),
+    pattern: /(?:(?<![A-Za-z0-9_\-+/.])|(?<=%3[Dd]))[A-Za-z0-9_-]{43}(?![A-Za-z0-9_\-+/=]|\.[A-Za-z0-9_-])/dg },
 ]
 
 /** Private keys first, by hand: a block may be cut off before its END line, and then its base64 lines still go. */

@@ -39,7 +39,7 @@ const fake = {
   pem: (kind = 'RSA PRIVATE') => [`-----BEGIN ${kind} KEY-----`, noise(64, B64, 21), noise(64, B64, 22), `${noise(20, B64, 23)}==`, `-----END ${kind} KEY-----`].join('\n'),
   password: () => `Fx${noise(16, ALNUM, 24)}`,
   // A Harness join or link token (sharing.ts): 32 random bytes as base64url, 43 characters.
-  linkToken: () => `Aa1${noise(40, B64URL, 29)}`,
+  linkToken: () => noise(43, B64URL, 29),
 }
 
 describe('findCredentials: every kind it removes', () => {
