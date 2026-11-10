@@ -140,9 +140,9 @@ async function start(): Promise<void> {
     // A Swarm its jobs delete closes its observer sockets, on any instance (store.ts accessChanged).
     accessChanged: tabId => { void publishSwarmAccessChanged(tabId) } })
   stopSweeps = startSwarmSweeps(prisma)
-  // The collections of what Swarm v4 removed, the Leads conversations through the store's own write, and the dead old state of
-  // migrated Swarms, go by themselves, a few rows at a time (superTabs/migration/dropLegacyJob.ts).
-  stopLegacyDrop = startLegacyDrop(prisma, swarms)
+  // The collections of what Swarm v4 removed and the dead old state of migrated Swarms go by themselves, a few rows at a time
+  // (superTabs/migration/dropLegacyJob.ts).
+  stopLegacyDrop = startLegacyDrop(prisma)
   // Once after this release: each Swarm's people take their accounts' names (superTabs/migration/accountNamesJob.ts).
   stopAccountNames = startAccountNames(prisma, swarms)
   // Once after this release: Harness Team accounts' machines leave every Swarm, and their account rows go

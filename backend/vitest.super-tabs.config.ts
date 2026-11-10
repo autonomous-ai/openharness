@@ -18,7 +18,6 @@ export default defineConfig({ test: {
     'integration/superTabProfile.test.ts',
     'integration/superTabLegacyDrop.test.ts',
     'integration/superTabCollectionDrop.test.ts',
-    'integration/superTabLeadsDrop.test.ts',
     'integration/shareRaces.test.ts',
     'integration/superTabIndexes.test.ts',
     'integration/superTabHotReads.test.ts',

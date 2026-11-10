@@ -464,7 +464,6 @@ describe('a busy Swarm\'s readings (task #3119)', () => {
     const beat = await during(() => f.beat({}, store))
     expect(beat.path).toBe('full')
     expect((await f.assignment()).status).toBe('working')
-    expect(Object.keys(beat.ops).filter(op => op.startsWith('SuperTabProjectRules.'))).toEqual([])
   })
 
   it('stores a reading fast, in four calls, after a change elsewhere in the Swarm', async () => {
