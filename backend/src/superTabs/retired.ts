@@ -59,6 +59,10 @@ export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; s
  *  logged, and the route's body limit bounds it as it does every command. */
 export const retiredCommandSchemas = RETIRED_COMMANDS.map(type => z.object({ type: z.literal(type) }))
 
+/** A person's Tasks feed as it reads empty: reset, so a Desktop that restored the rows it saved drops them. Sent in place of the
+ *  feed on a person's first load and change polls, and as the feed's own read; goes with the reads below, not before 2026-12-10. */
+export const NO_PERSONAL_TASKS = { approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null } as const
+
 /** Reads of Swarm v1-v3 that an older Desktop, phone or host still makes, each with the empty answer it takes as "nothing here".
  *  As a retired command's, one constant answer for everyone, whatever Swarm and query it names: nothing is read, so nothing is
  *  shown that the caller may not see. Each goes with this file's commands, not before 2026-12-09. */
@@ -74,7 +78,7 @@ export const RETIRED_READS: Readonly<Record<string, object>> = {
   '/api/super-tabs/:tabId/threads': { unread: [], read: [], more: false },
   '/api/super-tabs/:tabId/inbox': { threads: [], latest: [], more: false },
   // Personal tasks (2026-11-10): an older Desktop's and phone's own tasks, now the project's GitHub issues.
-  '/api/super-tabs/:tabId/personal-tasks': { approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null },
+  '/api/super-tabs/:tabId/personal-tasks': NO_PERSONAL_TASKS,
 }
 
 /** An older Desktop's catch-up of a chat since its mark (GET .../conversations/:conversationId/catch-up?after=N): nothing missed,

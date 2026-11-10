@@ -41,7 +41,6 @@ export const GROUP_FIELDS = {
     'projectId',
     'proposal',
     'reviewOf',
-    'taskApproval',
   ],
   whenRunning: [
     'assignment.execution',
@@ -103,6 +102,7 @@ export const GROUP_FIELDS = {
     'stepUp',
     'stuck',
     'talkedAt',
+    'taskApproval',
     'teamWritten',
     'teamWrittenBy',
     'unlinkedPullRequests',

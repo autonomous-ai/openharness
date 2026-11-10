@@ -185,10 +185,8 @@ export function applyProposalAction(state: SuperTabState, actor: Actor, command:
     if (command.decision === 'no') card.archived = true
     row(`${command.decision}: ${command.reason}`, { kind: 'proposal-decision', decision: command.decision })
   } else {
-    if (card.taskApproval) fail('TASK_APPROVAL_REQUIRED', 'Keep Review proposals separate so each person’s decision and chosen agent stay attached.', 409)
     pending(card)
     const target = namedCard(state, actor, command.intoConversationId)
-    if (target.taskApproval) fail('TASK_APPROVAL_REQUIRED', 'Keep Review proposals separate so each person’s decision and chosen agent stay attached.', 409)
     pending(target)
     if (target.id === card.id) fail('PROPOSAL_MERGE_SELF', 'Merge another proposal into this card.', 400)
     if (hasOpenQuestion(card)) fail('PROPOSAL_QUESTION_OPEN', 'Answer the source card’s questions before merging.', 409)

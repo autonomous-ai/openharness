@@ -79,7 +79,6 @@ const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS)
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional(), period: z.enum(PERIODS).optional(), scope: z.literal('all').optional() }).strict()
   .refine(query => query.week === undefined || query.period === undefined, 'Ask for a week or a period, not both.')
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
-/** An older page of the person's Tasks feed (task #4203): the `olderCursor` a first load or an earlier page gave. */
 const groupParams = tabParams.extend({ conversationId: id })
 const hostChangesQuery = z.object({ cursor: cursor.optional(), full: z.literal('1').optional() }).strict()
 const etag = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)

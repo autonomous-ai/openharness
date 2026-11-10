@@ -157,6 +157,9 @@ export function projectsOf(state: SuperTabState): SwarmProject[] {
   }]
 }
 
+/** Whether [group] is a project's own chat (its channel). */
+export const isProjectChat = (state: SuperTabState, group: Conversation): boolean => projectsOf(state).some(project => project.leadConversationId === group.id)
+
 export function projectOf(state: SuperTabState, projectId: string): SwarmProject {
   return projectsOf(state).find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
 }

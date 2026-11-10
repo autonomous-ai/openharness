@@ -149,6 +149,8 @@ interface ReadMeta {
 /** GET /api/super-tabs/:tabId/parts[?asAgentId=] */
 export interface FirstLoad extends ReadMeta {
   tabId: string
+  /** A person's Tasks feed, always empty since Swarm v4 (retired.ts NO_PERSONAL_TASKS); absent for agent readers. */
+  personalTasks?: typeof import('../retired.js').NO_PERSONAL_TASKS
   /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App; never now. */
   githubApp?: true
   /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
@@ -180,6 +182,8 @@ export interface MachineReading { key: string; version: number; receivedAt: numb
 /** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
 export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
+  /** As a first load's: the empty Tasks feed. */
+  personalTasks?: typeof import('../retired.js').NO_PERSONAL_TASKS
   reload: false
   head: LivePart<HeadView> | null
   members: PartChange<MemberView>[]

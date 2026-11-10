@@ -10,7 +10,6 @@ import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { githubRelaySchema, relayGitHub } from './githubRelay.js'
-import { requireCanChat, requirePriorityRight } from './boardRights.js'
 import { keepUsernames, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, nameFromAccount } from './personNames.js'
 import { z } from 'zod'
@@ -47,7 +46,7 @@ import { bindPullRequestCards, bindTaskCard } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
 import { namedDefault } from './catalog.js'
-import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
+import { BUILT_IN_ROLE_DEFAULTS, NO_PROJECT, inChannelOf, isProjectChat, isAgentChat, agentProjectId, groupRepositoryUrl, canReadAgent, canReadProject, deletableProject, deleteProject, markConfidential, onTeamAccount, ownsProject, admitPerson, dismissPeople, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectAgent, projectMembers, projectOf, projectsOf, readAgent, readConversation, readProject, sameProject, sharedWithLeads, withRoleDefaults, type SwarmProject, PROJECT_STATUS_MAX } from './projects.js'
 import { recordClosing } from './closedAgents.js'
 import { declinedWith, declinedWithout } from './sharing.js'
 import { actorLabel, memberChanges, memberRowText, quotedName } from './memberRows.js'
@@ -829,7 +828,6 @@ export function worksInProjectChat(state: SuperTabState, group: Conversation, ag
  *  to an upload is not a yes to the post that sends it: that asks again, of the Swarm as it is then. */
 export function postable(state: SuperTabState, actor: Actor, conversationId: string): { group: Conversation; joining: string | null } {
   const group = open(state, conversationId)
-  requireCanChat(state, actor, group)
   if (actor.kind !== 'agent' || group.agentIds.includes(actor.agentId)) return { group, joining: null }
   if (projectAgent(state, actor, groupProject(state, group).id) && worksInProjectChat(state, group, actor.agentId)) return { group, joining: null }
   if (!joinsProject(state, group, actor.agentId) && !joinsChannel(state, group, actor.agentId)) {
@@ -2403,8 +2401,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A private chat is no task of its own, so it carries no priority (taskPriority.ts).
       const prioritized = !command.audience
       if (command.priority && !prioritized) fail('PRIORITY_TASK_ONLY', 'Only a task has a priority: leave it out of a private chat.', 400)
-      // In a switched project a person's P0, or a task for someone else, needs a right (boardRights.ts, task #3819).
-      if (command.priority) requirePriorityRight(state, actor, project, command.priority, command.requesterId ?? undefined)
       // A hotfix jumps every queue, so of the agents only the PM marks one (River, task #3117).
       if (command.priority === 'P0' && actor.kind === 'agent' && ledProject(state, actor.agentId)?.id !== project.id) {
         fail('PRIORITY_P0', 'Only the PM or a person sets P0. Give this task P1, P2 or P3.', 403)
@@ -2627,7 +2623,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A new PM's first request is its person's first line in their chat with it (Swarm v4: only agents post in the channel).
       if (command.initialMessage) {
         if (actor.kind !== 'person') fail('FORBIDDEN', 'Only a person can record their initial launch request.', 403)
-        requireCanChat(state, actor, group)
         message(pmChat ?? group.id, command.initialMessage)
       }
       // A Product Manager started on its person's own Mac says, as one the Swarm starts does (leadJoined), when it does not
@@ -3592,7 +3587,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'message.edit':
       // `command` is the cleaned one (withoutCredentials): the store writes this text, never the one it was sent.
-      requireCanChat(state, actor, open(state, command.conversationId))
       result.changed = editMessage(open(state, command.conversationId), actor, command.messageId, command.text, context.messageChange)
       if (result.changed) effects.messageEdit = { messageId: command.messageId, text: command.text }
       break
@@ -3759,7 +3753,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
       if (command.answers) effects.messages.at(-1)!.answers = command.answers
       // Whom a stuck line in a task tags, with its requester (stuck.ts, task #3915).
-      if (actor.kind === 'person' && !command.agentOnly && !group.kind && !group.audience && !projectsOf(state).some(p => p.leadConversationId === group.id)) noteWriter(group, actor.userId)
+      if (actor.kind === 'person' && !command.agentOnly && !group.kind && !group.audience && !isProjectChat(state, group)) noteWriter(group, actor.userId)
       // After the post is marked: the crew need is the server's row for the PM, never a post of its own.
       if (pmInstead && routedTags.length) {
         crewNeed(group, pmInstead, { personIds: routedTags, messageId: operationId, conversationId: group.id }, text)
@@ -3810,7 +3804,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const target = agent(state, delivery.agentId)
       if (command.resolution === 'resend') {
         open(state, group.id)
-        requireCanChat(state, actor, group)
         if (!group.agentIds.includes(target.id)) fail('INVALID_RECIPIENT', 'This agent is no longer in the conversation.', 400)
         message(group.id, delivery.text, [target.id], delivery.messageId, SYSTEM_ROW, delivery.attachments)
       } else {

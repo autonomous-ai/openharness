@@ -35,8 +35,10 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-describe('Can chat, through the store', () => {
-  it('refuses an upload and a message into a switched project\'s chat from a member without it, and takes them once granted', async () => {
+// Swarm v4 retired the Board settings (2026-11-10): nobody can change them now, so a project switched before holds its chat to
+// nobody's Can chat, or its people would be shut out for good.
+describe('a project switched to the Board before Swarm v4, through the store', () => {
+  it('takes an upload and a message into its chat from a member it never granted Can chat', async () => {
     const store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
     const tab = (await store.create(owner, randomUUID(), 'Board', 'public')).id
     const execute = (command: Command, user = owner) => store.execute(user, tab, { operationId: randomUUID(), command })
@@ -46,12 +48,7 @@ describe('Can chat, through the store', () => {
     const upload = () => store.upload(peer, tab, web.conversationId, { name: 'plan.txt', mime: 'text/plain', body: Readable.from([Buffer.from('plan')]) })
     const say = () => execute({ type: 'message.send', conversationId: web.conversationId, text: 'Hello', replyTo: null, recipientIds: [] }, peer)
 
-    // Not switched: as today.
-    await upload()
-    await storeBoardSettings(db, tab, web.projectId, { boardMode: true })
-    await expect(upload()).rejects.toMatchObject({ code: 'CHAT_NOT_ALLOWED', status: 403 })
-    await expect(say()).rejects.toMatchObject({ code: 'CHAT_NOT_ALLOWED', status: 403 })
-    await storeBoardSettings(db, tab, web.projectId, { boardMode: true, canChat: [peer.sub] })
+    await storeBoardSettings(db, tab, web.projectId, { boardMode: true, canChat: [] })
     await upload()
     await say()
   })
