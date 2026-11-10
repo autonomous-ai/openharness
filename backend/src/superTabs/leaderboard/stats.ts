@@ -70,7 +70,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const generations = new Map(state.people.map(p => [p.id, p.generation]))
   // An idle v3 Regular agent and a Swarm Buddy have no project; visibility is resolved by the caller.
   const agentProjects = new Set([...projectIds, NO_PROJECT])
-  const agentsBy = weeklyOrg ? byKey(visibleAgents.filter(a => !a.teamAccount && !a.buddySession
+  const agentsBy = weeklyOrg ? byKey(visibleAgents.filter(a => !a.buddySession
     && generations.get(a.contributorId) === a.membershipGeneration
     && agentProjects.has(agentProjectId(state, a))), a => a.contributorId) : new Map<string, Agent[]>()
   const answersBy = byKey(visible.flatMap(group => (group.ledger?.unblocks ?? []).map(unblock => ({ ...unblock, group }))), u => u.personId)
@@ -97,7 +97,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
       lent: [...machines].sort((a, b) => b.busyMs - a.busyMs).slice(0, DETAILS_LIMIT)
         .map(m => ({ machineName: m.name, busyHours: Math.round(m.busyMs / HOUR_MS * 10) / 10 })),
       // The weekly board counts agents instead of presenting machine/subscription contributions.
-      brought: weeklyOrg ? [] : broughtMachines(state, machinesBy.get(personId) ?? [], visibleMachines, shippedRequests, span, lentOf).slice(0, DETAILS_LIMIT),
+      brought: weeklyOrg ? [] : broughtMachines(state, machinesBy.get(personId) ?? [], shippedRequests, span, lentOf).slice(0, DETAILS_LIMIT),
     }
     return {
       points,

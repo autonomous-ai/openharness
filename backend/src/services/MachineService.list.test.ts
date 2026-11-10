@@ -151,21 +151,23 @@ describe('listForUser — a remote machine\'s presence', () => {
   })
 })
 
-// One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's team machine names the Mac it lives on, so a list
-// can show that Mac once. Only a team machine names one; a row that is no longer a team machine names none.
-describe('listForUser — the Mac a team machine lives on', () => {
+// Harness Team accounts are gone (anh Dee, 2026-11-10): a machine a Team account's daemon served is never listed, so no
+// app or daemon shows it or counts it among the person's machines. A row a computer sign-in took over is the person's.
+describe("listForUser — a Harness Team account's machine", () => {
   beforeEach(() => {
-    findMany.mockImplementation(async ({ where }: { where: Where }) => [
+    findMany.mockImplementation(async (args: Parameters<typeof answer>[1]) => answer([
       { ...base, machineId: 'laptop', userId: 'u1', sessionKind: 'computer' },
       { ...base, machineId: 'laptop-team', userId: 'u1', sessionKind: 'team', hostMachineId: 'laptop' },
       { ...base, machineId: 'mini', userId: 'u1', sessionKind: 'team' },
       { ...base, machineId: 'taken-over', userId: 'u1', sessionKind: 'computer', hostMachineId: 'laptop' },
-    ].filter((r) => matches(r, where)))
+      { ...base, machineId: 'older', userId: 'u1' },
+    ], args))
   })
 
-  it('is returned for a team machine on a Mac, and null for every other machine', async () => {
-    const hosts = Object.fromEntries((await machineService.listForUser('u1')).map((m) => [m.machineId, m.hostMachineId]))
-    expect(hosts).toEqual({ laptop: null, 'laptop-team': 'laptop', mini: null, 'taken-over': null })
+  it('is left out; every other machine is listed, naming no Mac', async () => {
+    const listed = await machineService.listForUser('u1')
+    expect(listed.map((m) => m.machineId).sort()).toEqual(['laptop', 'older', 'taken-over'])
+    expect(listed.map((m) => m.hostMachineId)).toEqual([null, null, null])
   })
 })
 
@@ -177,7 +179,7 @@ describe('listForUser — what it reads', () => {
     ...base,
     id: 'obj-1', machineId: 'm-full', userId: 'u1', apiKey: API_KEY, managerId: 'mgr-1', computerId: 'cmp-1',
     workspaceId: 'ws-1', planId: 'plan-1', autonomousEnv: 'prod', authMode: 'remote', billingStatus: 'active',
-    name: 'Studio', hostname: 'studio.local', sessionKind: 'team', hostMachineId: 'm-host', credentialCiphertext: 'secret',
+    name: 'Studio', hostname: 'studio.local', sessionKind: 'computer', hostMachineId: 'm-host', credentialCiphertext: 'secret',
     externalSubscriptionId: 'sub-1', createdAt: new Date('2026-03-01'),
   }
 
@@ -193,7 +195,7 @@ describe('listForUser — what it reads', () => {
       machineId: 'm-full', computerId: 'cmp-1', workspaceId: 'ws-1', planId: 'plan-1', autonomousEnv: 'prod',
       authMode: 'remote', planName: 'Remote', billingStatus: 'active', createdAt: new Date('2026-03-01'),
       status: 'running', agentCount: 3, engine: 'claude', name: 'Studio', hostname: 'studio.local',
-      sessionKind: 'team', hostMachineId: 'm-host',
+      sessionKind: 'computer', hostMachineId: null,
     })
     expect(JSON.stringify(machine)).not.toContain(API_KEY)
   })

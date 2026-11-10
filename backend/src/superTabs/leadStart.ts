@@ -1,9 +1,9 @@
 /** A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B), as a Buddy's start is
  *  (buddies.ts): recorded on the machine's contribution and launched by its host. Its person names the machine, which is their
- *  own computer: Swarm v3 starts no agent on another person's computer and none in a Team account (task #4120). Desktop's
+ *  own computer: Swarm v3 starts no agent on another person's computer (task #4120). Desktop's
  *  own-machine flow (project.create, a local start, agent.add) is unchanged. */
-import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, NOT_YOUR_COMPUTER, projectFolder, projectsOnMachine, teamAccountPool,
-  noRepositoryStart, TEAM_ACCOUNTS_GONE, type ContributedMachine } from './machines.js'
+import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, NOT_YOUR_COMPUTER, projectFolder,
+  noRepositoryStart, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { BUILT_IN_ROLE_DEFAULTS, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
@@ -35,7 +35,7 @@ export interface LeadContext {
 
 /** Efforts a Product Manager never runs at (task #3022, Ken 11-05): it keeps what people teach it only when it thinks hard
  *  enough to. Claude's and Codex's names below high. */
-const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
+export const BELOW_LEAD_EFFORT = new Set(['none', 'minimal', 'low', 'medium'])
 /** The effort a Product Manager gets when its start or switch names a model and no effort. */
 export const LEAD_EFFORT = 'high'
 
@@ -61,19 +61,13 @@ function admitLead(state: SuperTabState, project: SwarmProject, pool: Contribute
     fail('ENGINE_NOT_OFFERED', `${LEAD_ENGINES[start.engine as keyof typeof LEAD_ENGINES] ?? start.engine} isn’t offered on ${pool.name}.`, 403)
   }
   admitMachineStart(state, start, context.now, undefined, project)
-  // Its Team account will serve only this project (machines.ts productManagerOn), so not one running another's work now.
-  if (teamAccountPool(pool) && [...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)) {
-    fail('TEAM_ACCOUNT_BUSY', `The Harness Team account on ${pool.name} runs other projects' agents, so it cannot host this ${coordinatorNameOf(project)} now.`, 409)
-  }
   if (!pool.observation?.capabilities?.includes(LEAD_CAPABILITY)) {
     fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${coordinatorNameOf(project)} there.`, 409)
   }
 }
 
 /** Where [project]'s Product Manager with [request]'s engine runs when its person names [machineId], as its start request; or
- *  throws why it cannot run there now. Writes nothing. The machine itself for its own owner; on another person's Mac, its
- *  Harness Team account when that admits this Product Manager with this engine now, else the Mac itself, as its owner,
- *  unless the Mac was added as its person joined. A Team account named itself keeps its rules and is refused with its reason.
+ *  throws why it cannot run there now. Writes nothing. Only on its person's own computer.
  */
 export function leadHost(state: SuperTabState, project: SwarmProject, machineId: string, request: LeadRequest, leadFor: AgentStartRequest['leadFor'],
   context: LeadContext): AgentStartRequest {
@@ -85,9 +79,8 @@ export function leadHost(state: SuperTabState, project: SwarmProject, machineId:
   const startIn = (pool: ContributedMachine): AgentStartRequest => noRepositoryStart(pool, project, { conversationId: project.leadConversationId, machineId: pool.machineId,
     engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: coordinatorNameOf(project),
     cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
-  // A PM starts only on its person's own computer, as them, and never in a Team account (task #4120, the PM's ruling): the
-  // person starting it is [leadFor]'s, else the project's owner.
-  if (teamAccountPool(named)) failTeamWork(TEAM_ACCOUNTS_GONE)
+  // A PM starts only on its person's own computer, as them (task #4120, the PM's ruling): the person starting it is
+  // [leadFor]'s, else the project's owner.
   if (named.contributorId !== (leadFor?.personId ?? project.ownerId)) failTeamWork({ code: 'NOT_YOUR_COMPUTER', reason: NOT_YOUR_COMPUTER })
   const start = startIn(named)
   admitLead(state, project, named, start, context)

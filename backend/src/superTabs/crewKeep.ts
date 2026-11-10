@@ -11,25 +11,15 @@ import { activeWork, actorKey, stableId, type Agent, type AgentStart, type Agent
 import { isBuddy } from './buddies.js'
 import { isCrew } from './crew.js'
 import { roleNameOf } from './instructions.js'
-import { AGENT_MEMORY_BYTES, MACHINE_FRESH_MS, projectFolder, type ContributedMachine } from './machines.js'
-import { agentProjectId, groupProject, onTeamAccount, projectsOf, teamAccountPool } from './projects.js'
+import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
+import { agentProjectId, groupProject, projectsOf } from './projects.js'
 import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { groupsOf, idleSince } from './tidy.js'
 import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, QUOTA_FLOOR_PERCENT, QUOTA_FLOOR_PM_PERCENT, SLEEP_IDLE_MS, UNSTABLE_STOPS, UNSTABLE_WINDOW_MS } from './crewRules.js'
 
-/** What a Harness Team account says of an engine that spends its Mac owner's subscription through the owner's relay: the
- *  allowance is that subscription's, read on the Mac. The same sentence as cli superTabs/capacity.ts RELAYED_QUOTA, which
- *  writes it. */
-const RELAYED_QUOTA = "This account runs on its owner's subscription; its allowance is read on the owner's machine."
-
-/** The engine's quota reading for [pool]: its own, or for a Team account that spends its Mac's subscription, the Mac's. */
-function quotaOf(state: SuperTabState, pool: ContributedMachine, engine: string, now: number) {
-  const own = pool.observation?.quotas.find(q => q.engine === engine)
-  if (own?.known || !pool.hostMachineId || pool.observation?.quotaReasons?.[engine] !== RELAYED_QUOTA) return own
-  const mac = state.machines?.find(m => m.machineId === pool.hostMachineId && m.contributorId === pool.contributorId)
-  return mac?.observation && now - mac.observation.receivedAt <= MACHINE_FRESH_MS ? mac.observation.quotas.find(q => q.engine === engine) : own
-}
+/** The engine's quota reading for [pool]. */
+const quotaOf = (pool: ContributedMachine, engine: string) => pool.observation?.quotas.find(q => q.engine === engine)
 
 function resetMs(value: string | number | null): number | null {
   if (typeof value === 'number') return value > 1e10 ? value : value * 1000
@@ -89,7 +79,7 @@ export function crewTrouble(state: SuperTabState, pool: ContributedMachine | nul
   const reading = pool?.observation
   if (!pool || !reading || now - reading.receivedAt > MOVE_OFFLINE_MS) return 'offline'
   if (reading.readiness?.engines?.find(e => e.engine === engine)?.signedIn === false) return 'signed-out'
-  const quota = quotaOf(state, pool, engine, now)
+  const quota = quotaOf(pool, engine)
   if (quota?.known && quota.windows.some(w => {
     if (!(w.usedPercent >= 100)) return false
     const back = resetMs(w.resetsAt)
@@ -106,13 +96,12 @@ export function crewTrouble(state: SuperTabState, pool: ContributedMachine | nul
 }
 
 /** Whether a project's coordinator runs on [pool]'s account for [engine]: its weekly quota is the PM's, so a crew member leaves it
- *  sooner. An account is a machine (a Team account's machine counts with the Mac that hosts it). */
+ *  sooner. An account is a machine. */
 function runsPm(state: SuperTabState, pool: ContributedMachine, engine: string): boolean {
   return state.conversations.some(c => {
     const lead = c.leadId ? state.agents.find(a => a.id === c.leadId) : undefined
     if (!lead || lead.configuration.engine !== engine) return false
-    const home = state.machines?.find(m => m.machineId === lead.machineId)
-    return lead.machineId === pool.machineId || (!!pool.hostMachineId && pool.hostMachineId === lead.machineId) || (!!home?.hostMachineId && home.hostMachineId === pool.machineId)
+    return lead.machineId === pool.machineId
   })
 }
 
@@ -122,34 +111,32 @@ const unstable = (agent: Agent, now: number): boolean => (agent.stops ?? []).fil
 /** The fallback machines for [agent], best first, in the route's order: the same account kind as the machine it leaves, then
  *  the account whose weekly quota resets soonest, then the most left, then the fewest agents working, then by name. Only
  *  machines with no trouble that admit its start. */
-/** Whether [agent]'s work must stay in Harness Team accounts, as an agent.start's must (audit H2; security review of #3229):
- *  it runs in one, or it is in a Team-written task or step. Its project's chat is its coordinator's and does not count. */
+/** Whether [agent]'s work may not move, as an agent.start's may not (audit H2; security review of #3229): it is in a
+ *  Team-written task or step. Its project's chat is its coordinator's and does not count. */
 export function teamOnly(state: SuperTabState, agent: Agent): boolean {
   const chats = new Set(projectsOf(state).map(p => p.leadConversationId))
-  return onTeamAccount(state, agent) || groupsOf(state, agent).some(g => !chats.has(g.id) && teamWrittenTask(state, g))
+  return groupsOf(state, agent).some(g => !chats.has(g.id) && teamWrittenTask(state, g))
 }
 
 export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps: CrewDeps): ContributedMachine[] {
-  const from = standingPool(state, agent.machineId)
-  const team = teamOnly(state, agent), kind = onTeamAccount(state, agent)
+  const team = teamOnly(state, agent)
   const engine = agent.configuration.engine
   // A crew Reviewer goes nowhere a no-Reviewer rule refuses its reviews (review of #3964): any role the review steps take as a
   // Reviewer's (reviewerPick.ts), its crew role or else its role name.
   const reviews = /review/i.test(agent.crew?.role ?? roleNameOf(state, agent))
   const projectId = agentProjectId(state, agent)
   const rules = projectId ? deps.machineRules?.(projectId) ?? [] : []
-  const weekly = (pool: ContributedMachine) => quotaOf(state, pool, engine, now)?.windows.find(w => w.name === 'weekly')
+  const weekly = (pool: ContributedMachine) => quotaOf(pool, engine)?.windows.find(w => w.name === 'weekly')
   const working = (pool: ContributedMachine) => state.agents.filter(a => a.machineId === pool.machineId && hasWork(state, a)).length
   const key = (pool: ContributedMachine): Array<number | string> => {
     const w = weekly(pool)
-    return [teamAccountPool(pool) === teamAccountPool(from) ? 0 : 1, (w && resetMs(w.resetsAt)) ?? Number.MAX_SAFE_INTEGER,
+    return [(w && resetMs(w.resetsAt)) ?? Number.MAX_SAFE_INTEGER,
       w ? w.usedPercent : 100, working(pool), pool.name]
   }
   return (state.machines ?? [])
-    // The same account kind only (security review 2 of #3229): a Team member's work stays in Team accounts, and a main-account
-    // member never brings its own-account work into one. A machine that just refused its start waits.
-    .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId) && (!team || teamAccountPool(pool))
-      && teamAccountPool(pool) === kind && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS)
+    // Team-written work stays where it is (security review 2 of #3229). A machine that just refused its start waits.
+    .filter(pool => !team && pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId)
+      && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS)
       && !machineRuleRefusal(rules, { machineId: pool.machineId, engine, review: reviews }, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
     .sort((a, b) => { for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return a.key[i]! < b.key[i]! ? -1 : 1; return 0 })
@@ -181,9 +168,7 @@ export function crewKeep(state: SuperTabState, now: number, deps: CrewDeps): Cre
       if (!agent.asleep.folderDropped && now - agent.asleep.since >= FOLDER_ASLEEP_MS) actions.push({ kind: 'dropFolder', agentId: agent.id, why: 'asleep-7d' })
       continue
     }
-    // On a Team account the only close deletes the session's own data (inCore/agents.ts ended), so a wake could not resume it
-    // in place: such a member is kept awake until a close that keeps it exists (security review 2 of #3229).
-    if (hasWork(state, agent) || onTeamAccount(state, agent)) continue
+    if (hasWork(state, agent)) continue
     const since = idleSince(agent, groupsOf(state, agent))
     if (since !== undefined && now - since >= SLEEP_IDLE_MS) actions.push({ kind: 'sleep', agentId: agent.id })
   }

@@ -8,7 +8,7 @@ const user = { sub: owner.userId, email: owner.email } as AuthUser
 const lookups = { people: [{ id: owner.userId, email: owner.email }], confidential: new Set<string>(), agentGrant: async () => {} }
 
 // No task resumes after a usage limit since Swarm v4 (work.resume answers as retired, 2026-11-10). An older host still reads the
-// row's `resume` and, when it names a task, asks for it back and types a continue into the session (cli superTabs/limitResume.ts):
+// row's `resume` and, when it names a task, asks for it back and types a continue into the session (cli superTabs/limitResume.ts, gone from the CLI since #3864):
 // the field stays, always null, until 2026-12-09.
 describe('a host row\'s resume', () => {
   it('is null even for a task its agent lost to a usage limit with a reset time, as a Swarm from before stores one', async () => {

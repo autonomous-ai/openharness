@@ -65,7 +65,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     active: state.conversations.some(c => !c.archived && c.agentIds.includes(target.id)),
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
     // No task resumes after a usage limit since Swarm v4 (work.resume is retired, 2026-11-10): an older host still reads the
-    // field (cli superTabs/limitResume.ts), so it stays, always empty, until 2026-12-09.
+    // field (cli superTabs/limitResume.ts, gone from the CLI since #3864), so it stays, always empty, until 2026-12-09.
     resume: null,
     agent: target,
     ...(buddySleepManaged(state, target) ? { buddySleepManaged: true as const } : {}),

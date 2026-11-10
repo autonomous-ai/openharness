@@ -251,7 +251,7 @@ extension _ManageMachines on _SuperTabMachinesState {
                 padding: MachinesStyle.side,
                 children: [
                   if (_ids.isEmpty)
-                    _stateNote(MachinesStyle.headerInset)!
+                    _stateNote()!
                   else if (machines.isEmpty)
                     Padding(
                       padding: MachinesStyle.headerInset,
@@ -272,7 +272,7 @@ extension _ManageMachines on _SuperTabMachinesState {
   }
 }
 
-/// Fixed columns in Manage; the compact sidebar keeps its separate row anatomy.
+/// One machine's line in Manage, in fixed columns.
 class _ManageMachineLine extends StatelessWidget {
   const _ManageMachineLine({
     required this.view,
@@ -301,8 +301,9 @@ class _ManageMachineLine extends StatelessWidget {
     final age = view.readingAt == null ? null : now.difference(view.readingAt!);
     final metadata = [
       local ? 'This machine' : view.owner?.shownName ?? 'Owner unavailable',
-      if (view.problem != null)
-        view.problem!
+      // Removed from the Swarm: its folders are being deleted (Remove from Swarm).
+      if (view.cleaning)
+        'Cleaning up'
       else if (group != 'online')
         'last seen ${age == null ? 'unknown' : superTabAgo(age)}',
     ].join(' · ');
@@ -396,7 +397,7 @@ class _ManageMachineLine extends StatelessWidget {
                                       ' · ${view.id.length > 8 ? view.id.substring(0, 8) : view.id}${port == null ? '' : ' · port $port'}',
                                   style: MachinesStyle.identity(),
                                 ),
-                                if (view.problem != null || group != 'online')
+                                if (view.cleaning || group != 'online')
                                   TextSpan(
                                     text: metadata.substring(
                                       'This machine'.length,
@@ -414,13 +415,21 @@ class _ManageMachineLine extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 12),
+              // Every row the same width, so the figures stay aligned; a larger text size widens them all alike.
               SizedBox(
-                width: narrow ? 112 : 150,
+                width: MediaQuery.textScalerOf(context)
+                    .scale(narrow ? 112 : 150),
                 child: _MachineDisk(view: view),
               ),
               const SizedBox(width: 12),
               // Reserve the column even when the menu is hidden so hover never moves disk values.
-              SizedBox(width: 32, child: _MachineMore(onOpen: onMore)),
+              SizedBox(
+                width: 32,
+                child: _MachineMore(
+                  key: ValueKey('super-machine-more-${view.id}'),
+                  onOpen: onMore,
+                ),
+              ),
             ],
           );
         },

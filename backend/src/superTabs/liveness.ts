@@ -10,6 +10,7 @@ import { leadOf, toLead } from './terminal.js'
 import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
 import { staleModelRequests, staleSwitches } from './tidy.js'
+import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
@@ -280,38 +281,20 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 
 /** The time checks, run on any machine's report once per Swarm sweep: every start dispatched over 3 minutes ago that is not running
  *  fails, unless its machine is still preparing it; a Product Manager switch nobody answered, a model request nobody answered and a
- *  removed confidential session whose data is not deleted say so once. Swarm v4 loses no task and nudges no worker. */
+ *  removed confidential session whose data is not deleted say so once; a PM on another account of its machine is moved back to
+ *  the default one (pmAccount.ts). Swarm v4 loses no task and nudges no worker. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...failStalledStarts(state, now), ...unpurged(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now)]
+  const drafts = [...failStalledStarts(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now), ...pmsToDefaultAccount(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts
 }
 
-/** How long a removed confidential session's data may take to be deleted in its Team account before the Swarm says so. */
-export const PURGE_NOTICE_MS = 15 * 60_000
-
-/** What its project's conversation hears of a removed confidential session [unpurged] still holds on [machine]. */
+/** What a project's conversation heard, before Harness Team accounts went, of a removed confidential session still held on
+ *  [machine]: written by nothing now; store.ts still hides the machine of the stored ones from a Buddy. */
 export const unpurgedNotice = (machine: string) =>
   `The saved session of a removed agent that held people's private chats, on ${machine}, is not deleted yet, so its Harness Team account takes no other project's work until it is.`
 
-/** A removed confidential session whose host has not confirmed its data deleted (commands.ts removeAgent `heldFor`): its
- *  Team account keeps serving only its project, and its project's conversation hears once, or the Swarm's first one when
- *  its project went with it. Its host keeps trying (cli superTabs/host.ts endSession). */
-function unpurged(state: SuperTabState, now: number): MessageDraft[] {
-  const owner = state.people.find(p => p.id === state.ownerId)
-  return (state.closingSessions ?? []).flatMap(closing => {
-    if (!closing.heldFor || closing.noticed || closing.since === undefined || now - closing.since <= PURGE_NOTICE_MS || !owner) return []
-    closing.noticed = true
-    const project = projectsOf(state).find(p => p.id === closing.heldFor) ?? projectsOf(state)[0]
-    if (!project || !state.conversations.some(c => c.id === project.leadConversationId)) return []
-    // Its source names the machine, so a Buddy reading this conversation reads it without (store.ts withoutMachineNames).
-    const machine = state.machines?.find(m => m.machineId === closing.machineId)?.name
-    return [{ id: stableId('unpurged', closing.agentId, closing.harnessId), conversationId: project.leadConversationId, replyTo: null, recipients: [],
-      author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
-      text: unpurgedNotice(machine ?? machineName(state, closing.machineId)), source: machine ? { kind: 'system', machine } : { kind: 'system' } }]
-  })
-}
 
 
 /** A task whose agent has reported nothing itself (a status, check or post) this long is quiet, and its Lead is woken to act

@@ -143,9 +143,8 @@ describe('the head of the list when the move is placed (review of #3229, River)'
 })
 
 describe('a take-over marks nothing Team-written (security review of #3229, Curlew3)', () => {
-  it('a Team member moved to another Team machine joins its old conversations without marking them', () => {
-    const team = (pool: ReturnType<typeof machine>) => ({ ...pool, hostMachineId: `${pool.machineId}-mac` }) as typeof pool
-    const f = fixture([team(machine('mac', { signedIn: false })), team(machine('mini'))])
+  it('a moved member joins its old conversations without marking them', () => {
+    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
     f.state = run(f.state, { type: 'conversation.create', title: 'Talk', brief: 'A chat it was in', checks: [] } as Command, 'talk', NOW - 3_600_000)
     const talk = f.state.conversations.find(c => c.title === 'Talk')!
     talk.agentIds.push(f.ada.id)
