@@ -44,6 +44,19 @@ describe('agent browser settings', () => {
     expect(() => parseSettings(null, current)).toThrow(/settings/)
   })
 
+  it('parseSettings rejects a field of the wrong type, too long, empty or too many languages', () => {
+    const current = defaultSettings(host)
+    const raw = { ...withProxy, proxy: { ...withProxy.proxy } }
+    expect(() => parseSettings({ ...raw, humanInput: 'yes' }, current)).toThrow(/humanInput/)
+    expect(() => parseSettings({ ...raw, timeZone: 7 }, current)).toThrow(/timeZone/)
+    expect(() => parseSettings({ ...raw, languages: ['vi-VN'] }, current)).toThrow(/languages/)
+    expect(() => parseSettings({ ...raw, languages: 'en,'.repeat(70) + 'en' }, current)).toThrow(/languages/)
+    expect(() => parseSettings({ ...raw, languages: Array(11).fill('en').join(',') }, current)).toThrow(/languages/)
+    expect(() => parseSettings({ ...raw, device: { gpuVendor: ' ', gpuRenderer: 'y', cpuCores: 8, memoryGb: 8 } }, current)).toThrow(
+      /device\.gpuVendor/,
+    )
+  })
+
   it('saving without a password keeps the stored one', () => {
     const { password: _password, ...proxy } = withProxy.proxy!
     const saved = parseSettings({ ...withProxy, proxy: { ...proxy, passwordSet: true } }, withProxy)

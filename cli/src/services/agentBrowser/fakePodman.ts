@@ -10,7 +10,6 @@ import { join } from 'node:path'
 
 /** Each fake's script path: whether it was removed, and its children still running. */
 const fakes = new Map<string, { removed: boolean; running: Set<ChildProcess> }>()
-let tracking = false
 
 /**
  * node:child_process for a spec that starts fakes, installed with
@@ -20,9 +19,8 @@ let tracking = false
  * after the spec ended, and its teardown deleted the fake's folder under a running fake (CI, 2026-11-10).
  */
 export function trackingFakes(real: typeof ChildProcesses): typeof ChildProcesses {
-  tracking = true
-  const started = <T extends (...args: never[]) => ChildProcess>(start: T): T => ((file: string, args: unknown, ...rest: unknown[]) => {
-    const fake = [file, ...(Array.isArray(args) ? args as string[] : [])].map(arg => fakes.get(arg)).find(Boolean)
+  const started = <T extends (...args: never[]) => ChildProcess>(start: T): T => ((file: string, args: string[], ...rest: unknown[]) => {
+    const fake = [file, ...args].map(arg => fakes.get(arg)).find(Boolean)
     if (fake?.removed) throw Object.assign(new Error(`spawn ${file} ENOENT: the fake podman was removed`), { code: 'ENOENT' })
     const child = (start as unknown as (...all: unknown[]) => ChildProcess)(file, args, ...rest)
     // A child that failed to start has no pid and never exits.
@@ -76,7 +74,6 @@ setTimeout(() => {
 `
 
 export function fakePodman(): FakePodman {
-  if (!tracking) throw new Error('mock node:child_process with trackingFakes before starting a fake podman')
   const dir = mkdtempSync(join(tmpdir(), 'fake-podman-'))
   const path = join(dir, 'podman')
   const fake = { removed: false, running: new Set<ChildProcess>() }

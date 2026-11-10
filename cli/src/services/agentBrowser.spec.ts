@@ -260,6 +260,8 @@ describe('the agent browser service', () => {
     port.attached(session('a1'))
     port.stopped('a1')
     port.deleted('a1')
+    // The core's browser streams listen on every port; on win32 no browser ever closes its viewers.
+    port.onCloseViewers(() => expect.unreachable())
     expect(port.frameContext('a1')).toBeUndefined()
     expect(port.streamCommand('a1')).toEqual({ error: 'NO_BROWSER' })
     expect(fake.calls()).toEqual([])
