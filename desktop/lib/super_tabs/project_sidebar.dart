@@ -18,6 +18,7 @@ import 'attention.dart';
 import 'controller.dart';
 import 'delete_agent.dart';
 import 'buddies.dart';
+import 'buddy_chat.dart' show countText;
 import 'model.dart';
 import 'my_agents.dart';
 import 'personal_agents.dart';
@@ -318,12 +319,19 @@ class ProjectSidebar extends StatelessWidget {
         : badge == 1
         ? '1 tag'
         : '$badge tags';
+    // Swarm v4: how many posts are new in the project's channel, its agents'
+    // among them (anh Dee 2026-11-09: "i dont see any agent to agent chat"),
+    // while the name stays bold for people and tags alone.
+    final fresh = board && project != null && !selected
+        ? controller.unreadCount(group)
+        : 0;
     return _drawRow(
       group,
       project: project,
       key: key,
       selected: selected,
       unread: unread,
+      fresh: fresh,
       badge: badge,
       badgeTooltip: badgeTooltip,
       buddyChat: reading?.buddyChat,
@@ -339,6 +347,7 @@ class ProjectSidebar extends StatelessWidget {
     String? key,
     required bool selected,
     required bool unread,
+    int fresh = 0,
     int badge = 0,
     String? badgeTooltip,
     SuperTabConversation? buddyChat,
@@ -453,6 +462,22 @@ class ProjectSidebar extends StatelessWidget {
                                             style: style,
                                           ),
                                   ),
+                                  if (fresh > 0 && !muted) ...[
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '${countText(fresh)} new',
+                                      key: ValueKey('super-new-${group.id}'),
+                                      maxLines: 1,
+                                      style:
+                                          DesktopChrome.metadata(
+                                            color: grid.SidebarInk.inkMuted,
+                                          ).copyWith(
+                                            fontFeatures: const [
+                                              FontFeature.tabularFigures(),
+                                            ],
+                                          ),
+                                    ),
+                                  ],
                                   if (badge > 0) ...[
                                     const SizedBox(width: 8),
                                     Semantics(
