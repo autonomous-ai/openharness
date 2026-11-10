@@ -544,9 +544,8 @@ export class SuperTabHost {
   /** Each delivery's last claim: the list row it came from, the backend's answer and when, and whether the core refused its
    *  write (`refused`). A refused one is written again from this, and claimed again only after HELD_RECLAIM_MS. Freed once the
    *  delivery leaves its list or the journal, and once a write is no longer refused. */
-  private readonly claims = new Map<string, { delivery: Json; result: Json; claimedAt: number; refused: boolean }>()
-  /** The deliveries a busy agent's pane refused, by id, and when each is tried again if no end of its turn is heard. */
-  private readonly heldBusy = new Map<string, number>()
+  /** Each delivery's claim; `busyUntil` while its busy agent's pane refused it (`heard`), when it is tried again regardless. */
+  private readonly claims = new Map<string, { delivery: Json; result: Json; claimedAt: number; refused: boolean; busyUntil?: number }>()
   /** Each of this machine's thread sessions, by `tabId:agentId`: when it last did anything, since when its terminal is gone,
    *  and its end once asked of the backend. */
   private readonly threadSessions = new Map<string, { activeAt: number; seenAt: number; missingSince?: number; ending?: 'idle' | 'stopped'
@@ -1993,6 +1992,8 @@ export class SuperTabHost {
       this.authorized.delete(id)
       const active = this.active.delete(id)
       if (entry.stage === 'prepared') entry.harnessId = target.agent.harnessId
+      const moved = this.claims.get(deliveryId)
+      if (moved) delete moved.busyUntil
       else if (entry.stage === 'submitting') {
         entry.stage = 'uncertain'
         entry.receipt = 'The member changed terminals before native submission was confirmed. Inspect the earlier session before retrying.'
@@ -2020,11 +2021,14 @@ export class SuperTabHost {
       await this.leases()
       return false
     }
-    // Its busy agent refused it: it waits for the agent's turn to end (`turnEnded`), or BUSY_HOLD_MS when no end is heard.
-    if ((this.heldBusy.get(deliveryId) ?? 0) > this.now()) return false
-    this.heldBusy.delete(deliveryId)
     // A write the pane refused is tried again with the claim it holds, and claimed again only every HELD_RECLAIM_MS.
     const kept = this.claims.get(deliveryId)
+    // Its busy agent's pane refused it: it waits while the core says the agent works (from memory; nothing is written), until its
+    // turn ends (`turnEnded`), and BUSY_HOLD_MS at most. The end can come before the refusal, and a pane can look busy a moment after.
+    if (kept?.busyUntil !== undefined) {
+      if (this.now() < kept.busyUntil && await this.working(entry.harnessId)) return false
+      delete kept.busyUntil
+    }
     const reuse = kept?.refused && this.now() - kept.claimedAt < HELD_RECLAIM_MS
     const result = reuse ? kept.result : object(await backend(this.core, 'POST', `${path}/${deliveryId}`, { type: 'claim', claimId: entry.claimId }))
     // The receipt check may have retired this held entry while the claim was in flight.
@@ -2499,14 +2503,6 @@ export class SuperTabHost {
   }
 
   /** Says why the core keeps holding this delivery: once in the log per change of reason, and once to the conversation after 30 s. */
-  /** [harnessId]'s turn ended: what its busy pane refused is tried at the next tick. */
-  private turnEnded(harnessId: string): void {
-    for (const deliveryId of this.heldBusy.keys()) {
-      const entry = this.journal.entries[deliveryId]
-      if (!entry || entry.harnessId === harnessId) this.heldBusy.delete(deliveryId)
-    }
-  }
-
   private reportWithheld(entry: Entry, reason: string): void {
     const now = this.now()
     const reading = this.withheld.record(entry.deliveryId, reason, now)
@@ -2517,6 +2513,11 @@ export class SuperTabHost {
     backend(this.core, 'POST', path, { type: 'hold', claimId: entry.claimId, reason: noticeReason(reason) })
       .then(() => this.withheld.noticed(entry.deliveryId))
       .catch(error => this.log(error instanceof Error ? error.message : String(error)))
+  }
+
+  /** [harnessId]'s turn ended: what its busy pane refused is tried at the next tick. */
+  private turnEnded(harnessId: string): void {
+    for (const [deliveryId, claim] of this.claims) if (this.journal.entries[deliveryId]?.harnessId === harnessId) delete claim.busyUntil
   }
 
   private heard(event: TurnDelivery): void {
@@ -2533,9 +2534,11 @@ export class SuperTabHost {
       // expired authority). A later fresh check may retry the same claim safely.
       entry.stage = 'prepared'
       delete entry.receipt
-      if (claim) claim.refused = true
-      // The pane is not idle: its agent works (engines/kit/screen.ts teamHold).
-      if (event.reason === 'team_waiting_idle') this.heldBusy.set(entry.deliveryId, this.now() + BUSY_HOLD_MS)
+      if (claim) {
+        claim.refused = true
+        // The pane is not idle: its agent works (engines/kit/screen.ts teamHold).
+        if (event.reason === 'team_waiting_idle') claim.busyUntil = this.now() + BUSY_HOLD_MS
+      }
       this.reportWithheld(entry, event.reason)
     } else {
       this.claims.delete(entry.deliveryId)
