@@ -35,8 +35,8 @@ export interface HistoryDeps {
   /** Line counts, and the explicit inline compatibility path's pages. Isolated readers own their indexes. */
   pages: Pick<TranscriptPager, 'page' | 'lineCount'>
   readerFor: (engine: string) => EngineTranscript | undefined
-  /** The database engines' stores. */
-  dbs: { opencode: string; kilo: string; devin: string }
+  /** The database engines' stores. OpenClaw's is the state folder of the session's own TUI (lib/openclawStore.ts). */
+  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number }) => Promise<string | null> }
   /** Hermes keeps a store per profile: the one this session's lives in. */
   hermesDb: (session: RegisteredSession) => Promise<string>
 }
@@ -109,13 +109,20 @@ function databasePage<M>(
 
 export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFor }: HistoryDeps) {
   // Devin, OpenCode and Kilo keep one store on this machine. Hermes keeps one per HOME, so its path is
-  // the session's own (`hermesDb`) rather than this machine's default.
+  // the session's own (`hermesDb`) rather than this machine's default, and OpenClaw's is its TUI's state folder.
   // Each store's reader, replay and window are the engine's own code, loaded in this process (engines/inProcess.ts).
   const databases = new Map<string, (s: RegisteredSession) => Promise<DatabasePage | null>>([
     ['devin', async () => { const m = await loadEngine('devin'); return m && databasePage((s) => m.readDevinMessages(dbs.devin, s.sessionId), m.devinMessagesToEvents, m.windowDevinMessages) }],
     ['hermes', async () => { const m = await loadEngine('hermes'); return m && databasePage(async (s) => m.readHermesMessages(await hermesDb(s), s.sessionId), m.hermesMessagesToEvents, m.windowHermesMessages) }],
     ['opencode', async () => { const m = await loadEngine('opencode'); return m && databasePage((s) => m.readOpencodeMessages(dbs.opencode, s.sessionId), m.opencodeMessagesToEvents, m.windowOpencodeMessages) }],
     ['kilo', async () => { const m = await loadEngine('kilo'); return m && databasePage((s) => m.readKiloMessages(dbs.kilo, s.sessionId), m.kiloMessagesToEvents, m.windowKiloMessages) }],
+    ['openclaw', async () => {
+      const m = await loadEngine('openclaw')
+      return m && databasePage(async (s) => {
+        const db = await dbs.openclaw(s.sessionId, { pid: s.processIdentity?.pid ?? 0 })
+        return db ? m.readOpenclawHistory(db, s.sessionId) : []
+      }, m.openclawMessagesToEvents, m.windowOpenclawEvents)
+    }],
   ])
   /** A conversation with nothing to show: no transcript yet, or its engine's code could not be loaded. */
   const emptyPage = (s: RegisteredSession, sessionId: string): Record<string, unknown> => ({

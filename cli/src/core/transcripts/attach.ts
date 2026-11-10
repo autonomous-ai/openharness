@@ -44,7 +44,7 @@ export interface AttachDeps {
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'add'>
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
   device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
-  runtimeProfiles: Pick<RuntimeProfileManager, 'transcriptFields' | 'hydrate' | 'ingestConfig' | 'capturePane'> & {
+  runtimeProfiles: Pick<RuntimeProfileManager, 'transcriptFields' | 'hydrate' | 'ingest' | 'ingestConfig' | 'capturePane'> & {
     beginHydrate(session: RegisteredSession): ProfileHydration
     ingestPane(session: RegisteredSession, text: string, silent?: boolean): boolean | Promise<boolean>
   }
@@ -54,8 +54,8 @@ export interface AttachDeps {
   questionWatcher: Pick<QuestionWatcher, 'start'>
   /** How a session's terminal is named in the log. */
   terminalLabel: (session: RegisteredSession) => string
-  /** The database engines' stores. */
-  dbs: { opencode: string; kilo: string; devin: string }
+  /** The database engines' stores. OpenClaw's is the state folder of the session's own TUI (lib/openclawStore.ts). */
+  dbs: { opencode: string; kilo: string; devin: string; openclaw: (key: string, pane: { pid: number }) => Promise<string | null> }
   devinHome: string
   /** Hermes keeps a store per profile: the one this session's lives in. */
   hermesDb: (session: RegisteredSession) => Promise<string>
@@ -79,6 +79,7 @@ export function createAttach({
   const {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
     grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, ompNormalizers, hermesReaders, devinReaders, commandcodeNormalizers,
+    openclawReaders,
   } = normalizers
   const sideRead = createSideReads()
   const readerLoads = createReaderLoads(readerLoadWaitMs)
@@ -434,6 +435,28 @@ export function createAttach({
       })
       kiloReaders.set(session.sessionId, reader)
       await reader.start()
+    } else if (engine('openclaw')) {
+      // OpenClaw has no transcript file either: its Gateway writes every row to the agent database under the state
+      // folder its TUI holds open. Polled like OpenCode's; the window's header names the workspace OpenClaw's tools
+      // run in, shown on the agent as a label.
+      const db = await dbs.openclaw(session.sessionId, { pid: session.processIdentity?.pid ?? 0 })
+      if (!current()) return false
+      if (!db) {
+        console.warn(`[openclaw] ${sid(session.sessionId)} not an OpenClaw session key · not read`)
+        return true
+      }
+      const live = new (engine('openclaw')!).OpenclawLive({
+        db,
+        key: session.sessionId,
+        onEvents: (events) => emit(session.sessionId, events),
+        onHeader: (record) => { runtimeProfiles.ingest(session, JSON.stringify(record), true) },
+        onFatal: (reason) => console.warn(`[openclaw] ${sid(session.sessionId)} ${reason === 'unsupported'
+          ? 'This OpenClaw version is not supported yet.' : 'OpenClaw needs Node 24.'}`),
+      })
+      openclawReaders.set(session.sessionId, live)
+      await live.start()
+      // The footer names the model and thinking level; read it now rather than at the next pane poll.
+      await runtimeProfiles.capturePane(session, captureTerminal, 60, true)
     } else if (engine('muse')) {
       // Same JSONL tail as claude/pi; only the record shape differs.
       const normalizer = new (engine('muse')!).MuseNormalizer()

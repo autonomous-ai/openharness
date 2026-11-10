@@ -11,6 +11,8 @@ import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
+import { OPENCLAW_COLUMNS } from '../engines/openclaw/contract.js'
+import { openclawSessionDb } from './openclawStore.js'
 import { findResumedTranscript } from './sessionRepair.js'
 
 export class SessionCheckpointError extends Error {
@@ -21,7 +23,8 @@ export class SessionCheckpointError extends Error {
  * read-only connection; never copy an incomplete .db or replace an engine's shared store. */
 async function databaseHistory(s: RegisteredSession): Promise<Record<string, unknown>> {
   let database: string
-  let selections: [string, string][]
+  /** Table, filter, and the columns when not all of them. */
+  let selections: [string, string, string?][]
   switch (s.engine) {
     case 'opencode': case 'kilo':
       database = s.engine === 'opencode' ? join(env.OPENCODE_DATA_DIR, 'opencode.db') : join(env.KILO_DATA_DIR, 'kilo.db')
@@ -36,6 +39,17 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
       database = join(env.DEVIN_HOME, 'sessions.db')
       selections = [['sessions', 'id = ?'], ['message_nodes', 'session_id = ?']]
       break
+    case 'openclaw': {
+      const found = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0 })
+      if (!found) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+      database = found
+      // Every window the key has had, with each row as the reader reads it. A compressed row is kept as hex: JSON has
+      // no bytes.
+      const events = OPENCLAW_COLUMNS.transcript_events.map((column) => column === 'event_zstd' ? 'hex(event_zstd) AS event_zstd_hex' : column).join(', ')
+      selections = [['session_nodes', 'session_key = ?'], ['session_windows', 'session_key = ?'],
+        ['transcript_events', 'session_id IN (SELECT session_id FROM session_windows WHERE session_key = ?)', events]]
+      break
+    }
     default: throw new SessionCheckpointError('This engine has no supported history checkpoint yet. The session is still open.')
   }
   // OpenCode 2 keeps a conversation in `session_v2` and `session_message`; the v1 tables stay in the same file with
@@ -48,8 +62,8 @@ async function databaseHistory(s: RegisteredSession): Promise<Record<string, unk
     if (held?.rows.length) selections = [['session_v2', 'id = ?'], ['session_message', 'session_id = ?']]
   }
   const tables: Record<string, unknown[]> = {}
-  for (const [table, where] of selections) {
-    const result = await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId])
+  for (const [table, where, columns = '*'] of selections) {
+    const result = await sqliteReadAll(database, `SELECT ${columns} FROM ${table} WHERE ${where};`, [s.sessionId])
     if (!result.ok || (table === selections[0][0] && result.rows.length !== 1)) {
       throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
     }

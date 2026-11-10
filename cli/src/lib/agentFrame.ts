@@ -90,6 +90,8 @@ export type AgentFrame = {
   terminal: { available: boolean; primary: string; runtimes: RegisteredSession['runtimes'] }
   engine: RegisteredSession['engine']
   selectedModel: string | null
+  /** The folder the engine's own tools run in when it is not the pane's (OpenClaw's workspace); absent when none. */
+  workspace?: string
   grid: GridFrameBlock | null
   codexHome: string | null
   /** The Claude profile folder (CLAUDE_CONFIG_DIR) this agent launched against; absent or null for the default account. */
@@ -181,6 +183,8 @@ export interface AgentFrameContext {
   activity?: () => ActivityFrame | null
   /** The runtime profile's answer for this session, or null when there is none. */
   selectedModel: string | null
+  /** The engine's own workspace, from its runtime profile; absent or null when it has none. */
+  workspace?: string | null
   /** `registry.terminalAvailable(agentId)` — the caller already holds the registry. */
   terminalAvailable: boolean
   tokenUsage?: AgentTokenUsage | null
@@ -233,7 +237,7 @@ const gitContexts = new SessionGitContextReader()
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, browser }: AgentFrameContext,
+  { selectedModel, workspace, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation, waitingFor, browser }: AgentFrameContext,
 ): Promise<AgentFrame> {
   // The git context is git's own display projection and keeps reading git directly; the frame's
   // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
@@ -275,6 +279,9 @@ export async function agentFrame(
     terminal: { available: terminalAvailable, primary: s.primaryRuntimeKey, runtimes: s.runtimes },
     engine: s.engine,
     selectedModel,
+    // A label for OpenClaw, whose tools run in its own workspace rather than the pane's folder. Absent means no
+    // label: no other engine has one, and clients show nothing without it.
+    ...(workspace ? { workspace } : {}),
     // Where this agent's inference actually goes, so a client can tell which agents a newly picked
     // grid has left behind. Read off the live process by discovery; carries no credential. Null is
     // a real answer ("on no grid") and must be sent as one — omitting the key would make every push

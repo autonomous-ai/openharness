@@ -28,7 +28,7 @@
  "cursor · cursor": [true,true,true,true],
  "not moved · claudeMoved": [false,false],
  "not moved · codexMoved": [false,false],
- "keeps a file": {"claude":true,"codex":true,"cursor":true,"pi":true,"opencode":false,"kilo":false,"hermes":false,"devin":false,"terminal":false}
+ "keeps a file": {"claude":true,"codex":true,"cursor":true,"pi":true,"opencode":false,"kilo":false,"hermes":false,"devin":false,"openclaw":false,"terminal":false}
 },
 "find": {
  "resumed · default homes · claude · aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa": "<root>/claude/projects/-work-a/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",

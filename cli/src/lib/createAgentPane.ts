@@ -30,6 +30,7 @@ const DEFAULT_MAX_ATTEMPTS = 3
 export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> {
   tmuxBackend: Pick<TerminalBackend<Ref>, 'create' | 'kill'>
   registry: { openPendingAgent: (input: {
+    agentId?: string
     nativeToken?: string
     engine: AgentEngine
     runtimes: TerminalRuntimeRef[]
@@ -57,6 +58,8 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
     browser?: boolean
   }) => RegisteredSession | null }
   nativeToken?: string
+  /** The agent id the row gets, chosen before the pane so its argv can name it (OpenClaw's session key). */
+  agentId?: string
   engine: AgentEngine
   cwd?: string | null
   bypassPermission?: boolean
@@ -144,6 +147,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
     }
     const pending = deps.registry.openPendingAgent({
+      ...(deps.agentId ? { agentId: deps.agentId } : {}),
       ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
       engine: deps.engine,
       runtimes: [spawned.runtime],

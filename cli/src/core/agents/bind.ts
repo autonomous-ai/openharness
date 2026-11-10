@@ -10,6 +10,7 @@ import { stat } from 'node:fs/promises'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
+import { OPENCLAW_HEADER, OPENCLAW_HEADER_URL, OPENCLAW_LOOPBACK } from '../../engines/openclaw/contract.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
@@ -33,6 +34,16 @@ const REPAIR_RETRY_MS = 60_000
  *  FIRST message: the pane answers while web and device show nothing. So keep sweeping for a while first,
  *  then settle into the slow rhythm for processes that will never resolve. */
 const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
+
+/** Decision 4 of the OpenClaw design: a TUI attached to a Gateway on another host writes nothing to this machine. */
+const OPENCLAW_REMOTE = 'This OpenClaw runs on another machine.'
+
+/** The last match of a multiline pattern: after `/new` the old title can still be in the scrollback above the new one. */
+function lastMatch(pattern: RegExp, text: string): string | null {
+  let found: string | null = null
+  for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) found = match[1]
+  return found
+}
 
 /** Birth time of a transcript in ms, or 0 when it cannot be read (treated as "not newer than the agent").
  *  A filesystem that keeps no birth time reports 0 for it: the change time, then the write time, stand in. */
@@ -70,11 +81,13 @@ export interface BindDeps {
   homes: { copilot: string; grok: string; agy: string }
   /** One owner per conversation, stopped harnesses included (conversationOwners.ts). */
   owners?: Pick<ConversationOwners, 'settle'>
+  /** The agent's pane as it shows now, or null when it cannot be read: OpenClaw's TUI names its session nowhere else. */
+  capturePane: (agentId: string) => Promise<string | null>
 }
 
 export function createBinding({
   registry, mirror, forgetSession, clients, attachSession, announceSession, stoppedAgents, syncRecapPool,
-  input, deviceInput, homes, owners,
+  input, deviceInput, homes, owners, capturePane,
 }: BindDeps) {
   /**
    * Forks whose engine session has not reported in yet, agentId → the SOURCE's sessionId. A fork's tile
@@ -283,6 +296,43 @@ export function createBinding({
     // The switch leaves exactly one trace — the `inuse.<pid>.lock` Copilot takes on the new session
     // directory. It writes nothing to the transcript and fires no hook until the next prompt.
     if (agent.resumeOnly && agent.launch && agent.launch.state !== 'ready') return
+    if (observed.engine === 'openclaw') {
+      // The TUI renames its process to a bare `openclaw`, so its session is read off its header, on every pass: `/new`
+      // moves a running pane to a new key, and the new key becomes the agent's session. A key that existed before the
+      // process (`main`, a resume) is the pane's all the same, so nothing is compared with the process's start. A key
+      // another agent holds stays that agent's: two panes on `main` share one conversation, and the first keeps it.
+      const screen = await read(() => capturePane(agent.agentId))
+      const shown = screen?.value
+      if (!shown || !current()) return
+      const key = lastMatch(OPENCLAW_HEADER, shown)
+      const url = lastMatch(OPENCLAW_HEADER_URL, shown)
+      if (url && !OPENCLAW_LOOPBACK.test(url)) {
+        if (registry.setIdentityHold(agent.agentId, OPENCLAW_REMOTE)) {
+          console.log(`[discovery] ${sid(agent.agentId)} openclaw · ${OPENCLAW_REMOTE}`)
+          announceSession(agent)
+        }
+        return
+      }
+      if (agent.identityHold === OPENCLAW_REMOTE && registry.setIdentityHold(agent.agentId, undefined)) announceSession(agent)
+      if (!key || key === agent.sessionId || isRecentlyDeleted(key)) return
+      const owner = registry.bySession(key)
+      if (owner && owner.agentId !== agent.agentId) return
+      const moved = !!agent.sessionId
+      const bound = commit({
+        engine: 'openclaw',
+        sessionId: key,
+        cwd: observed.cwd,
+        source: moved ? 'openclaw-new' : 'openclaw-header',
+        runtimes: observed.runtimes,
+        primaryRuntimeKey: observed.primaryRuntimeKey,
+        processIdentity: observed.processIdentity,
+        hookEvent: moved ? 'OpenclawNew' : 'OpenclawHeader',
+      })
+      if (!bound?.isNew) return
+      followRegistered(bound.entry, bound)
+      console.log(`[discovery] ${moved ? `${sid(agent.agentId)} openclaw session moved ${sid(agent.sessionId)} → ` : 'bound openclaw session '}${sid(key)} via ${observed.primaryRuntimeKey}`)
+      return
+    }
     if (agent.sessionId) {
       if (observed.engine === 'copilot') {
         const process = await read(() => processSessionOf('copilot', homes.copilot, observed.processIdentity.pid))

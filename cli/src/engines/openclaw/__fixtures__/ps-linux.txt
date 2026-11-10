@@ -1,0 +1,32 @@
+# OpenClaw 2026.11.2, node:24-bookworm (Linux), TUI started as: openclaw tui --session main (pane folder /work/proj)
+$ ps -o pid,ppid,comm,args -p 7714
+  PID  PPID COMMAND         COMMAND
+ 7714  7712 openclaw        openclaw
+$ tr "\0" " " < /proc/7714/cmdline
+openclaw
+$ readlink /proc/7714/cwd
+/work/proj
+$ ls -l /proc/7714/fd | grep sqlite  (fd -> target, mode)
+21 -> /root/.openclaw/state/openclaw.sqlite lr-x------
+26 -> /root/.openclaw/state/openclaw-quarantine.sqlite lr-x------
+31 -> /root/.openclaw/state/openclaw.sqlite lr-x------
+32 -> /root/.openclaw/state/openclaw.sqlite-wal lrwx------
+33 -> /root/.openclaw/state/openclaw.sqlite-shm lrwx------
+38 -> /root/.openclaw/state/openclaw.sqlite lrwx------
+39 -> /root/.openclaw/state/openclaw.sqlite-wal lrwx------
+
+# Gateway process (holds the agent DB; the TUI does not)
+$ ps -o pid,ppid,comm,args -p 1080
+  PID  PPID COMMAND         COMMAND
+ 1080  1078 openclaw-gatewa openclaw-gateway
+$ ls -l /proc/1080/fd | grep -oE "/root/.openclaw/[^ ]*sqlite[^ ]*" | sort | uniq -c
+     13 /root/.openclaw/agents/main/agent/openclaw-agent.sqlite
+      1 /root/.openclaw/agents/main/agent/openclaw-agent.sqlite-shm
+      9 /root/.openclaw/agents/main/agent/openclaw-agent.sqlite-wal
+      1 /root/.openclaw/agents/main/agent/openclaw-agent.sqlite.memory-reindex-69777291-b25d-4273-828e-9740b433ad22
+      1 /root/.openclaw/state/openclaw-quarantine.sqlite
+     11 /root/.openclaw/state/openclaw.sqlite
+      1 /root/.openclaw/state/openclaw.sqlite-shm
+      7 /root/.openclaw/state/openclaw.sqlite-wal
+      2 /root/.openclaw/tmp/plugin-captures/528ef18c-736e-4944-b5c5-7ef3643b6613/owner.sqlite
+      1 /root/.openclaw/tmp/plugin-captures/528ef18c-736e-4944-b5c5-7ef3643b6613/owner.sqlite-journal

@@ -28,7 +28,7 @@ it.each(['inline', 'worker'])('preserves recorded history, cursors and last-turn
       const requests = engineReaderRequests(engine as 'claude' | 'codex')
       const port = createEngineReaders({ isolated: new Set([`engine-${engine}`]), call: async (_service, type, payload) => await requests[type](JSON.parse(JSON.stringify(payload)), { owner: true, local: true }) })
       port.connected(`engine-${engine}`)
-      const deps = { readerFor: mode === 'worker' ? port.forEngine : engineTranscriptFor, resolve: () => session, stopped: () => [], pages: new TranscriptPager(), dbs: { opencode: '', kilo: '', devin: '' }, hermesDb: async () => '' }
+      const deps = { readerFor: mode === 'worker' ? port.forEngine : engineTranscriptFor, resolve: () => session, stopped: () => [], pages: new TranscriptPager(), dbs: { opencode: '', kilo: '', devin: '', openclaw: async () => null }, hermesDb: async () => '' }
       const history = createHistory(deps)
       const digest = (value: Record<string, unknown>) => {
         const { timestamp, ...stable } = value

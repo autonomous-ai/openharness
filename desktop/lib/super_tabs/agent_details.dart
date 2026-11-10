@@ -99,6 +99,7 @@ class SuperTabAgentInfo {
   }
 
   String? get folder => _known(native?.project?.cwd);
+  String? get workspace => _known(native?.workspace);
   DateTime? get lastActive => native?.lastActivityAt;
   bool get hasQuestion =>
       app?.questionFor(agent.machineId, agent.harnessId) != null;

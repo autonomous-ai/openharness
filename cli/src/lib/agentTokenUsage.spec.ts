@@ -280,6 +280,27 @@ describe('owning-machine token cache', () => {
     expect(query).toHaveBeenCalledTimes(1)
   })
 
+  it('sums an OpenClaw conversation\'s assistant usage from its store, per model', async () => {
+    const { builtinSqlite, closeSqliteHandles } = await import('./sqliteBuiltin.js')
+    const Database = builtinSqlite()!
+    const path = join(dir, 'openclaw-agent.sqlite')
+    const db = new Database(path, { readOnly: false })
+    const fixtures = join(import.meta.dirname, '../engines/openclaw/__fixtures__')
+    db.exec(await readFile(join(fixtures, 'schema.sql'), 'utf8'))
+    db.exec(await readFile(join(fixtures, 'tool.sql'), 'utf8'))
+    db.close()
+    store.dispose()
+    const opened = vi.fn(async () => path)
+    store = new AgentTokenUsageCache(join(dir, 'cache'), { openclawDb: opened, now: () => now })
+    target.engine = 'openclaw'
+    target.sessionId = 'agent:main:tool'
+    target.transcriptPath = null
+    // Two assistant rows: 18615 + 19025 uncached input, 257 + 6 output, no cache.
+    expect(await read()).toMatchObject({ totalTokens: 37_903, inputTokens: 37_640, outputTokens: 263 })
+    expect(opened).toHaveBeenCalledWith('agent:main:tool')
+    closeSqliteHandles()
+  })
+
   /**
    * OpenCode 2 keeps a session in `session_v2` and no longer writes `session`: for a session v2 began the v1
    * table has no row, and a fresh store has no such table at all. v1's row is the answer for what 1.x wrote.

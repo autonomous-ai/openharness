@@ -1211,6 +1211,8 @@ export class BackendSocket {
                 command: entry.command,
                 installable: entry.installable,
                 installCommand: (entry.installable && installRecipeLine(entry.engine)) || null,
+                // Installed but unable to run here (OpenClaw on a Node it cannot use): New shows it and blocks Start.
+                ...(entry.unavailable ? { unavailable: entry.unavailable } : {}),
                 ...(entry.signedIn !== undefined ? { signedIn: entry.signedIn, lastUsedAt: entry.lastUsedAt ?? null } : {}),
                 // Static per-CLI-version capability, not a probe result: its mere presence is what
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather

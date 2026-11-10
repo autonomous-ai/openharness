@@ -39,7 +39,7 @@ function setup(replyEffort?: string) {
     cursorDiscovery: { add: async () => {} }, device: () => undefined,
     captureTerminal: async () => null, emit, announceTurnAborted: vi.fn(),
     questionWatcher: { start: vi.fn() }, terminalLabel: () => 'private fixture',
-    dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db') },
+    dbs: { opencode: join(root, 'o.db'), kilo: join(root, 'k.db'), devin: join(root, 'd.db'), openclaw: async () => null },
     devinHome: root, hermesDb: async () => join(root, 'h.db'), concurrency: 1,
   })
   const attaching = attach.attachSession(session, true)

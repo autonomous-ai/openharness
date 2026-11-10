@@ -15,7 +15,10 @@ import { kiloMessagesToEvents } from '../engines/kilo/normalizer.js'
 import { readKiloMessages } from '../engines/kilo/reader.js'
 import { opencodeMessagesToEvents } from '../engines/opencode/normalizer.js'
 import { readOpencodeMessages } from '../engines/opencode/reader.js'
+import { openclawMessagesToEvents } from '../engines/openclaw/normalizer.js'
+import { readOpenclawHistory } from '../engines/openclaw/reader.js'
 import { hermesDbForSession } from './hermesHome.js'
+import { openclawSessionDb } from './openclawStore.js'
 import type { LiveEvent } from './normalize.js'
 import type { RegisteredSession } from './registry.js'
 
@@ -25,6 +28,10 @@ export const databaseHistory = (s: RegisteredSession): (() => Promise<readonly L
     case 'kilo': return async () => kiloMessagesToEvents(await readKiloMessages(join(env.KILO_DATA_DIR, 'kilo.db'), s.sessionId))
     case 'devin': return async () => devinMessagesToEvents(await readDevinMessages(join(env.DEVIN_HOME, 'sessions.db'), s.sessionId))
     case 'hermes': return async () => hermesMessagesToEvents(await readHermesMessages(await hermesDbForSession(s), s.sessionId))
+    case 'openclaw': return async () => {
+      const db = await openclawSessionDb(s.sessionId, { pid: s.processIdentity?.pid ?? 0 })
+      return db ? openclawMessagesToEvents(await readOpenclawHistory(db, s.sessionId)) : []
+    }
     default: return undefined
   }
 }

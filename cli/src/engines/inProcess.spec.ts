@@ -106,9 +106,20 @@ describe('the core\'s side', () => {
     } finally { vi.doUnmock('../lib/sessionSearch/externals/opencode.js') }
   })
 
-  it('names the thirteen engines besides Claude Code, Codex and the terminal', () => {
+  it('names the fourteen engines besides Claude Code, Codex and the terminal', () => {
     expect(ENGINES.filter(isOtherEngine)).toEqual(ENGINES.filter((engine) => !['claude', 'codex', 'terminal'].includes(engine)))
-    expect(OTHER_ENGINES).toHaveLength(13)
+    expect(OTHER_ENGINES).toHaveLength(14)
+  })
+
+  it('inProcess loads openclaw only through inProcess', async () => {
+    const { inProcess, error } = await fresh('counted')
+    expect(inProcess.engineNow('openclaw', 'a row came')).toBeNull()
+    const openclaw = await inProcess.loadEngine('openclaw')
+    expect(openclaw).toHaveProperty('OpenclawReader')
+    expect(openclaw).toHaveProperty('readOpenclawEvents')
+    expect(openclaw).toHaveProperty('readOpenclawHistory')
+    expect(inProcess.engineNow('openclaw', 'a row came')).toBe(openclaw)
+    expect(error.mock.calls).toEqual([['[engine openclaw] a row came before its code was loaded · skipped']])
   })
 
   it('preloads the screens for a session of theirs, once; Claude Code, Codex and the terminal load nothing', async () => {

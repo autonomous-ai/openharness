@@ -5,6 +5,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { loadEngine } from '../engines/inProcess.js'
+import { openclawSessionDb } from './openclawStore.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { emptyOutputLedger, ingestOutput, outputSnapshot, validOutputLedger, type AgentOutputStats, type OutputLedger } from './agentOutputStats.js'
 import { emptySessionWork, ingestSessionWork, sessionWorkSnapshot, validSessionWork, type SessionWork, type SessionWorkLedger } from './sessionWork.js'
@@ -43,9 +45,32 @@ const object = (value: unknown): Record<string, unknown> | null =>
 const tokens = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0
 const sum = (values: number[]) => values.reduce((a, b) => a + b, 0)
 
+/**
+ * An OpenClaw key's tokens, per model: the `usage` its Gateway writes on each assistant row (uncached input, output,
+ * cache read, cache write), summed over the conversation's active branch. The session row's own counts are the last
+ * run's alone (recorded: `model-switch` holds three runs and its row counts one). The usage target carries no
+ * process, so the store is OpenClaw's default state folder's.
+ */
+async function openclawUsage(sessionId: string, store: (sessionId: string) => Promise<string | null>): Promise<Record<string, Buckets> | null> {
+  const [code, db] = await Promise.all([loadEngine('openclaw'), store(sessionId)])
+  if (!code || !db) return null
+  const models: Record<string, Buckets> = {}
+  for (const { record } of await code.readOpenclawHistory(db, sessionId)) {
+    const message = object(record.message)
+    const usage = object(message?.usage)
+    if (record.type !== 'message' || message?.role !== 'assistant' || !usage) continue
+    const into = models[typeof message.model === 'string' ? message.model : ''] ??= [0, 0, 0, 0]
+    ;[usage.input, usage.output, usage.cacheRead, usage.cacheWrite].forEach((n, i) => { into[i] += tokens(n) })
+  }
+  return models
+}
+
+/** The engines whose count is their store's, not a transcript file's. */
+const STORE_COUNTED = ['opencode', 'openclaw']
+
 function keyFor(s: Target): string | null {
-  if (!s.sessionId || !['claude', 'codex', 'opencode'].includes(s.engine)) return null
-  if (s.engine !== 'opencode' && !s.transcriptPath) return null
+  if (!s.sessionId || !['claude', 'codex', ...STORE_COUNTED].includes(s.engine)) return null
+  if (!STORE_COUNTED.includes(s.engine) && !s.transcriptPath) return null
   return hash(JSON.stringify([s.engine, s.codexHome ?? '', s.sessionId, s.transcriptPath,
     s.forkedFrom ? s.registeredAt : null]))
 }
@@ -163,6 +188,7 @@ export class AgentTokenUsageCache {
   onChanged?: (target: Target) => void
   constructor(private readonly directory: string, private readonly options: {
     now?: () => number; refreshMs?: number; opencodeDb?: string;
+    openclawDb?: (sessionId: string) => Promise<string | null>;
     readSqlite?: typeof sqliteReadAll;
     onRead?: (bytes: number) => void;
   } = {}) {}
@@ -352,6 +378,19 @@ export class AgentTokenUsageCache {
       state.total = sum(Object.values(row).map(tokens))
       state.usage = [tokens(row.tokens_input) + tokens(row.tokens_cache_read) + tokens(row.tokens_cache_write),
         tokens(row.tokens_output) + tokens(row.tokens_reasoning), tokens(row.tokens_cache_read)]
+      state.observed = true
+    } else if (entry.target.engine === 'openclaw') {
+      const models = await openclawUsage(entry.target.sessionId, this.options.openclawDb ?? ((key) => openclawSessionDb(key, { pid: 0 })))
+      if (!models) return false
+      // Counted whole each time from the store, so nothing of an earlier count is carried over.
+      state = { ...empty(key), work: state.work, output: state.output }
+      for (const [model, delta] of Object.entries(models)) {
+        addModel(state, model, delta)
+        state.total += sum(delta)
+        state.usage[0] += delta[0] + delta[2] + delta[3]
+        state.usage[1] += delta[1]
+        state.usage[2] += delta[2]
+      }
       state.observed = true
     } else {
       const path = entry.target.transcriptPath!

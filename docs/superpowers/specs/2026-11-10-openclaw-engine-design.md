@@ -179,6 +179,30 @@ state folder (`~/.openclaw`, or `$OPENCLAW_STATE_DIR`):
 `node:sqlite` returns `event_zstd` as bytes, and `zlib.zstdDecompressSync` reads them. The `sqlite3` CLI fallback
 (`-json`) mangles blobs, so OpenClaw is read through `node:sqlite` only. After Part 0, Harness always has it.
 
+### Corrections from the recorded fixtures (2026-11-10)
+
+The fixtures (`cli/src/engines/openclaw/__fixtures__/`) override anything above that they contradict:
+
+- **Bare `openclaw tui`** opens the last-used session, not always `agent:main:main`.
+- **`/reset`** keeps the window and appends a `reset` event.
+- **`/new`** moves the pane to a new key, `agent:main:tui-<uuid>`. A pane's key can therefore change while it runs.
+- **Rewind** exists only as the Gateway call `sessions.rewind`. It makes a new window, copies every old row into it, and adds a `leaf` row. The attached TUI does not redraw.
+- **Hidden rows.** `navigation_custom_type` is empty for the system-prompt, model-snapshot and bootstrap rows. On compressed rows the type sits in `navigation_json`. Only large rows are compressed; most assistant rows are plain text.
+- **Abort and failure.**
+  - Esc leaves the tool call unanswered, and the status becomes `killed`.
+  - A failed run writes an empty `error` assistant row and a `run-failed-before-reply` row, and the status becomes `failed`.
+- **Folder.** A session created by `/model` before any message has `cwd: "/"`.
+- **Heartbeat.** The recorded heartbeat was event-driven, not scheduled, and its `heartbeat_respond` call failed.
+- **Approvals.** The TUI denies exec approvals at once ("Headless runs cannot wait"). There is no approval prompt to answer.
+- **No Gateway.** The TUI opens and shows `gateway disconnected: ECONNREFUSED`, and reconnects by itself when the Gateway is back.
+- **Open files.** The TUI holds the state DB open read-write, and also opens `openclaw-quarantine.sqlite`. A remote TUI still holds the local state DB.
+- **Footer and screen.** The footer's token count lags after a turn, the thinking level shows next to the model, and tool calls are not drawn on screen.
+
+Decisions that follow from the corrections:
+- The binding follows a pane's key when its header changes (`/new`). The new key becomes the agent's session.
+- The reader drops events whose `id` it has already emitted, so a rewind's copied rows are not shown twice.
+- Hidden rows are recognised from the decoded record, not only from `navigation_custom_type`.
+
 ## Decisions
 
 These are my calls unless marked as Ken's.

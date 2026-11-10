@@ -161,6 +161,42 @@ Three things that pattern gets wrong if nobody warns you, all found by running i
 
 ---
 
+## When your agent's loop runs in a daemon (OpenClaw)
+
+`openclaw tui` is only a client. The agent loop, its tools and every transcript write live in the
+Gateway process, so the pane's process has nothing to read and nothing to hook. Everything below was
+measured on 2026.11.2 with a real model; re-measure it on the binary you ship.
+
+- **No pane environment reaches the loop.** A plugin runs inside the Gateway, not in the pane, so it
+  never sees the pane's env or folder. Every session's header records the agent workspace as `cwd`,
+  whatever folder the pane was in (a session made by `/model` before any message says `/`).
+- **The transcript is SQLite, not JSONL.** WAL mode, STRICT tables, one database per agent. Large
+  rows are `event_zstd` blobs, small ones plain `event_json`; the role and navigation columns are
+  filled on both, so filter in SQL before decompressing. The `sqlite3` CLI mangles the blobs: read it
+  through `node:sqlite` and `zlib.zstdDecompressSync`.
+- **A transcript is rewritten after it was written.** Each session has a rewrite generation. `/reset`
+  keeps the window and appends a `reset` row. Rewind makes a new window, copies every old row into
+  it and adds a `leaf` row, so a reader that replays windows shows the copied rows twice unless it
+  drops ids it already emitted. The attached TUI does not redraw after a rewind.
+- **The TUI hides its argv.** `ps` and `/proc/<pid>/cmdline` show only `openclaw`, so flags cannot
+  tell you which session a pane runs. The screen header does (`session agent:<id>:<key>`); bind from
+  that, and keep a second pane showing the same key unbound rather than taking the session from the
+  first.
+- **A key is not a pane.** A bare `openclaw tui` opens the last-used session of any TUI, not `main`,
+  and two panes opened that way share one conversation. `/new` moves a running pane to a new key
+  (`agent:main:tui-<uuid>`), so the binding has to follow the header while the process lives.
+- **Some runs have no person.** The Gateway answers channel messages and heartbeat polls on `main`
+  (user rows `[OpenClaw heartbeat poll]`, `senderIsOwner:false`). Do not count them as a turn the
+  person started. The recorded heartbeat was event-driven, and its `heartbeat_respond` call failed.
+- **Find the state folder from the TUI, not from a guess.** The TUI holds `<stateDir>/state/openclaw.sqlite`
+  open (`/proc/<pid>/fd`, `lsof -p`), which is right under `--profile`, `--dev` and
+  `OPENCLAW_STATE_DIR`. A Gateway on another host still leaves the local file open, so the header's
+  URL, not the file, says whether the transcript is on this machine.
+- **There is no approval to answer.** The TUI denies an exec approval at once ("Headless runs cannot
+  wait"), so no permission dialog ever appears on screen for Harness to walk.
+
+---
+
 ## When hooks and transcript events disagree about ordering
 
 Grok Build supplies both global hooks and an ACP-style `updates.jsonl`, but they do different jobs.

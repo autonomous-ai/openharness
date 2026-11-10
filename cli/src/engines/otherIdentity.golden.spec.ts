@@ -238,6 +238,9 @@ describe('where the core finds the other engines\' conversations', () => {
       announceSession: () => {}, stoppedAgents: { save: () => {}, finishResume: () => {}, get: () => null } as never, syncRecapPool: () => {},
       input: { forget: () => {} } as never, deviceInput: { forget: () => {} } as never,
       homes: { copilot: home('.copilot'), grok: home('.grok'), agy: home('.gemini', 'antigravity-cli') },
+      // OpenClaw's TUI names its session on its header alone.
+      capturePane: async (agentId: string) => agentId === 'agent-openclaw'
+        ? ' openclaw tui - ws://127.0.0.1:18789 - agent main - session plain\n\n session agent:main:plain\n' : null,
     })
     const observed = (engine: string, over: Record<string, unknown>) => ({
       engine, cwd: '/work/g', runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux:%1',
@@ -257,6 +260,10 @@ describe('where the core finds the other engines\' conversations', () => {
     registered.length = 0
     await binding.bindObservedAgent(observed('copilot', {}) as never)
     results.push(['copilot /resume', [...registered]])
+    agents.clear(); agents.set('openclaw', { agentId: 'agent-openclaw', engine: 'openclaw', sessionId: '', registeredAt: 0 })
+    registered.length = 0
+    await binding.bindObservedAgent(observed('openclaw', {}) as never)
+    results.push(['openclaw header', [...registered]])
     check('bind', results)
   }, 60_000)
 

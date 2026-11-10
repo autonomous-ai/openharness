@@ -524,7 +524,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   `Limited until 14:00`, `Offline`), `Task` (`#5759` and its title: the issues
   of its projects' boards that are taken and labelled for it, read with the
   board's own reader, shown at once from what it read last and read again on
-  opening and each minute while Info is open) and `Folder` in `AppType.mono`.
+  opening and each minute while Info is open), `Folder` in `AppType.mono`, and
+  `Workspace` in `AppType.mono` below it for an engine whose tools work
+  somewhere other than the pane's folder (OpenClaw).
   A row the app has no value for is not drawn; a board that cannot be read
   puts GitHub's reason in the Task row, under the tasks it held when last
   read, so they never read as current. Its text can be selected. Info,

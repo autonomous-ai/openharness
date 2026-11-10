@@ -56,6 +56,12 @@ const _engines = <String, EngineIdentity>{
     color: Color(0xff9b8cff),
     asset: 'assets/engine-icons/hermes.png',
   ),
+  'openclaw': EngineIdentity(
+    id: 'openclaw',
+    label: 'OpenClaw',
+    color: Color(0xffff4d4d),
+    asset: 'assets/engine-icons/openclaw.png',
+  ),
   'commandcode': EngineIdentity(
     id: 'commandcode',
     label: 'Command Code',

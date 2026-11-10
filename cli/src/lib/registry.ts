@@ -53,6 +53,7 @@ import { storedLaunchModel, type LaunchModel } from './launchModel.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
 import { agyTranscriptPath } from '../engines/agy/contract.js'
 import { copilotTranscriptPath } from '../engines/copilot/contract.js'
+import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
@@ -1390,7 +1391,7 @@ class Registry {
             }
             if (!verified) bound = false
           } else if (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi'
-            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin') {
+            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'openclaw') {
             bound = false
             changed = true
           }
@@ -1735,6 +1736,8 @@ class Registry {
 
   /** Register a terminal route before its engine process exists. */
   openPendingAgent(input: {
+    /** The id the launch already named its session after (OpenClaw's `harness-<agentId>`); a new one otherwise. */
+    agentId?: string
     nativeToken?: string
     engine: AgentEngine
     runtimes: TerminalRuntimeRef[]
@@ -1779,8 +1782,9 @@ class Registry {
     const runtimes = normalizedRuntimes(input.runtimes)
     if (!runtimes.length) return null
     if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
+    const agentId = input.agentId ?? randomUUID()
+    if (this.byAgent(agentId)) return null
     const now = Date.now()
-    const agentId = randomUUID()
     const entry: RegisteredSession = {
       schemaVersion: 2,
       active: !externalResume,
@@ -1996,7 +2000,9 @@ class Registry {
       || (engine === 'agy' && !GROK_SESSION_RE.test(sessionId))
       // Copilot's session id is a uuid and names the directory its event stream lives in.
       || (engine === 'copilot' && !GROK_SESSION_RE.test(sessionId))
-      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && !transcriptPath)
+      // OpenClaw's session id is its key, `agent:<agentId>:<key>`, which names the agent database it is read from.
+      || (engine === 'openclaw' && !OPENCLAW_KEY.test(sessionId))
+      || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && engine !== 'openclaw' && !transcriptPath)
       // The already-registered agent (opened at agent_create time) already carries its own
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
     ) return null

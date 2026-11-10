@@ -77,6 +77,8 @@ export function createPaneSwap({ byAgent, prepareSessionResume, keepAbandonedCon
       && paneReadIdentity(byAgent(target.agentId)) === identity
     const relaunchOptions = (opts: RelaunchArgvOptions) => ({
       ...opts,
+      // A fresh start of an engine whose sessions Harness names reopens the agent's own (engineLaunch.ts `agentId`).
+      agentId: session.agentId,
       ...(launch.native ? { native: launch.native } : {}),
       // The mode picked at create outranks what the live argv said: `bypassPermission` is a yes/no, and
       // Plan or Accept edits would come back as Ask without it.

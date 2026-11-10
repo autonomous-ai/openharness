@@ -32,7 +32,8 @@
 
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
-import { commandAvailableInInteractiveShell } from './engineLaunch.js'
+import { commandAvailableInInteractiveShell, commandOutputInInteractiveShell } from './engineLaunch.js'
+import { OPENCLAW_RUNTIME_PROBE, openclawRuntimeState } from '../engines/openclaw/contract.js'
 import { engineInstallRecipe } from './engineInstall.js'
 import { engineAccount } from './engineAccount.js'
 
@@ -49,6 +50,18 @@ export interface EngineAvailability {
   readonly signedIn?: boolean | null
   /** Installed process engines: latest known session activity, ms; null when unavailable. */
   readonly lastUsedAt?: number | null
+  /** Installed, but it cannot run on this machine: why, in the words New shows as it blocks Start. */
+  readonly unavailable?: string
+}
+
+/**
+ * Why an installed engine cannot run here, or null. Only OpenClaw is asked: it needs a Node this machine may not have,
+ * and `--version` is the one command it answers on any Node without installing one. No answer says nothing.
+ */
+async function runtimeUnavailable(engine: AgentEngine, command: string): Promise<string | null> {
+  if (engine !== 'openclaw') return null
+  const ran = await commandOutputInInteractiveShell(command, OPENCLAW_RUNTIME_PROBE).catch(() => null)
+  return ran ? openclawRuntimeState(ran.output) : null
 }
 
 /**
@@ -114,6 +127,7 @@ export async function probeEngines(
       }
       // Account knowledge belongs to the engine reader, not this shared probe (#3839). An
       // unsupported reader answers unknown; neither a failure nor an install proves sign-in.
+      const unavailable = installed && command ? await runtimeUnavailable(engine, command) : null
       const readAccount = options.accounts && installed && !isTerminalEngine(engine)
       const account = readAccount ? await engineAccount(engine).catch(() => null) : null
       results[index] = {
@@ -121,6 +135,7 @@ export async function probeEngines(
         installed,
         command,
         installable: !installed && command !== null && recipe !== undefined,
+        ...(unavailable ? { unavailable } : {}),
         // Project only safe scalars: future readers must not leak credentials or error details.
         ...(readAccount ? {
           signedIn: typeof account?.signedIn === 'boolean' ? account.signedIn : null,

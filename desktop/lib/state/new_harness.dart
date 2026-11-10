@@ -2058,6 +2058,14 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     final engineState = machine.engines[_engine];
+    if (engineState?.unavailable case final reason?) {
+      return (
+        field: harnessId == null
+            ? NewHarnessField.harness
+            : NewHarnessField.agent,
+        message: reason,
+      );
+    }
     if (!compatibleEngines.contains(_engine) ||
         (_rememberedAgent &&
             !asGuest &&
@@ -3684,6 +3692,7 @@ class NewHarnessController extends ChangeNotifier {
             'fo',
             'pi',
             'hermes',
+            'openclaw',
             'commandcode',
             'muse',
             ...engines,

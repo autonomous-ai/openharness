@@ -652,6 +652,12 @@ export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engin
     basenames: [/^copilot$/],
     entrypoints: [/@github[\/\\]copilot[\/\\](?:npm-loader\.js|index\.js|bin[\/\\]copilot)$/],
   },
+  // The TUI renames itself to a bare `openclaw`: `comm` and the whole argv (`ps-*.txt`), so no entrypoint is ever
+  // seen. Its Gateway is `openclaw-gateway` (`openclaw-gatewa` under Linux's 15-byte cap) and is never a pane's agent.
+  openclaw: {
+    basenames: [/^openclaw$/],
+    entrypoints: [],
+  },
   // A terminal is a shell, and a shell is what every pane starts as — so nothing matches it, ever.
   // Discovery walks PROCESS_ENGINES and never asks; this entry exists for the Record's sake.
   terminal: { basenames: [], entrypoints: [] },
