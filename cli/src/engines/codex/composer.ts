@@ -4,6 +4,25 @@ import { rowBackgrounds, screenLines, startsBold, typedToken } from '../kit/comp
 /** Codex's composer row: `›` (or `»`) at the left edge, never a numbered row of a picker. */
 const CODEX_COMPOSER = /^[›»](?:\s|$)/
 const CODEX_PICKER_ROW = /^[›»]\s*\d+\.\s/
+/** A further row of a draft: Codex draws each two columns in, under the text after its `›`. */
+const DRAFT_ROW = /^ {2}/
+/** What a dialog or picker draws and a draft does not: a numbered choice, or the key that answers it. */
+const ANSWERED = /^\s*(?:[›»]\s*)?\d+\.\s|\b(?:enter|esc)\b.*\b(?:confirm|continue|cancel|close|select)\b/i
+
+/**
+ * Where an unshaded draft in paragraphs ends: at the blank row above the footer, when every row from the composer down to it
+ * is a draft's (blank, or two columns in) and nothing there or in the footer answers a dialog. Else [first], its first blank
+ * row. A Swarm message ("@Pip, to you:", the text, the line to answer with) is paragraphs, and Codex in a pane no window
+ * shows has no background to shade its composer from: ended at its first blank row, the rest read as a screen under it, and
+ * its Enter was never pressed.
+ */
+function paragraphsEnd(lines: readonly string[], composer: number, first: number): number {
+  const last = lines.findLastIndex((line) => !line.trim())
+  if (last <= first) return first
+  const draft = lines.slice(composer + 1, last), footer = lines.slice(last + 1)
+  const drawn = (line: string) => DRAFT_ROW.test(line) && !ANSWERED.test(line)
+  return draft.every((line) => !line.trim() || drawn(line)) && footer.length <= 3 && footer.every(drawn) ? last : first
+}
 
 export function composerState(capture: string): ComposerState {
   const { lines, raw } = screenLines(capture)
@@ -20,7 +39,11 @@ export function composerState(capture: string): ComposerState {
   let end = composer + 1
   if (shade) while (end < lines.length && shades[end] === shade) end++
   else while (end < lines.length && lines[end].trim()) end++
-  const footer = lines.slice(end).filter((line) => line.trim())
+  let footer = lines.slice(end).filter((line) => line.trim())
+  if (footer.length > 3 && !shade) {
+    end = paragraphsEnd(lines, composer, end)
+    footer = lines.slice(end).filter((line) => line.trim())
+  }
   if (footer.length > 3) return 'absent'
   const draft = [lines[composer].replace(/^[›»]\s?/, ''), ...lines.slice(composer + 1, end).map((line) => line.trim()).filter(Boolean)].join(' ').trim()
   const token = typedToken(draft)
