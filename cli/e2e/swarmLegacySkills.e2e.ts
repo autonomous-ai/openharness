@@ -64,7 +64,7 @@ it('old Lead and worker restarts and stopped resume gain only their role; person
     if (role) {
       expect(args).toContain(BASICS)
       expect(args.includes(PM_PART), name).toBe(role === 'lead')
-      expect(saved(ids[name]!).swarmSkill).toEqual({ role: role === 'lead' ? 'coordinator' : 'agent', key: ids[name], mode: 'orchestration' })
+      expect(saved(ids[name]!).swarmSkill).toEqual({ role: role === 'lead' ? 'coordinator' : 'agent', key: ids[name] })
     } else {
       expect(args).not.toContain(BASICS)
       expect(saved(ids[name]!).swarmSkill).toBeUndefined()
@@ -77,7 +77,7 @@ it('old Lead and worker restarts and stopped resume gain only their role; person
   const launch = await until('resumed worker argv', () => argv().slice(before).find(row => row.engine === 'claude') ?? null, 30_000)
   expect(launch.args.join(' ')).toContain(BASICS)
   expect(launch.args.join(' ')).not.toContain(PM_PART)
-  expect(saved(ids.resumed!).swarmSkill).toEqual({ role: 'agent', key: ids.resumed, mode: 'orchestration' })
+  expect(saved(ids.resumed!).swarmSkill).toEqual({ role: 'agent', key: ids.resumed })
   expect(readFileSync(join(cwd, 'AGENTS.md'), 'utf8')).toBe('Project rules stay here\n')
   expect(existsSync(join(cwd, '.harness'))).toBe(false)
   for (const home of [d.engineConfig.codexHome, join(d.root, 'home', '.claude')]) {
