@@ -80,7 +80,7 @@ export function startLegacyDrop(db: PrismaClient, leads: Pick<SuperTabStore, 'dr
   const control = new AbortController()
   const wait = sleeper(control.signal)
   void wait(delayMs).then(() => dropLegacyUntilDone(db, { batch, signal: control.signal, wait, pause: () => wait(PAUSE_MS), leads,
-    log: line => 'failed' in line || (line.collectionsFailed as unknown[] | undefined)?.length
+    log: line => 'failed' in line || (line.collectionsFailed as unknown[] | undefined)?.length || (line.leads as { failed?: number } | undefined)?.failed
       ? logger.warn('[legacy-drop] failed', line) : logger.info('[legacy-drop] run', line) }))
   return () => control.abort()
 }

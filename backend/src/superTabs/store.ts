@@ -4004,8 +4004,6 @@ export class SuperTabStore {
     })
   }
 
-  /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked
-   *  writes nothing. */
   /**
    * Removes the Leads conversations [ids] of [tabId] from its state, the Swarm-wide chat Swarm v4 removed (model.ts leadsRemoved),
    * and the head's pointer to it, through the parts' own write: each group leaves a tombstone at its next version, so caches and
@@ -4027,6 +4025,8 @@ export class SuperTabStore {
     })
   }
 
+  /** One state write moving the GitHub revision of the projects [moves] picks, re-read in its transaction; none picked
+   *  writes nothing. */
   private async moveGitHub(tabId: string, moves: (project: SwarmProject) => boolean, also?: (project: SwarmProject) => void): Promise<boolean> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })

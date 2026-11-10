@@ -89,7 +89,7 @@ describe('dropping the Leads conversations', () => {
     expect(read.state.conversations.map(c => c.id)).not.toContain(LEADS)
     expect(read.state.conversations.map(c => c.id)).toEqual(expect.arrayContaining(['lead', s.web]))
     // A second pass finds nothing to do, and says the job is done.
-    expect(await dropLeadsChats(db, store())).toEqual({ swarms: 0, conversations: 0, messages: 0, deliveries: 0, done: true })
+    expect(await dropLeadsChats(db, store())).toEqual({ swarms: 0, conversations: 0, messages: 0, deliveries: 0, failed: 0, done: true })
   })
 
   it('finds the messages of a Leads conversation removed by a run that stopped before them', async () => {
@@ -99,6 +99,46 @@ describe('dropping the Leads conversations', () => {
     expect(await counts(s.tabId, LEADS)).toEqual({ messages: 2, deliveries: 2 })
     expect(await dropLeadsChats(db, store())).toMatchObject({ conversations: 0, messages: 2, deliveries: 2, done: false })
     expect(await counts(s.tabId, LEADS)).toEqual({ messages: 0, deliveries: 0 })
+  })
+
+  // Review of #3742: what the store's own message delete takes with a message goes with these too.
+  it('takes each message\'s receipt, reactions and stray deliveries, and releases its files, leaving v4\'s alone', async () => {
+    const s = await swarm(1)
+    const [leadsMessage] = await db.superTabMessage.findMany({ where: { tabId: s.tabId, conversationId: LEADS }, select: { id: true } })
+    const [chatMessage] = await db.superTabMessage.findMany({ where: { tabId: s.tabId, conversationId: 'lead' }, select: { id: true } })
+    for (const [message, conversationId] of [[leadsMessage!.id, LEADS], [chatMessage!.id, 'lead']] as const) {
+      await db.superTabReceipt.create({ data: { id: message, tabId: s.tabId, conversationId, receipts: {}, deliveryIds: [`old-${message}`] } })
+      await db.superTabReaction.create({ data: { id: `r-${message}`, tabId: s.tabId, conversationId, messageId: message, actorKind: 'person', actorId: owner.userId, emoji: '👍' } })
+      await db.superTabAttachment.create({ data: { id: `f-${message}`, tabId: s.tabId, conversationId, actorKey: `person:${owner.userId}`, name: 'notes.txt',
+        mime: 'text/plain', size: 5, objectKey: `k-${message}`, usedBy: message } })
+      await db.superTabMessage.update({ where: { id: message }, data: { attachments: [{ id: `f-${message}`, name: 'notes.txt', mime: 'text/plain', size: 5 }] as never } })
+    }
+    // A delivery whose message a v3 delete already took.
+    await db.superTabDelivery.create({ data: { id: 'd-stray', tabId: s.tabId, conversationId: LEADS, messageId: 'gone-message', agentId: s.lead, machineId: 'host',
+      membershipGeneration: 'g', authorKind: 'person', authorId: owner.userId, authorGeneration: 'g', status: 'cancelled' } })
+    expect(await dropLeadsChats(db, store())).toMatchObject({ conversations: 1, messages: 1, deliveries: 2, failed: 0 })
+    expect(await db.superTabReceipt.findUnique({ where: { id: leadsMessage!.id } })).toBeNull()
+    expect(await db.superTabReaction.findUnique({ where: { id: `r-${leadsMessage!.id}` } })).toBeNull()
+    expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: `f-${leadsMessage!.id}` } })).usedBy).toBe('expired:unsent')
+    expect(await db.superTabDelivery.findUnique({ where: { id: 'd-stray' } })).toBeNull()
+    // The project chat's message keeps all of it.
+    expect(await db.superTabReceipt.findUnique({ where: { id: chatMessage!.id } })).not.toBeNull()
+    expect(await db.superTabReaction.findUnique({ where: { id: `r-${chatMessage!.id}` } })).not.toBeNull()
+    expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: `f-${chatMessage!.id}` } })).usedBy).toBe(chatMessage!.id)
+  })
+
+  it('goes on past a Swarm whose write fails, and counts it, so the job tries again', async () => {
+    const bad = await swarm(1)
+    const good = await swarm(1)
+    const real = store()
+    const failing = { dropLeads: (tabId: string, ids: string[]) => tabId === bad.tabId ? Promise.reject(new Error('SWARM_BUSY')) : real.dropLeads(tabId, ids) }
+    const report = await dropLeadsChats(db, failing)
+    expect(report).toMatchObject({ failed: 1, done: false })
+    expect(await counts(good.tabId, LEADS)).toEqual({ messages: 0, deliveries: 0 })
+    expect(await counts(bad.tabId, LEADS)).toEqual({ messages: 1, deliveries: 1 })
+    // The next run takes it.
+    expect(await dropLeadsChats(db, store())).toMatchObject({ conversations: 1, failed: 0 })
+    expect(await counts(bad.tabId, LEADS)).toEqual({ messages: 0, deliveries: 0 })
   })
 
   it('removes each conversation once when two servers run it at once', async () => {
