@@ -41,8 +41,17 @@ void main() {
         name: 'Stopped builder',
         engine: 'codex',
         status: 'stopped',
+        sessionId: 'saved-builder',
       ),
     ];
+    f.connection.native = {
+      'id': 'stopped',
+      'name': 'Stopped builder',
+      'engine': 'codex',
+      'sessionId': 'saved-builder',
+      'status': 'stopped',
+      'terminal': {'available': false},
+    };
     final c = await f.app.superTabs.open(tabId);
     await c.refresh();
     final map = MemoryKeymap();
@@ -89,16 +98,10 @@ void main() {
       );
       expect(search.canSubmit(docs), isTrue);
       expect(search.actionLabel(docs), 'Attach');
-      // A plain shell and a stopped session cannot join, and say why; Attach makes nothing new.
+      // A plain shell cannot join, and says why; Attach makes nothing new.
       expect(
         search.canSubmit(
           search.rows.singleWhere((row) => row.agentId == 'shell'),
-        ),
-        isFalse,
-      );
-      expect(
-        search.canSubmit(
-          search.rows.singleWhere((row) => row.agentId == 'stopped'),
         ),
         isFalse,
       );
@@ -130,4 +133,42 @@ void main() {
       f.app.superTabs.dispose();
     },
   );
+
+  // anh Dee 2026-11-10: "i should be able to attach stopped sessions too … resume + attach in one step".
+  testWidgets('a stopped session resumes and joins in one step', (
+    tester,
+  ) async {
+    final f = await open(tester);
+    await tester.tap(key('project-sidebar-agents-attach'));
+    await tester.pumpAndSettle();
+    final search = tester
+        .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+        .search;
+    final stopped = search.rows.singleWhere((row) => row.agentId == 'stopped');
+    expect(search.canSubmit(stopped), isTrue);
+    expect(search.actionLabel(stopped), 'Attach');
+
+    await tester.enterText(
+      find.byKey(const ValueKey('swarm-search-input')),
+      'Stopped builder',
+    );
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    final calls = f.connection.calls;
+    expect(calls.where((c) => c.$1 == 'agent_resume'), hasLength(1));
+    expect(calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+    final join = f.connection.joins.single['command'] as Map;
+    expect(join, containsPair('harnessId', 'stopped'));
+    expect(join, containsPair('name', 'Stopped builder'));
+    expect(
+      f.app.stateOf('m')!.agents.firstWhere((a) => a.id == 'stopped').isStopped,
+      isFalse,
+    );
+    expect(f.app.superTabs.peek(tabId)!.selectedId, join['conversationId']);
+    await tester.pumpWidget(const SizedBox());
+    await f.app.superTabs.peek(tabId)!.flush();
+    f.app.superTabs.dispose();
+  });
 }
