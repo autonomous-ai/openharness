@@ -5,7 +5,7 @@
  */
 import { isBuddy, isBuddyChat } from './buddies.js'
 import type { Actor, Agent, Conversation, SuperTabState } from './model.js'
-import { isAgentChat, ledProject, onTeamAccount, projectsOf } from './projects.js'
+import { isAgentChat, ledProject, projectsOf } from './projects.js'
 
 export type AgentKind = 'buddy' | 'pm' | 'regular'
 /** Members and Leads (task #4540; spec 2026-11-07-members-and-leads): a Lead leads a project, every other agent is a Member.
@@ -45,6 +45,6 @@ export function agentChatId(state: SuperTabState, target: Agent, reads: (chat: C
 export function inMyAgents(state: SuperTabState, actor: Actor, target: Agent): boolean {
   if (actor.kind !== 'person' || target.contributorId !== actor.userId) return false
   if (isBuddy(target)) return target.buddyOf!.personId === actor.userId && !target.buddySession
-  if (onTeamAccount(state, target) || target.workDecision === 'awaiting' || target.workDecision === 'stop') return false
+  if (target.workDecision === 'awaiting' || target.workDecision === 'stop') return false
   return (!target.downSince && !target.asleep) || !!ledProject(state, target.id)
 }

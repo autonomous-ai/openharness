@@ -17,7 +17,7 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 const reading = (receivedAt: number, os: string | null = null): NonNullable<ContributedMachine['observation']> => ({ generation: 'g1', receivedAt,
-  sessionKind: 'computer', resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null,
+  resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null,
     projectDiskFreeBytes: null, deviceType: null, chip: null, os, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] })
 /** What the app sends for a machine it prepared as Add machine does (prepareContribution): never a machine in the Swarm. */
 const setupOf = { name: 'Peer Laptop', cwd: '/home/peer/harness-swarm', engines: ['claude', 'codex'] as Array<'claude' | 'codex'> }
@@ -84,13 +84,11 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     expect([buddyOnly(f), f.state.starts ?? []]).toEqual([undefined, []])
   })
 
-  it('is refused on someone else\'s machine, one shared with the person, and a Harness Team account, changing nothing', () => {
+  it('is refused on someone else\'s machine and one shared with the person, changing nothing', () => {
     const f = setup()
     const refused = [
       own('owner'),
       { machineOwnerId: 'owner', contributorId: 'peer', hostGrant: 'share-grant' },
-      { ...own('peer'), hostMachineId: 'peer-mac' },
-      { ...own('peer'), teamSession: true as const },
     ]
     for (const grant of refused) {
       expect(() => addOwn(f, f.app.projectId, peer, grant)).toThrow('A Buddy runs only on your own machine')
@@ -166,19 +164,18 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     expect(f.state.machines!.find(m => m.machineId === 'owner-mac')!.lentDays).toEqual([{ day: 0, projectId: 'lead', busyMs: 1 }])
   })
 
-  it('never serves the Swarm\'s local models, and its host is not told the Swarm\'s grid or to join a Team account', async () => {
+  it('never serves the Swarm\'s local models, and its host is not told the Swarm\'s grid', async () => {
     const f = setup()
     f.state.localModels = { grid: 'swarm-grid', enabled: true, ready: true }
     const added = addOwn(f, f.app.projectId)
     buddyOnly(f)!.observation = { ...reading(1000), localModels: [{ grid: 'swarm-grid', model: 'qwen', kind: 'served', starting: false }] } as never
     expect(servedLocalModels(f.state, 1000)).toEqual([])
-    const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [{ machineId: 'peer-team' }] }
+    const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {} }
     const user = { sub: 'peer', email: peer.email, role: 'user', autonomousEnv: 'test' } as never
     const rows = await hostTab('swarm', f.state, 'peer-laptop', user, null, lookups)
     expect(rows.pool!.buddyStarts!.map(s => s.id)).toEqual([added.result.startId])
     expect(rows.pool!.starts).toEqual([])
     expect(rows.pool).not.toHaveProperty('localGrid')
-    expect(rows.roster.filter(r => 'joinTeam' in r)).toEqual([])
   })
 
   it('refuses its Buddy\'s launch once the machine reads as a Windows host from before its caller check', () => {
@@ -351,10 +348,9 @@ describe('a Buddy-only machine after its reviews', () => {
   })
 
   it('counts a Buddy-only machine in its person\'s 20, never in another person\'s (#2637)', () => {
-    /** [userId]'s [real] machines and as many Team accounts' entries. */
+    /** [userId]'s [real] machines. */
     const fill = (f: Swarm, userId: string, real: number) => {
-      f.state.machines!.push(...Array.from({ length: real }, (_, i) => [{ ...f.state.machines![0]!, machineId: `${userId}-${i}`, contributorId: userId },
-        { ...f.state.machines![0]!, machineId: `${userId}-team-${i}`, contributorId: userId, hostMachineId: `${userId}-${i}` }]).flat())
+      f.state.machines!.push(...Array.from({ length: real }, (_, i) => ({ ...f.state.machines![0]!, machineId: `${userId}-${i}`, contributorId: userId })))
     }
     const room = setup()
     fill(room, 'peer', 19)
@@ -377,14 +373,6 @@ describe('a Buddy-only machine after its reviews', () => {
       ifMissing: true } as Command, owner, { contribution: own('owner') })
     expect(buddyOnly(f, 'owner-laptop')).toMatchObject({ contributorId: 'owner' })
     expect(buddyOnly(f, 'owner-laptop')).not.toHaveProperty('buddyOnly')
-  })
-
-  it('never lets a Mac\'s Team account join through it (review 2)', () => {
-    const f = setup()
-    addOwn(f, f.app.projectId)
-    expect(() => f.run({ type: 'machine.contribute', machineId: 'peer-team', name: 'Peer Laptop', cwd: '/team', scope: 'swarm', engines: ['claude'], maxAgents: 2,
-      ifMissing: true } as Command, peer, { contribution: { ...own('peer'), hostMachineId: 'peer-laptop' } })).toThrow('This machine is not one of the Swarm\'s machines')
-    expect(f.state.machines!.map(m => m.machineId)).toEqual(['owner-mac', 'peer-laptop'])
   })
 
   // Security re-check 1 of #2234: a pane its person added to someone else's public project made the private Mac take that

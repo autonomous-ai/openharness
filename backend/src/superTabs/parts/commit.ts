@@ -193,12 +193,10 @@ export function hostMarker(kind: PartKind, before: unknown, after: unknown, mach
 /**
  * The machines whose hosts a commit's writes concern, by the same rules the host read wakes a Swarm for a machine
  * (read/host.ts woken): the head and members for every host of the Swarm before or after; an agent or a start for its
- * machine; a group for the machines its marker names; a machine's settings for that machine, the Mac it follows and the
- * team accounts that follow it. A machine's reading alone tells nobody. Each host is pushed these (lib/swarmHostPushes.ts).
+ * machine; a group for the machines its marker names; a machine's settings for that machine. A machine's reading alone tells nobody. Each host is pushed these (lib/swarmHostPushes.ts).
  */
 export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState, after: SuperTabState): string[] {
   const hosts = new Set<string>()
-  const pools = [...before.machines ?? [], ...after.machines ?? []]
   for (const write of writes) {
     if (write.op === 'touch') continue
     switch (write.kind) {
@@ -214,9 +212,6 @@ export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState,
       case 'machine': {
         if (!write.host?.hostChangedAt) break
         hosts.add(write.key)
-        const follows = (write.data as MachineData | null)?.contribution?.hostMachineId
-        if (follows) hosts.add(follows)
-        for (const pool of pools) if (pool.hostMachineId === write.key) hosts.add(pool.machineId)
         break
       }
     }

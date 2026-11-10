@@ -35,7 +35,7 @@ function swarm(quotas: Quota[] = [subscription()]) {
   const machine = (machineId: string, contributorId: string, extra: Partial<ContributedMachine> = {}): ContributedMachine => ({
     machineId, name: machineId, contributorId, membershipGeneration: state.people.find(p => p.id === contributorId)!.generation, generation: 'g1',
     cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-    observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources, tools: {}, quotas, runningHarnessIds: [], stoppedHarnessIds: [],
+    observation: { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas, runningHarnessIds: [], stoppedHarnessIds: [],
       capabilities: ['regularAgent'] }, ...extra })
   state.machines = [machine('kai-mac', 'kai'), machine('owner-mac', 'owner')]
   const project = (name: string) => run({ type: 'project.create', name, visibility: 'public', brief: '' }).result.projectId as string
@@ -127,10 +127,9 @@ describe('the first Accept', () => {
     expect(memberStarts(f)).toHaveLength(1)
   })
 
-  it('never uses another person\'s computer, a Team account or a Buddy-only one, and says why when it has none', () => {
+  it('never uses another person\'s computer or a Buddy-only one, and says why when it has none', () => {
     const f = swarm()
-    f.state.machines = [f.machine('owner-mac', 'owner'), f.machine('kai-team', 'kai', { observation: { ...f.machine('x', 'kai').observation!, sessionKind: 'team' } }),
-      f.machine('kai-buddy', 'kai', { buddyOnly: true })]
+    f.state.machines = [f.machine('owner-mac', 'owner'), f.machine('kai-buddy', 'kai', { buddyOnly: true })]
     const { first } = accepted(f)
     expect(memberStarts(f)).toHaveLength(0)
     expect(f.group(first).taskApproval?.state).toBe('approved')
