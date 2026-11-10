@@ -9,8 +9,10 @@ import {
   cursorRuntimeBin,
   ENGINE_CLI_COMMANDS,
   engineBin,
+  engineFileOwners,
   PROCESS_ENGINES,
   executableFileIdentity,
+  hermesBootFileKey,
   installedEngineBin,
 } from './engineBin.js'
 
@@ -135,6 +137,43 @@ function onPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
   Object.defineProperty(process, 'platform', { value: platform })
   try { return run() } finally { Object.defineProperty(process, 'platform', original) }
 }
+
+// Harness runs Hermes' installer launcher on Windows as `<python> -I <root>\bin\hermes-boot.py` (Smart App Control refuses
+// the launcher, lib/windows/hermesLaunch.ts). That module is the pane's Hermes: without it no Hermes pane there was
+// ever confirmed (DESKTOP-0TFH0OJ, 2026-11-09).
+describe('Hermes\' boot module on Windows', () => {
+  const install = () => {
+    const root = mkdtempSync(join(tmpdir(), 'engine-bin-hermes-'))
+    tempDirs.push(root)
+    const hermes = join(root, 'hermes')
+    mkdirSync(join(hermes, 'bin'), { recursive: true })
+    mkdirSync(join(hermes, 'hermes-agent', 'hermes_cli'), { recursive: true })
+    writeFileSync(join(hermes, 'hermes-agent', 'hermes_cli', 'main.py'), '')
+    writeFileSync(join(hermes, 'bin', 'hermes.exe'), 'MZ', { mode: 0o755 })
+    const boot = join(hermes, 'bin', 'hermes-boot.py')
+    return { bin: join(hermes, 'bin'), launcher: join(hermes, 'bin', 'hermes.exe'), boot }
+  }
+
+  it('is owned once Harness has written it beside the installer\'s launcher', () => {
+    const { launcher, boot } = install()
+    expect(hermesBootFileKey(launcher)).toBeNull()
+    writeFileSync(boot, 'import sys\n')
+    expect(hermesBootFileKey(launcher)).toBe(executableFileIdentity(boot)!.fileKey)
+  })
+
+  it('is nothing for another Hermes', () => {
+    expect(hermesBootFileKey('/usr/local/bin/hermes')).toBeNull()
+    expect(hermesBootFileKey('hermes')).toBeNull()
+  })
+
+  it('counts as Hermes in the ownership snapshot, the launcher found on PATH as the launch finds it', () => {
+    const { bin, boot } = install()
+    writeFileSync(boot, 'import sys\n')
+    process.env.PATH = bin
+    const snapshot = onPlatform('win32', () => agentCommandOwnershipSnapshot())
+    expect(engineFileOwners([executableFileIdentity(boot)!.fileKey], snapshot)).toEqual(['hermes'])
+  })
+})
 
 it('starts Command Code by its own name on Windows, where cmd is the command processor (F7)', () => {
   expect(onPlatform('win32', () => engineBin('commandcode'))).toBe('command-code')

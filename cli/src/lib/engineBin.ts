@@ -13,6 +13,8 @@ import { env } from '../config/env.js'
 import { ENGINES, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 import { currentUserShell } from './userShell.js'
+import { windowsLaunchCommand } from './binaryOnPath.js'
+import { hermesBootFile, hermesRoot } from './windows/hermesLaunch.js'
 
 // Keep this historical import surface for callers, but never duplicate the
 // catalog here. `engines/types.ts` is the one iterable source of truth.
@@ -208,6 +210,13 @@ function uniqueIdentities(identities: readonly ExecutableFileIdentity[]): Execut
   })
 }
 
+/** The file key of the boot module Harness runs in place of Hermes' installer [launcher] (`<root>\bin\hermes.exe`), when
+ *  it is that launcher and the module has been written. */
+export function hermesBootFileKey(launcher: string): string | null {
+  const root = hermesRoot(launcher)
+  return root ? executableFileIdentity(hermesBootFile(root))?.fileKey ?? null : null
+}
+
 /** Build once per process-table pass; callers pass the snapshot through every row comparison. */
 export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
   const engineCandidates = new Map<AgentEngine, ExecutableFileIdentity[]>()
@@ -223,6 +232,12 @@ export function engineBinaryOwnershipSnapshot(): AgentCommandOwnershipSnapshot {
     engineCandidates.set(engine, candidates)
     engineFileKeys.set(engine, new Set(candidates.map((candidate) => candidate.fileKey)))
   }
+  // Harness runs Hermes' installer launcher on Windows as `<python> -I <root>\bin\hermes-boot.py`
+  // (lib/windows/hermesLaunch.ts), so the pane's Hermes is that file, as surely as the launcher it stands in for.
+  // Not a candidate: nothing runs it by name. Without it a Hermes pane was never confirmed (DESKTOP-0TFH0OJ, 2026-11-09).
+  // The launcher is found as the launch finds it (lib/windows/launch.ts): `hermes` alone names no file on Windows.
+  const hermesBoot = hermesBootFileKey(windowsLaunchCommand(enginePathOverride('hermes') || 'hermes'))
+  if (hermesBoot) engineFileKeys.get('hermes')?.add(hermesBoot)
 
   const agentCandidates = commandCandidates('agent')
   const cursorAgentCandidates = commandCandidates('cursor-agent')

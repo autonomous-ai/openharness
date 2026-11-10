@@ -37,7 +37,6 @@ import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'model.dart';
-import 'profile_sheet.dart';
 import 'roster_scope.dart';
 import 'section_heading.dart';
 import 'agent_line.dart';
@@ -296,8 +295,7 @@ class _SuperTabRosterState extends State<SuperTabRoster>
 
   /// A person's card (Quiet Swarm, screen 5): their name with the crown,
   /// their points, the period on hover, their numbers under the name and
-  /// what is behind them; who they are on the avatar's hover. One's own also
-  /// opens the profile sheet, where one's avatar and status change.
+  /// what is behind them; who they are on the avatar's hover.
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) {
     final name = leaderboardName(person, score);
     return showAppDialog<void>(
@@ -340,15 +338,6 @@ class _SuperTabRosterState extends State<SuperTabRoster>
             },
             child: const Text('Manage people'),
           ),
-          if (person.id == c.accountId && c.canWrite)
-            TextButton(
-              key: const ValueKey('super-profile-edit'),
-              onPressed: () {
-                Navigator.pop(context);
-                showSuperTabProfile(this.context, c);
-              },
-              child: const Text('Edit profile'),
-            ),
         ],
       ),
     );

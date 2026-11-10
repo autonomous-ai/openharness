@@ -9,10 +9,9 @@ import 'package:harness/widgets/account_profile_sheet.dart';
 
 import 'account_profile_sheet_test.dart' show NameApi, profileApp;
 import 'support/capture.dart';
-import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the Profile PR's screenshots there (task #2654):
-/// the real sheet over a fake API and the in-memory Swarm, never a backend.
+/// the real sheet over a fake API, never a backend.
 final shots = Platform.environment['ACCOUNT_PROFILE_SHOTS'];
 
 Widget _frame(Brightness brightness, Widget body) => MaterialApp(
@@ -37,12 +36,9 @@ void main() {
       'screenshots for review ($mode)',
       (tester) async {
         await _theme(tester, brightness);
-        final app = profileApp(NameApi(), name: 'phorom12a');
+        final api = NameApi();
+        final app = profileApp(api, name: 'phorom12a');
         addTearDown(app.dispose);
-        final server = ConversationServer();
-        final c = server.controller();
-        addTearDown(c.dispose);
-        await c.refresh();
 
         // The avatar menu, Profile at its head.
         await tester.pumpWidget(
@@ -69,17 +65,13 @@ void main() {
         await tester.pumpAndSettle();
         await captureWindow(tester, shots, 'avatar-menu-$mode');
 
-        // The sheet, then a taken username said under its field.
+        // The sheet, then a refused name said under its field.
         await tester.pumpWidget(
           _frame(
             brightness,
             Builder(
               builder: (context) => TextButton(
-                onPressed: () => showAccountProfileSheet(
-                  context,
-                  app,
-                  swarm: (controller: c, name: 'openharness'),
-                ),
+                onPressed: () => showAccountProfileSheet(context, app),
                 child: const Text('Open'),
               ),
             ),
@@ -91,19 +83,12 @@ void main() {
           find.byKey(const ValueKey('account-profile-name')),
           'Elvis',
         );
-        await tester.enterText(
-          find.byKey(const ValueKey('account-profile-username')),
-          'elvis',
-        );
         await tester.pump();
         await captureWindow(tester, shots, 'profile-sheet-$mode');
-        server.refuse = {
-          'code': 'USERNAME_TAKEN',
-          'message': 'elvis is taken.',
-        };
+        api.refuse = (400, 'Use 1 to 60 characters, with no hidden ones.');
         await tester.tap(find.byKey(const ValueKey('account-profile-save')));
         await tester.pumpAndSettle();
-        await captureWindow(tester, shots, 'profile-sheet-taken-$mode');
+        await captureWindow(tester, shots, 'profile-sheet-refused-$mode');
         await tester.tap(find.byKey(const ValueKey('account-profile-cancel')));
         await tester.pumpAndSettle();
 

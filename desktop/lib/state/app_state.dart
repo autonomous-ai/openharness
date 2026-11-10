@@ -9,6 +9,7 @@ import '../core/guest_folders.dart';
 import '../measurement/desktop_setup_report.dart';
 import 'attached_task_delivery.dart';
 import 'browser_copies.dart';
+import 'harness_activity.dart' show HarnessActivity, harnessActivity;
 import 'harness_attachments.dart';
 import 'task_route.dart';
 import '../core/permission_modes.dart';
@@ -104,7 +105,6 @@ import '../super_tabs/swarm_accounts.dart';
 import '../super_tabs/attachment_upload.dart';
 import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/image_cache.dart' show superTabImageCache;
-import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
@@ -611,6 +611,7 @@ class MachineState {
   // opening a terminal stream against an unavailable node.
   String? pendingOfflineAgentId;
   final Set<String> processingAgentIds = {};
+
   final Set<String> unknownActivityAgentIds = {};
   final Map<String, AgentActivityOrder> activityOrder = {};
   final Set<String> legacyHeartbeatSeen = {};
@@ -1946,14 +1947,6 @@ class AppNotifier extends ChangeNotifier {
             cancel: cancel,
             onProgress: onProgress,
           ),
-    avatarUpload: ({required tabId, required png}) => _teamComputer
-        ? Future.error(
-            const SuperTabFailure(
-              'MACHINE_UNAVAILABLE',
-              teamComputerSwarmMessage,
-            ),
-          )
-        : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onChatMessage: superTabChatNotice(systemNotifications),
     onReply: superTabReplyNotice(systemNotifications),
@@ -11362,6 +11355,7 @@ class AppNotifier extends ChangeNotifier {
           prev.createdAt != agent.createdAt ||
           prev.closeSupported != agent.closeSupported ||
           prev.nameChosen != agent.nameChosen ||
+          prev.waitingFor != agent.waitingFor ||
           prev.closePlanState != agent.closePlanState ||
           prev.closePlanDetail != agent.closePlanDetail ||
           prev.lastOpenedAt != agent.lastOpenedAt ||
@@ -15152,6 +15146,11 @@ class AppNotifier extends ChangeNotifier {
     }
     modelStarts.start(machineId, agentId);
   }
+
+  /// Whether [agentId] on [machineId] reads as starting (a message waits for its engine, its frame's `waitingFor`, or it is
+  /// launching): [harnessActivity]'s one answer, so a computer that is off or an agent stopped never says it.
+  bool engineStarting(String machineId, String agentId) =>
+      harnessActivity(this, machineId, agentId) == HarnessActivity.starting;
 
   void _cancelTurnActivity(
     String machineId,

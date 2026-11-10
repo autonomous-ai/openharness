@@ -13,7 +13,7 @@ import type { Choice } from './assign/model.js'
 import { solve } from './assign/search.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
-import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, verdicts, type LedProject } from './githubMerge.js'
+import { authorOf, isWriter, openPullsPath, PULL_PAGES, pullPeople, pullTalk, verdicts, type LedProject } from './githubMerge.js'
 import { TEAM } from './githubMentions.js'
 
 type Json = Record<string, unknown>
@@ -254,7 +254,7 @@ export class GitHubAssign {
       if (!Number.isSafeInteger(number) || !/^[0-9a-f]{40}$/.test(head)) continue
       const author = authorOf(pull)
       if (author === null || !team.has(labelOf(author))) continue
-      const comments = await this.reads.current(repo, `/repos/${repo}/issues/${number}/comments?per_page=${PAGE}`, 3)
+      const comments = await pullTalk(this.reads, repo, number)
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       const onHead = (sha: string) => head.startsWith(sha)
@@ -288,7 +288,8 @@ export class GitHubAssign {
       // opened it (verdicts); a reader who signs two ways counts once, as the merger counts it.
       const own = (name: string) => isWriter(people.writers, name)
       const ok = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
-      const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
+      // An unsigned READ-OK from that login was no read, so there is nobody to ask again for it (an unsigned HOLD stands, and is).
+      const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha) && !(r.ownLogin && r.verdict === 'READ-OK'))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
         if (lastAsk(reader, true)) continue

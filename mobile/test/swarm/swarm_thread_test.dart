@@ -3,7 +3,6 @@ import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_outbox.dart';
 import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
@@ -1145,62 +1144,6 @@ void main() {
         );
       });
     }
-
-    test(
-      'a reaction whose read of the thread is refused drops the thread',
-      () async {
-        final r = await rig();
-        r.swarm.routes[thread] = (_) => {
-          'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
-          'next': null,
-        };
-        final t = open(r.chat);
-        await t.load();
-        r.swarm.routes[commands] = (_) => {'ok': true};
-        r.swarm.routes[thread] = (_) => throw const SuperTabFailure(
-          'FORBIDDEN',
-          'Not yours.',
-          statusCode: 403,
-        );
-
-        expect(
-          await t.react(t.replies.single, SuperTabReactionEmoji.rocket),
-          isTrue,
-        );
-        await settle();
-
-        expect(t.state, SwarmChatState.lost);
-        expect(t.messages, isEmpty);
-      },
-    );
-
-    test('a refused reaction has the chat read again, and a chat refused '
-        'there drops the thread', () async {
-      final r = await rig();
-      r.swarm.routes[thread] = (_) => {
-        'messages': [message('m1', 1), message('m2', 2, root: 'm1')],
-        'next': null,
-      };
-      final t = open(r.chat);
-      await t.load();
-      const refused = SuperTabFailure(
-        'FORBIDDEN',
-        'Not yours.',
-        statusCode: 403,
-      );
-      r.swarm.routes[commands] = (_) => throw refused;
-      r.swarm.routes[messages] = (_) => throw refused;
-
-      expect(
-        await t.react(t.replies.single, SuperTabReactionEmoji.rocket),
-        isFalse,
-      );
-      await settle();
-
-      expect(r.chat.state, SwarmChatState.lost);
-      expect(t.state, SwarmChatState.lost);
-      expect(t.messages, isEmpty);
-    });
 
     test('a reply refused after its thread closed puts nothing back', () async {
       final r = await rig();
