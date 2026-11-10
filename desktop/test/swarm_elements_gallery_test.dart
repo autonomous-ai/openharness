@@ -601,22 +601,6 @@ class _Gallery extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SwarmChatCard(
-                          icon: AppIcons.send,
-                          label: 'Sent to River',
-                          title: 'Every task opens as a thread',
-                          action: 'View brief',
-                          details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
-                        const SwarmChatCard(
-                          icon: AppIcons.circleCheck,
-                          label: 'Shipped',
-                          title: 'Wake fix: the mic closes after 1 second',
-                          action: 'What changed',
-                          details: SizedBox.shrink(),
-                        ),
-                        const SizedBox(height: 8),
                         // What GitHub said to your agent (github_row.dart).
                         const SwarmChatCard(
                           icon: AppIcons.gitPullRequest,

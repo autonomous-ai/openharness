@@ -59,8 +59,6 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.message,
     required this.author,
     required this.onReturnToComposer,
-    this.card,
-    this.brief,
     required this.receipts,
     this.agent,
     this.person,
@@ -99,14 +97,6 @@ class SuperTabMessageRow extends StatefulWidget {
   });
 
   final SuperTabMessage message;
-
-  /// The live card [message] is (live_card.dart), drawn in place of its pull
-  /// request links; null for a plain message.
-  final Widget? card;
-
-  /// A card drawn in place of the message's text, such as a sent brief's:
-  /// a label, one title line and its action (#4529).
-  final Widget? brief;
 
   /// The thread [message] is the root of, once it has a reply.
   final SuperTabThread? thread;
@@ -799,9 +789,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                                     ),
                                             ),
                                           ),
-                                        if (widget.brief case final brief?)
-                                          brief
-                                        else if (_bubbled(voiceMessage))
+                                        if (_bubbled(voiceMessage))
                                           SwarmBubble(
                                             own: own,
                                             tooltip: _clock,
@@ -931,10 +919,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             ),
                                           ),
                                         if (!message.deleted) ...[
-                                          widget.card ??
-                                              SuperTabPullRequestLinks(
-                                                message.text,
-                                              ),
+                                          SuperTabPullRequestLinks(
+                                            message.text,
+                                          ),
                                           if (widget.linkTarget
                                               case final resolve?)
                                             if (widget.onOpenLink

@@ -282,35 +282,15 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await f.app.handleMachineEventForTest('m', {
-        'type': 'commander_question',
-        'agentId': 'native-b',
-        'payload': {
-          'requestId': 'q-fixture',
-          'questions': [
-            {
-              'key': 'confirm',
-              'q': 'Use this approach?',
-              'options': ['Yes', 'No'],
-              'multi': false,
-            },
-          ],
-        },
-      });
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('b needs you').first);
+      // Opening one member's terminal, b's, keeps every member's beside it.
+      tester
+          .widget<SuperTabView>(find.byType(SuperTabView))
+          .onOpenTerminal(c.snapshot!.agent('b')!);
       await tester.pumpAndSettle();
       expect(
         f.app.activeSwarm.panes.map((p) => p.agentId),
         unorderedEquals(['native-a', 'native-b', 'native-c', 'native-d']),
       );
-      await f.app.handleMachineEventForTest('m', {
-        'type': 'commander_question_close',
-        'agentId': 'native-b',
-        'payload': {'requestId': 'q-fixture'},
-      });
-      await tester.pumpAndSettle();
-      expect(f.app.questionFor('m', 'native-b'), isNull);
       tester
           .widget<SuperTabView>(find.byType(SuperTabView))
           .onOpenGroupTerminals!();

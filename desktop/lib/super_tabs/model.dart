@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:cryptography/dart.dart' show DartSha256;
 
 import 'identity.dart' show superTabPersonName;
-import 'live_card_model.dart';
 import 'profile_model.dart';
 
 export 'profile_model.dart';
@@ -35,16 +34,6 @@ List<T> _list<T>(Object? value, T Function(Map<String, dynamic>) read) =>
     value is List
     ? List.unmodifiable(value.map((row) => read(superTabMap(row))))
     : throw const FormatException('Invalid Swarm list.');
-
-/// Work that waits on a person: the agent needs a decision (`needs_human`) or
-/// is stuck (`blocked`). Both stay active work until the agent moves on.
-bool superTabWorkWaits(Object? status) =>
-    status == 'needs_human' || status == 'blocked';
-
-/// How a work status reads in the app. `blocked` is what the agent calls it;
-/// people read Stuck. Statuses this build does not know read as sent.
-String superTabWorkStatusLabel(String status) =>
-    status == 'blocked' ? 'stuck' : status.replaceAll('_', ' ');
 
 /// What a project calls its coordinator when the backend names none (one from before project instructions), and
 /// what every new project starts with.
@@ -203,7 +192,6 @@ class SuperTabAgent {
       profileId = row['profileId'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
-      workDecision = row['workDecision'] as String?,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -247,13 +235,6 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
-
-  /// What its coordinator or a person chose for it once its work ended: `keep` or `stop`; `awaiting` while nobody has.
-  final String? workDecision;
-
-  /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
-  /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
-  bool get keptClosed => workDecision == 'keep' && downSince != null;
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
@@ -337,17 +318,6 @@ class SuperTabBuddySession {
   bool get starting => agentId == null;
 }
 
-class SuperTabTask {
-  SuperTabTask.fromJson(Map<String, dynamic> row)
-    : goal = _text(row, 'goal'),
-      changes = _text(row, 'changes'),
-      constraints = _text(row, 'constraints'),
-      owns = List.unmodifiable((row['owns'] as List).cast<String>());
-
-  final String goal, changes, constraints;
-  final List<String> owns;
-}
-
 class SuperTabConversation {
   SuperTabConversation.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -390,34 +360,15 @@ class SuperTabConversation {
                 if (person is Map && person['id'] is String) person['id'],
             ])
           : null,
-      checks = _list(
-        row['checks'] ?? const [],
-        (check) => Map<String, dynamic>.unmodifiable(check),
-      ),
       pullRequestUrls = List.unmodifiable(
         (row['pullRequestUrls'] as List?)?.whereType<String>() ??
             const <String>[],
       ),
-      cards = SuperTabCards.fromJson(row['cards']),
-      reviewOf = row['reviewOf'] as String?,
-      step = row['step'] as String?,
-      brief = _text(row, 'brief'),
-      task = row['task'] is Map
-          ? SuperTabTask.fromJson(superTabMap(row['task']))
-          : null,
-      requesterId = row['requesterId'] as String?,
-      priority = row['priority'] as String?,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       lastPersonSequence = (row['lastPersonSequence'] as num?)?.toInt() ?? 0,
-      reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
-      assignment = row['assignment'] == null
-          ? null
-          : Map.unmodifiable(superTabMap(row['assignment'])),
-      liveness = row['liveness'] is Map
-          ? Map.unmodifiable(superTabMap(row['liveness']))
-          : null;
-  final String id, projectId, title, brief;
+      reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0;
+  final String id, projectId, title;
 
   /// What the backend calls it apart from a workgroup: `buddy` for a person's
   /// chat with their Buddy. A `leads` one is never kept ([SuperTabSnapshot]).
@@ -446,7 +397,6 @@ class SuperTabConversation {
   /// A Buddy chat's thread sessions, live or starting (at most 3); empty on
   /// every other conversation and from older backends.
   final List<SuperTabBuddySession> buddySessions;
-  final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
   final String? leadId;
@@ -463,22 +413,10 @@ class SuperTabConversation {
 
   /// Listed with the project's closed groups, not its active ones.
   bool get closed => archived || dormant;
-  final List<Map<String, dynamic>> checks;
 
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
 
-  /// Its messages drawn as live cards (live_card.dart); none from an older
-  /// backend.
-  final SuperTabCards cards;
-
-  /// A review group's reviewed group; null for any other conversation.
-  final String? reviewOf;
-
-  /// A step of the task [reviewOf] names, by the name its project's
-  /// instructions give it (task steps design); null for a task, and for a
-  /// linked task opened before steps.
-  final String? step;
   final int lastMessageSequence;
 
   /// Its newest message in the main stream: a reply only in its thread
@@ -498,21 +436,6 @@ class SuperTabConversation {
   /// none (that read finds nothing new). Absent, it is 0, the pages' own value
   /// then.
   final int reactionSeq;
-
-  /// The person who asked for this task; null on a conversation that is no
-  /// task, and from a server that does not say.
-  final String? requesterId;
-
-  /// A task's priority as the server keeps it, `P0` to `P3` (backend
-  /// taskPriority.ts); null on a step, a chat, and a task from before it,
-  /// whose title may still mark one (`superTabTaskPriority`, task_priority.dart).
-  final String? priority;
-  final Map<String, dynamic>? assignment;
-
-  /// Whether its task waits on purpose or is stuck, as the server last found
-  /// it (`state`, `why`, `since`, `personId`); absent while it is working,
-  /// and from older backends.
-  final Map<String, dynamic>? liveness;
 }
 
 /// The zone a project's day is read in when its digest names none (backend
@@ -553,27 +476,12 @@ class SuperTabProject {
       repositoryCreation = SuperTabRepositoryCreation.read(
         row['repositoryCreation'],
       ),
-      boardMode = row['boardMode'] == true,
-      archived = row['archived'] == true,
-      deciderId = row['decider'] is String ? row['decider'] as String : null;
+      archived = row['archived'] == true;
   final String id, name, ownerId, leadConversationId;
-
-  /// Whether its owner switched it to the Board way of working (#3819, spec 2026-11-06-buddy-board-final-spec):
-  /// people talk to their Buddies, work comes in as proposals.
-  /// False when not switched and from an older backend: everything then works as today.
-  final bool boardMode;
 
   /// Kept read-only and out of the project list: a v3 tab's project that had messages when it was closed (backend
   /// commands.ts `project.closeTab`).
   final bool archived;
-
-  /// Its top decider (for openharness, Dee), who may set P0 and pause like its owner; null when none is set.
-  final String? deciderId;
-
-  /// Whether [personId] may set P0 on any card and pause or resume any task: its owner, the Swarm's owner and its
-  /// decider. The server enforces it; the app only offers what it would allow.
-  bool canSteer(String personId, {bool swarmOwner = false}) =>
-      swarmOwner || personId == ownerId || personId == deciderId;
 
   /// The zone its day is read in, as the server reads it for the crew
   /// dispatch and the morning digest: its digest's, else
