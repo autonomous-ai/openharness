@@ -4,7 +4,7 @@ import { CREW_NEED_KIND, crewNeedOf } from './crewNeeds.js'
 import { agentOnly, createSuperTab, type Actor, type MessageDraft } from './model.js'
 
 // People talk only to the PM (anh Dee, 2026-11-05; task #3404, River's ruling): an agent's tag of a person
-// and its person.tell become a crew need for the PM, and the agent is told. The PM tags anyone; any other
+// becomes a crew need for the PM, and the agent is told. The PM tags anyone; any other
 // agent tags only the person it is answering. With no PM in the project, everything stays as before.
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }

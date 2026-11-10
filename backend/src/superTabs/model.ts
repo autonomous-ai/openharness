@@ -170,7 +170,7 @@ export interface Agent {
   /** A Buddy's thread session (buddySessions.ts): it hears and answers only the thread rooted at `thread`, and reads the main
    *  chat only up to `from`, the sequence before the message that started it. The main Buddy has none. */
   buddySession?: BuddySession
-  /** A crew member woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
+  /** An asleep Buddy woken by new work (crewTimes.ts startWake): when, and the task that woke it, until a machine reading shows
    *  its session running again (`runningAt`, the first reading that did) and the wake's timing row is written (task #3462). Set
    *  only by the server. */
   crewWaking?: { at: number; conversationId: string; runningAt?: number }
@@ -222,8 +222,6 @@ export interface AgentStartRequest {
   /** A helper's start (members.ts): made from its Member's ready setup on the Member's computer, for the task it starts
    *  in. Written by the server alone. */
   helperOf?: { agentId: string; harnessId: string }
-  /** The commands its Member recorded setting the project up (agent.setUp), for a helper's host to repeat. */
-  setUpSteps?: string[]
   /** A one-project Buddy's start (Agent.buddyNarrow), written by message.send alone. */
   buddyNarrow?: true
   /** The person's messages in an older project chat its start waits on, delivered when it joins (ids only). */

@@ -3976,7 +3976,7 @@ describe('credentials in every command', () => {
     const exempt = NOT_WORDS.flatMap(([, fields]) => fields)
     const covered = new Set([...Object.entries(WORDS).flatMap(([type, paths]) => paths!.map(path => `${type} ${path}`)), ...exempt])
     const all = strings()
-    expect(all.length).toBeGreaterThan(150)
+    expect(all.length).toBeGreaterThan(190)
     expect(all.filter(field => !covered.has(field))).toEqual([])
     // Nothing listed is stale or listed twice.
     expect([...covered].filter(field => !all.includes(field))).toEqual([])
