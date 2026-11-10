@@ -1215,43 +1215,6 @@ class ConversationServer {
         for (final chat in (state['conversations'] as List).cast<Map>()) {
           (chat['agentIds'] as List).remove(agent['id']);
         }
-      } else if (command['type'] == 'conversation.create') {
-        revision++;
-        final id = 'group-$revision';
-        final projectId = command['projectId'] ?? 'lead';
-        // The project's Lead is in every new group, a private one included.
-        final leadConversationId =
-            (state['projects'] as List?)
-                ?.cast<Map<String, dynamic>>()
-                .where((p) => p['id'] == projectId)
-                .firstOrNull?['leadConversationId'] ??
-            'lead';
-        final leadId = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .where((g) => g['id'] == leadConversationId)
-            .firstOrNull?['leadId'];
-        (state['conversations'] as List).add({
-          ...conversationFixture(id, command['title'] as String),
-          'projectId': projectId,
-          'leadId': leadId,
-          'agentIds': [?leadId],
-          if (command['audience'] case {'personIds': final List people})
-            'audience': {
-              'people': [
-                for (final person in people)
-                  {
-                    'id': person,
-                    'generation':
-                        (state['people'] as List?)
-                            ?.cast<Map>()
-                            .where((p) => p['id'] == person)
-                            .firstOrNull?['generation'] ??
-                        'fixture',
-                  },
-              ],
-            },
-        });
-        output['conversationId'] = id;
       } else if (command['type'] == 'lead.claim') {
         // One start of a project's Lead (backend commands.ts lead.claim):
         // another machine's claim is the one; the same machine claims again.
