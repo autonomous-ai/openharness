@@ -341,25 +341,19 @@ Tab, machine, project and full status descriptions remain in tooltips and
 accessibility text. Unavailable
 rows remain visible and disabled. An empty inbox says “No unread notifications.”
 
-A Swarm section follows, on a Mac only, and disappears when empty: what needs
-the person in their open Swarm tabs, which the Swarm sidebar's Notifications
-row listed before (`statusMenuSwarmEntries`). Each Swarm's open decisions come
-first, then the tags waiting for them, newest first within each, as its
-Notifications page lists them: who asks or tagged them, the question or the
-message, and when it was asked; the Swarm, project and conversation are in the
-tooltip and accessibility text. Each Swarm shows at most five, then its own
-View all, which opens that Swarm's Notifications page; with several Swarms each
-has a heading with its name and count, so a second Swarm's items are never
-behind the first's overflow. Only rows whose conversation the person can read
-now are listed: when access changes, the lists clear and are read again, and a
-read that started before is dropped. Choosing a tag opens its
-conversation at the message; choosing a decision opens that Swarm's
-Notifications page, where it is answered. A row answered while the menu is open
-does nothing. Mark all read leaves them: a tag is done when it is replied to or
-marked done, a decision when it is answered. They add to the menu bar badge,
-and their count, the tags plus open decisions across every Swarm tab, counted
-for this account alone by the Swarm, is the badge on the Dock's app icon,
-cleared at zero and when the workspace leaves.
+A Swarm section follows, on a Mac only, and disappears when empty: the
+person's agents that ask them in their open Swarm tabs (`statusMenuSwarmEntries`),
+each an agent whose own chat has something new for them by its read marks
+(Swarm v4: an agent reaches its person only there). A row is the agent's name
+and its newest words in that chat when they are held, with when they came; the
+Swarm is in the tooltip and accessibility text. Each Swarm shows at most five,
+then its own View all, which brings that Swarm forward; with several Swarms
+each has a heading with its name and count, so a second Swarm's items are never
+behind the first's overflow. Choosing a row opens that agent's chat; one read
+meanwhile does nothing. Mark all read leaves them: a row goes when its chat is
+read. They add to the menu bar badge, and their count across every Swarm tab is
+the badge on the Dock's app icon, cleared at zero and when the workspace leaves.
+The pictures below show the rows' layout; their words are from before Swarm v4.
 
 ![The Swarm section between Ready and Working](images/notification-swarm-light.png)
 

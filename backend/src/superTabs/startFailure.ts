@@ -31,9 +31,6 @@ export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
 /** Its machine's computer is signed in to another account now (commands.ts machine.moved, #3122). */
 export const MACHINE_MOVED = 'Its machine is signed in to another account now.'
 export const ABANDONED = 'Abandoned before it started.'
-/** A Team account's host refusing a Codex Product Manager it cannot sign in (cli superTabs/start.ts): it names nothing of the
- *  machine but its lack of the owner's relay, which its project reads (security re-check 3 of #2089). */
-export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
 
 /** A host's refusal for memory (cli superTabs/capacity.ts memoryShort): its numbers alone, which members already see in the
  *  Machines view. Read only at the start of the reason, so nothing else a host wrote is ever told (Ken's MacBook Pro,
@@ -48,7 +45,7 @@ const CREATION_FOLDER = /^CREATION_STORAGE_FAILED: The creation folder (~\/[\w.-
 const CLONE_FAILED = /^This machine could not clone the project repository with the Harness GitHub App's token(?::|$)/
 
 export function publicReason(error: string): string {
-  if (error === MACHINE_REMOVED || error === ABANDONED || error === NO_PM_RELAY) return error
+  if (error === MACHINE_REMOVED || error === ABANDONED) return error
   const folder = CREATION_FOLDER.exec(error)
   if (folder) return `Its machine's creation folder ${folder[1]} is not usable by its account (permissions): the owner of that computer fixes its owner and mode.`
   if (CLONE_FAILED.test(error)) return "Its machine could not clone the project repository with the Harness GitHub App's token."

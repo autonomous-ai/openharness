@@ -10,7 +10,6 @@ import { FINISHED, GROUP_FIELDS } from './light.js'
 const assignment: Required<Assignment> = {
   agentId: 'a',
   askedOf: 'p',
-  changesRequestedAt: 1,
   configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
   execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' },
   handoffs: 1,
@@ -25,7 +24,6 @@ const assignment: Required<Assignment> = {
   result: null,
   reviewFoundAt: 1,
   status: 'working',
-  toldEngineerAt: 1,
   verdicts: [{ by: 'agent:r', passed: true, handoff: 1, review: 'g' }],
 }
 const conversation: Required<Conversation> = {
@@ -64,7 +62,6 @@ const conversation: Required<Conversation> = {
   messageSeq: 0,
   notBefore: '2026-12-04',
   number: 1,
-  openedBy: 'server',
   owed: [],
   paused: { by: 'person:owner', at: 1, reason: 'Wait' },
   pin: { agentId: 'a', why: 'ci', at: 1 },
@@ -73,9 +70,6 @@ const conversation: Required<Conversation> = {
   projectId: 'p',
   proposal: { version: 1, text: 'Words', goal: 'Goal', why: 'Why', doneWhen: 'Done', evidence: ['Evidence'], priority: 'P2', createdAt: 0, senders: [], questions: [] },
   proposals: [],
-  pullRequestChecks: {},
-  pullRequestEvents: {},
-  pullRequestHeads: {},
   pullRequestUrls: [],
   pulse: {} as never,
   queueRank: 1.5,
@@ -87,7 +81,6 @@ const conversation: Required<Conversation> = {
   reviewStamp: { assignmentId: 'w', handoff: 1 },
   statusLine: { text: '', since: 0 },
   step: 'Review',
-  stepIds: [],
   stepUp: { attempt: 2, floor: 2, reason: 'r', at: 1, carry: '' },
   stuck: { key: 'k', messageId: 'm', tagged: [], fixed: 'f' },
   talkedAt: { w: { person: 1, answer: 2 } },
@@ -97,8 +90,6 @@ const conversation: Required<Conversation> = {
   teamWrittenBy: { kind: 'assigned' },
   title: 't',
   unlinkedPullRequests: [],
-  waitingLinuxStep: { step: { name: 'Test on a Linux machine', kind: 'test', areas: [], where: ['The CLI on a Linux machine'], os: 'linux' }, pulls: [] },
-  waitingWindowsStep: { step: { name: 'Test on a Windows machine', kind: 'test', areas: [], where: ['The CLI on a Windows machine'], os: 'windows' }, pulls: [] },
   writers: [],
 }
 

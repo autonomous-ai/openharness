@@ -34,8 +34,7 @@ beforeAll(async () => {
     machineId, userId, computerId, sessionKind: 'computer', apiKey: `fixture-${machineId}`, managerId: '', autonomousEnv: 'prod', authMode: 'remote', ...extra } })
   await machine('kelvin-mac', kelvin, COMPUTER)
   await machine('tt-mac', tt, COMPUTER)
-  // Not another account's sign-in on this computer: a Team row, a deleted row, another environment's, another computer's.
-  await machine('kelvin-team', kelvin, COMPUTER, { sessionKind: 'team', hostMachineId: 'kelvin-mac' })
+  // Not another account's sign-in on this computer: a deleted row, another environment's, another computer's.
   await machine('other-deleted', other, COMPUTER, { deletedAt: new Date() })
   await machine('other-stag', other, COMPUTER, { autonomousEnv: 'stag' })
   await machine('other-elsewhere', other, OTHER)
@@ -54,7 +53,7 @@ afterAll(async () => {
 })
 
 describe("a computer's other accounts", () => {
-  it('are the live rows of other accounts signed in on it before, never the owner\'s own, a Team row, or another computer\'s', async () => {
+  it('are the live rows of other accounts signed in on it before, never the owner\'s own or another computer\'s', async () => {
     expect(await otherAccountsOnComputer(db, { computerId: COMPUTER, ownerId: tt, autonomousEnv: 'prod' }))
       .toEqual([{ machineId: 'kelvin-mac', userId: kelvin }])
     expect(await otherAccountsOnComputer(db, { computerId: COMPUTER, ownerId: kelvin, autonomousEnv: 'prod' }))

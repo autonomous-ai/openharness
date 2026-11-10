@@ -8,7 +8,6 @@
  */
 import type { Agent, AgentStart, Conversation, Person, SuperTabState, WorkStatus } from '../model.js'
 import type { ContributedMachine } from '../machines.js'
-import type { PromptWait } from '../promptWaits.js'
 
 export const READ_FORMAT = 2
 export type PartKind = 'head' | 'member' | 'agent' | 'group' | 'machine' | 'start' | 'progress'
@@ -96,30 +95,12 @@ export interface Derived {
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A project agent only: the account each project's PM runs on, a project it may not read named "another project". */
-  pmAccounts?: Array<{ machineId: string; hostMachineId?: string; engine: string; project: string; pm: string }>
+  pmAccounts?: Array<{ machineId: string; engine: string; project: string; pm: string }>
   /** The Swarm's owner only: projects nobody owns, which they may delete but never read (projects.ts ownerlessProjects). */
   ownerlessProjects?: Array<{ id: string; name: string; conversations: number }>
-  /** A person only. */
-  mentionsWaiting?: number
-  /** A person only: a digest of which tags wait, moving when they change though the count may not. */
-  mentionsDigest?: string
   /** Signed links to uploaded avatars, by `person:<id>` and `agent:<id>` (avatarLinks.ts): fresh with every read, the same
    *  through each half hour, each opening for at most an hour. Absent when nobody visible has one. */
   avatars?: Record<string, string>
-  /** A person only: decisions asked of them, still open. */
-  decisionsWaiting?: number
-  /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
-  decisionsDigest?: string
-  /** A person only: the task agents waiting at a prompt in their terminals for them (promptWaits.ts), shown under Decisions and
-   *  counted with them. Absent from an older backend, and for an agent. */
-  promptsWaiting?: PromptWait[]
-  /** A person only: a digest of which of their Activity rows are unread (activity.ts), moving when one is written, read or
-   *  removed. No count and no chat: the client reads its list again when it moves. Absent from an older backend. */
-  activityDigest?: string
-  /** A person only: a digest of their reminders and when each is due (reminders.ts), moving when one is set, replaced or
-   *  cleared. No count and no chat: the client reads its reminders again when it moves, and at the `next` time that read
-   *  gave it. Absent from an older backend. */
-  remindersDigest?: string
   /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
    *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
    *  higher of the two. Never another person's. */
@@ -242,10 +223,7 @@ export interface CommandReply {
 export interface SwarmList {
   tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null
     /** Only on the reader's own Personal Swarm. */
-    personal?: true
-    /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a
-     *  Swarm whose count cannot be told here has neither). */
-    mentionsWaiting?: number; mentionsDigest?: string }>
+    personal?: true }>
   next: string | null
 }
 

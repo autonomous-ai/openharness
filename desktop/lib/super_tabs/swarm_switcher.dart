@@ -8,7 +8,7 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
-import 'buddy_rows.dart' show SuperTabCountBadge;
+import 'count_badge.dart' show SuperTabCountBadge;
 import 'controller.dart';
 import 'machines.dart' show contributeComputer;
 import 'personal_machines.dart';
@@ -340,14 +340,10 @@ List<SwarmChoice> swarmChoices(AppNotifier app) {
         (
           id: id,
           name: name.trim().isEmpty ? 'Swarm' : name,
-          waiting: swarmWaiting(app, id),
+          waiting: app.superTabs.agentsAsking(id),
         ),
   ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 }
-
-/// What a Swarm's tab badge counts: its tags and unread Buddy chat lines.
-int swarmWaiting(AppNotifier app, String id) =>
-    app.superTabs.waitingTags(id) + app.superTabs.waitingBuddy(id);
 
 /// The Swarm tab showing [c]'s Swarm moves to Personal when that Swarm is
 /// taken away, once the person has picked Personal here (read from this
@@ -443,7 +439,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
       final choices = swarmChoices(app);
       final personalWaiting = personalId == null || isPersonal
           ? 0
-          : swarmWaiting(app, personalId);
+          : app.superTabs.agentsAsking(personalId);
       Widget? badge(int count) => count > 0 ? SuperTabCountBadge(count) : null;
       return LayoutBuilder(
         builder: (context, box) {

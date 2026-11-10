@@ -42,6 +42,7 @@ class SwarmSession extends ChangeNotifier {
     LocalKeyValueStore? readMarks,
     SwarmKeptStore? kept,
     SwarmTold? told,
+    DateTime Function()? now,
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
@@ -59,6 +60,7 @@ class SwarmSession extends ChangeNotifier {
           inbox.reader(need.swarmId)?.notifyOf(need.conversationId) ==
           SwarmNotify.muted,
       told: told,
+      now: now,
     );
     _chatNotices = SwarmChatNotices(_announcer);
     inbox

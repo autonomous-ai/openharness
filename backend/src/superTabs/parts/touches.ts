@@ -1,6 +1,5 @@
 import type { Command, CommandContext } from '../commands.js'
 import type { Actor, CommandEffects, SuperTabState } from '../model.js'
-import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
@@ -34,13 +33,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       if ((start.request.member || start.request.helperOf) && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
     }
   }
-  const slots = (machineId: string) => {
-    const pool = before.machines?.find(m => m.machineId === machineId)
-    const mac: ContributedMachine | undefined = pool?.hostMachineId ? before.machines?.find(m => m.machineId === pool.hostMachineId) : pool
-    for (const id of new Set([machineId, mac?.machineId, ...(before.machines ?? []).filter(m => mac && m.hostMachineId === mac.machineId).map(m => m.machineId)])) {
-      if (id) machine(id)
-    }
-  }
+  const slots = (machineId: string) => machine(machineId)
 
   // D1: the actor's own part (spec ruling 2).
   if (actor.kind === 'person') member(actor.userId)
@@ -163,19 +156,13 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'conversation.create': {
       const projectId = command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : 'lead')
       group(leadGroupOf(projectId))
-      group(command.reviewOf)
       member(command.requesterId)
       for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
       if (command.proposalMessageId) head()
       break
     }
-    case 'conversation.merged':
     case 'conversation.unlink':
       leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
-    case 'work.status':
-      // Ready decides whether to open steps from the project's preset; a concurrent switch must make it retry.
-      if (command.status === 'review') head()
       break
     // Whether an agent may change a priority is whether it is still its project's PM (commands.ts coordinatorOrPerson).
     case 'work.priority':

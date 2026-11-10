@@ -92,7 +92,6 @@ void main() {
             builder: (context, set) => SuperTabView(
               controller: controller,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
@@ -103,7 +102,6 @@ void main() {
                   : null,
               onOpenGroupTerminals: () => set(() => terminalOpen = true),
               onCloseTerminal: () => set(() => terminalOpen = false),
-              board: true,
             ),
           ),
         ),

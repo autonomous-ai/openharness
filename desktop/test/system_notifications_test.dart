@@ -845,7 +845,7 @@ void main() {
 
     // Diego (11-03): on Linux no Swarm notice click did anything. notify-send
     // reports the click on its default action while it waits (--wait).
-    group('a click on a tag or chat notice', () {
+    group('a click on a chat notice', () {
       Future<void> notice(LinuxSystemNotifier n, String machine, String to) =>
           n.show(
             id: 'harness-chat:$to',
@@ -864,13 +864,9 @@ void main() {
         final taps = <(String, String)>[];
         n.onTap = (machine, agent) => taps.add((machine, agent));
         await notice(n, '@chat', 'tab-1/offline');
-        await notice(n, SystemNotifications.mentionNoticeMachine, 'tab-1/m-2');
         await pumpEventQueue();
         expect(ran[0], containsAll(['--action=default=Open', '--wait']));
-        expect(taps, [
-          ('@chat', 'tab-1/offline'),
-          (SystemNotifications.mentionNoticeMachine, 'tab-1/m-2'),
-        ]);
+        expect(taps, [('@chat', 'tab-1/offline')]);
         // An agent's alert still replaces its last one, and waits for nothing.
         await post(n);
         expect(ran.last, contains('--print-id'));

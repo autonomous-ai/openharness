@@ -11,11 +11,6 @@ const words = 'Keep offline edits.'
 const task = { goal: words, changes: 'Persist drafts', constraints: 'No sign-in', owns: ['backend/src/superTabs/'] }
 function fixture(board = true) {
   const f = fullSwarm(NOW)
-  // Its machine is its person's own computer: a Team-session machine takes no new work in Swarm v3 (task #4120).
-  f.edit(state => {
-    const reading = state.machines!.find(m => m.machineId === 'host')!.observation!
-    reading.sessionKind = 'computer'
-  })
   if (board) f.state.projects![0]!.boardMode = true
   else delete f.state.projects![0]!.boardMode
   const candidate = f.add('candidate', f.web), other = f.add('other-candidate', f.web)
@@ -329,14 +324,6 @@ describe('personal approval enforced before work', () => {
     const clean = withoutCredentials(commandSchema.parse({ type: 'task.reject', conversationId: 'task', reason: `Avoid ${token}` }), removed)
     expect(JSON.stringify(clean)).not.toContain(token)
     expect(removed.length).toBeGreaterThan(0)
-  })
-  it('blocks child review execution while the owning task is pending or rejected', () => {
-    const f = fixture(); f.mode('review'); const id = f.create()
-    const step = () => f.runCommand({ type: 'conversation.create', title: 'Review', brief: 'Review implementation', checks: [{ description: 'Review passed' }],
-      reviewOf: id, step: 'Review' }, f.pm)
-    expect(step).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-    f.runCommand({ type: 'task.reject', conversationId: id, reason: 'Do later' })
-    expect(step).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
   it.each(['removed', 'stopping'])('recovers an approved, unassigned task when its chosen worker is %s, with fresh person approval', state => {
     const f = fixture(); f.mode('review'); const id = f.create()

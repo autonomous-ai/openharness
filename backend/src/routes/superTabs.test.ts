@@ -48,7 +48,7 @@ import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
+import { REFUSED_TO_PEOPLE, RETIRED_COMMANDS, RETIRED_NOTE } from '../superTabs/retired.js'
 import { counted, OLD_PAYLOADS } from '../superTabs/retired.test-support.js'
 import { SuperTabStore } from '../superTabs/store.js'
 import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
@@ -113,8 +113,11 @@ describe('a command Swarm v4 no longer has, over HTTP', () => {
     const before = await counted(type, 'desktop')
     for (const asAgentId of [undefined, 'agent-1']) {
       const res = await send({ type, ...OLD_PAYLOADS[type] }, asAgentId)
-      expect(res.statusCode).toBe(200)
-      expect(res.json()).toEqual({ success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } })
+      // A person's that an older app would take as saved is refused in words it shows (REFUSED_TO_PEOPLE); an agent's is ignored.
+      const refused = asAgentId ? undefined : REFUSED_TO_PEOPLE[type]
+      expect({ status: res.statusCode, body: res.json() }).toEqual(refused
+        ? { status: refused.status, body: expect.objectContaining({ success: false, error: expect.objectContaining({ code: refused.code, message: refused.message }) }) }
+        : { status: 200, body: { success: true, data: { result: { ignored: true, note: RETIRED_NOTE }, parts: [] } } })
     }
     expect(await counted(type, 'desktop')).toBe(before + 2)
     expect(queries).toEqual([])
@@ -192,6 +195,62 @@ describe('the retired scorecard read', () => {
       const res = await app.inject({ method: 'GET', url })
       expect(res.statusCode, url).toBe(200)
       expect(res.json(), url).toEqual({ success: true, data: { days: [] } })
+    }
+  })
+})
+
+// Decisions, tags, Activity, reminders, followed threads, the inbox and catch-up are gone with Swarm v4 (anh Dee, 2026-11-10): an agent
+// reaches its person in their 1:1 chat. An older Desktop, phone or host still reads them: each gets its empty answer, whoever asks,
+// whichever Swarm and query it names, and nothing is read.
+describe('the retired reads', () => {
+  let app: FastifyInstance
+  beforeEach(async () => {
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    // A store, reads and host reads that fail on any call: the answer must not touch them.
+    await app.register(superTabRoutes, { store: {} as never, github: null, reads: {} as never, hosts: {} as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  // Tags, Activity, reminders, followed threads, the inbox and catch-up go too (S11): each answers its empty answer.
+  it('answers an older client\'s tags, Activity, reminders, threads, inbox and catch-up reads with none, and reads nothing', async () => {
+    const none = { total: 0, items: [] }
+    for (const [url, data] of [
+      ['/api/super-tabs/tab-1/mentions?state=waiting', { mentions: [] }], ['/api/super-tabs/tab-2/mentions?state=earlier', { mentions: [] }],
+      ['/api/super-tabs/tab-1/activity', { items: [], more: false }], ['/api/super-tabs/tab-1/reminders', { due: [], next: null }],
+      ['/api/super-tabs/tab-1/threads?read=50', { unread: [], read: [], more: false }], ['/api/super-tabs/tab-1/inbox', { threads: [], latest: [], more: false }],
+      // Catch-up's span ends where it started, at the mark it was sent: never behind it.
+      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=4', { after: 4, through: 4, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
+        needsYou: none }],
+      ['/api/super-tabs/tab-1/conversations/c1/catch-up?after=x', { after: 0, through: 0, unread: 0, more: false, decisions: 0, landed: none, blocked: none,
+        needsYou: none }],
+    ] as const) {
+      const res = await app.inject({ method: 'GET', url })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data } })
+    }
+  })
+
+  it('answers an older client\'s Activity read mark, thread follow and cleared reminder as done, refuses a new reminder in words, and reads nothing', async () => {
+    for (const [url, payload, data] of [
+      ['/api/super-tabs/tab-1/activity/read', { through: '2026-11-01T00:00:00.000Z' }, { marked: 0 }],
+      ['/api/super-tabs/tab-1/conversations/c1/threads/m1/follow', { follow: true }, { follow: null }],
+      ['/api/super-tabs/tab-1/conversations/c1/messages/m1/reminder', { at: null }, { cleared: false }],
+    ] as const) {
+      const res = await app.inject({ method: 'POST', url, payload })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data } })
+    }
+    const set = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/conversations/c1/messages/m1/reminder', payload: { at: '2026-11-11T09:00:00.000Z' } })
+    expect({ status: set.statusCode, body: set.json() }).toEqual({ status: 410,
+      body: { success: false, error: { code: 'REMINDERS_RETIRED', message: 'Reminders are gone. Nothing was set.' } } })
+  })
+
+  it('answers an older client\'s decisions read with none, with each query it sent, and reads nothing', async () => {
+    for (const url of ['/api/super-tabs/tab-1/decisions?state=open', '/api/super-tabs/tab-1/decisions?state=answered&asAgentId=agent-1',
+      '/api/super-tabs/tab-2/decisions?state=settled', '/api/super-tabs/tab-2/decisions']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data: { more: false, decisions: [] } } })
     }
   })
 })

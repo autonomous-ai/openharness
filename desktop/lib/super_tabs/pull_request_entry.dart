@@ -141,15 +141,3 @@ class SuperTabPullRequestEntry {
     );
   }
 }
-
-String pullRequestAge(DateTime? time, DateTime now) {
-  if (time == null) return '';
-  final minutes = now.difference(time).inMinutes.clamp(0, 99999999);
-  return minutes < 1
-      ? 'just now'
-      : minutes < 60
-      ? '$minutes min ago'
-      : minutes < 1440
-      ? '${(minutes / 60).round()} h ago'
-      : '${(minutes / 1440).round()} d ago';
-}

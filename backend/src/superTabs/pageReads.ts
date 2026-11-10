@@ -319,11 +319,11 @@ export async function pageThreads(tx: Transaction, tabId: string, conversationId
   return threadsAcross(tx, tabId, roots.map(root => ({ conversationId, root })))
 }
 
-/** pageThreads for threads of any conversations of one Swarm (read/followedThreads.ts): the summaries of all of them by root id
+/** pageThreads for threads of one Swarm: the summaries of all of them by root id
  *  in one read, each counted only in the Swarm and conversation named for it; threadFacet per conversation before the backfill.
  *  Matched by `_id` alone, so no other index of the collection (tabId, conversationId) can serve it and walk a Swarm's every
  *  summary. */
-export async function threadsAcross(tx: Transaction, tabId: string, threads: ReadonlyArray<{ conversationId: string; root: string }>): Promise<ThreadReply[]> {
+async function threadsAcross(tx: Transaction, tabId: string, threads: ReadonlyArray<{ conversationId: string; root: string }>): Promise<ThreadReply[]> {
   if (!threads.length) return []
   if (!await threadsBackfilled(tx, tabId)) {
     const byChat = new Map<string, string[]>()
@@ -338,41 +338,6 @@ export async function threadsAcross(tx: Transaction, tabId: string, threads: Rea
     .filter(t => t.tabId === tabId && named.has(`${t.conversationId}\u0000${t._id}`))
   return threadReplies(tx, tabId, { parts: stored.flatMap(t => t.parts), mentions: stored.flatMap(t => t.mentions) })
 }
-
-/**
- * Of the threads rooted at `threads`, those whose summary shows `personId` writing or tagged in a row a person reads (what
- * threadReplies marks agentOnly is left out), as `${conversationId}\u0000${root}`. A backfilled Swarm's only (threadsBackfilled):
- * its summaries hold every reply. One read by `_id`, as threadsAcross, that returns only the summaries naming the person, and
- * of each only the parts and tags that do, without their rows' authors or the root's source: the member check needs no more
- * (inbox.ts namedInThreads). Reading them whole made the threads route return 2.8x the database bytes per call (task #2838).
- */
-export async function threadsNaming(tx: Transaction, tabId: string, threads: ReadonlyArray<{ conversationId: string; root: string }>,
-  personId: string): Promise<Set<string>> {
-  if (!threads.length) return new Set()
-  const named = new Set(threads.map(t => `${t.conversationId}\u0000${t.root}`))
-  // A part's key fields that decide whether a reader skips its rows (threadReplies hidden).
-  const key = (of: string) => ({ root: `${of}._id.root`, kind: `${of}._id.kind`, only: `${of}._id.only`, to: `${of}._id.to` })
-  const stored = (await readBy(tx, 'SuperTabThread', 'id', [
-    { $match: { _id: { $in: [...new Set(threads.map(t => t.root))] },
-      $or: [{ parts: { $elemMatch: { '_id.author.kind': 'person', '_id.author.id': personId } } }, { 'mentions._id.person': personId }] } },
-    { $project: { tabId: 1, conversationId: 1,
-      parts: { $map: { input: { $filter: { input: '$parts', as: 'p',
-        cond: { $and: [{ $eq: ['$$p._id.author.kind', 'person'] }, { $eq: ['$$p._id.author.id', personId] }] } } }, as: 'p', in: key('$$p') } },
-      mentions: { $map: { input: { $filter: { input: '$mentions', as: 'm', cond: { $eq: ['$$m._id.person', personId] } } }, as: 'm', in: key('$$m') } },
-      // The root's row, which deliveredCopies reads: only what it decides by.
-      root: { $map: { input: { $filter: { input: '$parts', as: 'p', cond: { $eq: ['$$p._id.root', true] } } }, as: 'p',
-        in: { kind: '$$p.root.source.kind', only: '$$p.root.source.recipientsOnly', to: { $gt: [{ $size: { $ifNull: ['$$p.root.recipientIds', []] } }, 0] } } } },
-    } }]) as unknown as Array<{ _id: string; tabId: string; conversationId: string; parts: NamingPart[]; mentions: NamingPart[]
-      root: Array<{ kind?: unknown; only?: unknown; to: boolean }> }>)
-    .filter(t => t.tabId === tabId && named.has(`${t.conversationId}\u0000${t._id}`))
-  const copies = await deliveredCopies(tx, tabId, stored.flatMap(t => t.root.slice(0, 1).map(r =>
-    ({ id: t._id, source: { kind: r.kind, recipientsOnly: r.only }, recipientIds: r.to ? ['recipient'] : [] }))))
-  const hidden = (thread: string, p: NamingPart) => (p.root === true && copies.has(thread))
-    || agentOnly({ kind: p.kind, recipientsOnly: p.only }, p.to ? ['recipient'] : [])
-  return new Set(stored.filter(t => [...t.parts, ...t.mentions].some(p => !hidden(t._id, p))).map(t => `${t.conversationId}\u0000${t._id}`))
-}
-/** What threadsNaming reads of a part or tag: what threadReplies decides agentOnly by. */
-interface NamingPart { root?: boolean; kind?: unknown; only?: unknown; to?: boolean }
 
 /**
  * Rewrites the summaries of the threads rooted at `roots` in one conversation from their rows now: one document per thread
@@ -451,23 +416,15 @@ export async function foldReplies(tx: Transaction, tabId: string, conversationId
   return { parts: [...whole.parts, ...folded.flatMap(f => f.parts)], mentions: [...whole.mentions, ...folded.flatMap(f => f.mentions)] }
 }
 
-/** Folds the rows `rows`, just inserted, into the summaries of the threads they reply in (foldReplies), and answers each
- *  thread's facet by its root, which the same transaction's Activity reads instead of the thread's rows (activity.ts
- *  writeReplyActivity). A row that is its own thread's root, or has none (written before threads), changes no summary. */
+/** Folds the rows `rows`, just inserted, into the summaries of the threads they reply in (foldReplies). A row that is its own
+ *  thread's root, or has none (written before threads), changes no summary. */
 export async function refreshReplies(tx: Transaction, tabId: string,
-  rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<Map<string, ThreadFacet>> {
+  rows: ReadonlyArray<{ id: string; conversationId: string; thread?: string | null }>): Promise<void> {
   const replies = new Map<string, Array<{ id: string; thread: string }>>()
   for (const row of rows) {
     if (row.thread && row.thread !== row.id) replies.set(row.conversationId, [...replies.get(row.conversationId) ?? [], { id: row.id, thread: row.thread }])
   }
-  const facets = new Map<string, ThreadFacet>()
-  for (const [conversationId, list] of replies) {
-    const facet = await foldReplies(tx, tabId, conversationId, list)
-    for (const root of new Set(list.map(row => row.thread))) {
-      facets.set(root, { parts: facet.parts.filter(p => p._id.thread === root), mentions: facet.mentions.filter(m => m._id.thread === root) })
-    }
-  }
-  return facets
+  for (const [conversationId, list] of replies) await foldReplies(tx, tabId, conversationId, list)
 }
 
 /** How long this process trusts what it last read of a Swarm's backfill marker. */
@@ -475,7 +432,7 @@ const BACKFILL_CHECK_MS = 60_000
 const backfilled = new Map<string, { done: boolean; at: number }>()
 
 /** Whether the Swarm's thread summaries are backfilled (threadBackfill.ts), as this process read it in the last minute. */
-export async function threadsBackfilled(tx: Transaction, tabId: string): Promise<boolean> {
+async function threadsBackfilled(tx: Transaction, tabId: string): Promise<boolean> {
   const known = backfilled.get(tabId), now = Date.now()
   if (known && now - known.at < BACKFILL_CHECK_MS) return known.done
   const done = !!await tx.superTabThreadBackfill.findUnique({ where: { id: tabId }, select: { id: true } })

@@ -8,15 +8,15 @@ import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { pmAcceptsMessage, legacyProposalId, type LegacyProposalAsk } from './proposalCards.js'
 import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
-import { isRetiredCommand, retiredAnswer } from './retired.js'
+import { isRetiredCommand, opensRetiredStep, REFUSED_TO_PEOPLE, RETIRED_STEP, retiredAnswer } from './retired.js'
 import { metrics } from '../lib/metrics.js'
-import { writeReplyActivity } from './activity.js'
 import type { ReactionTarget } from './reactions.js'
-import { chatNotices, phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
+import { chatNotices } from '../push/notices.js'
+import { writeReadMark } from './readMarks.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
 import type { AccountRename } from './accountRenames.js'
-import { authorForAgent, lazyUsernames, nameFromAccount, namesPerson, rowForAgent, shownNameOf } from './personNames.js'
+import { authorForAgent, lazyUsernames, nameFromAccount, namesPerson, rowForAgent } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
@@ -29,8 +29,6 @@ import { wavDurationMs } from '../lib/wav.js'
 import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_READ_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
-import type { PullRequestFilesRead } from './pullRequestFiles.js'
-import type { RepositoryReach } from './repositoryReach.js'
 import { githubRepository } from '../github/repository.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
@@ -38,7 +36,7 @@ import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } 
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
-import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery, type ThreadFacet } from './pageReads.js'
+import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
@@ -56,15 +54,13 @@ import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
 import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
-import { accountOf, wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
-import { taskProcess } from './process.js'
+import { wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, refuseOthersInPrivateChat, routingRow } from './buddies.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
 import { crewNeedOf } from './crewNeeds.js'
-import { CARRIES_KEPT } from './mergeCarry.js'
 import { swarmUsernames } from './usernames.js'
 import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, owedLines, personLine, turnInboxHost, type InboxSection } from './inbox.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
@@ -77,17 +73,17 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
-import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
-import { candidatesFor, dispatchRules, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchRules, type Skip } from './dispatch.js'
+import { candidatesFor, dispatchRules, freeCrew, laneCapacity, openTasks, roundOf, type DispatchRules, type Skip } from './dispatch.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { finishedWakes } from './crewTimes.js'
-import { failRefusedStarts, judgedMachines, recordTaskState, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { teamMachineIds } from './migration/teamMachinesJob.js'
+import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
-import { groupsOf, archivable, archiveLine, archiveWaitsFor, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
+import { groupsOf } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
@@ -96,10 +92,6 @@ import { otherAccountsOnComputer, sameComputerKey, type ComputerMove, type Compu
 import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
-import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { checksStateOf, pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
-import { checkedPullRequest, deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
-import { reopenOnEvents } from './handed.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -114,13 +106,9 @@ import { agentDisplayName } from './agentNames.js'
 import { endedHolds, startedHolds, tokenTask, type WorkHold } from '../github/holds.js'
 import { accrueLent, addLent, lentAgents, lentProjects } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
-import { costRows, failedStarts, summarizeCosts } from './costs/read.js'
-import { MAX_PROPOSALS, proposalQuestion, proposalTitle, REASK_DAYS, reflectionMessageId, routingReflection, type ReflectionInput } from './costs/reflection.js'
+import { costRows, summarizeCosts } from './costs/read.js'
 import { recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
-import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { answerableBy, askDecisions, BUDDY_SEND, closeDecisions, DECISION_ASKED_KIND, keepWaiting, MAX_OPEN_DECISIONS, REFLECTION_DECISION, reflectionDecisions, expireReflections, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, withdrawIn, workEnded, workOver, writeDecisions } from './decisions.js'
-import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
@@ -227,7 +215,6 @@ function namedFor(command: Command): Named {
   const has = (key: string) => key in command
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
   const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
-    command.type === 'conversation.create' ? command.reviewOf : undefined,
     'askedIn' in command ? command.askedIn?.conversationId : undefined,
     // The code tasks an instructions save's rules moved into, merged ones gone quiet included (ruleGuard.ts; #3392).
     ...command.type === 'instructions.save' ? command.tasks ?? [] : []].filter((id): id is string => !!id)
@@ -270,15 +257,6 @@ function deliveryTouches(delivery: SuperTabDelivery, state: SuperTabState): Touc
  *  (commands.ts applyCommand), and the parts stay what the write is compared with (parts/commit.ts). */
 export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {}): Promise<Loaded> {
   return loadedFrom(row, await loadActive(tx, row.id, named))
-}
-
-const DAY_MS = 24 * 60 * 60_000
-/** Where a project's routing reflection goes: its project chat, under its Lead. None in a paused Swarm or without a Lead. */
-function reflectionPlace(state: SuperTabState, projectId: string) {
-  const project = projectsOf(state).find(p => p.id === projectId)
-  const chat = project && state.conversations.find(c => c.id === project.leadConversationId)
-  const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
-  return state.paused || !project || !chat || !lead ? null : { project, chat, lead }
 }
 
 function loadedFrom(row: SwarmRow, parts: SwarmParts): Loaded {
@@ -355,7 +333,7 @@ function grantsOf(state: SuperTabState, agentId: string, allowed: SuperTabDelive
   for (const id of [agentId, ...allowed.filter(d => d.authorKind === 'agent').map(d => d.authorId)]) {
     const found = state.agents.find(a => a.id === id)
     if (found) grants[id] = { contributorId: found.contributorId, machineId: found.machineId, machineOwnerId: found.machineOwnerId, hostGrant: found.hostGrant ?? null,
-      ...(onTeamAccount(state, found) ? { team: true as const } : {}) }
+ }
   }
   return { swarm: { environment: state.environment }, grants }
 }
@@ -403,21 +381,12 @@ export interface SuperTabStoreHooks {
   workStarted?: (tabId: string, started: WorkHold[]) => void
   /** Who pushed these pull requests of a project's repository (github/pushOrigin.ts): the worst of their answers. Absent with no GitHub App. */
   pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
-  /** The files a handed task's pull requests change and their head (pullRequestFiles.ts), read before its Engineer's Ready so
-   *  the server opens its review steps (task #3401). Null with nothing of the project's repository to read. Absent with no GitHub App. */
-  pullRequestFiles?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PullRequestFilesRead | null>
   /** When GitHub says each of these pull requests merged (ms; null: not merged; absent: not known), read before an
    *  instructions save that may drop a person's rule kept in a code task (ruleMoves.ts, task #3463). Absent with no GitHub App:
    *  such a line then stays. */
   pullRequestMerges?: (autonomousEnv: string, tabId: string, projectId: string, pullRequestUrls: string[]) => Promise<Record<string, number | null>>
-  /** A reader of pull requests as the minute PR watch reads them (pullRequestEvents.ts appPullRequestWatch), for a verdict naming
-   *  a head the record does not have and for a Ready, which read the head now (task #3628). Absent with no GitHub App. */
-  pullRequestReader?: () => PullRequestReader
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
-  /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
-   *  an agent.start or work.assign (repositoryReach.ts). Absent with no GitHub App. */
-  repositoryReach?: (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) => Promise<RepositoryReach | undefined>
   /** Hand free crew members their next task after the writes that may free one or open a task, and from the 30-second sweep
    *  (store.ts dispatchCrew, task #3400). Off unless a server turns it on. */
   dispatch?: boolean
@@ -496,8 +465,7 @@ export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: 
 /** What of a Swarm an agent's grant is checked against (SuperTabStore.grantHolds). */
 export type SwarmGrant = Pick<SuperTabState, 'environment'>
 /** What of an agent its grant is checked against: who lent which machine to whom, under which share grant. */
-/** `team`: the agent runs in a Harness Team account, by the Swarm's own record (projects.ts onTeamAccount). */
-export type AgentGrant = Pick<Agent, 'contributorId' | 'machineId' | 'machineOwnerId' | 'hostGrant'> & { team?: true }
+export type AgentGrant = Pick<Agent, 'contributorId' | 'machineId' | 'machineOwnerId' | 'hostGrant'>
 
 /** A caller's last full delivery poll: when it succeeded and, when it found deliveries open, what it found. */
 export interface Polled {
@@ -529,26 +497,11 @@ export function localPollMemory(now: () => number): PollMemory {
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
-/** The routing decision a command names. `decision.answer` names a person's decision instead (decisions.ts). */
-const routeDecisionOf = (command: Command): string | undefined => command.type === 'decision.answer' ? undefined
-  : 'decisionId' in command ? command.decisionId : 'routeDecisionId' in command ? command.routeDecisionId : undefined
+/** The routing decision a command names. */
+const routeDecisionOf = (command: Command): string | undefined =>
+  'decisionId' in command ? command.decisionId : 'routeDecisionId' in command ? command.routeDecisionId : undefined
 
 const machineKey = (environment: string, machineId: string, ownerId: string) => `machine:${environment}:${machineId}:${ownerId}`
-/** Whether a Swarm's own record says [machineId] is a Harness Team account's: its pool names a Mac, or an agent there
- *  joined as one (projects.ts onTeamAccount). An ordinary sign-in connecting as that computer resets its account row's mark,
- *  never this (security re-check 2 of #2089). */
-export const teamByRecord = (state: SuperTabState, machineId: string): boolean =>
-  !!state.machines?.find(m => m.machineId === machineId)?.hostMachineId || state.agents.some(a => a.machineId === machineId && onTeamAccount(state, a))
-/** A Team account's machine refused to its owner's own sign-in (notTeamMachine). */
-/** A PM from before Swarm v3 still in a Harness Team account, which assigns and starts no agent (store.ts teamCommand, #4248). */
-export const PM_IN_TEAM_ACCOUNT = 'PM_IN_TEAM_ACCOUNT'
-/** What such a PM is told: who moves it, and how (commands.ts lead.switch, which only the project's owner may run). */
-const pmInTeamAccount = (state: SuperTabState, project: SwarmProject): string =>
-  `This ${coordinatorNameOf(project)} runs in a Harness Team account, which assigns and starts no agents now. ${shownNameOf(state, project.ownerId) ?? 'The project\'s owner'} `
-  + 'moves it with Switch PM to their own computer, where it keeps its chat and tasks and starts agents in their own account. Until then it keeps coordinating.'
-
-export const TEAM_HOST_ONLY = 'TEAM_HOST_ONLY'
-export const TEAM_HOST_ONLY_MESSAGE = 'Only this computer\'s Harness Team account runs its Swarm agents. Its owner\'s own sign-in cannot act for them.'
 
 /**
  * What agent grant checks read, kept for one request only. A host read checks every agent on its machine, mostly for the
@@ -709,100 +662,6 @@ export class SuperTabStore {
     this.machineKeys = hooks.machineKeys ?? activeMachineKeysOf
   }
 
-  /** A host route never hosts a Harness Team account's machine (notTeamMachine). Shared with the read API (superTabs/read,
-   *  design section 7.2). [owned]: the machine's account row for this sign-in, when the caller already read it (machineAlive),
-   *  so it is read once. [state]: a Swarm the request reads, whose own record of the machine counts too (teamByRecord). */
-  async hostFor(tx: Transaction, user: AuthUser, machineId: string, owned?: Machine | null, state?: SuperTabState): Promise<void> {
-    await this.notTeamMachine(async () => owned !== undefined ? owned
-      : tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } }), !!state && teamByRecord(state, machineId))
-  }
-
-  /**
-   * A Harness Team account's machine was hosted, and its agents spoken for, by its team session alone (security review 2 of
-   * #2089), and Team sessions are gone (anh Dee, 2026-11-10): nobody hosts it. It is a machine of its Mac owner's account, so
-   * the owner's ordinary sign-in passed every host check, and could read every chat its Product Manager can, claim its
-   * deliveries and post as it, past every rule the Swarm keeps for it.
-   * [row]: the machine's account row, read once with the request's others; [flagged]: an agent that joined on one.
-   */
-  private async notTeamMachine(row: () => Promise<Pick<Machine, 'sessionKind' | 'hostMachineId'> | null>, flagged = false): Promise<void> {
-    // The row's own mark, which an ordinary sign-in connecting as that computer resets (lib/adapterWs.ts), and the Mac it
-    // names, which it keeps; and what the Swarm itself recorded ([flagged], security re-check 2 of #2089).
-    const machine = flagged ? null : await row()
-    if (flagged || machine?.sessionKind === 'team' || !!machine?.hostMachineId) {
-      fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
-    }
-  }
-
-  /**
-   * What a PM in a Harness Team account may have the server's dispatch command for it (projectPmActor), beyond the Swarm's own
-   * rules for that agent, as its team session once could (Team sessions are gone, anh Dee 2026-11-10; Team machines go with S15): a machine is the person's to
-   * contribute, pause or remove, and nothing may start, add, move or drive an agent on another machine. It may assign or
-   * add an agent that runs in a Team account too, on any machine: a Team Engineer handing its review step to a Reviewer on
-   * another Team machine had to ask the PM instead (tasks #2178 and #2215, 11-02). That other Team account is another account
-   * (projects.ts accountOf), so its agent reads the brief marked as another account's text (audit M3), as a message from it
-   * would be; the main account stays out of reach. Typing into
-   * or reading another machine's terminal stays refused, whatever account it runs in. Messages and work reports go to the
-   * Swarm as from any agent. An agent that is gone is left to the command's own answer.
-   */
-  private teamCommand(state: SuperTabState, team: string, user: AuthUser, command: Command, actorId?: string): void {
-    // A PM from before Swarm v3 still in a Team account (#4248, finding 7 of #4212): what it may not do is refused in words that
-    // say who moves it and how, since nothing else tells it; it keeps coordinating meanwhile. Only a PM on this Team computer: the
-    // agent a request names is not checked yet here, and another project's PM would read that project's names (review of #3476).
-    const pm = actorId && ['work.assign', 'conversation.agent', 'agent.start'].includes(command.type)
-      ? state.agents.find(a => a.id === actorId && a.machineId === team) : undefined
-    const led = pm && ledProject(state, pm.id)
-    if (led) {
-      logger.warn('[super-tab] team command refused', { tabId: state.id, command: command.type, teamMachineId: team, code: PM_IN_TEAM_ACCOUNT })
-      fail(PM_IN_TEAM_ACCOUNT, pmInTeamAccount(state, led), 403)
-    }
-    const refuse = (target?: Agent) => {
-      // Refusals were counted only from agents saying so in chat (15 lines in 10 days): the log says which command, and
-      // whether its target was in a Team account, so a workflow the check blocks shows up before people work around it.
-      logger.warn('[super-tab] team command refused', { tabId: state.id, command: command.type, teamMachineId: team,
-        ...target ? { targetMachineId: target.machineId, targetTeamAccount: onTeamAccount(state, target) } : {} })
-      fail('TEAM_SESSION_LIMITED', 'A PM in a Harness Team account can only run Swarm agents on its own machine.', 403)
-    }
-    const onTeam = (agentId: string) => {
-      const target = state.agents.find(a => a.id === agentId)
-      if (target && target.machineId !== team) refuse(target)
-    }
-    const inTeamAccount = (agentId: string) => {
-      const target = state.agents.find(a => a.id === agentId)
-      if (target && target.machineId !== team && !onTeamAccount(state, target)) refuse(target)
-    }
-    switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.moved': case 'machine.engineResume': return refuse()
-      case 'machine.cleaned': case 'tab.project': case 'agent.add':
-        if (command.machineId !== team) refuse()
-        return
-      case 'agent.rebind':
-        if (command.machineId !== team) refuse()
-        return onTeam(command.agentId)
-      case 'agent.start':
-        if (command.request.machineId !== team) refuse()
-        return
-      // A coordinator carries on its agents' starts (commands.ts mayResumeStart): from here, by the Mac owner's grant, it
-      // would launch, register or settle one on another of the owner's machines (security review L3). Elsewhere it only
-      // fails one.
-      case 'agent.startDispatch': case 'agent.started': case 'agent.startSettled': case 'route.modelResult': {
-        const start = state.starts?.find(s => s.id === command.startId)
-        if (start && start.request.machineId !== team) refuse()
-        return
-      }
-      // Team-written code keeps the main account out of these in the command itself (teamWritten.ts, audit H2).
-      case 'work.assign': case 'conversation.agent':
-        return inTeamAccount(command.agentId)
-      case 'agent.screen': case 'agent.input':
-      case 'agent.release': case 'agent.stopLease': case 'agent.remove':
-        return onTeam(command.agentId)
-      case 'agent.sessionClosed': {
-        const closing = state.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId && c.machineOwnerId === user.sub)
-        if (closing && closing.machineId !== team) refuse()
-        return
-      }
-    }
-  }
-
   /** The machines of the Swarm's pending cleanups whose account is deleted or missing: no host of theirs can read the
    *  Swarm again to confirm (read/host.ts asks for a live account), so applyCommand drops their cleanups. */
   private async deletedMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
@@ -957,20 +816,6 @@ export class SuperTabStore {
       const owner = state.people.find(p => p.id === id)
       if (owner) groupIds.push(swarmBuddyChatId(owner))
     }
-    // A person's decision may sit in a quiet or archived conversation: it is loaded to answer it (review of #1753).
-    if (command.type === 'decision.answer') {
-      const asked = await readAskedDecision(tx, tabId, command.decisionId)
-      if (asked) groupIds.push(asked.conversationId)
-      // Left to the PM: the person's Chat with PM in that project, quiet or not, takes the PM's line.
-      if (asked && command.delegate) projectIds.push(asked.projectId)
-      // And their one Buddy chat, which takes it too (spec: Guard).
-      if (asked && command.delegate) swarmChat(asked.personId)
-      // A Buddy's Send posts in its project's chat, quiet or not (task #4525).
-      if (asked?.kind === BUDDY_SEND && asked.send) {
-        const chat = projectsOf(state).find(p => p.id === asked.send!.projectId)?.leadConversationId
-        if (chat) groupIds.push(chat)
-      }
-    }
     // A switch's result tells the machine's owner in their one Buddy chat, quiet or not (commands.ts agent.switchResult).
     if (command.type === 'agent.switchResult') swarmChat(state.agents.find(a => a.id === command.agentId)?.machineOwnerId)
     // A project's sharing ends its sessions in the one Buddy chats of whoever loses it (commands.ts endLostProjectSessions).
@@ -1048,10 +893,8 @@ export class SuperTabStore {
     // that read by dormant would not do: its index has no dormant, so it examines them all, and removals need them (design D8).
     if ((command.type === 'agent.input' || command.type === 'agent.alert' || command.type === 'agent.rebind') && !ledProject(state, command.agentId)) agentIds.push(command.agentId)
     if (command.type === 'agent.remove') startAgentIds.push(command.agentId)
-    if (command.type === 'machine.remove' || command.type === 'machine.moved') {
-      const pool = state.machines?.find(m => m.machineId === command.machineId)
-      const machines = new Set([command.machineId, ...(pool ? state.machines!.filter(m => m.hostMachineId === pool.machineId).map(m => m.machineId) : [])])
-      agentIds.push(...state.agents.filter(a => machines.has(a.machineId)).map(a => a.id))
+    if (command.type === 'machine.remove' || command.type === 'machine.moved' || command.type === 'machine.teamGone') {
+      agentIds.push(...state.agents.filter(a => a.machineId === command.machineId).map(a => a.id))
     }
     if (command.type === 'member.remove') {
       const machines = new Set((state.machines ?? []).filter(m => m.contributorId === command.userId).map(m => m.machineId))
@@ -1094,9 +937,6 @@ export class SuperTabStore {
     })
     const reads = new GrantReads()
     await this.agentGrant(tx, state, target, reads)
-    // An agent of a Team account's machine is spoken for by that account alone, never its owner's own sign-in.
-    await this.notTeamMachine(() => reads.once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
-      where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } })), onTeamAccount(state, target))
     return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
 
@@ -1134,11 +974,7 @@ export class SuperTabStore {
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This machine is unavailable.', 403)
     // Its owner's name for it, from its account row: the name a client sends may be the computer's (#2308).
     const named = accountMachineName(machine)
-    // A Mac's Harness Team account names its Mac from its own account row, which only its owner's sign-in set (machines.ts).
-    const host = { ...(named ? { machineName: named } : {}),
-      ...(machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}),
-      // A Team sign-in with no Mac (`harness team on`) is no person's own machine either (commands.ts buddy.create).
-      ...(machine.sessionKind === 'team' ? { teamSession: true as const } : {}) }
+    const host = { ...(named ? { machineName: named } : {}) }
     if (pooled) {
       const pool = machineContribution(state, command.machineId)
       if (pool) {
@@ -1263,6 +1099,25 @@ export class SuperTabStore {
       if (changed.length) await this.save(tx, loaded, state, clock.next(), changed.map(p => ({ kind: 'member' as const, key: p.id })))
       return changed.length
     })
+  }
+
+  /** Takes every machine Swarm [tabId] still records as a Harness Team account's out, with its agents (migration/teamMachinesJob.ts):
+   *  each by the store-only machine.teamGone, run as the Swarm's owner, in its own write. How many it took out, or 'gone' for a
+   *  Swarm no longer there. A read that finds none writes nothing. */
+  async takeOutTeamMachines(tabId: string): Promise<number | 'gone'> {
+    const row = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+    if (!row || row.deletedAt) return 'gone'
+    const { state } = await loadRow(this.db as unknown as Transaction, requireParts(row), {})
+    const ids = teamMachineIds(state)
+    if (!ids.length) return 0
+    const owner = await this.db.user.findUnique({ where: { id: state.ownerId }, select: { email: true } })
+    if (!owner) throw new SuperTabError('OWNER_MISSING', 'This Swarm\'s owner has no account.', 409)
+    const user: AuthUser = { sub: state.ownerId, email: owner.email, autonomousEnv: state.environment as AuthUser['autonomousEnv'], role: 'user' }
+    for (const machineId of ids) {
+      await this.executeOnce(user, tabId, { operationId: `team-gone-${stableId(tabId, machineId)}`, command: { type: 'machine.teamGone', machineId } },
+        undefined, undefined, { teamMachineGone: true })
+    }
+    return ids.length
   }
 
   /** A person who just joined [tabId] takes their account's name once more, outside the join: a rename committed while the join
@@ -1398,10 +1253,9 @@ export class SuperTabStore {
     const actor = await this.actor(tx, user, state, asAgentId)
     const now = this.now()
     const visible = visibleState(state, actor, now)
-    const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
     const versions = visible.machines?.length ? await this.machineVersions(tx, state) : {} as Record<string, string>
     const slots = slotCounter(state)
-    return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
+    return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, machines: visible.machines?.map(pool => {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
       const suspended = suspendedEngines(stored, now)
       const machineSuspended = machineSuspensionReason(stored, now)
@@ -1443,9 +1297,13 @@ export class SuperTabStore {
     // A command v4 no longer has is ignored before anything is read, written or checked: the answer is one constant, as
     // `updateRequired`'s is, and names nothing of the Swarm (retired.ts). It is counted by type and kind of client, which says
     // when the last older client has stopped sending it.
-    // A person's reaction is gone too (reactions.ts), though an agent's still acknowledges: ignored the same way.
-    if (isRetiredCommand(input.command?.type) || (input.command?.type === 'message.react' && !asAgentId)) {
-      metrics.retiredCommand(input.command.type, client?.kind ?? 'other')
+    // A person's reaction is gone too (reactions.ts), though an agent's still acknowledges: ignored the same way. So is a step an
+    // older agent opens (retired.ts opensRetiredStep), counted under a type of its own.
+    const type = opensRetiredStep(input.command) ? RETIRED_STEP : input.command?.type
+    if (isRetiredCommand(type) || type === RETIRED_STEP || (type === 'message.react' && !asAgentId)) {
+      metrics.retiredCommand(type, client?.kind ?? 'other')
+      const refused = isRetiredCommand(type) && !asAgentId ? REFUSED_TO_PEOPLE[type] : undefined
+      if (refused) fail(refused.code, refused.message, refused.status)
       return retiredAnswer()
     }
     try {
@@ -1537,62 +1395,6 @@ export class SuperTabStore {
   }
 
   /**
-   * Whether the app reaches the repository of the project an agent.start or work.assign is for (repositoryReach.ts, task
-   * #3266), read outside the command's transaction as GitHub may take seconds. It can only refuse earlier than the machine
-   * would: undefined, refusing nothing, when there is nothing to read or the read fails.
-   */
-  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown): Promise<RepositoryReach | undefined> {
-    const hook = this.hooks.repositoryReach
-    const asked = command as { type?: unknown; conversationId?: unknown; request?: { conversationId?: unknown } } | null
-    // A task's Ready assigns its review steps (task #3401), so it reads the reach as an assignment does.
-    const assigns = asked?.type === 'work.assign' || (asked?.type === 'work.status' && (asked as { status?: unknown }).status === 'review')
-    const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : assigns ? asked!.conversationId : undefined
-    if (!hook || typeof conversationId !== 'string') return undefined
-    try {
-      const project = await transaction(this.db, async tx => {
-        const { state } = await this.factsLoad(tx, user, tabId, command)
-        const group = state.conversations.find(c => c.id === conversationId)
-        return group ? groupProject(state, group) : undefined
-      })
-      const repositoryUrl = project?.repository?.repositoryUrl
-      if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return undefined
-      return await hook(user.autonomousEnv, tabId, project.id, repositoryUrl)
-    } catch (error) {
-      if (!(error instanceof SuperTabError)) logger.warn('[super-tab] repository access not read', { tabId, error: error instanceof Error ? error.message : String(error) })
-      return undefined
-    }
-  }
-
-  /**
-   * The files the pull requests of the task a Ready for review hands over change (task #3401), read outside the command's
-   * transaction as GitHub may take seconds, as pushOriginFor reads. Undefined for a step's Ready, a task naming no pull
-   * request, or no hook: no step opens then. A read that throws gives files null: the strictest steps open, never none.
-   */
-  private async pullRequestFilesFor(user: AuthUser, tabId: string, command: unknown): Promise<PullRequestFilesRead | undefined> {
-    const hook = this.hooks.pullRequestFiles
-    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown } | null
-    if (!hook || asked?.type !== 'work.status' || asked.status !== 'review' || typeof asked.conversationId !== 'string') return undefined
-    let facts: { repositoryUrl: string | null; urls: string[] } | null = null
-    try {
-      facts = await transaction(this.db, async tx => {
-        const { state } = await this.factsLoad(tx, user, tabId, command)
-        const group = state.conversations.find(c => c.id === asked.conversationId)
-        if (!group || group.reviewOf || taskProcess(groupProject(state, group), group) === 'simple') return null
-        const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
-        const urls = [...group.pullRequestUrls ?? [], ...[typeof asked.result === 'string' ? asked.result : '', group.brief]
-          .flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
-        return { repositoryUrl, urls: [...new Set(urls)] }
-      })
-      if (!facts?.urls.length) return undefined
-      return await hook(facts.repositoryUrl, facts.urls) ?? undefined
-    } catch (error) {
-      if (error instanceof SuperTabError || !facts) return undefined
-      logger.warn('[swarm-review-steps] pull request files not read', { tabId, error: error instanceof Error ? error.message : String(error) })
-      return { urls: facts.urls, head: null, files: null }
-    }
-  }
-
-  /**
    * When GitHub says the pull requests merged that an instructions save's dropped lines may wait on (task #3463): those linked
    * to the project's code tasks whose brief carries a line the save removes, in the project's own repository (a link
    * elsewhere is not this task's merge), at most MAX_MERGE_READS. Read before the write, as GitHub may take seconds, whatever
@@ -1623,17 +1425,15 @@ export class SuperTabStore {
     }
   }
 
-  /** [only]: what the store alone may give a command: `movedTo` for machine.moved (computerSignedIn). */
+  /** [only]: what the store alone may give a command: `movedTo` for machine.moved (computerSignedIn), `teamMachineGone` for
+   *  machine.teamGone (takeOutTeamMachines). */
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
-    only: { movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
+    only: { movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string; teamMachineGone?: true } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     // Each read before the transaction is its own phase (commandTiming.ts): several call GitHub.
-    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([
+    const [pushOrigin, pullRequestMerges] = await Promise.all([
       timedPhase('read:pushOrigin', () => this.pushOriginFor(user, tabId, command)),
-      timedPhase('read:repositoryReach', () => this.repositoryReachFor(user, tabId, command)),
-      timedPhase('read:pullRequestFiles', () => this.pullRequestFilesFor(user, tabId, command)),
-      timedPhase('read:pullRequestMerges', () => this.pullRequestMergesFor(user, tabId, command)),
-      timedPhase('read:verdictHead', () => this.verdictHeadRead(user, tabId, command))])
+      timedPhase('read:pullRequestMerges', () => this.pullRequestMergesFor(user, tabId, command))])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
@@ -1658,26 +1458,18 @@ export class SuperTabStore {
         fail('FORBIDDEN', 'Only the execution host can confirm this removal.', 403)
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
-      // A Team account's session is closed by its own team session: the Mac's owner is its machine owner too, and from an
-      // ordinary sign-in confirmed it, ending its hold with its data still there. A held one is on a Team account by
-      // definition, whatever the account row says now (review of #2142).
-      if (command.type === 'agent.sessionClosed') {
-        const closing = original.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId && c.machineOwnerId === user.sub)
-        if (closing) await this.notTeamMachine(() => tx.machine.findFirst({ where: { machineId: closing.machineId, userId: user.sub,
-          autonomousEnv: user.autonomousEnv, ...machineAlive } }), !!closing.heldFor || teamByRecord(original, closing.machineId))
-      }
       // A removed agent's or machine's host confirms its close or cleanup as the machine owner, who may have left the Swarm with it.
       const actor: Actor = command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned' ? { kind: 'person', userId: user.sub, email: user.email }
         // The server's own crew dispatch (dispatchCrew), as the project's PM, with no sign-in of anyone's: only while that
         // agent still leads a project in this write's state, and only for work.assign. No route reaches it.
-        : only.asProjectPm ? await this.projectPmActor(tx, original, only.asProjectPm, command, user)
+        : only.asProjectPm ? await this.projectPmActor(tx, original, only.asProjectPm, command)
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
           : await this.actor(tx, user, original, asAgentId)
             // A made-up or stopped agent, or anyone refused here, is told what a missing Swarm tells (deletion.ts).
             .catch(error => DELETION_COMMANDS.has(command.type) ? notThere() : Promise.reject(error))
-      // A Mac and its Harness Team account leave under one removal, and each host confirms its cleanup as the same person
-      // with the same operation (cli/src/superTabs/machines.ts runCleanup): each machine's confirmation is its own receipt.
+      // A host confirms each machine's cleanup as its own receipt, whatever operation it sends (cli/src/superTabs/machines.ts
+      // runCleanup).
       const receiptId = command.type === 'machine.cleaned' ? stableId(tabId, actorKey(actor), operationId, command.machineId)
         : stableId(tabId, actorKey(actor), operationId)
       const requestHash = hash(command)
@@ -1700,9 +1492,7 @@ export class SuperTabStore {
             if (!delivery) fail('NOT_FOUND', 'This delivery is unavailable.', 404)
             readConversation(original, actor, delivery.conversationId)
           }
-          // A retried answer is checked again: the person must still read the decision's conversation (review of #1753).
-          if (command.type === 'decision.answer') answerableBy(original, actor, await readAskedDecision(tx, tabId, command.decisionId))
-          else if ('decisionId' in command) {
+          if ('decisionId' in command) {
             const decision = await readDecision(tx, tabId, command.decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
             readConversation(original, actor, decision.conversationId)
           }
@@ -1718,6 +1508,7 @@ export class SuperTabStore {
         try { author(original, actor) } catch (error) { if (DELETION_COMMANDS.has(command.type)) notThere(); throw error }
       }
       const context: CommandContext = { operationId, now: this.now() }
+      if (command.type === 'machine.teamGone' && only.teamMachineGone) context.teamMachineGone = true
       if (command.type === 'machine.moved' && only.movedTo && actor.kind === 'person') {
         context.computerMove = await this.computerMove(tx, original, actor.userId, command.machineId, only.movedTo)
       }
@@ -1796,7 +1587,6 @@ export class SuperTabStore {
           thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null,
           ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionRow ? { sessionThread: true as const, ...(sessionRow.buddyProject ? { sessionProject: sessionRow.buddyProject } : {}) } : {}) }
       }
-      if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       // A person's top-level line in a project chat: the top-level line right above it, whose agent it may answer (commands.ts,
       // #2924). The chat's newest rows by its sequence index; a thread's replies and agent-only notices are not in the chat.
       if (command.type === 'message.send' && actor.kind === 'person' && !command.replyTo && projectsOf(original).some(p => p.leadConversationId === command.conversationId)) {
@@ -1885,29 +1675,7 @@ export class SuperTabStore {
         context.confirmedStopped = !!proof && !!execution && proof.machineId === execution.machineId &&
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
-      if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'invite.accept' && actor.kind === 'person') context.accountName = await accountNameOf(tx, actor.userId)
-      if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
-      // A Buddy settling its own question names its owner's answer in its chat (task #4525): that message, and whether it is
-      // their newest there, by the chat's newest rows as buddy.propose reads them.
-      if (command.type === 'decision.answer' && command.ownerMessageId && context.decision) {
-        const said = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: context.decision.conversationId },
-          select: { id: true, conversationId: true, author: true, source: true, createdAt: true } })
-        if (said) {
-          const author = said.author as unknown as Author
-          const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: said.conversationId }, orderBy: { sequence: 'desc' }, take: 50,
-            select: { id: true, author: true, source: true } })
-          const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === author.id)
-          context.ownerAnswer = { id: said.id, conversationId: said.conversationId, author, source: !!said.source, createdAt: said.createdAt.getTime(),
-            newest: newest?.id === said.id }
-        }
-      }
-      if (command.type === 'work.status' && command.ask && command.result && actor.kind === 'agent') {
-        const ask = { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId, conversationId: command.conversationId,
-          question: command.result }
-        context.repeatedDecision = await repeatOf(tx, tabId, ask) ?? null
-        context.openDecisions = context.repeatedDecision ? null : await fullFor(tx, tabId, ask)
-      }
       // The files this command sends, and those it takes from the uploads waiting for a message: a chat file it sent before
       // stays with that message, and a proposal may carry one its Buddy's owner sent in their chat.
       let claimed: string[] = [], proposed: string[] = []
@@ -1922,13 +1690,6 @@ export class SuperTabStore {
       // A start records the version of the machine it is dispatched to.
       if (command.type === 'agent.startDispatch') context.machineVersions = await this.machineVersions(tx, original)
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls, ...pushOrigin.task ? { pushOriginTask: pushOrigin.task } : {} })
-      if (repositoryReach) context.repositoryReach = repositoryReach
-      if (pullRequestFiles && command.type === 'work.status') {
-        context.pullRequestFiles = pullRequestFiles
-        // Its project's review table plans the steps: one indexed read of the newest rules revision (policyStore.ts).
-        const handed = original.conversations.find(c => c.id === command.conversationId)
-        if (handed) context.projectRules = await readRules(tx, tabId, groupProject(original, handed).id)
-      }
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))
@@ -1946,21 +1707,6 @@ export class SuperTabStore {
       if (decisionId) context.routeDecision = await readDecision(tx, tabId, decisionId) ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
       if (command.type === 'project.boardMode' && command.on) context.legacyProposals = await this.legacyProposalBodies(tx, original, command.projectId)
       const effects = applyCommand(original, actor, command, context)
-      // Resolve repeats before numbering or writing Buddy notices: a repeated ask is the existing decision, already told.
-      // A card's question stays on its card when its person's Decisions from this PM are full: the ask still counts (task #4547).
-      const decisionIds = !effects.decisions ? [] : command.type !== 'proposal.ask' ? await writeDecisions(tx, tabId, effects.decisions, context.now)
-        : await writeDecisions(tx, tabId, effects.decisions, context.now).catch((error: unknown) => {
-          if (!(error instanceof SuperTabError) || error.code !== 'DECISIONS_FULL') throw error
-          logger.warn('[swarm-decisions] a proposal question stays on its card only: its person has the most open decisions from this asker')
-          effects.decisions = []
-          return []
-        })
-      const newDecisions = effects.decisions?.filter((draft, i) => decisionIds[i] === draft.id) ?? []
-      if (effects.decisions) {
-        if (command.type === 'decision.ask') effects.result.decisionIds = decisionIds
-        const fresh = new Set(newDecisions.map(d => d.id))
-        effects.messages = effects.messages.filter(m => m.source?.kind !== DECISION_ASKED_KIND || fresh.has(String(m.source.decisionId)))
-      }
       hasWorkers = effects.state.agents.some(a => !isBuddy(a) && !ledProject(effects.state, a.id))
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
@@ -2020,7 +1766,8 @@ export class SuperTabStore {
         // A task cancelled with no assignment archives (commands.ts work.cancel).
         || command.type === 'work.cancel' && !original.conversations.find(c => c.id === command.conversationId)?.archived
           && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
-      // A task's finished steps archive with it (steps.ts endSteps): their deliveries end too (final review, finding 2).
+      // A task's finished steps from before Swarm v4 archive with it (steps.ts endSteps): their deliveries end too (final review,
+      // finding 2).
       const archivedSteps = unreadable && command.type !== 'conversation.agent' ? effects.state.conversations.filter(c => c.reviewOf === command.conversationId
         && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
       // One plain match per conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
@@ -2140,7 +1887,8 @@ export class SuperTabStore {
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
       }
       // Starts a removed machine failed, whether its owner removed it or left the Swarm with it, release their route holds.
-      if (command.type === 'machine.remove' || command.type === 'machine.moved' || command.type === 'member.remove' || command.type === 'swarm.delete') {
+      if (command.type === 'machine.remove' || command.type === 'machine.moved' || command.type === 'machine.teamGone' || command.type === 'member.remove'
+        || command.type === 'swarm.delete') {
         for (const start of original.starts ?? []) {
           if (!start.routeDecisionId || start.harnessId || start.error) continue
           if (effects.state.starts?.find(s => s.id === start.id)?.error) {
@@ -2176,48 +1924,23 @@ export class SuperTabStore {
       }
       if (effects.closedAssignment) await closeAssignment(tx, tabId, effects.closedAssignment.assignmentId, effects.closedAssignment.outcome, context.now)
       await recordEvidence(tx, tabId, original, effects.state, context.now)
-      const threads = await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences, false, original)
+      await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences, false, original)
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
-      if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
-      // Answering an agent settles its tags in other conversations too (mentions.ts answeredAgents).
-      if (command.type === 'message.send' && actor.kind === 'person') {
-        const sent = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person' && m.author.id === actor.userId && !m.source)
-        await resolveByAnswer(tx, tabId, actor.userId, answeredAgents(effects.state, actor, effects.state.conversations.find(c => c.id === command.conversationId)!,
-          sent.flatMap(m => m.recipients)), context.now)
-      }
-      if (command.type === 'work.assign') await resolveWhenWorked(tx, tabId, command.conversationId, context.now)
-      // The Lead acting on a group ends the tags it held back about it (mentions.ts), before this command's own are written.
-      const ledId = 'conversationId' in command ? command.conversationId : command.type === 'agent.start' ? command.request.conversationId : undefined
-      const leadAt = (state: SuperTabState) => state.conversations.find(c => c.id === ledId)?.leadAction?.at
-      if (ledId && leadAt(effects.state) !== undefined && leadAt(effects.state) !== leadAt(original)) await dropHeldTags(tx, tabId, ledId, context.now)
-      const tags = await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
-      // Everyone in each thread replied in, from the summaries just computed: no read of the threads' rows (task #2745).
-      const replies = await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now, { state: effects.state, threads })
-      this.tellPhones(tx, tabId, effects.state, { replies, tags }, effects.messages, original)
       // Their own message leaves the chat read for them on every app, in the same commit its read answers from (task #2265). A reply
       // only in a thread is not in the chat.
       if (command.type === 'message.send' && actor.kind === 'person') {
         const own = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person'
           && m.author.id === actor.userId && (!m.thread || m.thread === m.id || m.alsoInChat))
         const next = Math.max(0, ...own.map(m => sequences.get(m.id) ?? 0))
-        if (next) await moveChatMark(tx as unknown as PrismaClient, { tabId, state: effects.state, personId: actor.userId, conversationId: command.conversationId, next, now: context.now })
+        if (next) await writeReadMark(tx as unknown as PrismaClient, { tabId, personId: actor.userId, conversationId: command.conversationId, sequence: next, now: context.now })
       }
-      if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
+      this.tellPhones(tx, tabId, effects.state, effects.messages, original)
       // The cleaned text (commands.ts WORDS), never the command as it was sent (security review 2 of #2967).
       if (effects.messageEdit) {
         await tx.superTabMessage.update({ where: { id: effects.messageEdit.messageId }, data: { text: effects.messageEdit.text, editedAt: new Date(context.now) } })
       }
-      if (command.type === 'message.delete') await this.writeDelete(tx, tabId, command, effects.result.kept === true, effects.state.people.map(p => p.id), context.now)
+      if (command.type === 'message.delete') await this.writeDelete(tx, tabId, command, effects.result.kept === true, context.now)
       if (effects.closedProposal) await closeProposal(tx, tabId, effects.closedProposal, actor.kind === 'person' ? actor.userId : actor.agentId, new Date(context.now))
-      // A new decision reaches its person's phones (task #3248); a repeat was already brought to them.
-      if (newDecisions.length) this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: newDecisions }, [])
-      if (effects.decisionAnswer) await recordAnswer(tx, tabId, effects.decisionAnswer, context.now)
-      if (effects.closedDecisions) await closeDecisions(tx, tabId, effects.closedDecisions, context.now)
-      if (effects.decisionKeptWaiting) await keepWaiting(tx, tabId, effects.decisionKeptWaiting)
-      // Work this command ended (done, cancelled, archived) closes the decisions still waiting there (Dee, 10-31). After this
-      // command's own answer and asks, so an answer in the same write counts and a reopened task's new ask is a new decision.
-      const over = workEnded(original, effects.state)
-      if (over.length) await withdrawIn(tx, tabId, over, context.now)
       if (claimed.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
         const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: { in: claimed }, ...unused },
@@ -2276,80 +1999,19 @@ export class SuperTabStore {
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
-    // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
-    if (command.type === 'work.status' && command.status === 'review') await timedPhase('read:readyHead', () => this.readyHeadRead(user, tabId, command))
     return done
   }
 
   /**
-   * Before a work.check naming a head (or base) its pull request's record does not have, that pull request's head as GitHub has
-   * it now, recorded as the PR watch records it (task #3628): the verdict is then judged on it. On #3561 a Yes at the real head
-   * did not count, twice, while the minute's pass had not read the push. A head the record has, carried ones too, reads nothing:
-   * the record never moves but to the head GitHub gives, so a verdict at an older head still counts at none.
-   */
-  private async verdictHeadRead(user: AuthUser, tabId: string, command: Command): Promise<void> {
-    if (!this.hooks.pullRequestReader || command.type !== 'work.check' || !command.head) return
-    const { head, base } = command
-    await this.headsReadNow(user, tabId, command, (state) => {
-      const group = state.conversations.find(c => c.id === command.conversationId)
-      const task = group?.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
-      const heads = task?.pullRequestHeads
-      // The pull request the command records the verdict on (commands.ts work.check).
-      const url = task ? checkedPullRequest(task, groupProject(state, task).repository?.repositoryUrl ?? null) : undefined
-      const known = url ? heads?.[url] : undefined
-      const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
-      if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
-      return { task, urls: [url] }
-    })
-  }
-
-  /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
-  private async readyHeadRead(user: AuthUser, tabId: string, command: Extract<Command, { type: 'work.status' }>): Promise<void> {
-    if (!this.hooks.pullRequestReader) return
-    await this.headsReadNow(user, tabId, command, (state) => {
-      const task = state.conversations.find(c => c.id === command.conversationId)
-      if (!task || task.reviewOf || !task.pullRequestUrls?.length) return null
-      const linked = watchedLinks(task.pullRequestUrls)
-      const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
-      const urls = linked.filter(url => named.includes(url))
-      return { task, urls: urls.length ? urls : linked.slice(-1) }
-    })
-  }
-
-  /** [pick]'s pull requests of a task read from GitHub now and recorded (pullRequestEvents.ts readPullRequestsNow), outside any
-   *  command's transaction, as GitHub may take seconds. A failure leaves the record as it was and is logged: the command is
-   *  judged on the record then, as before. */
-  private async headsReadNow(user: AuthUser, tabId: string, command: Command,
-    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null): Promise<void> {
-    let picked: { task: TaskHeads; urls: string[] } | null = null
-    try {
-      picked = await transaction(this.db, async tx => {
-        // A step's task, dormant ones too, is loaded with it.
-        const { state } = await this.factsLoad(tx, user, tabId, command)
-        const chosen = pick(state)
-        return chosen && chosen.urls.length ? { task: { key: chosen.task.id, heads: chosen.task.pullRequestHeads ?? null,
-          steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
-      })
-      if (!picked) return
-      const unread = await readPullRequestsNow(this.db, this, this.hooks.pullRequestReader!(), tabId, picked.task, picked.urls, this.now())
-      if (unread.length) logger.warn('[swarm-pr-head] not read', { tabId, group: picked.task.key, pulls: unread.length })
-    } catch (error) {
-      if (error instanceof SuperTabError) return
-      logger.warn('[swarm-pr-head] not read', { tabId, group: picked?.task.key, error: error instanceof Error ? error.message : String(error) })
-    }
-  }
-
-  /**
    * The project PM the crew dispatch speaks as (dispatchCrew), checked inside the write as the agent path checks an agent:
-   * it still leads the task's own project and is not stopping, its grant holds (machine, share: grantHolds), a
-   * PM in a Team account reaches only what its own session could (teamCommand), and the task is still one the dispatch would
+   * it still leads the task's own project and is not stopping, its grant holds (machine, share: grantHolds), and the task is still one the dispatch would
    * hand out now (its state may have moved since the pass read it: postponed, pinned, defined again). It only assigns.
    */
-  private async projectPmActor(tx: Transaction, state: SuperTabState, agentId: string, command: Command, user: AuthUser): Promise<Actor> {
+  private async projectPmActor(tx: Transaction, state: SuperTabState, agentId: string, command: Command): Promise<Actor> {
     const pm = state.agents.find(a => a.id === agentId)
     const task = command.type === 'work.assign' ? state.conversations.find(c => c.id === command.conversationId) : undefined
     const project = task && groupProject(state, task)
-    // A refusal of the PM itself (gone, stopping, its grant or its Team boundary) is the PM's, not this pick's: marked so the
+    // A refusal of the PM itself (gone, stopping, its grant) is the PM's, not this pick's: marked so the
     // pass waits a little on that PM instead of remembering the pick (dispatchCrew).
     const pmRefused = (error: unknown): never => {
       if (error instanceof SuperTabError) throw new SuperTabError(error.code, error.message, error.status, error.unreachable, { ...error.details, pmRefused: true })
@@ -2368,7 +2030,6 @@ export class SuperTabStore {
     }
     try {
       await this.agentGrant(tx, state, pm)
-      if (onTeamAccount(state, pm)) this.teamCommand(state, pm.machineId, user, command, pm.id)
     } catch (error) { return pmRefused(error) }
     return { kind: 'agent', agentId, machineOwnerId: pm.machineOwnerId }
   }
@@ -2459,11 +2120,6 @@ export class SuperTabStore {
       if (this.pmWaiting(tabId, state, project, now)) continue
       const leadId = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
       const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
-      // Its PM is still in a Team account, which assigns no agent (teamCommand): counted while work waits, so the pass says why.
-      if (lead && onTeamAccount(state, lead)) {
-        if (openTasks(state, project.id, now).length) skipCode(PM_IN_TEAM_ACCOUNT)
-        continue
-      }
       // Each person's asked tasks go to their own Member (members.ts, task #4697), before the crew's lanes: a free Member gets
       // its person's next task, and a person with none yet gets one started. Sent as its PM, as crew picks are, once per round.
       if (lead) {
@@ -3002,8 +2658,8 @@ export class SuperTabStore {
   /** What a delete removes beside its row (messageEdits.ts): its reactions and their Activity, the Activity of the reply it was,
    *  deliveries no agent has taken yet, and its files, which the hourly sweep removes from the bucket (lib/attachmentSweep.ts).
    *  A root with replies stays as DELETED_TEXT with nothing else of what it said; a reply's thread summary is written again. */
-  private async writeDelete(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>, kept: boolean, people: string[], now: number) {
-    const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true, mentions: true } })
+  private async writeDelete(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>, kept: boolean, now: number) {
+    const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true } })
     const files = Array.isArray(row.attachments) ? (row.attachments as unknown as Attachment[]).map(a => a.id) : []
     // Raw `$in` filters: Prisma sends `in` as $expr, which no index bounds (hotFilters.test.ts). By _id, and by [tabId, messageId].
     // A proposal can carry its owner's chat files without owning them (#3322 security review): expire only this row's
@@ -3012,16 +2668,9 @@ export class SuperTabStore {
       { q: { _id: { $in: files }, tabId, usedBy: row.id }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true },
       { q: { _id: { $in: files }, tabId, proposedBy: row.id }, u: { $unset: { proposedBy: '' } }, multi: true },
     ] })
-    // Activity has no index by message: its rows go by the ids they were written with (activity.ts), each reaction's from its row,
-    // the reply's for every member it could have told. Reactions were last written 2026-11-09 (reactions.ts): their two lines go
-    // once the last such row is gone, 30 days on, from 2026-12-09.
-    const reactions = await tx.superTabReaction.findMany({ where: { tabId, messageId: row.id }, select: { id: true } })
-    const activityIds = [...reactions.map(r => stableId(tabId, 'reaction', r.id)), ...people.map(personId => stableId(tabId, 'reply', row.id, personId))]
+    // Reactions were last written 2026-11-09 (reactions.ts): this line goes once the last such row is gone, 30 days on, from
+    // 2026-12-09. Its Activity and tag rows, written until Swarm v4 (2026-11-10), hold no words and expire by themselves.
     await tx.superTabReaction.deleteMany({ where: { tabId, messageId: row.id } })
-    if (activityIds.length) await tx.$runCommandRaw({ delete: 'SuperTabActivity', deletes: [{ q: { _id: { $in: activityIds }, tabId }, limit: 0 }] })
-    // Its tags (mentions.ts writeMentions ids): nobody keeps a waiting tag to a message they cannot open (security review 1 of #2967).
-    const tagIds = (row.mentions ?? []).map(personId => stableId(tabId, row.id, personId))
-    if (tagIds.length) await tx.$runCommandRaw({ delete: 'SuperTabMention', deletes: [{ q: { _id: { $in: tagIds }, tabId }, limit: 0 }] })
     await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
       u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
     if (kept) {
@@ -3212,7 +2861,6 @@ export class SuperTabStore {
    * requester changed, is answered with the reason instead, so input is never typed late or into another pane. */
   async hostTerminal(user: AuthUser, machineId: string) {
     return transaction(this.db, async tx => {
-      await this.hostFor(tx, user, machineId)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const now = this.now()
@@ -3247,9 +2895,6 @@ export class SuperTabStore {
     row: { agentId: string; machineId: string; machineOwnerId: string; harnessId: string; requesterKey: string }): Promise<string | null> {
     const target = state?.agents.find(a => a.id === row.agentId && a.machineId === row.machineId && a.machineOwnerId === row.machineOwnerId)
     if (!state || !target) return 'The agent is no longer in the Swarm.'
-    // Only its Team account answered for an agent there, never its owner's own sign-in (security re-check 2 of #2089); since
-    // Team sessions went (2026-11-10), nobody does.
-    if (onTeamAccount(state, target)) return 'Only this computer\'s Harness Team account answers for its agents.'
     if (target.harnessId !== row.harnessId) return 'The agent’s terminal changed since the request. Read it again.'
     const [kind, id] = [row.requesterKey.slice(0, row.requesterKey.indexOf(':')), row.requesterKey.slice(row.requesterKey.indexOf(':') + 1)]
     const requester: Actor = kind === 'person' ? { kind: 'person', userId: id, email: '' }
@@ -3327,7 +2972,7 @@ export class SuperTabStore {
    *  kept, and only its missing deliveries are written. One duplicate had stopped every later report and poll
    *  (2026-10-28); any other message under the id still fails, so another task's notice is never delivered as this one. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
-    keepStored = false, before: Pick<SuperTabState, 'agents'> = state): Promise<Map<string, ThreadFacet>> {
+    keepStored = false, before: Pick<SuperTabState, 'agents'> = state): Promise<void> {
     // Only a person and their own agent write in their private chat (task #4558): applyCommand checks a command's rows, and
     // every write is checked again here, so a notice built off that path with the wrong author is refused too (#4547).
     refuseOthersInPrivateChat(state, messages, before)
@@ -3371,8 +3016,8 @@ export class SuperTabStore {
     // A proposal's root joins its chat's open proposals with it, which the Tasks view reads by id (proposals.ts).
     const proposals = openProposalRows(tabId, rows)
     if (proposals.length) await tx.superTabOpenProposal.createMany({ data: proposals })
-    // A reply's thread summary, in this transaction (pageReads.ts refreshThreads); its facet is answered for Activity.
-    const threads = await refreshReplies(tx, tabId, rows)
+    // A reply's thread summary, in this transaction (pageReads.ts refreshThreads).
+    await refreshReplies(tx, tabId, rows)
     for (const message of messages) {
       // Once committed, so a retried write logs once.
       if (message.source?.kind === SESSION_ENDED_KIND && !kept.has(message.id)) {
@@ -3390,7 +3035,6 @@ export class SuperTabStore {
     }
     if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
     for (const delivery of deliveries) if (delivery.status !== 'gathered') this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
-    return threads
   }
 
   /** A Buddy thread session's first deliveries (buddySessions.ts): its person's messages sent in its thread while it started,
@@ -3636,49 +3280,7 @@ export class SuperTabStore {
     return sessionContext(main.map(r => ({ ...r, author: authorForAgent(state, r.author as unknown as Author, names) as ContextRow['author'] })))
   }
 
-  /** What the person missed in one conversation since `after` (catchUp.ts), from the rows past it they may read, as a page
-   *  shows them: the same read check and row filter as messages(). People only, reading as themselves: agents read every
-   *  message as it comes. At most CATCH_UP_SCAN rows are read; `more` says there were more. */
-  async catchUp(user: AuthUser, tabId: string, conversationId: string, after: number): Promise<CatchUp> {
-    const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
-    const actor = await this.actor(this.db, user, state)
-    const group = readConversation(state, actor, conversationId)
-    const buddy = isBuddyReader(state, actor)
-    // In the one Buddy chat, a project its person lost counts nothing toward what they missed (security review 2 of #2435).
-    const lost = sessionReadsRow(undefined, group, state)
-    const [rows, decisions] = await Promise.all([
-      this.db.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { gt: after } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }],
-        take: CATCH_UP_SCAN + 1 }),
-      // None waits where the work is over, closed or not yet (decisions.ts workOver).
-      workOver(state, group) ? 0 : waitingFor(this.db, tabId, conversationId, user.sub),
-    ])
-    const scanned = rows.slice(0, CATCH_UP_SCAN), reads = readsRow(actor, buddy)
-    // A task chat's copy of a Lead's notice stored before it was marked is read by no one, as on the page (pageReads.ts).
-    const copies = await deliveredCopies(this.db, tabId, scanned)
-    const shown = scanned.filter(m => !copies.has(m.id) && reads(m) && lost(m))
-    recordMessageRead({ reader: readerKind(actor, buddy), cursor: 'catchUp', session: sessionKind(user) }, 1, rows.length, shown.length)
-    return catchUpSummary(buddy ? shown.map(rowForBuddy) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN, decisions })
-  }
 
-  /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
-  async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
-    // Not every quiet conversation: listMentions reads the quiet ones its tags are in by id (mentions.ts readable).
-    const { state: tab } = await this.readLoad(user, tabId)
-    await this.actor(this.db, user, tab)
-    return { mentions: await listMentions(this.db, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
-  }
-
-  /** The caller's decisions in this Swarm, newest first: a person's asked of them, an agent's asked by it (a Lead's also
-   *  those asked in its project), still open or answered. A light load: the quiet conversations its decisions are in are
-   *  read with them (decisions.ts conversationsOf), never the Swarm's whole history, read again on every change. */
-  async decisions(user: AuthUser, tabId: string, state: DecisionList, asAgentId?: string) {
-    // Through the read cache, as every read (task #2674): only what the Swarm's stamp says changed is read again. It loaded
-    // the whole active Swarm on every request, ~540 ms a part on prod (Ken's scan, 2026-11-04).
-    const { state: tab } = await this.readLoad(user, tabId)
-    const actor = await this.actor(this.db, user, tab, asAgentId)
-    author(tab, actor)
-    return listDecisions(this.db, tabId, tab, actor, state)
-  }
 
   /**
    * Every earlier attempt of one group. `work.define` takes a stopped assignment out of the state, so this is the
@@ -3788,7 +3390,6 @@ export class SuperTabStore {
    * never submit arbitrary commands as its initiating person or lead. */
   private async poolHostActor(tx: Transaction, user: AuthUser, state: SuperTabState, machineId: string, startId: string): Promise<Actor> {
     const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
-    await this.hostFor(tx, user, machineId, owned, state)
     const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This start is unavailable.', 404)
     const pool = machineContribution(state, machineId)
     if (!pool || pool.contributorId !== user.sub || pool.generation !== start.poolGeneration || start.request.machineId !== machineId || start.machineOwnerId !== user.sub) {
@@ -4011,7 +3612,6 @@ export class SuperTabStore {
    *  batch of readings shares (DB 2.5). */
   async machineHost(user: AuthUser, machineId: string): Promise<MachineHost> {
     const owned = await this.db.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
-    await this.hostFor(this.db, user, machineId, owned)
     return { owned }
   }
 
@@ -4067,13 +3667,13 @@ export class SuperTabStore {
     // whatever changed there that this machine's host does not read (machineReports.ts recordHolds).
     if (!record || !stamps || !recordHolds(record, stamps) || now >= record.deadline || now - record.at >= RECORD_TTL_MS || record.removals) return null
     // The checks a full report makes with the Swarm, from what the last one saw of it; a refusal is the full report's to say.
-    if (record.team || !host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
+    if (!host.owned || !machineBillingAllowsDataPlane(host.owned)) return null
     const row = await this.db.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: { format: true, deletedAt: true } })
     if (row?.format !== 2 || row.deletedAt) return null
     const part = loaded !== undefined ? loaded : (await loadMachineParts(this.db, [partId(tabId, machineId)])).get(partId(tabId, machineId))
     const pool = part && !part.deleted ? part.data.contribution : null
     if (!part || !pool || pool.contributorId !== user.sub || pool.generation !== observation.generation || pool.removal) return null
-    // Renamed by its owner since: the full report renames it, and its Team account's pools with it (#2308).
+    // Renamed by its owner since: the full report renames it (#2308).
     if (renamedBy(pool, accountMachineName(host.owned))) return null
     const data = structuredClone(part.data), mine = data.contribution!
     // A reading naming a refused start is never only a reading (machines.ts readingOnly): the full report fails it.
@@ -4134,7 +3734,6 @@ export class SuperTabStore {
       }
       const state = cloneData(loaded.state)
       const buddyTouches: Touch[] = []
-      await this.hostFor(tx, user, machineId, owned, state)
       const pool = await strangerRefusal(state, user.sub, () => {
         const found = machineContribution(state, machineId)
         if (!found || found.contributorId !== user.sub || found.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
@@ -4179,7 +3778,7 @@ export class SuperTabStore {
       accrueLent(state, pool, now)
       pool.observation = reading
       // The name its owner gave it in Machines, which a rename there changes (#2308).
-      followAccountName(state, pool, accountMachineName(owned))
+      followAccountName(pool, accountMachineName(owned))
       // A reading that shows a suspended engine signed in with quota offered again (engineHealth.ts); posts nothing.
       readingClearsSuspensions(pool, now)
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
@@ -4247,7 +3846,7 @@ export class SuperTabStore {
       return { ...written, ...mine ? { record: { lentCount: lentAgents(state, mine, mine.observation?.runningHarnessIds ?? []),
         lentProjects: lentProjects(state, mine, mine.observation?.runningHarnessIds ?? []),
         removals: !!state.machines?.some(m => m.removal), deadline: Math.min(nextRemovalAt(state, machineId, now) ?? Infinity, now + DEADLINE_CAP_MS),
-        team: teamByRecord(state, machineId), members: state.people.map(p => p.id),
+        members: state.people.map(p => p.id),
         preparable: (state.starts ?? []).filter(s => preparableStart(s, machineId)).map(s => s.id), at: now } } : {} }
     })
     if (record && before && !stampOwed(tabId)) await this.reports.set(tabId, machineId, { ...record, stamp: before.main, hosts: { host: before.host, all: before.all } })
@@ -4423,8 +4022,6 @@ export class SuperTabStore {
     // One request's reads, shared by the agent's check and its senders' (GrantReads), never kept past it.
     const target = seen.grants[agentId]!, inSwarm = () => {}, reads = new GrantReads()
     await this.grantHolds(this.db, seen.swarm, target, inSwarm, reads)
-    await this.notTeamMachine(() => reads.once(machineKey(seen.swarm.environment, target.machineId, target.machineOwnerId),
-      () => this.db.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: seen.swarm.environment, ...machineAlive } })), !!target.team)
     const senders = new Map<string, Promise<boolean>>()
     const sent = (id: string) => senders.get(id) ?? senders.set(id, this.grantHolds(this.db, seen.swarm, seen.grants[id]!, inSwarm, reads)
       .then(() => true, error => { if (error instanceof SuperTabError) return false; throw error })).get(id)!
@@ -4524,7 +4121,6 @@ export class SuperTabStore {
     const notices: Array<{ delivery: SuperTabDelivery; line: string; otherAccount: boolean; section: InboxSection }> = []
     const names = swarmUsernames(state)
     // The digest is the coordinator's own message: each line says whether an agent of another account wrote what it quotes.
-    const accounts = new Map<string, Promise<string>>()
     let refused = 0
     for (const delivery of rows) {
       const message = this.recipientAllowed(state, delivery)
@@ -4535,7 +4131,7 @@ export class SuperTabStore {
         refused += (await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId: delivery.tabId, status: 'gathered' }, data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
         continue
       }
-      const otherAccount = allowed && !!message && await this.otherAccount(tx, state, coordinator, message, accounts)
+      const otherAccount = allowed && !!message && this.otherAccount(state, coordinator, message)
       // A post's line names who wrote it (#3387); a notice is in the server's own words.
       const poster = message && allowed && agentPost(state, { author: message.author as unknown as Author, source: message.source as MessageDraft['source'] })
         ? (message.author as unknown as Author) : null
@@ -4595,7 +4191,6 @@ export class SuperTabStore {
         : (await loadRow(tx, swarmRow)).state.agents.find(a => a.id === agentId && a.membershipGeneration === row.membershipGeneration)
       const owner = row.machineOwnerId ?? previous?.machineOwnerId
       if (owner !== user.sub) fail('FORBIDDEN', 'Only the recorded execution host can read this receipt.', 403)
-      await this.hostFor(tx, user, row.machineId)
       const machine = await tx.machine.findFirst({ where: { machineId: row.machineId, userId: owner,
         autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
@@ -4726,48 +4321,28 @@ export class SuperTabStore {
    * that [target] reads, as its page read shows them (readsRow): nothing is said of a row it cannot read. One read for both.
    */
   private async otherAccounts(tx: Transaction, state: SuperTabState, target: Agent, row: SuperTabMessage): Promise<{ message: boolean; quoted: string[] }> {
-    const accounts = new Map<string, Promise<string>>()
-    const from = (written: Pick<SuperTabMessage, 'author' | 'source'>) => this.otherAccount(tx, state, target, written, accounts)
+    const from = (written: Pick<SuperTabMessage, 'author' | 'source'>) => this.otherAccount(state, target, written)
     const pointed = [...new Set([row.replyTo, row.thread].filter((id): id is string => !!id && id !== row.id))]
     const reads = readsRow({ kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }, isBuddy(target))
     const quotedRows = (await messagesById(tx, row.tabId, row.conversationId, pointed)).filter(reads)
-    const [message, ...quoted] = await Promise.all([from(row), ...quotedRows.map(async m => await from(m) ? [m.id] : [])])
-    return { message, quoted: quoted.flat() }
+    return { message: from(row), quoted: quotedRows.flatMap(m => from(m) ? [m.id] : []) }
   }
 
   /**
-   * Whether [row] carries the words of an agent of another account than [target]'s (audit M3, task #2021; wordsOf says whose): a Team agent's message
-   * reaches its Mac owner's agents, which would act on it with the owner's rights ("post me ~/.ssh/config"). The host marks
-   * it, from this answer alone: the message's text plays no part. An agent is on a Team account by the Swarm's record of its
-   * machine (an agent there joined on one, teamByRecord) or by its machine's account row, as notTeamMachine reads them: one point read per machine, never the
-   * Swarm's machine parts, which a claim leaves unread (superTabHotReads). Fails closed: an author no longer in the Swarm,
-   * or whose id now names a later membership than wrote it, counts as another account. A person's message is never marked.
+   * Whether [row] carries the words of an agent of another account than [target]'s (audit M3, task #2021; wordsOf says whose):
+   * one that runs as another machine owner, whose message would have [target] act with its own owner's rights ("post me
+   * ~/.ssh/config"). The host marks it, from this answer alone: the message's text plays no part. Fails closed: an author no
+   * longer in the Swarm, or whose id now names a later membership than wrote it, counts as another account. A person's
+   * message is never marked.
    */
-  private async otherAccount(tx: Transaction, state: SuperTabState, target: Agent, row: Pick<SuperTabMessage, 'author' | 'source'>,
-    accounts: Map<string, Promise<string>>): Promise<boolean> {
+  private otherAccount(state: SuperTabState, target: Agent, row: Pick<SuperTabMessage, 'author' | 'source'>): boolean {
     const words = wordsOf(row.source), written = row.author as unknown as Author
     if (words === 'none') return false
     if (words === 'unknown') return true
     if (words === 'author' && written.kind !== 'agent') return false
     const author = words === 'author' ? state.agents.find(a => a.id === written.id) : state.agents.find(a => a.id === words.agentId)
     if (!author || words === 'author' && author.membershipGeneration !== written.membershipGeneration) return true
-    // Read once per agent for all the rows one claim asks about.
-    const account = (agent: Agent) => {
-      const known = accounts.get(agent.id)
-      if (known) return known
-      const reading = (async () => {
-        const recorded = teamByRecord(state, agent.machineId)
-        const machine = recorded ? null : await tx.machine.findFirst({ where: { machineId: agent.machineId, userId: agent.machineOwnerId,
-          autonomousEnv: state.environment, ...machineAlive }, select: { sessionKind: true, hostMachineId: true } })
-        // A machine the Swarm records on no Team account and whose row is gone cannot be placed: another account (fails closed).
-        if (!recorded && !machine) return `unknown:${agent.id}`
-        return accountOf(agent, recorded || machine?.sessionKind === 'team' || !!machine?.hostMachineId)
-      })()
-      accounts.set(agent.id, reading)
-      return reading
-    }
-    const [from, to] = await Promise.all([account(author), account(target)])
-    return from !== to
+    return author.machineOwnerId !== target.machineOwnerId
   }
 
   /** The host cannot type a claimed instruction yet. Recorded on the delivery, an agent-only one's too: it is how the delivery
@@ -4781,73 +4356,9 @@ export class SuperTabStore {
   }
 
   /**
-   * Asks the owner about fresh nightly routing proposals, never posting a project-chat report. The costs command keeps
-   * the numbers available to the coordinator. Existing report rows stay and their nightly IDs remain recognized.
-   * Reads only the project's task attempts, then rechecks the owner and open Decisions in a short transaction.
-   * 'posted' means fresh Decisions were written; 'empty' means nothing new to ask. At most MAX_PROPOSALS stay open;
-   * unanswered proposals expire after 7 days, and answers suppress another ask for REASK_DAYS. Instructions containing
-   * the proposed routing line suppress it too. No routing rule changes until the coordinator writes an approved line.
-   */
-  async postReflection(tabId: string, projectId: string, on: string): Promise<'posted' | 'already' | 'empty' | 'skipped'> {
-    const id = reflectionMessageId(tabId, projectId, on)
-    if (await this.db.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return 'already'
-    const read = await this.db.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-    if (!read || read.deletedAt) return 'skipped'
-    const now = this.now(), since = now - 7 * DAY_MS
-    const { rows } = await costRows(this.db, tabId, since)
-    const failed = await failedStarts(this.db, tabId, since)
-    const seen = (await loadRow(this.db, requireParts(read), { groupIds: [...new Set([...rows, ...failed].map(r => r.conversationId))] })).state
-    const at = reflectionPlace(seen, projectId)
-    if (!at) return 'skipped'
-    const ids = new Set(seen.conversations.filter(g => !g.audience && !isLeads(g) && g.id !== at.chat.id && groupProject(seen, g).id === projectId).map(g => g.id))
-    // The project's document as it reads now: the template at revision 0 (a project the migration has not reached yet).
-    const revision = at.project.instructionsRevision ?? 0
-    const stored = revision ? await this.db.superTabInstructions.findUnique({ where: { id: instructionsId(tabId, projectId) }, select: { text: true } }) : null
-    const input: ReflectionInput = { now, rows: rows.filter(r => ids.has(r.conversationId)), groups: seen.conversations.filter(g => ids.has(g.id)),
-      failedStarts: failed.filter(f => ids.has(f.conversationId)),
-      document: stored?.text ?? INSTRUCTIONS_TEMPLATE }
-    // A quiet night still expires the proposals left unanswered (delta review of #2276).
-    if (!routingReflection(input)) { await expireReflections(this.db, tabId, projectId, now); return 'empty' }
-    return transaction(this.db, async tx => {
-      if (await tx.superTabMessage.findUnique({ where: { id }, select: { id: true } })) return 'already'
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return 'skipped'
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [at.chat.id] })
-      const state = cloneData(loaded.state)
-      const place = reflectionPlace(state, projectId)
-      if (!place) return 'skipped'
-      const { project, chat, lead } = place
-      // Expired first, so neither the open proposals nor the owner's open decisions count them.
-      await expireReflections(tx, tabId, projectId, now)
-      const asked = await reflectionDecisions(tx, tabId, projectId)
-      const open = asked.filter(d => !d.answeredAt)
-      const recent = asked.filter(d => d.answeredAt && d.answeredAt.getTime() >= now - REASK_DAYS * DAY_MS)
-      const decided = recent.map(d => proposalTitle(d.question))
-      const report = routingReflection({ ...input, decided })!
-      const owner = state.people.find(p => p.id === project.ownerId)
-      const reads = !!owner && canReadGroup(state, { kind: 'person', userId: owner.id, email: owner.email }, chat)
-      const waiting = new Set(open.map(d => proposalTitle(d.question)))
-      const held = reads ? await tx.superTabDecision.count({ where: { tabId, personId: project.ownerId, askerAgentId: lead.id,
-        OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] } }) : 0
-      const room = Math.max(0, Math.min(MAX_PROPOSALS - open.length, MAX_OPEN_DECISIONS - held))
-      const fresh = reads ? report.proposals.filter(p => !waiting.has(p.title)).slice(0, room) : []
-      if (!fresh.length) return 'empty'
-      await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
-      await writeDecisions(tx, tabId, askDecisions(state, chat, project.ownerId, fresh.map(proposalQuestion),
-        { now, operationId: id, askerAgentId: lead.id, assignmentId: null, kind: REFLECTION_DECISION }), now)
-      return 'posted'
-    })
-  }
-
-  /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
-   *  qualifies inside this write: no message and no pull request linked since the read. A decision still waiting there
-   *  closes as withdrawn (decisions.ts withdrawIn), and its waiting deliveries end, as a person's archive ends them. A step
-   *  needs `reviewOf`, the group the pass read as its task, which this write reads again: it stays open unless that task is
-   *  done or cancelled and that task's pull requests are settled too. A review nobody is reviewing closes the same way
-   *  (tidy.ts reviewClosable). True when it archived. */
   /**
-   * A machine its owner renamed (machineRenames.ts): every Swarm it is in shows the name from its owner's account row now, its
-   * Mac's Team account pools with it (machines.ts followAccountName), as its next reading would. One Swarm at a time, each
+   * A machine its owner renamed (machineRenames.ts): every Swarm it is in shows the name from its owner's account row now
+   * (machines.ts followAccountName), as its next reading would. One Swarm at a time, each
    * written only when its name differs; a Swarm that fails is logged and left to that reading. The Swarms renamed.
    */
   async machineRenamed({ machineId, ownerId, autonomousEnv }: MachineRename): Promise<number> {
@@ -4862,7 +4373,7 @@ export class SuperTabStore {
           if (!swarm || swarm.deletedAt) return false
           const loaded = await loadRow(tx, requireParts(swarm)), state = cloneData(loaded.state)
           const pool = machineContribution(state, machineId)
-          if (!pool || pool.removal || !followAccountName(state, pool, name)) return false
+          if (!pool || pool.removal || !followAccountName(pool, name)) return false
           await this.save(tx, loaded, state, clock.next())
           return true
         })) renamed++
@@ -4884,8 +4395,8 @@ export class SuperTabStore {
     const others = await otherAccountsOnComputer(this.db, signIn)
     if (!others.length) return []
     const to = await this.db.machine.findFirst({ where: { machineId: signIn.machineId, userId: signIn.ownerId, autonomousEnv: signIn.autonomousEnv, ...machineAlive },
-      select: { computerId: true, sessionKind: true } })
-    if (to?.computerId !== signIn.computerId || to.sessionKind === 'team') return []
+      select: { computerId: true } })
+    if (to?.computerId !== signIn.computerId) return []
     const moves: ComputerMove[] = []
     for (const from of others) {
       // Only the computer's own key proves it is the same computer; machine.moved checks again in its transaction.
@@ -4936,154 +4447,16 @@ export class SuperTabStore {
   }
 
   /** The move [ownerId]'s entry [machineId] makes to [to], read from both account rows in this transaction: the same computer,
-   *  two accounts, neither a Team sign-in. None otherwise, which machine.moved refuses. */
+   *  two accounts. None otherwise, which machine.moved refuses. */
   private async computerMove(tx: Transaction, state: SuperTabState, ownerId: string, machineId: string, to: { machineId: string; ownerId: string }):
     Promise<CommandContext['computerMove']> {
     if (ownerId === to.ownerId) return undefined
     const row = (id: string, userId: string) => tx.machine.findFirst({ where: { machineId: id, userId, autonomousEnv: state.environment, ...machineAlive },
-      select: { computerId: true, sessionKind: true, name: true } })
+      select: { computerId: true, name: true } })
     const [from, next] = await Promise.all([row(machineId, ownerId), row(to.machineId, to.ownerId)])
-    if (!from?.computerId || from.computerId !== next?.computerId || from.sessionKind === 'team' || next.sessionKind === 'team') return undefined
+    if (!from?.computerId || from.computerId !== next?.computerId) return undefined
     if (!await sameComputerKey(this.machineKeys, { userId: ownerId, machineId }, { userId: to.ownerId, machineId: to.machineId })) return undefined
     return { to: { ...to, name: accountMachineName(next) } }
-  }
-
-  /**
-   * What GitHub says of [watch], a pull request linked to the task [groupId] (pullRequestEvents.ts): each event its Engineer
-   * was not told yet goes to it as a message in the task, and every event is recorded there, in one write, so a retry or a
-   * second pass posts none twice. A task with no Engineer in the Swarm records them and posts nothing. A step, an archived or
-   * a finished task, or a pull request it no longer links, is left alone. The messages posted.
-   */
-  /** [patch]: the patch id the pass read for [watch]'s head when it was new to the task, or read again after GitHub could not
-   *  give it (undefined: not read, null: unreadable). [stepIds]: the task's steps (Conversation.stepIds), loaded even when
-   *  dormant, as a new head re-derives their checks. A done task records its heads and posts nothing (#3394). */
-  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null, patch?: string | null,
-    stepIds: readonly string[] = [], lookedUp = false, merged: string | null = null): Promise<number> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return 0
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...patch === undefined ? [] : stepIds] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId)
-      // A task its agent left (no assignment) records what happens, so its next Engineer hears only what is new.
-      const done = group?.assignment?.status === 'done'
-      if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url) || group.assignment?.status === 'cancelled') return 0
-      const now = this.now()
-      // A new head is recorded with its patch id, or a patch read again for it, and the verdicts of the task and its steps
-      // count against it (#3394).
-      // A new base branch counts as a new head (security review of #3218, round 3): the patch id names the branch.
-      const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head || known.base !== watch.base
-      const repatched = !newHead && patch !== undefined && known!.patch === null
-      // Open again after it was read closed: it may capture the task's checks once more (task #3953).
-      const reopened = !newHead && !!known?.closed
-      if (reopened) {
-        const { closed: _closed, ...open } = known!
-        group.pullRequestHeads = { ...group.pullRequestHeads, [watch.url]: open }
-        for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-          for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, group.pullRequestHeads)
-        }
-      }
-      if (newHead || repatched) {
-        // A task from before steps were listed lists the ones its watch looked up, with its awake ones (#3394).
-        if (lookedUp && !group.stepIds) {
-          group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
-        }
-        // A head the pass gave no patch for (its read already ended) is read again at the next pass, never kept unread.
-        // A new head that is git's own merge of another head and main carries that head's verdicts, and those it carried when
-        // it was the head before, on the same base (mergeCarry.ts, #3553); a head re-read for its patch keeps what it carries.
-        const carries = !newHead ? known!.carries
-          : merged ? [merged, ...known && known.base === watch.base && known.head.toLowerCase() === merged.toLowerCase() ? known.carries ?? [] : []].slice(0, CARRIES_KEPT)
-            : undefined
-        group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, base: watch.base, patch: patch ?? null,
-          at: patch === undefined ? 0 : now, ...carries?.length ? { carries } : {} }, group.pullRequestUrls)
-        for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-          refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
-        }
-      }
-      // What the board says of its checks (task #3827): recorded with the head, even for a done task, and only when it changed.
-      const checks = checksStateOf(watch), checksMoved = group.pullRequestChecks?.[watch.url] !== checks
-      // Of the links it still has: a state of a pull request the task dropped goes with the link.
-      if (checksMoved) group.pullRequestChecks = Object.fromEntries(Object.entries({ ...group.pullRequestChecks, [watch.url]: checks })
-        .filter(([url]) => group.pullRequestUrls!.includes(url)))
-      if (done) {
-        if (!newHead && !repatched && !reopened && !checksMoved) return 0
-        await this.save(tx, loaded, state, clock.next())
-        return 0
-      }
-      const seen = group.pullRequestEvents?.[watch.url] ?? []
-      const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (!newHead && !repatched && !reopened && !checksMoved && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
-      group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
-      // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
-      const events = reopenOnEvents(group, seenEvents, now)
-      if (events !== seenEvents) {
-        recordTaskState(state, group, now)
-        // Back in its hands: the session's cross-Swarm fence covers it again if nothing does (endRuns).
-        await this.restoreRuns(tx, tabId, state, [group.assignment!.agentId])
-      }
-      // A task nobody holds whose pull request turned red or conflicts waits for its builder (dispatch.ts); a handed one the
-      // reopen above made active work is not pinned.
-      const pinned = pullRequestPin(watch)
-      if (pinned) pinBuilder(group, pinned, now)
-      const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
-      // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
-      const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
-      const by = state.agents.find(a => a.id === leadId) ?? owner
-      const rows: MessageDraft[] = owner && by ? events.map(event => ({ id: stableId('pull-request-event', group.id, watch.url, event.key), conversationId: group.id,
-        author: { kind: 'agent', id: by.id, name: by.name, displayName: agentDisplayName(state.agents, by.id), membershipGeneration: by.membershipGeneration },
-        text: event.text, replyTo: null, recipients: [owner.id], source: { kind: 'system' } })) : []
-      const sequences = numberMessages(state, rows, now)
-      await this.save(tx, loaded, state, clock.next())
-      await this.writeMessages(tx, tabId, state, rows, sequences)
-      return rows.length
-    })
-  }
-
-  /** GitHub shows [url], a pull request the PR watch read before, closed: its head is marked, and the task's checks no longer
-   *  count at it while another linked pull request is open (checkVerdicts.ts checkedPullRequest, task #3953). Whether it wrote. */
-  async pullRequestClosed(tabId: string, groupId: string, url: string, stepIds: readonly string[] = [], lookedUp = false): Promise<boolean> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...stepIds] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId), known = group?.pullRequestHeads?.[url]
-      if (!group || group.reviewOf || !known || known.closed) return false
-      group.pullRequestHeads = { ...group.pullRequestHeads, [url]: { ...known, closed: true } }
-      if (lookedUp && !group.stepIds) {
-        group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
-      }
-      // The verdicts of the task and its steps count against the heads that are left (checkVerdicts.ts verdictCounts).
-      for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-        for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, group.pullRequestHeads)
-      }
-      await this.save(tx, loaded, state, clock.next())
-      return true
-    })
-  }
-
-  /** The task's links moved past a pull request whose head it keeps (review of #3218, round 3): the heads it no longer reads
-   *  (watchedLinks) are dropped, and the checks of the task and its steps, [stepIds] loaded even when dormant, count against
-   *  what is left: a verdict on a dropped one is unverified (checkVerdicts.ts verdictCounts), even with no head left. Whether
-   *  it wrote. */
-  async pullRequestHeadsWatched(tabId: string, groupId: string, stepIds: readonly string[] = [], lookedUp = false): Promise<boolean> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...stepIds] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId)
-      if (!group?.pullRequestHeads || group.archived || group.reviewOf) return false
-      const window = new Set(watchedLinks(group.pullRequestUrls ?? []))
-      const kept = Object.fromEntries(Object.entries(group.pullRequestHeads).filter(([url]) => window.has(url)))
-      if (Object.keys(kept).length === Object.keys(group.pullRequestHeads).length) return false
-      group.pullRequestHeads = kept
-      if (lookedUp && !group.stepIds) {
-        group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
-      }
-      for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-        for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, kept)
-      }
-      await this.save(tx, loaded, state, clock.next())
-      return true
-    })
   }
 
   /**
@@ -5126,71 +4499,15 @@ export class SuperTabStore {
     })
   }
 
-  async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, SettledPullRequest>>, reviewOf?: string): Promise<boolean> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: reviewOf ? [groupId, reviewOf] : [groupId] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId)
-      const now = this.now()
-      if (!group) return false
-      // Its links, and a "PR #N" its result or check evidence names, read in its project's repository; with none to read
-      // it in it stays open (tidy.ts archiveWaitsFor). Read only once it may close, so its project is a real one.
-      const read = (urls: readonly string[]) => {
-        const waits = archiveWaitsFor(group, groupProject(state, group).repository?.repositoryUrl)
-        return !!waits && [...urls, ...waits].every(url => !!checked[url])
-      }
-      // A step's task's pull requests count too: it may yet be handed back while one is open, and need its step again.
-      const finished = archivable(state, group, now) && read(reviewPullRequests(state, group))
-      // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
-      const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
-      if (!finished && !review) return false
-      // Its work is over: a decision still waiting there waits no more (Dee, 10-31), as when the work ended by a command.
-      await withdrawIn(tx, tabId, [groupId], now)
-      group.archived = true
-      // Its steps archive with it (task steps design): its work is done or cancelled and its pull requests settled, so a
-      // step still open there has nothing left to check.
-      const reason = `${group.title} was archived.`, heldBefore = new Set(stepsOf(state, group.id).filter(step => step.archived).map(step => step.id))
-      const cancelled = endSteps(state, group, reason, true)
-      const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now)
-      // A step this pass cancelled hears why, as when a command ends it (commands.ts endStepsOf): its later verdict is refused.
-      const rows = [...line ? [line] : [], ...stepEndedRows(state, cancelled, reason, line?.author ?? null, step => stableId('auto-archive-step', step.id, String(now)))]
-      const sequences = numberMessages(state, rows, now)
-      group.dormant = true
-      // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
-      // Its finished steps archive here too (execute does the same): a cancelled one stays open, to hear why. One plain match per
-      // conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
-      const endedIds = [groupId, ...stepsOf(state, group.id).filter(step => step.archived && !heldBefore.has(step.id)).map(step => step.id)]
-      await this.endDeliveries(tx, tabId, { matches: row => endedIds.includes(row.conversationId) }, async () => {
-        let count = 0
-        for (const conversationId of endedIds) {
-          count += (await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] } },
-            data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
-        }
-        return { count }
-      })
-      // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
-      // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
-      // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
-      // A finished step's too: its task handed on again since the load must not lose the step it will need.
-      await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
-      await this.writeMessages(tx, tabId, state, rows, sequences)
-      this.tellPhones(tx, tabId, state, { replies: [], tags: await writeMentions(tx, tabId, state, rows, now) }, rows)
-      return true
-    })
-  }
-
   /** The phones of whoever `written` tells hear of it once the write commits (push/send.ts). */
-  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[]; decisions?: DecisionRow[] },
-    messages: MessageDraft[], before: SuperTabState = state): void {
+  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], before: SuperTabState = state): void {
     const tell = this.hooks.phoneNotices
-    // An agent's post may be its words in its 1:1 chat (push/notices.ts chatNotices): nothing else is looked at for a write without.
-    const posted = messages.some(m => m.author.kind === 'agent' && m.post)
-    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length && !posted)) return
+    // Only an agent's post can be its words in its 1:1 chat (push/notices.ts chatNotices): nothing else is looked at for a write without.
+    if (!tell || !messages.some(m => m.author.kind === 'agent' && m.post)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {
-      notices = [...phoneNotices(tabId, state, written, messages), ...posted ? chatNotices(tabId, state, messages, before) : []]
+      notices = chatNotices(tabId, state, messages, before)
     } catch (error) {
       logger.warn('phone push failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       return
@@ -5255,7 +4572,6 @@ export class SuperTabStore {
         return found
       })
       const execution = assignment.execution
-      await this.hostFor(tx, user, execution.machineId)
       const machine = await tx.machine.findFirst({ where: { machineId: execution.machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!machine) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const id = stableId('stop', tabId, assignmentId)

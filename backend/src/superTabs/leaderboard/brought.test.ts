@@ -61,14 +61,6 @@ describe('Brought: the machines a person brought, what shipped on each, and thei
     expect(brought(view, 'diego')[0]!.shipped).toBe(0)
   })
 
-  it('folds a Mac\'s Harness Team account into its Mac: one row, its time and ships added, the Mac\'s subscriptions', () => {
-    const state = swarm()
-    state.machines = [machine('studio', 'ken', { name: 'Mac Studio', lent: [{ week: WEEK, busyMs: 2 * HOUR }] }),
-      machine('studio-team', 'ken', { name: 'Mac Studio · Team', hostMachineId: 'studio', lent: [{ week: WEEK, busyMs: 3 * HOUR }] })]
-    const view = board(state, [shippedOn('studio-team', WEEK + HOUR), shippedOn('studio', WEEK + 2 * HOUR)])
-    expect(brought(view, 'ken')).toEqual([expect.objectContaining({ machineId: 'studio', machineName: 'Mac Studio', shipped: 2, busyHours: 5 })])
-  })
-
   it('finds an older attempt\'s machine by its agent while that agent exists, and counts one it cannot place nowhere', () => {
     const state = swarm()
     state.machines = [machine('studio', 'ken')]

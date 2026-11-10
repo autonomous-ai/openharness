@@ -30,9 +30,8 @@ let db: PrismaClient
 const owner: AuthUser = { sub: '300000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '300000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
 const watcher: AuthUser = { sub: '300000000000000000000003', email: 'watcher@example.com', autonomousEnv: 'prod', role: 'user' }
-// peer's own Mac's daemon, which relays their web app's Swarm requests; and the Harness Team account's machine on that Mac,
-// from before Team accounts went (anh Dee, 2026-11-10).
-const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', PEER_TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+// peer's own Mac's daemon, which relays their web app's Swarm requests.
+const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const peerMac: AuthUser = { ...peer, harnessSessionId: 'peer-mac-session', harnessSessionKind: 'computer' }
 const config = { engine: 'claude', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
@@ -49,11 +48,8 @@ beforeAll(async () => {
     await db.machine.create({ data: { machineId, userId: user.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote',
       ...(machineId === 'peer-mac' ? { computerId: PEER_COMPUTER, sessionKind: 'computer' } : {}) } })
   }
-  await db.machine.create({ data: { machineId: 'peer-team', userId: peer.sub, computerId: PEER_TEAM_COMPUTER, sessionKind: 'team', hostMachineId: 'peer-mac',
-    apiKey: 'fixture-peer-team', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-  // Machines in no Swarm (Dee, 10-29): peer's own laptop, a machine of peer's account given over to team work (`harness team
-  // on`, no Mac), and the owner's own laptop.
-  for (const [machineId, user, sessionKind] of [['peer-laptop', peer, 'computer'], ['peer-dedicated', peer, 'team'], ['owner-laptop', owner, 'computer']] as const) {
+  // Machines in no Swarm (Dee, 10-29): peer's own laptop and the owner's own laptop.
+  for (const [machineId, user, sessionKind] of [['peer-laptop', peer, 'computer'], ['owner-laptop', owner, 'computer']] as const) {
     await db.machine.create({ data: { machineId, userId: user.sub, sessionKind, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   }
 })
@@ -286,10 +282,6 @@ describe('a Buddy through the store', () => {
     const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })).result.assignmentId)
     await f.execute({ type: 'message.send', conversationId: group, text: 'Opened https://github.com/acme/app/pull/12', replyTo: null, recipientIds: [] }, owner, builder)
     await f.execute({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', hold: quotaReset(), result: 'Ship it behind a flag?' }, owner, builder)
-    await f.execute({ type: 'decision.ask', conversationId: group, personId: peer.sub, questions: [{ question: 'Ship it behind a flag?',
-      options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }] }, owner, f.lead)
-    await f.execute({ type: 'decision.ask', conversationId: group, personId: owner.sub, questions: [{ question: 'Which week?',
-      options: ['This week', 'Next week'], recommended: 0, unblocks: 'The plan' }] }, owner, f.lead)
 
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     const task = read.groups.find(g => g.key === group)!.data
@@ -309,8 +301,6 @@ describe('a Buddy through the store', () => {
     expect(JSON.stringify([read, changed])).not.toContain('owner-mac')
     const messages = await f.store.messages(peer, f.tab, group, {}, agentId)
     expect(messages.messages.map(m => m.text)).toContain('Opened https://github.com/acme/app/pull/12')
-    const decisions = await f.store.decisions(peer, f.tab, 'open', agentId)
-    expect(decisions.decisions.map(d => [d.conversationId, d.question])).toEqual([[group, 'Ship it behind a flag?']])
   })
 
   it('is refused another person\'s private chat, the Leads conversation and another project', async () => {
@@ -361,16 +351,9 @@ describe('a Buddy through the store', () => {
     await expect(f.store.costSummary(peer, f.tab, 7, agentId)).rejects.toThrow('A Buddy reads no routing')
   })
 
-  it('receives no nightly report and still cannot read historical routing reports', async () => {
+  it('still cannot read historical routing reports', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
-    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Parser', brief: '', checks: [] })).result.conversationId)
-    const at = Date.now() - 60 * 60_000
-    await db.superTabRouteDecision.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: group, assignmentId: randomUUID(), outcome: 'done',
-      createdAt: new Date(at), final: { kind: 'member' }, record: { assessment: { kind: 'parser' } }, run: { machineId: 'peer-mac', harnessId: 'h',
-        engine: 'claude', model: 'opus', effort: 'high', billing: 'subscription', startedAt: at, start: {}, endedAt: at + 60_000, end: {} } } })
-    expect(await f.store.postReflection(f.tab, 'lead', '2026-10-30')).toBe('empty')
-    expect((await f.store.messages(peer, f.tab, 'lead', {})).messages.some(m => (m.source as { kind?: unknown } | null)?.kind === 'routing-reflection')).toBe(false)
     const report = await db.superTabMessage.create({ data: { id: randomUUID(), tabId: f.tab, conversationId: 'lead', sequence: 1,
       author: { kind: 'agent', id: f.lead, name: 'Lead' }, recipientIds: [], mentions: [], text: 'Routing reflection: an old report.',
       source: { kind: 'routing-reflection', projectId: 'lead', on: '2026-10-29' } } })
@@ -381,40 +364,10 @@ describe('a Buddy through the store', () => {
     await expect(f.store.messages(peer, f.tab, 'lead', { messageId: report.id }, agentId)).resolves.toMatchObject({ messages: [] })
   })
 
-  it('never reads the routing proposals asked of its person: not in its decisions, nor as the PM\'s line when its person leaves one to the PM (review of #2276)', async () => {
-    const f = await swarm()
-    const { agentId, chat } = await buddy(f)
-    // Two proposals as the nightly reflection asks them (store.ts postReflection): of peer, by the PM, in the project chat, tagged.
-    const proposal = (title: string) => ({ id: randomUUID(), tabId: f.tab, batchId: randomUUID(), projectId: 'lead', conversationId: 'lead', assignmentId: null,
-      personId: peer.sub, askerAgentId: f.lead, question: `${title}? Expected saving: about $10.00 a week at API prices.`,
-      options: ['Yes: the Lead routes this way from now on', 'No: keep routing as it is', 'Not yet: ask again when there is more evidence'],
-      recommended: 0, unblocks: 'If you say yes, the Lead routes parser work this way.', createdAt: new Date(), kind: 'routing-reflection' })
-    const routing = [proposal('Route parser work to claude sonnet medium instead of claude opus high'), proposal('Stop routing ui work to codex gpt-6.1-sol high')]
-    await db.superTabDecision.createMany({ data: routing })
-    await f.execute({ type: 'decision.ask', conversationId: 'lead', personId: peer.sub, questions: [{ question: 'Which week?',
-      options: ['This week', 'Next week'], recommended: 0, unblocks: 'The plan' }] }, owner, f.lead)
-    const theirs = (await f.store.decisions(peer, f.tab, 'open')).decisions
-    expect(theirs.map(d => d.question).sort()).toEqual([...routing.map(r => r.question), 'Which week?'].sort())
-    expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions.map(d => d.question)).toEqual(['Which week?'])
-    // An agent reads whom a decision asks by name, never email; the person's own app keeps it (review of #2954).
-    expect((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions[0]).toMatchObject({ personEmail: null, personName: expect.any(String) })
-    expect(JSON.stringify((await f.store.decisions(peer, f.tab, 'open', agentId)).decisions)).not.toContain(peer.email)
-    expect(theirs.find(d => d.question === 'Which week?')).toMatchObject({ personEmail: peer.email })
-    // Left to the PM: the plain one's line reaches the Buddy chat, the proposal's never does, and the Buddy's answered list holds no proposal.
-    await f.execute({ type: 'decision.answer', decisionId: routing[0]!.id, delegate: true }, peer)
-    await f.execute({ type: 'decision.answer', decisionId: theirs.find(d => d.question === 'Which week?')!.id, delegate: true }, peer)
-    const lines = (await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)
-    expect(lines).toContain('PM decided: This week — Which week?')
-    expect(lines.join('\n')).not.toContain('Route parser work')
-    expect((await f.store.decisions(peer, f.tab, 'settled', agentId)).decisions.map(d => d.question)).toEqual(['Which week?'])
-    expect((await f.store.decisions(peer, f.tab, 'settled')).decisions.map(d => d.question)).toContain(routing[0]!.question)
-  })
-
   it('reads a task archived by hand in the dormant view at once, with no report to wait for (security review 1 of #2115, #3593)', async () => {
     const f = await swarm()
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Old task', brief: '', checks: [] })).result.conversationId)
-    await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: 'https://github.com/example/app/pull/7' })
     await f.execute({ type: 'conversation.archive', conversationId: group, archived: true } as Command)
     const reads = new SwarmReads(f.store)
     expect((await reads.firstLoad(peer, f.tab, agentId)).groups.some(g => g.key === group)).toBe(false)
@@ -1176,15 +1129,15 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     expect(JSON.stringify(await reads.firstLoad(owner, f.tab))).not.toContain('peer-laptop')
   })
 
-  it('is refused in the same words on someone else\'s machine, a Team sign-in with or without a Mac, and no machine at all, adding nothing', async () => {
+  it('is refused in the same words on someone else\'s machine and no machine at all, adding nothing', async () => {
     const f = await swarm()
-    // The same words for someone else's machine, a Team sign-in and a machine that does not exist, so they never say which
-    // (security review 2 of #2234).
+    // The same words for someone else's machine and a machine that does not exist, so they never say which (security review 2
+    // of #2234).
     const refusals = []
-    for (const machineId of ['owner-laptop', 'peer-team', 'peer-dedicated', 'ffffffffffffffffffffffffffffffff']) {
+    for (const machineId of ['owner-laptop', 'ffffffffffffffffffffffffffffffff']) {
       refusals.push(await add(f, machineId).then(() => null, (e: { code: string; message: string; status: number }) => [e.code, e.message, e.status]))
     }
-    expect(refusals).toEqual(Array(4).fill(['BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403]))
+    expect(refusals).toEqual(Array(2).fill(['BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403]))
     const read = await f.store.read(peer, f.tab)
     expect([read.state.starts ?? [], read.state.agents.filter(a => a.buddyOf)]).toEqual([[], []])
     expect(await poolRows(f.store, owner, 'owner-laptop')).toEqual([])
@@ -1269,7 +1222,7 @@ describe('idle Buddy sleep (#3824)', () => {
     const { main, swarmChat, pool } = await swarmBuddy(f)
     const agent = (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
     const sent = await f.execute({ type: 'message.send', conversationId: swarmChat, text: 'Remember this', replyTo: null, recipientIds: [] }, peer)
-    const { receivedAt: _, sessionKind: __, ...report } = pool.machine.observation!
+    const { receivedAt: _, ...report } = pool.machine.observation!
     const idle = { ...report, runningHarnessIds: [agent.harnessId], idleBuddyHarnessIds: [agent.harnessId] }
     const current = async () => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === main)!
     now += 3_600_000 - 1
@@ -1305,7 +1258,7 @@ describe('Buddy input and sleep race (#3824)', () => {
     await f.execute({ type: 'project.boardMode', projectId: 'lead', on: true })
     const first = await swarmBuddy(f), second = await swarmBuddy(f, true)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
-    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const { receivedAt: _, ...report } = first.pool.machine.observation!
     const idle = { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) }
     const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!
     now += 3_600_000
@@ -1351,7 +1304,7 @@ describe('a sleeping proposal sender (#3824)', () => {
     await f.execute({ type: 'buddy.default', conversationId: second.swarmChat }, peer)
     const agents = (await f.store.read(peer, f.tab)).state.agents.filter(a => [first.main, second.main].includes(a.id))
     await db.superTabDelivery.updateMany({ where: { tabId: f.tab, agentId: { in: agents.map(a => a.id) } }, data: { status: 'answered' } })
-    const { receivedAt: _, sessionKind: __, ...report } = first.pool.machine.observation!
+    const { receivedAt: _, ...report } = first.pool.machine.observation!
     now += 3_600_001
     await f.store.observeMachine(peer, f.tab, 'peer-mac', { ...report, runningHarnessIds: agents.map(a => a.harnessId), idleBuddyHarnessIds: agents.map(a => a.harnessId) })
     const current = async (id: string) => (await f.store.read(peer, f.tab)).state.agents.find(a => a.id === id)!

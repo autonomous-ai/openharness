@@ -531,7 +531,8 @@ export const machineService = {
     })
     if (read.length === MACHINE_LIST_MAX) logger.warn('machine list cut at its limit', { userId, limit: MACHINE_LIST_MAX })
     // A Harness Team account's machine (anh Dee, 2026-11-10: Team accounts are gone) is no machine of the person's: never
-    // listed, so no app or daemon shows it. Left out of the bounded read here, as a row from before the field has none.
+    // listed, so no app or daemon shows it. Left out of the bounded read here, as a row from before the field has none. Goes
+    // with the job that soft-deletes those rows (superTabs/migration/teamMachinesJob.ts), on or after 2026-12-10.
     const rows = read.filter((b) => b.sessionKind !== 'team')
     if (rows.length === 0) return []
     const ids = rows.map((b) => b.machineId)
@@ -619,12 +620,6 @@ export const machineService = {
     assertRequesterEnvironment(binding, requester)
     assertMachineBillingActive(binding)
     await prisma.machine.update({ where: { machineId }, data: { name } })
-    // Its Mac's Harness Team accounts go by "<Mac> · Team" (cli/src/team/command.ts), and keep that after the new name; the
-    // suffix runs past the 40 characters a rename takes, as it does after a longer hostname. A cleared name leaves them.
-    if (name) {
-      await prisma.machine.updateMany({ where: { userId: binding.userId, autonomousEnv: binding.autonomousEnv, hostMachineId: machineId,
-        sessionKind: 'team', ...machineAlive }, data: { name: `${name} · Team` } })
-    }
     // Every Swarm it is in shows the new name now, not on its next reading, which an offline machine never sends (#2308).
     await machineRenamed({ machineId, ownerId: binding.userId, autonomousEnv: binding.autonomousEnv }).catch(error => {
       logger.warn('machine rename did not reach its Swarms; their next reading of it will', { machineId, error: error instanceof Error ? error.message : String(error) })

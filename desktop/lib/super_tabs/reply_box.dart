@@ -17,9 +17,8 @@ import 'swarm_type.dart';
 /// A thread's reply box, one everywhere a reply is written (the thread pane,
 /// the Threads view): files dropped, pasted or attached, Enter sends and
 /// ⇧Enter breaks the line. Under the text, one row (Huy and Scholes, 11-04):
-/// the paperclip, then [options] such as the pane's New session, and the mic
-/// (with [onMic]) and the round send at its right end, drawn as Cmd-N's field
-/// (anh Dee, 11-07, #4467). An @ typed tags; there is no @ button (River, 11-07).
+/// the paperclip, and the mic (with [onMic]) and the round send at its right
+/// end, drawn as Cmd-N's field (anh Dee, 11-07, #4467). An @ typed tags; there is no @ button (River, 11-07).
 class SuperTabReplyBox extends StatelessWidget {
   const SuperTabReplyBox({
     super.key,
@@ -33,7 +32,6 @@ class SuperTabReplyBox extends StatelessWidget {
     required this.error,
     required this.onEdited,
     required this.onSend,
-    this.options,
     this.onMic,
     this.voiceRow,
     this.voiceNotice,
@@ -59,7 +57,6 @@ class SuperTabReplyBox extends StatelessWidget {
   final String? error;
   final ValueChanged<String> onEdited;
   final VoidCallback onSend;
-  final Widget? options;
 
   /// The mic's press: no mic without one.
   final VoidCallback? onMic;
@@ -82,13 +79,11 @@ class SuperTabReplyBox extends StatelessWidget {
 
   /// The Tab order inside an [OrderedTraversalPolicy] group around the box,
   /// the row's own: the field (and its files) first, then the paperclip, the
-  /// options ([optionsOrder], such as the pane's New session), the mic and
-  /// send, and last what the owner puts under the box ([underOrder], such as
+  /// mic and send, and last what the owner puts under the box ([underOrder], such as
   /// the pane's Also send). Outside such a group it has no effect, and the
   /// reading order applies.
   static const fieldOrder = NumericFocusOrder(1),
       toolsOrder = NumericFocusOrder(1.5),
-      optionsOrder = 2.0,
       sendOrder = NumericFocusOrder(3),
       underOrder = NumericFocusOrder(4);
 
@@ -200,7 +195,7 @@ class SuperTabReplyBox extends StatelessWidget {
                           enabled: writable && !busy,
                         ),
                       ),
-                      Expanded(child: options ?? const SizedBox.shrink()),
+                      const Spacer(),
                       if (onMic case final onMic?)
                         FocusTraversalOrder(
                           order: sendOrder,

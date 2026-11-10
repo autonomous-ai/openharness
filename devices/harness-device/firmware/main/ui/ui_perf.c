@@ -39,7 +39,6 @@ void ui_perf_flush_done(void)
     last_done = esp_timer_get_time();
     portEXIT_CRITICAL_ISR(&mux);
 }
-#ifndef DEVICE_OCTOPUS_BENCH
 typedef struct {
     uint32_t api, visible, bytes, flushes, frames;
 } sample_t;
@@ -139,11 +138,6 @@ static void run_case(const char *name, int kind)
              (unsigned long)touch.presses, (unsigned long)touch.inferred_releases,
              (unsigned long)touch.read_failures, touch.held_now);
 }
-#endif
-#ifdef DEVICE_OCTOPUS_BENCH
-#include "habitat/perf_bench.h"
-void ui_perf_run(void) { octopus_perf_run(); }
-#else
 void ui_perf_run(void)
 {
     const char *renderer = "habitat-direct-c";
@@ -193,5 +187,4 @@ void ui_perf_run(void)
     ui_enter_boot_loading();
     ESP_LOGI("PERF", "END renderer=%s", renderer);
 }
-#endif
 #endif

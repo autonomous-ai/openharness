@@ -119,35 +119,6 @@ function recordingGroups() {
   return { client, keys }
 }
 
-// Review of #2275: the review-capacity notice took the command's own message id, which the Ready for review row already had,
-// so the real write hit a duplicate key and rolled the whole status back: no Builder could hand over during a quota shortage.
-describe('a Ready for review while no new agent can start', () => {
-  it('saves the hand-over and tells the project chat once, through the store\'s write', async () => {
-    const f = await swarm({ engines: ['codex', 'claude'] })
-    const window = [{ name: 'weekly', usedPercent: 100, resetsAt: new Date(f.clock.now + 3 * 86_400_000).toISOString() }]
-    // Both engines out on every machine (project instructions, phase 4: the notice speaks only when neither can start).
-    const outForDays = ['claude', 'codex'].map(engine => ({ engine, known: true, windows: window }))
-    await f.observe('lead-host', [f.harness.lead], { quotas: outForDays })
-    await f.observe('test-host', [f.harness.worker], { quotas: outForDays })
-    const status = (status: 'review' | 'working', result: string) =>
-      f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status, result }, host, f.worker)
-    const handed = await status('review', 'Ready for review: PR #7 at 4f9c2e1')
-    expect((await f.assignment()).status).toBe('review')
-    const rows = await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } })
-    const notices = rows.filter(m => (m.source as { kind?: string } | null)?.kind === 'review-capacity')
-    expect(notices).toHaveLength(1)
-    expect(notices[0]!.text).toMatch(/^No new agent can start: no machine this project may use can run Claude Code or Codex now/)
-    // The command's own row stays the hand-over.
-    expect(rows.find(m => m.id === handed.result.messageId)!.text).toContain('Ready for review: PR #7 at 4f9c2e1')
-    const project = (await f.timed.read(owner, f.tab)).state.projects![0]!
-    expect(project.reviewCapacity).toEqual({ any: 'out' })
-    // Handed over again, the cause is the same: said once.
-    await status('working', 'Fixing')
-    await status('review', 'Ready for review: PR #7 at 5a0d3f2')
-    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'review-capacity')).toHaveLength(1)
-  })
-})
-
 describe('a machine\'s report', () => {
   /** `n` conversations whose work finished but that are not yet quiet, each with a long brief: copies of a real one. */
   async function finishedGroups(f: Awaited<ReturnType<typeof swarm>>, n: number) {
@@ -1188,19 +1159,6 @@ describe('a session reopened after its agent was removed', () => {
     await db.swarmMachine.update({ where: { id: row.id }, data: { data: { ...row.data as object, closingSessions: [] } } })
     await resume(f)
     expect((await state(f)).agents.map(a => a.id)).toContain(f.idle)
-  })
-
-  it('never past a hold: a session its Team account is held for stays out, and the hold stands', async () => {
-    const f = await removed()
-    const row = await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })
-    const data = structuredClone(row.data) as { closingSessions: Array<Record<string, unknown>> }
-    for (const close of data.closingSessions) if (close.harnessId === f.harness.other) Object.assign(close, { heldFor: 'lead', since: f.clock.now })
-    await db.swarmMachine.update({ where: { id: row.id }, data: { data: data as object } })
-    await resume(f)
-    expect((await state(f)).agents.map(a => a.id)).not.toContain(f.idle)
-    const after = (await db.swarmMachine.findFirstOrThrow({ where: { tabId: f.tab, key: 'test-host' } })).data as { closingSessions: Array<Record<string, unknown>>; removedSessions?: unknown[] }
-    expect(after.closingSessions.find(c => c.harnessId === f.harness.other)).toMatchObject({ heldFor: 'lead' })
-    expect(after.removedSessions ?? []).toEqual([])
   })
 
   // Security review 1 of #2601: the record every Swarm registering this session writes (sessionScope.ts bindSession).

@@ -105,13 +105,13 @@ void main() {
   });
 
   testWidgets(
-    'Manage rows have leading dots, owner badge and aligned disk bars',
+    'Manage rows have leading dots, owner badge and aligned disk bars, and no crew (v3)',
     (tester) async {
       await mount(tester);
       expect(find.text('OWNER'), findsOneWidget);
       for (final id in ['mine', 'build', 'sleep', 'old']) {
         expect(tester.getSize(key('machines-line-$id')).height, 56);
-        expect(key('machines-crew-$id'), findsOneWidget);
+        expect(key('machines-crew-$id'), findsNothing);
         expect(key('machines-disk-$id'), findsOneWidget);
         expect(
           tester.getTopLeft(key('machines-dot-$id')).dx,
@@ -123,6 +123,11 @@ void main() {
         tester.getTopLeft(key('machines-disk-build')).dx,
       );
       expect(find.text('200 GB free'), findsNWidgets(4));
+      // A crew member's machine (crew-one, from an older server) reads no crew.
+      expect(
+        find.textContaining(RegExp('crew', caseSensitive: false)),
+        findsNothing,
+      );
       expect(find.textContaining('last seen'), findsWidgets);
     },
   );
@@ -167,16 +172,6 @@ void main() {
     expect(find.text('Online 1'), findsOneWidget);
     expect(find.text('Asleep 2'), findsOneWidget);
     expect(find.text('1 online · 2 asleep · 1 offline'), findsOneWidget);
-  });
-
-  testWidgets('crew chip expands the existing machine details', (tester) async {
-    final c = await mount(tester);
-    expect(find.text('1 crew'), findsOneWidget);
-    await tester.tap(key('machines-crew-mine'));
-    await tester.pump();
-    expect(c.isMachineExpanded('mine'), isTrue);
-    expect(key('super-machine-crew-member-mine-0'), findsOneWidget);
-    await c.flush();
   });
 
   testWidgets(
@@ -283,54 +278,28 @@ void main() {
     },
   );
 
-  // The test font draws every letter 1em wide: these names fit the room the crew chip does not need, and not half the row.
+  // The test font draws every letter 1em wide: these names fit the row, and not half of it.
   for (final (width, name) in [
     (880.0, 'Dee\'s MacBook Pro (M4)'),
     // In the app a window 880 wide leaves Manage a row this narrow, beside the Swarm's sidebar.
     (600.0, 'Dee\'s MBP16'),
   ]) {
-    testWidgets(
-      'at $width wide a long machine name takes the room its crew chip does not need',
-      (tester) async {
-        await mount(tester, width: width, name: name);
-        bool cut(Finder text) => tester
+    testWidgets('at $width wide a long machine name stays whole', (
+      tester,
+    ) async {
+      await mount(tester, width: width, name: name);
+      expect(
+        tester
             .renderObject<RenderParagraph>(
-              find.descendant(of: text, matching: find.byType(RichText)),
+              find.descendant(
+                of: key('super-machine-name-mine'),
+                matching: find.byType(RichText),
+              ),
             )
-            .didExceedMaxLines;
-        expect(cut(key('super-machine-name-mine')), isFalse);
-        // Its crew chips are whole too. (A narrow row's "0 asleep" is wider in the test font than in the app's.)
-        if (width > 640) {
-          for (final id in ['mine', 'build', 'sleep', 'old']) {
-            expect(cut(key('machines-crew-$id')), isFalse, reason: id);
-          }
-        }
-        expect(tester.takeException(), isNull);
-      },
-    );
-  }
-
-  testWidgets(
-    'at twice the text size the crew chips grow with it and stay whole',
-    (tester) async {
-      tester.platformDispatcher.textScaleFactorTestValue = 2;
-      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-      await mount(tester, width: 880);
-      for (final id in ['mine', 'build', 'sleep', 'old']) {
-        expect(
-          tester
-              .renderObject<RenderParagraph>(
-                find.descendant(
-                  of: key('machines-crew-$id'),
-                  matching: find.byType(RichText),
-                ),
-              )
-              .didExceedMaxLines,
-          isFalse,
-          reason: id,
-        );
-      }
+            .didExceedMaxLines,
+        isFalse,
+      );
       expect(tester.takeException(), isNull);
-    },
-  );
+    });
+  }
 }

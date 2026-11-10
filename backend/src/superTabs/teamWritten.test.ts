@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { opensStep, storedStep } from './steps.test-support.js'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
@@ -8,26 +9,25 @@ import { applyPushOrigin, TEAM_WRITTEN_STOP, TEAM_WRITTEN_WORK, teamWrittenTask 
 // Audit H2: a branch a Team agent wrote never runs with another person's rights (docs/plans/2026-11-02-team-written-branch-plan.md).
 // Swarm v3 has no Team accounts to run it (task #4120, the PM's ruling there): the mark stays on every branch a Team agent pushed
 // before the release, and only the project owner's own agent, on their own computer, may take one over. A teammate's agent, here
-// mate's, is refused as the main account's was. Team agents keep what they hold and take nothing new.
+// mate's, is refused as the main account's was.
 const NOW = 50_000_000
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const requirements = { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false }
 const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
-const reading = (sessionKind: 'team' | 'computer') => ({ generation: 'g1', receivedAt: NOW, sessionKind, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [],
-  ...(sessionKind === 'team' ? { privacy: { mode: 'account' as const, passed: true as const, checkedAt: NOW - 1000, seenAt: NOW - 1000 } } : {}) })
+const reading = { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [] }
 
 function swarm() {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
   const generation = state.people.find(p => p.id === 'owner')!.generation
-  const pool = (machineId: string, sessionKind: 'team' | 'computer', extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId, name: machineId, contributorId: 'owner',
-    membershipGeneration: generation, generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false, observation: reading(sessionKind), ...extra })
+  const pool = (machineId: string, extra: Partial<ContributedMachine> = {}): ContributedMachine => ({ machineId, name: machineId, contributorId: 'owner',
+    membershipGeneration: generation, generation: 'g1', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false, observation: reading, ...extra })
   state.people.push({ id: 'mate', email: 'mate@example.com', role: 'collaborator', generation: 'm1' })
-  state.machines = [pool('mac', 'computer'), pool('mac-team', 'team', { hostMachineId: 'mac' }),
-    pool('mate-mac', 'computer', { contributorId: 'mate', membershipGeneration: 'm1' })]
+  state.machines = [pool('mac'), pool('mate-mac', { contributorId: 'mate', membershipGeneration: 'm1' })]
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
+    if (opensStep(command)) return storedStep(state, command, actor)
     const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`,
       contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null }, ...context })
     state = effects.state
@@ -44,7 +44,7 @@ function swarm() {
       membershipGeneration: 'm1', hostGrant: null, name: id, configuration: config })
     return id
   }
-  /** [agentId] already in [conversationId], as a Team agent that joined before the release still is. */
+  /** [agentId] already in [conversationId]. */
   const within = (conversationId: string, agentId: string) => {
     const group = state.conversations.find(c => c.id === conversationId)!
     group.agentIds = [...new Set([...group.agentIds, agentId])]
@@ -56,13 +56,13 @@ function swarm() {
   /** As a teammate, on their own computer under their own grant. */
   const asMate: Actor = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
   const mateGrant = { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } }
-  /** A task a Team agent built before the release: marked, its builder still in it with its finished assignment, so a review can begin. */
+  /** A task marked Team-written before the release, its builder still in it with its finished assignment, so a review can begin. */
   const written = () => {
-    const task = group(), builder = member('team-builder', 'mac-team')
+    const task = group(), builder = member('builder', 'mac')
     const stored = state.conversations.find(c => c.id === task)!
     Object.assign(stored, { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
     stored.assignment = { id: 'built', agentId: builder, status: 'done', configuration: config, result: null,
-      execution: { machineId: 'mac-team', harnessId: `harness-${builder}`, machineOwnerId: 'owner' } } as never
+      execution: { machineId: 'mac', harnessId: `harness-${builder}`, machineOwnerId: 'owner' } } as never
     within(task, builder)
     return task
   }
@@ -73,7 +73,7 @@ const refusal = (body: () => unknown): string | null => {
 }
 
 describe('a task a Team agent worked on', () => {
-  it('keeps its mark after the Team agent leaves it', () => {
+  it('keeps its mark after its builder leaves it', () => {
     const f = swarm(), task = f.written()
     const stored = () => f.state.conversations.find(c => c.id === task)!
     expect(stored().teamWritten).toBe(true)
@@ -94,19 +94,17 @@ describe('a task a Team agent worked on', () => {
     const f = swarm(), task = f.written(), mates = f.mates('main-reviewer')
     expect(refusal(() => f.run({ type: 'conversation.agent', conversationId: task, agentId: mates, present: true, lead: false }))).toBe(TEAM_WRITTEN_WORK)
     const sent = f.run({ type: 'message.send', conversationId: task, text: 'Please test this.', replyTo: null, recipientIds: [mates] },
-      { kind: 'agent', agentId: 'team-builder', machineOwnerId: 'owner' })
+      { kind: 'agent', agentId: 'builder', machineOwnerId: 'owner' })
     expect(f.state.conversations.find(c => c.id === task)!.agentIds).not.toContain(mates)
     expect(sent.result.notReached).toContain('main-reviewer')
   })
 
-  it('starts only on the project owner\'s own computer, with project settings off, and never in a Team account', () => {
+  it('starts only on the project owner\'s own computer, with project settings off', () => {
     const f = swarm(), task = f.written()
     f.start(f.group({ reviewOf: task, step: 'Review' }), 'mac')
     const started = f.state.starts!.at(-1)!.request
     expect(started.machineId).toBe('mac')
     expect(started.projectSettings).toBe('off')
-    expect(refusal(() => f.start(f.group({ reviewOf: task, step: 'Test' }), 'mac-team'))).toBe(TEAM_WRITTEN_WORK)
-    expect(refusal(() => f.start(f.group(), 'mac-team'))).toBe('TEAM_ACCOUNTS_REMOVED')
   })
 
   it('refuses a start on a teammate\'s computer', () => {
@@ -153,14 +151,13 @@ describe('a task a Team agent worked on', () => {
     expect(effects.messages.find(m => m.text === TEAM_WRITTEN_STOP)?.recipients).toEqual([reviewer])
   })
 
-  it('tells every barred member once when it is marked, finished steps included, never the owner\'s own agent, the coordinator or a Team agent', () => {
-    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), tester = f.mates('mates-tester'), team = f.member('team-reviewer', 'mac-team')
+  it('tells every barred member once when it is marked, finished steps included, never the owner\'s own agent or the coordinator', () => {
+    const f = swarm(), task = f.group(), builder = f.member('main-builder', 'mac'), tester = f.mates('mates-tester')
     f.run({ type: 'work.assign', conversationId: task, agentId: builder })
     const assignmentId = f.state.conversations.find(c => c.id === task)!.assignment!.id
-    const testStep = f.group({ reviewOf: task, step: 'Test' }), reviewStep = f.group({ reviewOf: task, step: 'Review' })
+    const testStep = f.group({ reviewOf: task, step: 'Test' })
+    f.group({ reviewOf: task, step: 'Review' })
     f.run({ type: 'work.assign', conversationId: testStep, agentId: tester })
-    // A Team agent already on the review from before the release.
-    f.within(reviewStep, team)
     // The Tester's step ended: it is still a member, and the same-step re-ask would reach it.
     f.state.conversations.find(c => c.id === testStep)!.assignment!.status = 'done'
     const effects = f.run({ type: 'work.status', conversationId: task, assignmentId, status: 'review', result: 'https://github.com/acme/app/pull/7' }, owner, { pushOrigin: 'team' })
@@ -181,51 +178,46 @@ describe('a task a Team agent worked on', () => {
     // The result names the agent who was left out, and says the post itself went out.
     expect(sent.result.notReached).toContain('main-tester')
     expect(sent.result.notReached).toContain('post was delivered')
-    // A Team agent already in it may still be named, and a person speaks to whom they choose.
-    const team = f.member('team-tester', 'mac-team')
-    f.within(task, team)
-    const toTeam = post(task, [team], asBuilder)
-    expect(toTeam.messages.find(m => m.text === 'Please test again.')!.recipients).toEqual([team])
-    expect(toTeam.result).not.toHaveProperty('notReached')
+    // A person speaks to whom they choose.
     const byPerson = post(task, [tester], owner)
     expect(byPerson.messages.find(m => m.text === 'Please test again.')!.recipients).toEqual([tester])
     expect(byPerson.result).not.toHaveProperty('notReached')
   })
 
-  it('a Team agent\'s post naming a teammate\'s agent outside the group goes out without it, and the agent does not join', () => {
-    const f = swarm(), task = f.written(), integrator = f.mates('main-integrator'), team = f.member('team-reviewer', 'mac-team')
+  it('an agent\'s post naming a teammate\'s agent outside the group goes out without it, and the agent does not join', () => {
+    const f = swarm(), task = f.written(), integrator = f.mates('main-integrator'), reviewer = f.member('owners-reviewer', 'mac')
     const step = f.group({ reviewOf: task, step: 'Review' })
-    f.within(step, team)
-    const asTeam: Actor = { kind: 'agent', agentId: team, machineOwnerId: 'owner' }
-    const sent = f.run({ type: 'message.send', conversationId: step, text: 'Ready to merge: Yes.', replyTo: null, recipientIds: [integrator] }, asTeam)
+    f.within(step, reviewer)
+    const asReviewer: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' }
+    const sent = f.run({ type: 'message.send', conversationId: step, text: 'Ready to merge: Yes.', replyTo: null, recipientIds: [integrator] }, asReviewer)
     expect(sent.messages.find(m => m.text === 'Ready to merge: Yes.')!.recipients).not.toContain(integrator)
     expect(sent.result.notReached).toContain('main-integrator')
     expect(f.state.conversations.find(c => c.id === step)!.agentIds).not.toContain(integrator)
     expect(f.state.conversations.find(c => c.id === task)!.agentIds).not.toContain(integrator)
   })
 
-  it('leaves out only the barred recipient when a post names a teammate\'s agent and a Team agent', () => {
-    const f = swarm(), task = f.written(), integrator = f.mates('main-integrator'), team = f.member('team-reviewer', 'mac-team'), other = f.member('team-other', 'mac-team')
+  it('leaves out only the barred recipient when a post names a teammate\'s agent and the owner\'s own', () => {
+    const f = swarm(), task = f.written(), integrator = f.mates('main-integrator'), reviewer = f.member('owners-reviewer', 'mac'), other = f.member('owners-other', 'mac')
     const step = f.group({ reviewOf: task, step: 'Review' })
-    f.within(step, team)
+    f.within(step, reviewer)
     f.within(step, other)
-    const sent = f.run({ type: 'message.send', conversationId: step, text: 'Verdict.', replyTo: null, recipientIds: [integrator, other] }, { kind: 'agent', agentId: team, machineOwnerId: 'owner' })
+    const sent = f.run({ type: 'message.send', conversationId: step, text: 'Verdict.', replyTo: null, recipientIds: [integrator, other] }, { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' })
     expect(sent.messages.find(m => m.text === 'Verdict.')!.recipients).toEqual([other])
     expect(sent.result.notReached).toContain('main-integrator')
-    expect(sent.result.notReached).not.toContain('team-other')
+    expect(sent.result.notReached).not.toContain('owners-other')
   })
 
   it('does not fall back to the barred agent: its assignee, or the author of the message it answers', () => {
-    const f = swarm(), task = f.group(), engineer = f.mates('main-engineer'), team = f.member('team-reviewer', 'mac-team')
+    const f = swarm(), task = f.group(), engineer = f.mates('main-engineer'), reviewer = f.member('owners-reviewer', 'mac')
     f.run({ type: 'work.assign', conversationId: task, agentId: engineer })
-    f.within(task, team)
+    f.within(task, reviewer)
     // Marked by GitHub's push record: the teammate's Engineer is still assigned and in the group.
     f.state.conversations.find(c => c.id === task)!.teamWritten = true
-    const asTeam: Actor = { kind: 'agent', agentId: team, machineOwnerId: 'owner' }
-    const sent = f.run({ type: 'message.send', conversationId: task, text: 'Please test again.', replyTo: null, recipientIds: [engineer] }, asTeam)
+    const asReviewer: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'owner' }
+    const sent = f.run({ type: 'message.send', conversationId: task, text: 'Please test again.', replyTo: null, recipientIds: [engineer] }, asReviewer)
     expect(sent.messages.find(m => m.text === 'Please test again.')!.recipients).toEqual([])
     expect(sent.result.notReached).toContain('main-engineer')
-    const replied = f.run({ type: 'message.send', conversationId: task, text: 'And again.', replyTo: 'earlier', recipientIds: [engineer] }, asTeam,
+    const replied = f.run({ type: 'message.send', conversationId: task, text: 'And again.', replyTo: 'earlier', recipientIds: [engineer] }, asReviewer,
       { reply: { id: 'earlier', conversationId: task, author: { kind: 'agent', id: engineer, name: 'main-engineer' } } as never })
     expect(replied.messages.find(m => m.text === 'And again.')!.recipients).toEqual([])
     expect(replied.result.notReached).toContain('main-engineer')
@@ -250,19 +242,18 @@ describe('a task a Team agent worked on', () => {
     f.run({ type: 'work.assign', conversationId: task, agentId: builder })
     f.run({ type: 'conversation.agent', conversationId: task, agentId: tester, present: true, lead: false })
     f.state.conversations.find(c => c.id === task)!.teamWritten = true
-    const team = f.member('team-tester', 'mac-team')
-    f.within(task, team)
-    const sent = f.run({ type: 'message.send', conversationId: task, text: '@main-tester and @team-tester, please test again.', replyTo: null, recipientIds: [] },
+    const owners = f.member('owners-tester', 'mac')
+    f.within(task, owners)
+    const sent = f.run({ type: 'message.send', conversationId: task, text: '@main-tester and @owners-tester, please test again.', replyTo: null, recipientIds: [] },
       { kind: 'agent', agentId: builder, machineOwnerId: 'owner' })
-    expect(sent.messages[0]!.recipients).toEqual([team])
+    expect(sent.messages[0]!.recipients).toEqual([owners])
   })
 
-  it('reads who pushed before adding an agent: a bot\'s push or an unknown refuses a teammate\'s agent, and a Team agent joins nothing new', () => {
+  it('reads who pushed before adding an agent: a bot\'s push or an unknown refuses a teammate\'s agent', () => {
     const f = swarm(), task = f.group(), mates = f.mates('main-reviewer')
     const add = (agentId: string, pushOrigin: 'team' | 'unknown') => f.run({ type: 'conversation.agent', conversationId: task, agentId, present: true, lead: false }, owner, { pushOrigin })
     expect(refusal(() => add(mates, 'unknown'))).toBe(TEAM_WRITTEN_WORK)
     expect(refusal(() => add(mates, 'team'))).toBe(TEAM_WRITTEN_WORK)
-    expect(refusal(() => add(f.member('team-a', 'mac-team'), 'unknown'))).toBe('TEAM_ACCOUNTS_REMOVED')
   })
 
   it('refuses a PM start in the main account on a branch a bot pushed or GitHub cannot place, and takes a clean one', () => {
@@ -270,7 +261,7 @@ describe('a task a Team agent worked on', () => {
       const f = swarm()
       const projectId = String(f.run({ type: 'project.create', name: 'New', visibility: 'public', brief: '' }).result.projectId)
       f.state.machines!.find(m => m.machineId === 'mac')!.observation!.capabilities = [LEAD_CAPABILITY]
-      expect(refusal(() => f.run({ type: 'lead.start', projectId, machineId: 'mac', engine: 'claude', branchRef: 'refs/remotes/origin/fix', repositoryUrl: 'https://github.com/acme/app' }, owner, { pushOrigin, machineVersions: { mac: '99.0.0', 'mac-team': '99.0.0' } })), pushOrigin).toBe(code)
+      expect(refusal(() => f.run({ type: 'lead.start', projectId, machineId: 'mac', engine: 'claude', branchRef: 'refs/remotes/origin/fix', repositoryUrl: 'https://github.com/acme/app' }, owner, { pushOrigin, machineVersions: { mac: '99.0.0' } })), pushOrigin).toBe(code)
     }
   })
 
@@ -311,10 +302,11 @@ describe('a task a Team agent worked on', () => {
     expect(refusal(() => f.run({ type: 'work.assign', conversationId: clean, agentId: f.mates('mates-builder') }))).toBeNull()
   })
 
-  it('keeps the coordinator on a marked task, and it marks nothing when it runs in a Team account', () => {
-    const f = swarm(), task = f.written(), lead = f.member('lead-on-team', 'mac-team'), clean = f.group()
+  it('keeps the coordinator on a marked task, and adding it marks nothing', () => {
+    const f = swarm(), task = f.written(), lead = f.mates('mates-lead'), clean = f.group()
     f.state.projects!.find(p => p.id === 'lead')!.leadConversationId = 'lead'
     f.state.conversations.find(c => c.id === 'lead')!.leadId = lead
+    f.run({ type: 'conversation.agent', conversationId: task, agentId: lead, present: true, lead: false })
     f.run({ type: 'conversation.agent', conversationId: clean, agentId: lead, present: true, lead: false })
     expect(f.state.conversations.find(c => c.id === clean)!.teamWritten).toBeUndefined()
     expect(f.state.conversations.find(c => c.id === task)!.teamWritten).toBe(true)
@@ -390,11 +382,6 @@ describe('a task a Team agent worked on', () => {
     })
   })
 
-  it('reads a mark set before its assignee existed in the Swarm\'s record, on an open task, by its current assignee', () => {
-    const f = swarm(), task = f.written(), stored = f.state.conversations.find(c => c.id === task)!
-    delete stored.teamWritten
-    expect(teamWrittenTask(f.state, stored)).toBe(true)
-  })
 })
 
 // Task #3554: a step's own links (a reviewer's verdict citing another pull request) are read for the step alone. The task is marked

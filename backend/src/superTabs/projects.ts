@@ -81,9 +81,6 @@ export interface SwarmProject {
   leadWaiting?: Array<{ id: string; at: number }>
   /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
   leadClaim?: { id: string; machineId: string; at: number }
-  /** What its chat was last told of new Reviewers (reviewCapacity.ts), under `any`: none can start, or they soon will not.
-   *  Absent once a machine is usable again, so the next shortage is told. Per engine before 2026-10-30, never read since. */
-  reviewCapacity?: Partial<Record<'any' | 'claude' | 'codex', 'out' | 'low'>>
   /** Its instructions' revision and short hash (instructions.ts): the text lives outside the state. Absent on a project
    *  from before instructions until the migration writes its document; it runs on the built-in template meanwhile. */
   instructionsRevision?: number
@@ -162,14 +159,6 @@ export function projectsOf(state: SuperTabState): SwarmProject[] {
     visibility: 'public', members: [], updateMinutes: 5,
     ...(state.project ? { repository: state.project } : {}),
   }]
-}
-
-/** The projects' channels, each project's own chat (Swarm v4). A person's stored mute of one silences nothing (2026-11-10):
- *  v4's project menu has no Notifications, so a channel muted before could never be unmuted. Desktop reads that mute as
- *  Mentions only (SuperTabController.notifyOf, #3768), and so do reply rows and phone pushes (activity.ts
- *  writeReplyActivity, push/notices.ts); the stored row stays as it is. */
-export function projectChannels(state: SuperTabState): Set<string> {
-  return new Set(projectsOf(state).map(p => p.leadConversationId))
 }
 
 export function projectOf(state: SuperTabState, projectId: string): SwarmProject {
@@ -414,8 +403,8 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
   return !isClosedPmChat(group) && readsRecordsIn(state, actor, group)
 }
 
-/** Whether [actor] reads what was asked in [group] (decisions.ts): as canReadGroup, and in a closed Chat with PM still its
- *  person, at the generation they were listed with, and the project's Lead, so a decision asked there before stays theirs. */
+/** Whether [actor] reads the records of [group]: as canReadGroup, and in a closed Chat with PM still its person, at the
+ *  generation they were listed with, and the project's Lead, so what was asked there before stays theirs. */
 export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
   if (isSwarmBuddyChat(group)) return readsSwarmBuddyChat(state, actor, group)
@@ -571,25 +560,8 @@ export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = fal
  *  `isConfidential` alone (terminal.ts mayDrive). Any other agent: every reader of its project, as before. */
 export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets): boolean {
   if (!canReadAgent(state, actor, target)) return false
-  const team = teamSessionAccess(state, actor, target, elsewhere, sets)
-  if (team) return team !== 'none'
   return !watchClosed(state, target, elsewhere, sets) || ownSession(actor, target)
 }
-
-/** Whether [pool] is a Harness Team account: a Mac's (it names its Mac) or a machine used only for agents (its reading came
- *  from a team session). */
-export const teamAccountPool = (pool: import('./machines.js').ContributedMachine | null | undefined): boolean =>
-  !!pool && (!!pool.hostMachineId || pool.observation?.sessionKind === 'team')
-
-/** Whether [target] runs in a Harness Team account: read from its machine, whichever way it joined (security review 1 of
- *  #2089), and kept from when it joined one, so a machine row that went never brings back the old rules (its re-review). */
-export const onTeamAccount = (state: SuperTabState, target: Agent): boolean =>
-  !!target.teamAccount || teamAccountPool(state.machines?.find(m => m.machineId === target.machineId))
-
-/** Which account [agent] acts as (audit M3, task #2021): its machine owner's own on any of their machines, or, [onTeam], that
- *  one machine's Harness Team account. */
-export const accountOf = (agent: Pick<Agent, 'machineId' | 'machineOwnerId'>, onTeam: boolean): string =>
-  onTeam ? `team:${agent.machineOwnerId}:${agent.machineId}` : `own:${agent.machineOwnerId}`
 
 /** Notices the server writes in its own words under an agent's name (security reviews of #2570): they quote no agent, task
  *  titles and names aside. */
@@ -608,20 +580,6 @@ export function wordsOf(source: unknown): 'author' | 'none' | 'unknown' | { agen
     return typeof buddyId === 'string' ? { agentId: buddyId } : 'unknown'
   }
   return 'author'
-}
-
-/**
- * A confidential session in a Harness Team account (#895 R2): every teammate's work there runs as one macOS user whose
- * folders hold other projects' clones, so typing in it is a shell that reads them. Nobody drives it through the Swarm. Its
- * project's owner may watch it; its machine's owner neither watches nor drives it, as a member or as its machine's person.
- * Other members watch it as they watch any confidential session (watchClosed). Null for every other session, and for
- * agents, which keep their own rules (mayDrive).
- */
-export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, sets?: ConfidentialSets): 'watch' | 'none' | 'member' | null {
-  if (!onTeamAccount(state, target) || actor.kind !== 'person' || !isConfidential(state, target, elsewhere, sets)) return null
-  if (ownsProject(state, actor.userId, projectOf(state, agentProjectId(state, target)))) return 'watch'
-  if (actor.userId === target.machineOwnerId) return 'none'
-  return watchClosed(state, target, elsewhere, sets) ? 'none' : 'member'
 }
 
 /** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay

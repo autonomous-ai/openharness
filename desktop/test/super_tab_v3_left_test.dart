@@ -13,7 +13,7 @@ import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show load, swarm;
+import 'support/super_tab_swarm.dart' show load, swarm;
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -55,7 +55,6 @@ void main() {
   Future<SuperTabController> show(
     WidgetTester tester, {
     List<Map<String, dynamic>>? agents,
-    bool board = true,
     void Function(ConversationServer server)? setup,
     List<String>? selected,
     List<String>? created,
@@ -71,8 +70,7 @@ void main() {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
     setup?.call(server);
-    final activity = (await tester.runAsync(() => load(server)))!;
-    final c = activity.controller;
+    final c = (await tester.runAsync(() => load(server)))!;
     final app = withApp ?? createApp();
     if (withApp == null) addTearDown(app.dispose);
     // The design tokens follow the app's brightness, which main.dart sets from the theme.
@@ -98,16 +96,13 @@ void main() {
               },
               onNewAgent: () => created?.add('new'),
               onOpenAgentTerminal: (agent) => terminals?.add(agent.id),
-              places: SuperTabPlaces.of(c),
               onNewSwarm: () {},
               onNewProject: () {},
               onPage: (page) => pages?.add(page),
               page: page,
               boardProjectId: boardProjectId,
               leaderboard: leaderboard,
-              attention: activity.attention,
               onManage: () {},
-              board: board,
             ),
           ),
         ),
@@ -660,13 +655,11 @@ void main() {
             body: SuperTabView(
               controller: c,
               app: app,
-              onInvite: () {},
               onAddAgent: (_) {},
               onNewAgent: onNewAgent,
               onAttachAgent: onAttachAgent,
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              board: true,
             ),
           ),
         ),
@@ -761,11 +754,9 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
-              board: true,
             ),
           ),
         ),

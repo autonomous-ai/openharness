@@ -3,9 +3,7 @@ import { storeOldLeads } from './leads.test-support.js'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, stableId, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn, wordsOf } from './projects.js'
-import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, defaultBuddy, defaultBuddyChat, ownAgentAuthor, refuseOthersInPrivateChat, shownBefore, swarmBuddyChatId } from './buddies.js'
-import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { AGENT_NAMES, isRoleName } from './agentNames.js'
 import { buddiesTold } from './buddyNews.js'
 import { sweepLiveness } from './liveness.js'
@@ -192,19 +190,19 @@ describe('what a Buddy reads', () => {
     expect(JSON.stringify(visibleState(f.state, agentActor('buddy')))).not.toMatch(/owner-studio|owner-laptop/)
   })
 
-  it('shows no other agent\'s machine owner, contributor or Team account, nor a task\'s, only its own (security reviews of #2258)', () => {
+  it('shows no other agent\'s machine owner or contributor, nor a task\'s, only its own (security reviews of #2258)', () => {
     const f = setup()
     const pm = f.state.agents.find(a => a.id === f.pm)!
     // A grant under an older share policy names the contributor's email (lib/machineSharePolicy.ts machineShareGrant).
-    Object.assign(pm, { machineOwnerId: 'ken-user', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
+    Object.assign(pm, { machineOwnerId: 'ken-user', hostGrant: 'share-1:email:ken@example.com' })
     expect(pm.contributorId).toBe('owner')
     f.state.conversations.find(c => c.id === f.group)!.assignment = { id: 'a1', agentId: f.pm, status: 'working', result: null,
       execution: { machineId: 'machine', harnessId: 'app-pm', machineOwnerId: 'ken-user' } } as never
     const seen = visibleState(f.state, agentActor('buddy'))
     const agent = (id: string) => seen.agents.find(a => a.id === id)!
-    expect([agent(f.pm).machineOwnerId, agent(f.pm).contributorId, agent(f.pm).teamAccount]).toEqual(['', '', undefined])
+    expect([agent(f.pm).machineOwnerId, agent(f.pm).contributorId]).toEqual(['', ''])
     expect(seen.conversations.find(c => c.id === f.group)!.assignment!.execution).toEqual({ machineId: '', harnessId: '', machineOwnerId: '' })
-    expect(JSON.stringify(seen)).not.toMatch(/ken-user|"teamAccount"/)
+    expect(JSON.stringify(seen)).not.toMatch(/ken-user/)
     // Nor at which membership another agent was added, which matches a person's and so names them (delta review 1 of #2258).
     const generations = new Set(seen.people.map(p => p.generation))
     expect(seen.agents.filter(a => a.id !== 'buddy' && generations.has(a.membershipGeneration)).map(a => a.id)).toEqual([])
@@ -214,9 +212,9 @@ describe('what a Buddy reads', () => {
     expect([agent('buddy').machineOwnerId, agent('buddy').contributorId, agent('buddy').membershipGeneration]).toEqual(['host', 'peer', 'first'])
     // People and the PM read them as before; the stored agent is unchanged.
     for (const reader of [owner, { kind: 'agent', agentId: f.pm, machineOwnerId: 'ken-user' } as Actor]) expect(visibleState(f.state, reader).agents
-      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, membershipGeneration: pm.membershipGeneration,
+      .find(a => a.id === f.pm)).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', membershipGeneration: pm.membershipGeneration,
         hostGrant: 'share-1:email:ken@example.com' })
-    expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', teamAccount: true, hostGrant: 'share-1:email:ken@example.com' })
+    expect(pm).toMatchObject({ machineOwnerId: 'ken-user', contributorId: 'owner', hostGrant: 'share-1:email:ken@example.com' })
   })
 
   it('is no other person\'s Buddy chat in the same project', () => {
@@ -252,7 +250,7 @@ describe('Buddies in every Swarm', () => {
 function machine(f: ReturnType<typeof setup>, machineId: string, contributorId: string) {
   f.state.machines = [...(f.state.machines ?? []), { machineId, name: `${contributorId}'s Mac`, contributorId, generation: 'g1', cwd: '/swarm', scope: 'swarm',
     membershipGeneration: f.state.people.find(p => p.id === contributorId)!.generation, engines: ['claude', 'codex'], maxAgents: 3, paused: false,
-    observation: { generation: 'g1', receivedAt: 1000, sessionKind: 'computer',
+    observation: { generation: 'g1', receivedAt: 1000,
       resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
         deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [],
       // A host that runs a Swarm-wide Buddy and its sessions (machines.ts SWARM_BUDDY_CAPABILITY).
@@ -563,7 +561,7 @@ describe('what a Buddy may do', () => {
       .toThrow('A Buddy posts only in its own chat')
   })
 
-  it('never assigns, starts agents, opens groups, asks anyone but its owner, sets rules or reacts outside its chat', () => {
+  it('never assigns, starts agents, opens groups, sets rules or reacts outside its chat', () => {
     const f = on()
     const refused: Command[] = [
       { type: 'work.assign', conversationId: f.group, agentId: 'buddy' },
@@ -571,8 +569,6 @@ describe('what a Buddy may do', () => {
       { type: 'conversation.create', projectId: f.app.projectId, title: 'New', brief: 'Brief', checks: [{ description: 'Done', independent: false }] },
       { type: 'agent.start', request: { conversationId: f.group, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' },
-      // Its own owner only (task #4525, buddyDecisions.test.ts).
-      { type: 'decision.ask', conversationId: f.chat, personId: 'owner', questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] },
       { type: 'rule.set', rule: { kind: 'preferIdle' }, text: 'Idle first.' },
       { type: 'conversation.agent', conversationId: f.app.conversationId, agentId: 'buddy', present: true, lead: false },
       { type: 'message.react', conversationId: f.app.conversationId, messageId: 'm', emoji: 'thumbs_up', on: true },
@@ -1078,18 +1074,19 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
   it('is never opened again, by a person or the PM', () => {
     const f = setup()
     const refusal = (actor?: Actor) => { try { f.run({ ...open([actor ? 'peer' : 'owner']), projectId: f.app.projectId }, actor) } catch (e) { return String((e as Error).message) } return '' }
-    // Task #4547: neither refusal points at the retired private line; a Lead is told the project chat or a Decision.
+    // Task #4547: neither refusal points at the retired private line; a Lead is told the project chat, tagging (no Decisions since
+    // Swarm v4, 2026-11-10).
     expect(refusal()).toContain('Chat with PM is closed')
     expect(refusal()).not.toMatch(/private lines/)
-    expect(refusal(agentActor(f.pm))).toMatch(/project chat.*decision\.ask|decision\.ask.*project chat/)
+    expect(refusal(agentActor(f.pm))).toMatch(/project chat, tagging them\.$/)
     expect(refusal(agentActor(f.pm))).not.toContain('person.tell')
     expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
   })
 
-  it('is refused as closed before anything checks what a private chat may carry: work, a review, a requester or a proposal (merge review of #2090)', () => {
+  it('is refused as closed before anything checks what a private chat may carry: work, a requester or a proposal (merge review of #2090)', () => {
     const f = setup()
     const before = f.state.conversations.length
-    const carrying = [{ brief: 'Work', checks: [{ description: 'Done', independent: false }] }, { reviewOf: f.group }, { requesterId: 'peer' },
+    const carrying = [{ brief: 'Work', checks: [{ description: 'Done', independent: false }] }, { requesterId: 'peer' },
       { proposalMessageId: 'proposal' }]
     for (const extra of carrying) {
       for (const actor of [peer, agentActor(f.pm)]) {
@@ -1108,25 +1105,12 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
     expect(f.state.conversations.map(c => c.id)).toContain(f.pmChat)
   })
 
-  it('takes no posts or decisions, the PM\'s included', () => {
+  it('takes no posts, the PM\'s included', () => {
     const f = setup()
     expect(() => f.run(say(f.pmChat), peer)).toThrow('unavailable')
     expect(() => f.run(say(f.pmChat), agentActor(f.pm))).toThrow('unavailable')
-    expect(() => f.run({ type: 'decision.ask', conversationId: f.pmChat, personId: 'peer',
-      questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] }, agentActor(f.pm))).toThrow('unavailable')
   })
 
-  it('keeps a decision asked there before answerable by its person alone; the PM hears in the project chat, with none of the answer', () => {
-    const f = setup()
-    const decision = { id: 'old', personId: 'peer', conversationId: f.pmChat, projectId: f.app.projectId, askerAgentId: f.pm,
-      question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
-    expect(() => f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, owner, { decision: { ...decision, personId: 'owner' } })).toThrow('unavailable')
-    const answered = f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, peer, { decision })
-    expect(answered.result.decisionId).toBe('old')
-    // Told in the project chat, so the notice never says it was asked there.
-    expect(answered.messages.map(m => [m.conversationId, m.recipients, m.text])).toEqual([[f.app.conversationId, [f.pm], CLOSED_CHAT_ANSWERED_NOTICE]])
-    expect(CLOSED_CHAT_ANSWERED_NOTICE).not.toContain('in this conversation')
-  })
 })
 
 describe('a person\'s Buddy chat before any Buddy (Lead, 10-29)', () => {
@@ -1240,25 +1224,6 @@ describe('a Buddy\'s terminal alert', () => {
   })
 })
 
-describe('a decision left to the PM while Buddies are on', () => {
-  it('has their own Buddy say what the PM chose in their one Buddy chat marked with its project, and in their older Buddy chat there, to no one, not in their read-only Chat with PM', () => {
-    const f = setup()
-    // Only they and their own agent post in their private chat (task #4558): their default Buddy writes the line.
-    giveOwnBuddy(f.state, 'peer')
-    const decision = { id: 'decision-1', personId: 'peer', conversationId: f.group, projectId: f.app.projectId, askerAgentId: f.pm,
-      question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
-    const delegate = () => f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision }).messages
-      .filter(m => (m.source as { kind?: string } | undefined)?.kind === 'decision-delegated')
-    const lines = delegate()
-    expect(lines).toEqual([
-      expect.objectContaining({ conversationId: peerSwarmChat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-        author: expect.objectContaining({ id: 'peer-buddy' }), source: { kind: 'decision-delegated', decisionId: 'decision-1', projectId: f.app.projectId } }),
-      expect.objectContaining({ conversationId: f.chat, recipients: [], text: 'PM decided: To everyone — Ship how?',
-        source: { kind: 'decision-delegated', decisionId: 'decision-1' } })])
-    expect(lines.map(m => m.conversationId)).not.toContain(f.pmChat)
-  })
-})
-
 describe('starting a down Buddy again', () => {
   /** fresh() with peer's Buddy started and settled on peer's Mac. */
   function running() {
@@ -1325,43 +1290,15 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
   })
 
   // Full access on its owner's machine makes the wrong machine worse, not better (#2832): Codex is refused there as Claude is.
-  it('is never someone else\'s machine or a Harness Team account on Codex either (#2832)', () => {
+  it('is never someone else\'s machine on Codex either (#2832)', () => {
     const f = fresh()
     machine(f, 'owner-mac', 'owner')
-    machine(f, 'peer-team', 'peer')
-    Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
-    f.state.machines!.find(m => m.machineId === 'peer-team')!.observation!.sessionKind = 'team'
     const starts = f.state.starts?.length ?? 0
-    for (const [machineId, machineOwner] of [['owner-mac', 'owner'], ['peer-team', 'peer']] as const) {
-      let code: string | undefined
-      try { add(f, machineId, machineOwner, 'codex') } catch (error) { code = (error as { code?: string }).code }
-      expect(code, machineId).toBe('BUDDY_OWN_MACHINE')
-    }
+    let code: string | undefined
+    try { add(f, 'owner-mac', 'owner', 'codex') } catch (error) { code = (error as { code?: string }).code }
+    expect(code).toBe('BUDDY_OWN_MACHINE')
     expect(f.state.starts?.length ?? 0).toBe(starts)
     expect(add(f, 'peer-mac', 'peer', 'codex').result.startId).toBeTruthy()
-  })
-
-  it('is never a Harness Team account, not even the one on its owner\'s own Mac', () => {
-    const f = fresh()
-    machine(f, 'peer-team', 'peer')
-    Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
-    f.state.machines!.find(m => m.machineId === 'peer-team')!.observation!.sessionKind = 'team'
-    expect(() => add(f, 'peer-team', 'peer')).toThrow('A Buddy runs only on your own machine')
-  })
-
-  it('stays in its owner\'s own account for a teammate\'s project, even where teammates\' work needs a Team account', () => {
-    const f = fresh()
-    const saved = { required: process.env.SWARM_TEAM_ACCOUNT_REQUIRED }
-    process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
-    try {
-      machine(f, 'peer-team', 'peer')
-      Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
-      // A Builder for the owner's project would be refused here, or moved to the Mac's Team account.
-      const start = add(f, 'peer-mac', 'peer').result.startId
-      expect(f.state.starts!.find(s => s.id === start)!.request.machineId).toBe('peer-mac')
-    } finally {
-      if (saved.required === undefined) delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED; else process.env.SWARM_TEAM_ACCOUNT_REQUIRED = saved.required
-    }
   })
 })
 

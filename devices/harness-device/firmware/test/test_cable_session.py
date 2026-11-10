@@ -129,6 +129,10 @@ static void vTaskDelete(TaskHandle_t task) { assert(task==hello_handle&&hellos);
 static void xTaskNotifyGive(TaskHandle_t task) {
     assert(task==hello_handle&&hellos&&s_running&&driver&&new_task_ready);notifications++;
 }
+// The host has no PSRAM: the roster's PSRAM request finds none and falls back to the tracked calloc.
+#define MALLOC_CAP_SPIRAM 1
+#define MALLOC_CAP_8BIT 2
+static void *heap_caps_calloc(size_t n,size_t size,int caps) { (void)n; (void)size; (void)caps; return NULL; }
 #define calloc tracked_calloc
 #define free tracked_free
 '''

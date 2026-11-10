@@ -1,16 +1,12 @@
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/message_text.dart';
-import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -246,145 +242,4 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
-
-  for (final profile in [
-    (
-      name: 'dark',
-      brightness: Brightness.dark,
-      size: const Size(1440, 900),
-      scale: 1.0,
-    ),
-    (
-      name: 'light',
-      brightness: Brightness.light,
-      size: const Size(1280, 800),
-      scale: 1.0,
-    ),
-    (
-      name: 'large',
-      brightness: Brightness.dark,
-      size: const Size(800, 600),
-      scale: 2.0,
-    ),
-  ]) {
-    testWidgets(
-      'Swarm navigation, resources and transcript remain usable in ${profile.name}',
-      (tester) async {
-        await tester.binding.setSurfaceSize(profile.size);
-        addTearDown(() => tester.binding.setSurfaceSize(null));
-        final previous = grid.AppTheme.brightness.value;
-        grid.AppTheme.brightness.value = profile.brightness;
-        addTearDown(() => grid.AppTheme.brightness.value = previous);
-        final server = polishFixture(), c = server.controller();
-        await c.refresh();
-        final boundary = GlobalKey();
-        await tester.pumpWidget(
-          RepaintBoundary(
-            key: boundary,
-            child: MaterialApp(
-              debugShowCheckedModeBanner: false,
-              theme: grid.buildAppTheme(brightness: profile.brightness),
-              builder: (context, child) => MediaQuery(
-                data: MediaQuery.of(context).copyWith(
-                  textScaler: TextScaler.linear(profile.scale),
-                  highContrast: profile.scale > 1,
-                ),
-                child: child!,
-              ),
-              home: Scaffold(
-                body: SuperTabView(
-                  board: false,
-                  controller: c,
-                  onInvite: () {},
-                  onAddAgent: (_) {},
-                  onNewProject: () {},
-                  onOpenTerminal: (_) {},
-                  machineName: (_) => 'M2',
-                ),
-              ),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-        // The fixture's recording gap is no row (task #3127).
-        expect(find.textContaining('recording was interrupted'), findsNothing);
-        expect(c.messages('lead').length, 5);
-        expect(tester.takeException(), isNull);
-        Future<void> shot(String suffix) async {
-          if (capture == null) return;
-          await tester.runAsync(
-            () => precacheImage(
-              const AssetImage('assets/engine-icons/codex.png'),
-              tester.element(find.byType(SuperTabView)),
-            ),
-          );
-          await tester.pump();
-          final render =
-              boundary.currentContext!.findRenderObject()!
-                  as RenderRepaintBoundary;
-          await tester.runAsync(() async {
-            final image = await render.toImage(pixelRatio: 1.5);
-            final bytes = await image.toByteData(
-              format: ui.ImageByteFormat.png,
-            );
-            await Directory(capture).create(recursive: true);
-            await File('$capture/polish-${profile.name}$suffix.png')
-                .writeAsBytes(bytes!.buffer.asUint8List());
-            image.dispose();
-          });
-        }
-
-        await shot('');
-        if (profile.scale > 1) {
-          await tester.tap(find.byTooltip('Members'));
-          await tester.pumpAndSettle();
-          await shot('-resources');
-          expect(tester.takeException(), isNull);
-          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-          await tester.pumpAndSettle();
-          await tester.tap(find.byTooltip('Conversations'));
-          await tester.pumpAndSettle();
-          // Manage, where the machines are, stands at the foot however long
-          // the list: no scroll away.
-          expect(
-            find.byKey(const ValueKey('super-manage')).hitTestable(),
-            findsOneWidget,
-          );
-          expect(tester.takeException(), isNull);
-          await shot('-projects');
-          expect(tester.takeException(), isNull);
-        } else {
-          expect(find.text('Projects'), findsOneWidget);
-          // Manage's row starts where the project rows do.
-          expect(
-            tester.getTopLeft(find.byKey(const ValueKey('super-manage'))).dx,
-            tester
-                .getTopLeft(find.byKey(const ValueKey('super-group-lead')))
-                .dx,
-          );
-        }
-        // Capture one row treatment across disclosure, label and nested work.
-        final mouse = await tester.createGesture(
-          kind: ui.PointerDeviceKind.mouse,
-        );
-        await mouse.addPointer(location: Offset.zero);
-        for (final target in [
-          ('project-hover', const ValueKey('super-group-lead')),
-        ]) {
-          await mouse.moveTo(tester.getCenter(find.byKey(target.$2)));
-          await tester.pump();
-          await tester.pump(const Duration(milliseconds: 200));
-          await shot('-${target.$1}');
-        }
-        c.select('offline');
-        await tester.pumpAndSettle();
-        await shot('-workgroup-selected');
-        await mouse.removePointer();
-        expect(tester.takeException(), isNull);
-        await tester.pumpWidget(const SizedBox());
-        await c.flush();
-        c.dispose();
-      },
-    );
-  }
 }

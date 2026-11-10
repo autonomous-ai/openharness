@@ -15,8 +15,7 @@ const _leadEngines = {'claude': 'Claude Code', 'codex': 'Codex'};
 /// A Personal project chat with no Lead, empty: one click starts its Lead,
 /// on the person's own computer, with Claude Code and in the repo's folder
 /// unless they pick otherwise (Huy 11-04, task #2815). It is #2633's start
-/// (personal_lead.dart), which a first message also runs, laid out as a
-/// Buddy chat's start card is (buddies.dart).
+/// (personal_lead.dart), which a first message also runs.
 class PersonalLeadStartCard extends StatefulWidget {
   const PersonalLeadStartCard({
     super.key = const ValueKey('super-lead-start'),
