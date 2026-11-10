@@ -1,16 +1,29 @@
 /**
  * The Harness GitHub App (docs/swarm-github-app.md): how the backend proves it is the app, finds the app's installation
- * on a repository, checks an organization for New Repository, and reads pull requests with short read-only installation
- * tokens for that one repository. Since Swarm v4 (slice S6) it gives agents no token: they push with their own person's
- * login. Only node's crypto signs the app's JWT. Nothing here logs a token or the private key.
+ * on a repository and creates installation access tokens for that one repository.
+ *
+ * A token comes from an installation, never from a person: GitHub user tokens cannot be narrowed to one repository, an
+ * installation token can, and it lasts an hour (docs/plans/2026-10-24-swarm-team-account.md, Findings). Only node's
+ * crypto signs the app's JWT. Nothing here logs a token or the private key.
  */
-import { createPrivateKey, sign, type KeyObject } from 'node:crypto'
+import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
 import { readPushOrigin, type GitHubRead, type PushOrigin } from './pushOrigin.js'
 import { githubRepository, type GitHubRepository } from './repository.js'
 import type { PullRequestWatch } from '../superTabs/pullRequestEvents.js'
 import type { PullRequestFile } from '../superTabs/pullRequestPatch.js'
 import type { MergeSides } from '../superTabs/mergeCarry.js'
 
+/** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
+ *  and read checks and workflow runs to see whether its pull request passes. */
+export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
+/**
+ * What an agent's token also asks for where the repository's installation has granted it, at no more than the granted level
+ * (Scholes, task #2755, Ken approved): push changes to `.github/workflows`, which GitHub refuses without `workflows`, and
+ * read and write issues. Never asked for where not granted: GitHub refuses a token that asks for a permission its
+ * installation has not accepted, and every agent on it would lose its token. Ken accepted the risk: a workflow change runs
+ * in CI with the repository's secrets, and Team-written branches are among the pushers.
+ */
+export const GRANTED_TOKEN_PERMISSIONS = { workflows: 'write', issues: 'write' } as const
 /** What no installation token may ever ask for (task #1788): a new repository is created with the person's own sign-in
  *  token only (github/repositoryCreate.ts), so a token minted from the app's key can never create, delete or transfer a
  *  repository, nor widen which repositories the installation covers. */
@@ -20,7 +33,7 @@ export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' }
 /** What reading who pushed a pull request's commits may do (pushOrigin.ts): read the pull request and the repository's activity log. */
 export const PUSH_ORIGIN_PERMISSIONS = { contents: 'read', pull_requests: 'read', metadata: 'read' } as const
 /** What watching a task's pull request for its Engineer reads (superTabs/pullRequestEvents.ts): the pull request, its reviews
- *  and comments, and its head's checks. */
+ *  and comments, and its head's checks. All already among the app's permissions ([TOKEN_PERMISSIONS]). */
 export const PULL_WATCH_PERMISSIONS = { pull_requests: 'read', checks: 'read', metadata: 'read' } as const
 /** What reading a pull request head's patch may do (superTabs/pullRequestPatch.ts, #3394): read the pull request, and the
  *  comparison of its base and head commits, which is repository contents. Read only, revoked when the watch's pass ends. */
@@ -77,7 +90,12 @@ export function readPrivateKey(value: string): KeyObject {
 }
 
 /** Both empty: the feature is off. One without the other, or a value that cannot be right, stops the backend at startup
- *  rather than failing the first read that needs it. */
+ *  rather than failing the first agent that asks. */
+/** The name a Harness GitHub App's commits carry, whatever the app is called on GitHub (cli/src/lib/swarmGitHub.ts accepts it). */
+export const COMMIT_IDENTITY: CommitIdentity = { name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' }
+/** The line a commit, or the merge helper's squash message, names Harness by (attribution.ts; scripts/merge-validated-pr.py). */
+export const HARNESS_CO_AUTHOR = `Co-authored-by: ${COMMIT_IDENTITY.name} <${COMMIT_IDENTITY.email}>`
+
 export function githubAppConfig(env: { GITHUB_APP_ID: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_APP_SLUG: string }): GitHubAppConfig | null {
   const appId = env.GITHUB_APP_ID.trim(), key = env.GITHUB_APP_PRIVATE_KEY.trim(), slug = env.GITHUB_APP_SLUG.trim()
   if (!appId && !key) return null
@@ -88,18 +106,30 @@ export function githubAppConfig(env: { GITHUB_APP_ID: string; GITHUB_APP_PRIVATE
   return { appId, privateKey: readPrivateKey(key), slug: slug || null }
 }
 
-/** The app from the server's environment (githubAppConfig), or null when it is not configured. */
-export function githubAppFromEnv(env: { GITHUB_APP_ID: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_APP_SLUG: string }): GitHubApp | null {
-  const config = githubAppConfig(env)
-  return config ? new GitHubApp(config) : null
+/** The key that seals cached tokens (github/tokens.ts), derived from the app's own private key: whoever can read the cache
+ *  without it learns nothing, and no further secret has to be configured. */
+export function cacheSecret(config: GitHubAppConfig): Buffer {
+  const der = config.privateKey.export({ type: 'pkcs8', format: 'der' })
+  return Buffer.from(hkdfSync('sha256', der, 'harness-github-token-cache', config.appId, 32))
 }
 
+/** Where the default branch stands: a ruleset requires a pull request; classic branch protection is on, which an app
+ *  without administration access cannot read further; nothing protects it; or it could not be read. */
+export type BranchProtection = 'pull_request' | 'classic' | 'none' | 'unknown'
+export interface DefaultBranch { branch: string | null; protection: BranchProtection }
+
 const base64url = (value: string | Buffer) => Buffer.from(value).toString('base64url')
+const samePermissions = (a: TokenPermissions, b: TokenPermissions) =>
+  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([name, level]) => b[name] === level)
 const INSTALLATION_TTL_MS = 10 * 60_000
 const NOT_INSTALLED_TTL_MS = 60_000
 /** How often a person's "check again" may make the server ask GitHub again about one repository. */
 const REFRESH_MS = 15_000
+const BRANCH_TTL_MS = 10 * 60_000
 const REQUEST_TIMEOUT_MS = 10_000
+/** A git author and committer. */
+export interface CommitIdentity { name: string; email: string }
+
 export interface GitHubAppOptions {
   fetch?: typeof fetch
   now?: () => number
@@ -115,8 +145,9 @@ export class GitHubApp {
   /** The app's name, as GitHub answers it (botLogin). */
   private slug: string | null = null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
-  /** What each installation has granted, by its id, for [ownerReadiness]: null when GitHub did not say. */
+  /** What each installation has granted, by its id, for [GRANTED_TOKEN_PERMISSIONS]: null when GitHub did not say. */
   private readonly grants = new Map<number, { permissions: TokenPermissions | null; until: number }>()
+  private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
   private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
   private readonly shownNames = new Map<string, { name: string; until: number }>()
@@ -138,6 +169,13 @@ export class GitHubApp {
   installUrl(): string | null {
     return this.config.slug ? `https://github.com/apps/${this.config.slug}/installations/new` : null
   }
+
+  /**
+   * Who the app's commits are by, as Claude's are by its own line (Dee, task #2136). A Harness Team account has no git identity
+   * of its own, so its commits would read "Harness Team <harnessteam@<host>.local>" (PR #1934). No GitHub account owns this
+   * address, so GitHub links these commits to nobody: telling a Team agent's commits apart rests on who pushed (pushOrigin.ts).
+   */
+  commitIdentity(): CommitIdentity { return COMMIT_IDENTITY }
 
   /** The app's bot account's login, which GitHub's activity log names as the actor of every push with the app's token: GitHub's
    *  own answer, remembered. Never a configured name, as a wrong one asks the log for a bot that never pushed, and its empty
@@ -289,7 +327,7 @@ export class GitHubApp {
   }
 
   /** Whether [owner], an organization, lets Harness create a repository there (task #1788). Its installation is remembered
-   *  ten minutes (a missing one a minute), and what it granted ([granted]). A personal account reads
+   *  ten minutes (a missing one a minute), and what it granted as for agents' tokens ([granted]). A personal account reads
    *  as not installed: v1 creates in organizations only. */
   async ownerReadiness(owner: string): Promise<OwnerReadiness> {
     const key = owner.toLowerCase()
@@ -321,11 +359,11 @@ export class GitHubApp {
     if (this.renames.get(key)?.repository === null) this.renames.delete(key)
   }
 
-  /** What [installationId] has granted (GET /app/installations/{id}, with the app's JWT), remembered ten minutes. Null when
-   *  GitHub does not say, remembered a minute. */
-  private async granted(installationId: number): Promise<TokenPermissions | null> {
+  /** What [installationId] has granted (GET /app/installations/{id}, with the app's JWT), remembered ten minutes; [fresh]
+   *  asks GitHub again. Null when GitHub does not say, remembered a minute: the token then asks for TOKEN_PERMISSIONS alone. */
+  private async granted(installationId: number, fresh = false): Promise<TokenPermissions | null> {
     const known = this.grants.get(installationId)
-    if (known && known.until > this.now()) return known.permissions
+    if (!fresh && known && known.until > this.now()) return known.permissions
     let permissions: TokenPermissions | null = null
     try {
       const answer = await this.call('GET', `/app/installations/${installationId}`, `Bearer ${this.jwt()}`)
@@ -335,13 +373,13 @@ export class GitHubApp {
         permissions = Object.fromEntries(Object.entries(listed as Record<string, unknown>)
           .filter((entry): entry is [string, 'read' | 'write'] => entry[1] === 'read' || entry[1] === 'write'))
       } else {
-        // Said every time: New Repository then reads the organization as not ready, with nothing else to show why.
-        console.warn(`[github] installation ${installationId}'s permissions unreadable (HTTP ${answer.status})`)
+        // Said every time, as agents then lose workflow pushes and issue writes with nothing else to show why (review 2 of #2956).
+        console.warn(`[github] installation ${installationId}'s permissions unreadable (HTTP ${answer.status}); agent tokens ask for today's set alone`)
       }
     } catch (error) {
       if (!(error instanceof GitHubAppError) || error.code === 'GITHUB_APP_MISCONFIGURED') throw error
-      console.warn(`[github] installation ${installationId}'s permissions unreadable (${error.code})`)
-      // GitHub did not answer: asked again next time.
+      console.warn(`[github] installation ${installationId}'s permissions unreadable (${error.code}); agent tokens ask for today's set alone`)
+      // GitHub did not answer: today's set, asked again next time.
       return null
     }
     if (this.grants.size >= 1000) this.grants.delete(this.grants.keys().next().value!)
@@ -349,8 +387,37 @@ export class GitHubApp {
     return permissions
   }
 
-  /** A token for [repository] alone, with [permissions] alone: each of the server's own reads asks only for what it reads. */
-  async createToken(installationId: number, repository: GitHubRepository, permissions: TokenPermissions): Promise<{ token: string; expiresAt: string }> {
+  /** An agent's token's permissions on [installationId]: TOKEN_PERMISSIONS, and each of GRANTED_TOKEN_PERMISSIONS the
+   *  installation granted, at the lower of the two levels. */
+  private async agentPermissions(installationId: number, fresh = false): Promise<TokenPermissions> {
+    const granted = await this.granted(installationId, fresh)
+    const permissions: Record<string, 'read' | 'write'> = { ...TOKEN_PERMISSIONS }
+    for (const [name, wanted] of Object.entries(GRANTED_TOKEN_PERMISSIONS)) {
+      const level = granted?.[name]
+      if (level) permissions[name] = level === 'write' && wanted === 'write' ? 'write' : 'read'
+    }
+    return permissions
+  }
+
+  /**
+   * A token for [repository] alone. With [permissions] given, those alone; without, an agent's token: TOKEN_PERMISSIONS and
+   * what of GRANTED_TOKEN_PERMISSIONS its installation granted. A permission refusal of an agent's token reads the grant
+   * again and asks once more when that changes what to ask for: an owner took a permission away within the ten minutes.
+   */
+  async createToken(installationId: number, repository: GitHubRepository, permissions?: TokenPermissions): Promise<{ token: string; expiresAt: string }> {
+    if (permissions) return this.mint(installationId, repository, permissions)
+    const asked = await this.agentPermissions(installationId)
+    try {
+      return await this.mint(installationId, repository, asked)
+    } catch (error) {
+      if (!(error instanceof GitHubAppError) || error.code !== 'GITHUB_APP_PERMISSIONS') throw error
+      const now = await this.agentPermissions(installationId, true)
+      if (samePermissions(asked, now)) throw error
+      return this.mint(installationId, repository, now)
+    }
+  }
+
+  private async mint(installationId: number, repository: GitHubRepository, permissions: TokenPermissions): Promise<{ token: string; expiresAt: string }> {
     const forbidden = Object.keys(permissions).filter(name => (NEVER_ON_INSTALLATION_TOKENS as readonly string[]).includes(name))
     if (forbidden.length) throw new GitHubAppError('GITHUB_APP_PERMISSIONS_FORBIDDEN', `An installation token never asks for ${forbidden.join(', ')}.`, 500)
     const answer = await this.call('POST', `/app/installations/${installationId}/access_tokens`, `Bearer ${this.jwt()}`,
@@ -613,5 +680,35 @@ export class GitHubApp {
       if (error instanceof GitHubAppError) return null
       throw error
     }
+  }
+
+  /** The default branch and whether pushing to it straight needs a pull request, read with the agent's own token
+   *  (metadata and contents read): rulesets first (GET /repos/{owner}/{repo}/rules/branches/{branch}), then classic
+   *  protection's flag on the branch. Remembered ten minutes; a failed read is `unknown`, never a refusal. */
+  async defaultBranch(repository: GitHubRepository, token: string): Promise<DefaultBranch> {
+    const key = repository.fullName.toLowerCase()
+    const known = this.branches.get(key)
+    if (known && known.until > this.now()) return known.value
+    const auth = `Bearer ${token}`, path = `/repos/${repository.owner}/${repository.name}`
+    let value: DefaultBranch = { branch: null, protection: 'unknown' }
+    try {
+      const repo = await this.call('GET', path, auth)
+      const branch = (repo.body as Record<string, unknown>).default_branch
+      if (repo.status === 200 && typeof branch === 'string' && branch) {
+        value = { branch, protection: 'unknown' }
+        const rules = await this.call('GET', `${path}/rules/branches/${encodeURIComponent(branch)}`, auth)
+        if (rules.status === 200 && Array.isArray(rules.body) && rules.body.some(rule => (rule as Record<string, unknown>)?.type === 'pull_request')) {
+          value = { branch, protection: 'pull_request' }
+        } else {
+          const classic = await this.call('GET', `${path}/branches/${encodeURIComponent(branch)}`, auth)
+          const flag = (classic.body as Record<string, unknown>).protected
+          if (classic.status === 200 && typeof flag === 'boolean') value = { branch, protection: flag ? 'classic' : 'none' }
+        }
+      }
+    } catch (error) {
+      if (!(error instanceof GitHubAppError)) throw error
+    }
+    if (value.protection !== 'unknown') this.branches.set(key, { value, until: this.now() + BRANCH_TTL_MS })
+    return value
   }
 }

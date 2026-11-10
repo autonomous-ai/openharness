@@ -1,9 +1,9 @@
 import { createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
-import { githubAppConfig, GitHubAppError, PULL_PATCH_PERMISSIONS, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey } from './app.js'
+import { describe, expect, it, vi } from 'vitest'
+import { cacheSecret, GitHubApp, githubAppConfig, GitHubAppError, HARNESS_CO_AUTHOR, PULL_PATCH_PERMISSIONS, PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS, readPrivateKey,
+  TOKEN_PERMISSIONS } from './app.js'
 import { FAKE_API, fakeApp, fakeGitHub, throwawayKey } from './fakeGitHub.js'
 import { githubRepository } from './repository.js'
-import { GitHubApp } from './app.js'
 
 const key = throwawayKey()
 const repo = githubRepository('https://github.com/acme/app')!
@@ -48,6 +48,11 @@ describe('GitHub App configuration', () => {
     }
   })
 
+  it('derives a 32-byte cache key from the private key and app id', () => {
+    const config = githubAppConfig(env('424242', key.pem))!
+    expect(cacheSecret(config)).toHaveLength(32)
+    expect(cacheSecret(config).equals(cacheSecret({ ...config, appId: '1' }))).toBe(false)
+  })
 })
 
 describe('the app JWT', () => {
@@ -107,14 +112,16 @@ describe('installation lookup', () => {
 })
 
 describe('installation tokens', () => {
-  it('asks for exactly the one repository and the permissions it is given', async () => {
+  it('asks for exactly the one repository and the minimum permissions', async () => {
     const { app, github } = setup()
-    const minted = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    const minted = await app.createToken(77, repo)
     expect(minted.token).toBe('ghs_fixture_1')
     expect(Date.parse(minted.expiresAt)).toBeGreaterThan(Date.parse('2026-10-24T12:59:00Z'))
     const call = github.calls.at(-1)!
     expect(call).toMatchObject({ method: 'POST', path: '/app/installations/77/access_tokens' })
-    expect(call.body).toEqual({ repositories: ['app'], permissions: PULL_READ_PERMISSIONS })
+    expect(call.body).toEqual({ repositories: ['app'],
+      permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } })
+    expect(TOKEN_PERMISSIONS).toEqual((call.body as { permissions: unknown }).permissions)
   })
 
   it('names a repository the installation does not cover as not installed, with the install link, and a missing permission apart', async () => {
@@ -123,7 +130,7 @@ describe('installation tokens', () => {
     await app.installation(repo)
     github.control.tokenStatus = 422
     github.control.tokenMessage = 'There is at least one repository that does not exist or is not accessible to the parent installation.'
-    const refusal = await app.createToken(77, repo, PULL_READ_PERMISSIONS).then(() => { throw new Error('expected a refusal') }, (error: unknown) => error as GitHubAppError)
+    const refusal = await app.createToken(77, repo).then(() => { throw new Error('expected a refusal') }, (error: unknown) => error as GitHubAppError)
     expect(refusal).toMatchObject({ code: 'GITHUB_APP_NOT_INSTALLED', status: 409,
       details: { installUrl: 'https://github.com/apps/harness-fixture/installations/new' } })
     expect(refusal.message).toContain('acme/app')
@@ -132,16 +139,99 @@ describe('installation tokens', () => {
     await app.installation(repo)
     expect(github.calls.length).toBe(calls + 1)
     github.control.tokenMessage = 'The permissions requested are not granted to this installation.'
-    await expect(app.createToken(77, repo, PULL_READ_PERMISSIONS)).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS', status: 409 })
+    await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS', status: 409 })
     github.control.tokenStatus = 500
-    await expect(app.createToken(77, repo, PULL_READ_PERMISSIONS)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE', status: 502 })
+    await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE', status: 502 })
   })
 
+  // Scholes, task #2755 (Ken approved): an agent's token also pushes workflow files and writes issues, where the
+  // installation has granted them. Asking for one it has not granted would refuse every token on it.
+  const today = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
   const minted = (github: ReturnType<typeof fakeGitHub>) => github.calls.filter(c => c.path.endsWith('/access_tokens')).map(c => c.body)
+
+  it('asks for workflows and issues on an agent\'s token, for its one repository, where the installation granted them', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+  })
+
+  it('asks for no more than each granted level, and only what is granted', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, issues: 'read', administration: 'write' })
+    await app.createToken(77, repo)
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: { ...today, issues: 'read' } }])
+  })
+
+  it('asks for today\'s set where workflows and issues are not granted, and still gets its token', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('asks for today\'s set when GitHub does not say what the installation granted', async () => {
+    const { app, github } = setup()
+    // The fake answers 404 for an installation it lists no grants for.
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_1')
+    expect(minted(github)).toEqual([{ repositories: ['app'], permissions: today }])
+  })
+
+  it('says so, with the installation and why, each time the grant cannot be read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { app, github, time } = setup()
+      await app.createToken(77, repo)
+      expect(warn).toHaveBeenCalledWith("[github] installation 77's permissions unreadable (HTTP 404); agent tokens ask for today's set alone")
+      time.advance(60_001)
+      github.control.down = true
+      await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE' })
+      expect(warn).toHaveBeenLastCalledWith("[github] installation 77's permissions unreadable (GITHUB_UNAVAILABLE); agent tokens ask for today's set alone")
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('ghs_')
+    } finally { warn.mockRestore() }
+  })
+
+  it('remembers an installation\'s grant ten minutes', async () => {
+    const { app, github, time } = setup()
+    github.grants.set(77, { ...today, workflows: 'write' })
+    await app.createToken(77, repo)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(1)
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    time.advance(10 * 60_000 + 1)
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    expect(minted(github).at(-1)).toEqual({ repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } })
+  })
+
+  it('reads the grant again after a permission refusal, and asks once more with what is granted now', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
+    await app.createToken(77, repo)
+    // An owner takes workflows away inside the ten minutes: the remembered grant is wrong.
+    github.grants.set(77, { ...today, issues: 'write' })
+    expect((await app.createToken(77, repo)).token).toBe('ghs_fixture_2')
+    expect(minted(github).slice(1)).toEqual([
+      { repositories: ['app'], permissions: { ...today, workflows: 'write', issues: 'write' } },
+      { repositories: ['app'], permissions: { ...today, issues: 'write' } }])
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+    // The fresh grant is remembered.
+    await app.createToken(77, repo)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
+
+  it('still refuses, asking once, when even today\'s set is not granted and the fresh grant changes nothing', async () => {
+    const { app, github } = setup()
+    github.grants.set(77, { contents: 'read', metadata: 'read' })
+    await expect(app.createToken(77, repo)).rejects.toMatchObject({ code: 'GITHUB_APP_PERMISSIONS', status: 409 })
+    expect(minted(github)).toHaveLength(1)
+    expect(github.calls.filter(c => c.path === '/app/installations/77')).toHaveLength(2)
+  })
 
   it('never widens a narrow token, whatever the installation granted', async () => {
     const { app, github } = setup()
-    github.grants.set(77, { contents: 'write', pull_requests: 'write', checks: 'read', metadata: 'read', workflows: 'write', issues: 'write' })
+    github.grants.set(77, { ...today, workflows: 'write', issues: 'write' })
     await app.createToken(77, repo, PULL_READ_PERMISSIONS)
     await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
     expect(minted(github).map(b => (b as { permissions: unknown }).permissions)).toEqual([PULL_READ_PERMISSIONS, PULL_WATCH_PERMISSIONS])
@@ -153,6 +243,14 @@ describe('installation tokens', () => {
     expect(app.installUrl()).toBeNull()
     expect(app.notInstalled(repo).details).toBeUndefined()
     expect(app.notInstalled(repo).message).toBe('The Harness GitHub App is not installed on acme/app. Ask an owner of acme to install it.')
+  })
+
+  // Dee, task #2136: a commit reads as Claude's line does, and asks GitHub nothing.
+  it('names Harness by Autonomous as its commit identity, with no call to GitHub', () => {
+    const { app, github } = setup()
+    expect(app.commitIdentity()).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
+    expect(HARNESS_CO_AUTHOR).toBe('Co-authored-by: Harness by Autonomous <noreply@autonomous.ai>')
+    expect(github.calls).toEqual([])
   })
 
   // A wrong name asks the log for a bot that never pushed: an empty answer that would read as clean (review 1 of #2600).
@@ -170,18 +268,50 @@ describe('installation tokens', () => {
 
   it('revokes a token with the token itself, takes one already ended as done, and reports any other failure', async () => {
     const { app, github } = setup()
-    const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    const { token } = await app.createToken(77, repo)
     await app.revoke(token)
     expect(github.calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/installation/token', auth: `Bearer ${token}` })
     expect(github.revoked).toEqual([token])
     await app.revoke(token)
-    const second = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
+    const second = await app.createToken(77, repo)
     github.control.revokeStatus = 500
     await expect(app.revoke(second.token)).rejects.toMatchObject({ code: 'GITHUB_UNAVAILABLE' })
   })
 })
 
-describe('reading a pull request\'s state', () => {
+describe('default branch protection', () => {
+  it('reads a ruleset that requires a pull request with the agent token', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo)
+    github.protection.set('acme/app', { rules: [{ type: 'deletion' }, { type: 'pull_request', parameters: {} }] })
+    expect(await app.defaultBranch(repo, token)).toEqual({ branch: 'main', protection: 'pull_request' })
+    expect(github.calls.slice(-2).map(c => c.path)).toEqual(['/repos/acme/app', '/repos/acme/app/rules/branches/main'])
+    expect(github.calls.slice(-2).every(c => c.auth === `Bearer ${token}`)).toBe(true)
+  })
+
+  it('falls back to classic protection, which it cannot read further, or none, and remembers the answer ten minutes', async () => {
+    const { app, github, time } = setup()
+    const { token } = await app.createToken(77, repo)
+    github.protection.set('acme/app', { branch: 'trunk', protected: true })
+    expect(await app.defaultBranch(repo, token)).toEqual({ branch: 'trunk', protection: 'classic' })
+    github.protection.set('acme/app', { branch: 'trunk', protected: false })
+    expect(await app.defaultBranch(repo, token)).toEqual({ branch: 'trunk', protection: 'classic' })
+    time.advance(10 * 60_000 + 1)
+    expect(await app.defaultBranch(repo, token)).toEqual({ branch: 'trunk', protection: 'none' })
+  })
+
+  it('answers unknown, and asks again next time, when GitHub cannot say', async () => {
+    const { app, github } = setup()
+    const { token } = await app.createToken(77, repo)
+    github.protection.set('acme/app', { fail: true })
+    expect(await app.defaultBranch(repo, token)).toEqual({ branch: null, protection: 'unknown' })
+    github.control.down = true
+    expect(await app.defaultBranch(repo, token)).toEqual({ branch: null, protection: 'unknown' })
+    github.control.down = false
+    github.protection.set('acme/app', {})
+    expect(await app.defaultBranch(repo, token)).toEqual({ branch: 'main', protection: 'none' })
+  })
+
   it('reads whether a pull request is open, merged or closed, with a token for its repository alone', async () => {
     const { app, github } = setup()
     const { token } = await app.createToken(77, repo, PULL_READ_PERMISSIONS)
@@ -315,6 +445,7 @@ describe('watching a pull request', () => {
     const { token } = await app.createToken(77, repo, PULL_WATCH_PERMISSIONS)
     expect(github.calls.at(-1)!.body).toMatchObject({ permissions: { pull_requests: 'read', checks: 'read', metadata: 'read' } })
     expect(Object.keys(PULL_WATCH_PERMISSIONS).sort()).toEqual(['checks', 'metadata', 'pull_requests'])
+    for (const name of Object.keys(PULL_WATCH_PERMISSIONS)) expect(TOKEN_PERMISSIONS[name as keyof typeof TOKEN_PERMISSIONS]).toBeDefined()
     seed(github)
     expect(await app.watchPullRequest(repo, 12, token)).toEqual({ url: 'https://github.com/acme/app/pull/12', number: 12, state: 'open', draft: false,
       head: HEAD, base: 'main', mergeable: false,
@@ -449,7 +580,7 @@ describe('what installation tokens may never carry (task #1788)', () => {
   it('installation tokens never ask for administration or repository creation', async () => {
     const app = await import('./app.js')
     const sets = Object.entries(app).filter(([name]) => name.endsWith('_PERMISSIONS')) as Array<[string, Record<string, string>]>
-    expect(sets.map(([name]) => name)).toEqual(expect.arrayContaining(['PULL_READ_PERMISSIONS', 'PULL_WATCH_PERMISSIONS', 'PUSH_ORIGIN_PERMISSIONS']))
+    expect(sets.map(([name]) => name)).toEqual(expect.arrayContaining(['TOKEN_PERMISSIONS', 'GRANTED_TOKEN_PERMISSIONS', 'PULL_READ_PERMISSIONS']))
     for (const [, permissions] of sets) {
       for (const never of app.NEVER_ON_INSTALLATION_TOKENS) expect(Object.keys(permissions)).not.toContain(never)
     }

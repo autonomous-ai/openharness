@@ -562,6 +562,20 @@ describe('a team session speaking in a Swarm', () => {
 
   })
 
+  it('gets a GitHub token only as an agent on its own machine, naming its own machine (Task 4)', async () => {
+    const f = await fixture()
+    await beforeV3(f.tab, f.generation, () => run(f.tab, { type: 'work.assign', conversationId: f.teamGroup, agentId: f.builder }))
+    await run(f.tab, { type: 'work.assign', conversationId: f.personalGroup, agentId: f.personal })
+    expect(await store.githubAssignment(team, f.tab, f.builder, 'team-mac')).toMatchObject({ tabId: f.tab, agentId: f.builder })
+    // As the person's agent on their personal Mac: refused before anything is read about the task.
+    await expect(store.githubAssignment(team, f.tab, f.personal, 'personal-mac')).rejects.toMatchObject(LIMITED)
+    await expect(store.githubAssignment(team, f.tab, f.personal, 'team-mac')).rejects.toMatchObject(LIMITED)
+    // As its own agent, but naming another machine.
+    await expect(store.githubAssignment(team, f.tab, f.builder, 'personal-mac')).rejects.toMatchObject({ status: 403 })
+    // The person's own sign-in still gets one for the agent on their personal Mac.
+    expect(await store.githubAssignment(person, f.tab, f.personal, 'personal-mac')).toMatchObject({ agentId: f.personal })
+  })
+
   it('reads costs and CI load and sends a file over the form\'s 10 MB only as an agent on its own machine', async () => {
     const f = await fixture()
     const files = new MemoryAttachmentStore()

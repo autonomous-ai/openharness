@@ -115,7 +115,7 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/terminal', scope: 'machine' },
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
-  // A queued start's repository token (retired with Swarm v4, slice S6: answered `github: false`, routes/superTabs.ts).
+  // A queued start's repository token (retired with Swarm v4, slice S6: answered as a server without the app, routes/superTabs.ts).
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/:tabId/machines/:machineId', scope: 'machine' },
   // The same readings for all of its Swarms in one call (DB roadmap 2.5).
@@ -153,8 +153,7 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   // A file over the form's 10 MB: a signed link to the bucket, then its check (store.ts uploadLink, completeUpload).
   { method: 'POST', url: '/api/super-tabs/:tabId/attachments/uploads', scope: 'agent' },
   { method: 'POST', url: '/api/super-tabs/:tabId/attachments/uploads/:uploadId/complete', scope: 'agent' },
-  // Its agent's GitHub token for its task's repository (retired with Swarm v4, slice S6: answered as a server without the app);
-  // the body's machine must be its own.
+  // Its agent's one-hour GitHub token for the repository of its task (Task 4); the body's machine must be its own.
   { method: 'POST', url: '/api/super-tabs/:tabId/github-token', scope: 'agent', bodyMachine: true },
   // Commands as one of its agents, its agents' deliveries, stops and native terminals (retired: answered ok and ignored, so an older
   // team daemon is not refused), its agents' role texts.

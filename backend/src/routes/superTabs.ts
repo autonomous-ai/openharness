@@ -23,14 +23,17 @@ import { machineObservationSchema, teamAccountRequired } from '../superTabs/mach
 import { repositoryReachOf } from '../superTabs/repositoryReach.js'
 import { joinSwarmSchema, previewJoinSchema, saveSharingSchema } from '../superTabs/sharing.js'
 import { holdReason } from '../superTabs/holdReason.js'
-import { GitHubAppError, githubAppFromEnv, type GitHubApp } from '../github/app.js'
+import { GitHubAppError } from '../github/app.js'
 import { projectGitHubAccess } from '../github/projectAccess.js'
 import { projectBranchOrigin, projectPushOrigin } from '../github/pushOrigin.js'
 import { projectPullRequestFiles } from '../superTabs/pullRequestFiles.js'
 import { appPullRequestWatch } from '../superTabs/pullRequestEvents.js'
 import { githubSignIn, PrismaApprovals, readState, signState, stateSecret, type Approvals, type GitHubSignIn } from '../github/approvals.js'
+import type { GitHubRepository } from '../github/repository.js'
 import { githubRepository } from '../github/repository.js'
+import { attribution } from '../github/attribution.js'
 import { createRepository, createStateSecret, GITHUB_OWNER, ownerCheckAllowed, readCreateState, repositoryNameProblem, signCreateState } from '../github/repositoryCreate.js'
+import { githubTokensFromEnv, type GitHubTokens } from '../github/tokens.js'
 import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { inboxWait, readInbox } from '../superTabs/read/inbox.js'
@@ -40,6 +43,7 @@ import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
+import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { markNothingNew } from '../lib/routeLatency.js'
@@ -159,11 +163,13 @@ const personDecisionQuery = agentQuery.extend({ state: z.enum(['open', 'answered
 const savePolicy = z.object({ revision: z.number().int().nonnegative().safe(), policy: routingPolicySaveSchema }).strict()
 const stop = z.object({ assignmentId: id, receipt: z.string().min(1).max(2000) }).strict()
 const githubToken = z.object({ machineId: id }).strict()
-// Retired with Swarm v4 (slice S6, 2026-11-10): the server hands out no GitHub App token, as its agents push with their own person's
-// login on their own computer. Hosts and agents of the last 30 days still call these, so each keeps an answer they handle with
-// their own login (cli superTabs/projectFolder.ts startGitHub, github.ts githubToken). Delete them not before 2026-12-10.
-const NO_APP = () => new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
 const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
+// Swarm v4 (slice S6, 2026-11-10): agents push with their own person's login on their own computer, so the server no longer
+// advertises the app: no read says `githubApp`, a start's token answers as for the machine owner's own project, and the CI load as
+// a server without the app. An agent session started with the app before still asks for its task's token every hour, and gets it,
+// with its revocation at the task's end: it must never lose push mid-work. Delete the agent tokens (github/tokens.ts, holds.ts,
+// attribution.ts, this route and the store's githubAssignment) and these answers on or after 2026-12-10.
+const NO_APP = () => new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
 
 
 /**
@@ -225,7 +231,7 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
 }
 
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
- *  `github` is the Harness GitHub App (github/app.ts): read from the environment unless given, null when off. */
+ *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
 /** Full-state reads of clients from before Swarms were stored by parts (design 4.11): every old client reads one of them
  *  before or right after any action, so it meets this at once. */
 /**
@@ -239,7 +245,7 @@ export const HOT_BODY_LIMIT = 128 * 1024
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
-async function productionStore(github: GitHubApp | null, approvals: Approvals): Promise<SuperTabStore> {
+async function productionStore(github: GitHubTokens | null, approvals: Approvals): Promise<SuperTabStore> {
   const [bus, { announceSwarmDeliveries, announceSwarmTerminal }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers },
     { VoiceQuotaExceededError, voiceQuotaService }, { pickWavLang, transcribeWavWithDeepgram }] = await Promise.all([
     import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
@@ -250,17 +256,20 @@ async function productionStore(github: GitHubApp | null, approvals: Approvals): 
     { replica: prismaSecondary,
       // Thread replies and tags reach the phones of whoever they tell, while the app is closed (push/send.ts, task #2905).
       phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) },
-      ...(github ? { pushOrigin: projectPushOrigin(github), branchPushOrigin: projectBranchOrigin(github) } : {}),
+      // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
+      workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
+      ...(github ? { pushOrigin: projectPushOrigin(github.app), branchPushOrigin: projectBranchOrigin(github.app) } : {}),
       // When a moved rule's task merged, as GitHub dates it, read at the instructions save (superTabs/ruleMoves.ts, task #3463).
-      ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github)(urls) } : {}),
+      ...(github ? { pullRequestMerges: (_env: string, _tab: string, _project: string, urls: string[]) => appPullRequestMerges(github.app)(urls) } : {}),
       // A task's Ready reads the files its pull requests change, and the server opens its review steps from them (task #3401).
-      ...(github ? { pullRequestFiles: projectPullRequestFiles(github) } : {}),
+      ...(github ? { pullRequestFiles: projectPullRequestFiles(github.app) } : {}),
       // A verdict naming a head the record does not have, and a Ready, read the pull request's head now (task #3628).
-      ...(github ? { pullRequestReader: () => appPullRequestWatch(github) } : {}),
+      ...(github ? { pullRequestReader: () => appPullRequestWatch(github.app) } : {}),
       // A start or assignment its account cannot reach the repository from is refused at once, by the read Project details
-      // shows (task #3266).
+      // shows (task #3266): the token endpoint below would refuse it on the machine, after the start was queued.
       ...(github ? { repositoryReach: async (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) =>
-        repositoryReachOf(await projectGitHubAccess(github, repositoryUrl, { canApprove: false,
+        repositoryReachOf(await projectGitHubAccess(github.app, repositoryUrl, { canApprove: false,
           approved: async repository => !teamAccountRequired() || approvals.approved(autonomousEnv, tabId, projectId, repository) })) } : {}),
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
@@ -291,14 +300,26 @@ async function productionStore(github: GitHubApp | null, approvals: Approvals): 
       } })
 }
 
-export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubApp | null; reads?: SwarmReads; hosts?: HostReads;
+export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
   approvals?: Approvals; signIn?: GitHubSignIn | null; shipping?: Shipping } = {}) {
-  const github = options.github !== undefined ? options.github : githubAppFromEnv(env)
+  const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
   // Which repositories each Swarm may use the app on, and the app's sign-in that approves one (github/approvals.ts).
   const approvals = options.approvals ?? new PrismaApprovals(prisma)
   const signIn = options.signIn !== undefined ? options.signIn : githubSignIn(env)
-  const approvalSecret = github ? stateSecret(github.config) : null
-  const createSecret = github ? createStateSecret(github.config) : null
+  const approvalSecret = github ? stateSecret(github.app.config) : null
+  const createSecret = github ? createStateSecret(github.app.config) : null
+  // No token for a repository nobody who can push to it approved for this project: a project names its repository as
+  // text, and the app is on other people's repositories too.
+  // Rolled out with the team account (machines.ts `teamAccountRequired`): a Swarm outside it gets tokens as before, so a
+  // bug here cannot stop other people's Swarms.
+  const requireApproval = async (user: { autonomousEnv: string }, grant: { tabId: string; projectId: string; approvalRequired: boolean },
+    repository: GitHubRepository) => {
+    if (!grant.approvalRequired) return
+    const { tabId, projectId } = grant
+    if (await approvals.approved(user.autonomousEnv, tabId, projectId, repository.fullName)) return
+    throw new SuperTabError('GITHUB_REPOSITORY_NOT_APPROVED', `Nobody who can push to ${repository.fullName} has approved it for this project yet, `
+      + 'so teammates\' agents get no access to it. Someone who can push to it approves it in Harness: Project details, GitHub access.', 403)
+  }
   const store = options.store ?? await productionStore(github, approvals)
   // A rename in Machines reaches the Swarms the machine is in at once (MachineService.rename).
   onMachineRenamed(rename => store.machineRenamed(rename))
@@ -328,10 +349,14 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof hostParams>; Body: z.infer<typeof hostChangesBody> }>('/api/super-tabs/hosts/:machineId/changes',
     { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(hostParams), validateBody(hostChangesBody)] },
     (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, req.body)))
-  // A start's folder is prepared with its machine's own login (retired, above NO_APP): the answer the machine owner's own
-  // project got, which a host takes as "use your own login" (a refusal would fail the start there).
+  // A start's folder is prepared with its machine's own login (retired, above NO_APP): the answer a machine owner's own project
+  // got, which a host takes as "use your own login". A Harness Team host has none and asks `always`: it hears there is no app,
+  // as its next roster row would tell it.
   app.post<{ Params: z.infer<typeof hostStartParams>; Body: z.infer<typeof githubStartToken> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token',
-    { preHandler: [validateParams(hostStartParams), validateBody(githubStartToken)] }, (_req, reply) => respond(reply, async () => ({ github: false })))
+    { preHandler: [validateParams(hostStartParams), validateBody(githubStartToken)] }, (req, reply) => respond(reply, async () => {
+      if (req.body?.always === true) throw NO_APP()
+      return { github: false }
+    }))
   app.get<{ Params: z.infer<typeof hostStartParams> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', { preHandler: validateParams(hostStartParams) },
     (req, reply) => respond(reply, () => store.start(req.user!, req.params.tabId, req.params.startId, undefined, req.params.machineId)))
   app.post<{ Params: z.infer<typeof hostStartParams>; Body: z.infer<typeof operationSchema> }>('/api/super-tabs/hosts/:machineId/starts/:tabId/:startId',
@@ -345,7 +370,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(projectParams), validateQuery(refreshQuery)] },
     (req, reply) => respond(reply, async () => {
       const project = await store.projectRepository(req.user!, req.params.tabId, req.params.projectId)
-      const access = await projectGitHubAccess(github, project.repositoryUrl, { canApprove: !!signIn,
+      const access = await projectGitHubAccess(github?.app ?? null, project.repositoryUrl, { canApprove: !!signIn,
         approved: async repository => !project.approvalRequired || approvals.approved(req.user!.autonomousEnv, req.params.tabId, req.params.projectId, repository),
         approvedFor: async repository => {
           const ids = await approvals.approvedProjects(req.user!.autonomousEnv, req.params.tabId, repository)
@@ -359,8 +384,8 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       if (req.query.refresh === '1' && req.query.record !== '0') await recorded(req.params.tabId, () => store.githubSeen(req.params.tabId, req.params.projectId, access.state))
       return access
     }))
-  // The CI load a CLI's route read (retired with it, slice S6, 2026-11-10): who may read the project hears what a server without
-  // the app said. Delete it not before 2026-12-10.
+  // The CI load a CLI's route read (retired with it, above NO_APP): who may read the project hears what a server without the app
+  // said; anyone else is refused as before.
   app.get<{ Params: z.infer<typeof projectParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/projects/:projectId/ci-load',
     { preHandler: [validateParams(projectParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, async () => {
@@ -377,7 +402,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       const repository = githubRepository(repositoryUrl) ?? fail('REPOSITORY_NOT_GITHUB', 'This project\'s repository is not on github.com.', 409)
       const state = signState(approvalSecret, { userId: req.user!.sub, autonomousEnv: req.user!.autonomousEnv, tabId: req.params.tabId,
         projectId: req.params.projectId, repository: repository.fullName.toLowerCase(), scope: req.body.scope }, Date.now())
-      const install = github.installUrl()
+      const install = github.app.installUrl()
       return { authorizeUrl: signIn.authorizeUrl(state), installUrl: install ? `${install}?state=${encodeURIComponent(state)}` : null }
     }))
   // Whether an organization lets Harness create a repository there, for New Project's owner row before sign-in (F4, F5):
@@ -387,7 +412,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       await store.requireWriter(req.user!, req.params.tabId)
       if (!github || !signIn || !createSecret) return { state: 'not-configured' }
       await limitOwnerChecks(req.user!.sub)
-      const readiness = await github.ownerReadiness(req.params.owner)
+      const readiness = await github.app.ownerReadiness(req.params.owner)
       return readiness.state === 'not-installed' ? { state: readiness.state, ...(readiness.installUrl ? { installUrl: readiness.installUrl } : {}) } : { state: readiness.state }
     }))
   // A new repository for a project its owner just made: checked, recorded as waiting on the project, and the person sent to
@@ -402,7 +427,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       // Who may, before any call signed with the app's key (security review 1 of #3201).
       await store.mayCreateRepository(req.user!, req.params.tabId, req.params.projectId)
       await limitOwnerChecks(req.user!.sub)
-      const readiness = await github.ownerReadiness(owner)
+      const readiness = await github.app.ownerReadiness(owner)
       if (readiness.state === 'not-installed') {
         throw new GitHubAppError('GITHUB_APP_NOT_INSTALLED', `Harness isn't on ${owner}'s GitHub yet.`, 409, readiness.installUrl ? { installUrl: readiness.installUrl } : undefined)
       }
@@ -419,6 +444,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     const page = (title: string, text: string, status = 200) => reply.status(status).type('text/html; charset=utf-8').send(githubPage(title, text))
     const create = createSecret && github && req.query.state ? readCreateState(createSecret, req.query.state, Date.now()) : null
     if (create && github) {
+      const githubApp = github.app
       const expired = () => page('This link has expired', 'Go back to Harness and create the repository again.', 400)
       const deleted = (made: string | null) => page('The project was deleted meanwhile',
         made ? `${made} was made on GitHub, but no project uses it. You can go back to Harness.` : 'Nothing was created. You can go back to Harness.', 410)
@@ -437,7 +463,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
         await finish({ state: 'cancelled' })
         return page('Nothing was created', 'Go back to Harness and choose Try again.')
       }
-      const outcome = await signIn.withUserToken(req.query.code, call => createRepository(call, github, create)).catch(() => null)
+      const outcome = await signIn.withUserToken(req.query.code, call => createRepository(call, githubApp, create)).catch(() => null)
       if (!outcome || outcome.state === 'failed') {
         await finish({ state: 'failed' })
         return page('GitHub didn\'t answer', 'Nothing was created. Go back to Harness and choose Try again.', 502)
@@ -473,7 +499,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     if (!req.query.code || !signIn || !named) {
       // Installed just now: this server stops keeping "not installed", and members' apps read again (task #2316).
       if (named && github) {
-        github.forget(named)
+        github.app.forget(named)
         await recorded(request.tabId, () => store.githubChanged(request.tabId, request.repository))
       }
       return page('Harness is installed', 'Go back to Harness and choose Continue in GitHub, so this project can use it.')
@@ -632,9 +658,27 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof groupParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/groups/:conversationId',
     { preHandler: [validateParams(groupParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => reads.group(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))
-  // An agent's task token (retired, above NO_APP): its session uses its own person's login.
+  // A one-hour installation token for the repository of the calling agent's task, for git and gh on its machine
+  // (docs/swarm-github-app.md). Only that agent's host, on the machine running it, while the task is in its hands. Kept for
+  // sessions started with the app until 2026-12-10 (above NO_APP).
   app.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery>; Body: z.infer<typeof githubToken> }>('/api/super-tabs/:tabId/github-token',
-    { preHandler: [validateParams(tabParams), validateQuery(agentQuery), validateBody(githubToken)] }, (_req, reply) => respond(reply, async () => { throw NO_APP() }))
+    { preHandler: [validateParams(tabParams), validateQuery(agentQuery), validateBody(githubToken)] },
+    (req, reply) => respond(reply, async () => {
+      if (!github) throw new GitHubAppError('GITHUB_APP_NOT_CONFIGURED', 'This Harness server has no GitHub App configured.', 503)
+      const grant = await store.githubAssignment(req.user!, req.params.tabId, req.query.asAgentId, req.body.machineId)
+      const repository = githubRepository(grant.repositoryUrl)
+      if (!repository) {
+        throw new SuperTabError('REPOSITORY_NOT_GITHUB', grant.repositoryUrl
+          ? 'This project\'s repository is not on github.com, so the Harness GitHub App cannot give a token for it.'
+          : 'This project has no repository address yet. Its owner or Lead can share it (project.repository).', 409)
+      }
+      await requireApproval(req.user!, grant, repository)
+      const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
+      // A Harness Team account has no git identity of its own: its commits are the app's, as its pull requests are
+      // (github/app.ts commitIdentity). A person's machine keeps its owner's, as before.
+      const commitAs = isTeamSession(req.user) ? github.app.commitIdentity() : null
+      return { ...issued, ...attribution(grant), ...(commitAs ? { commitAs } : {}) }
+    }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },
     (req, reply) => respond(reply, () => store.execute(req.user!, req.params.tabId,

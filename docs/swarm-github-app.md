@@ -1,12 +1,12 @@
 # Swarm GitHub App
 
-> **Swarm v4 (2026-11-10, backend slice S6):** the server gives agents no token any more. Every agent runs on its own
-> person's computer and pushes with that person's own login. Both token routes stay for clients of the last 30 days and
-> answer as a server without the app did: `POST /api/super-tabs/:tabId/github-token` refuses with
-> `GITHUB_APP_NOT_CONFIGURED`, a start's `.../github-token` answers `{ "github": false }`, and no read says `githubApp`.
-> `GET .../projects/:projectId/ci-load` answers `{ "state": "unavailable" }`. The app still serves New Repository, the
-> repository approvals below (until the next slice) and the server's own read-only pull request reads. The sections on
-> tokens describe what clients from before Swarm v4 do.
+> **Swarm v4 (2026-11-10, backend slice S6):** every agent runs on its own person's computer and pushes with that person's
+> login, so the server no longer advertises the app: no read says `githubApp`, a start's `.../github-token` answers
+> `{ "github": false }` (a Harness Team host, asking `always`, hears `GITHUB_APP_NOT_CONFIGURED`), and
+> `GET .../projects/:projectId/ci-load` answers `{ "state": "unavailable" }`. A session started with the app before still gets
+> its task's token from `POST /api/super-tabs/:tabId/github-token`, revoked when its task ends, so it never loses push
+> mid-work; that ends on or after 2026-12-10. The app also serves New Repository, the repository approvals below and the
+> server's own read-only pull request reads. The rest of this page describes clients from before Swarm v4.
 
 When a Swarm agent works on another person's project, it pushes commits and opens
 pull requests with the **Harness GitHub App**, not the GitHub login of the computer
@@ -317,9 +317,61 @@ assign the pull request, because it does not know the person's GitHub login.
 
 ## The token endpoint
 
-Retired with Swarm v4 (see the note at the top): `POST /api/super-tabs/:tabId/github-token?asAgentId=AGENT` answers
-`GITHUB_APP_NOT_CONFIGURED` (503), which a CLI takes as "no app on this server", and the server mints, caches and revokes
-no token. The route goes on or after 2026-12-10.
+`POST /api/super-tabs/:tabId/github-token?asAgentId=AGENT` with body
+`{ "machineId": "MACHINE" }`.
+
+The caller must be the account that hosts the agent, sending from the computer that
+runs it. The agent must have a task in progress: working, waiting on a person, stuck,
+or out for review. The response is:
+
+```json
+{
+  "token": "ghs_…",
+  "expiresAt": "2026-10-24T13:00:00Z",
+  "repository": "acme/app",
+  "defaultBranch": "main",
+  "defaultBranchProtected": true,
+  "defaultBranchProtection": "pull_request",
+  "requestedBy": { "name": "Ada Lovelace", "email": "ada@example.com" },
+  "agent": "Atlas",
+  "machine": "Studio Mac",
+  "trailers": ["Co-authored-by: Ada Lovelace <ada@example.com>", "Harness-Agent: Atlas", "Harness-Machine: Studio Mac"],
+  "pullRequestLine": "Requested by Ada Lovelace (ada@example.com) through Harness."
+}
+```
+
+`defaultBranchProtection` takes one of these values:
+
+- `pull_request`: a ruleset requires a pull request.
+- `classic`: classic protection is on, but its settings cannot be read.
+- `none`: nothing protects the branch.
+- `unknown`: GitHub could not say.
+
+The endpoint refuses with these codes:
+
+| Code | Status | When |
+| --- | --- | --- |
+| `GITHUB_APP_NOT_CONFIGURED` | 503 | The server has no app. |
+| `AGENT_REQUIRED` | 400 | No `asAgentId`. |
+| `FORBIDDEN` | 403 | Another account's agent, or the agent runs on another computer. |
+| `NO_ASSIGNMENT` | 409 | The agent has no task in progress. |
+| `REPOSITORY_NOT_GITHUB` | 409 | The project has no repository address, or one outside github.com. |
+| `GITHUB_APP_NOT_INSTALLED` | 409 | The app does not cover the repository. When the slug is set, the response includes `installUrl`. |
+| `GITHUB_APP_PERMISSIONS` | 409 | The installation has not accepted the permissions above. |
+| `GITHUB_APP_MISCONFIGURED`, `GITHUB_UNAVAILABLE` | 503/502 | GitHub refused the app's credentials, or did not answer. |
+
+Each token is cached per agent and task, sealed with a key derived from the app's
+private key, in the backend's shared Redis. The backend serves the cached token until
+ten minutes before it expires. Then it mints a new one and leaves the old one to its
+last ten minutes, so a push that took the old token before the renewal is not broken.
+That token is for the one repository and the task's own session. When the task is
+done, cancelled or stopped, goes to another agent or attempt, or its agent is removed,
+every token minted for the task is revoked (`DELETE /installation/token`) and dropped,
+replaced ones included, whichever backend instance minted them. A request only ever
+ends its own task: one that waited across its task's end leaves the agent's next task
+alone. If a revocation fails, Harness logs it without
+the token and the task's change goes ahead. The token then expires within the hour.
+The server never logs a token.
 
 ## Known limits
 
@@ -331,5 +383,7 @@ no token. The route goes on or after 2026-12-10.
 - The team account has gh of its own: a Homebrew it cannot read leaves it none, so its
   daemon installs GitHub's release of gh (pinned by checksum in `cli/src/team/gh.ts`)
   in its home and links it from `~/.local/bin`.
+- If Redis is unavailable, Harness still issues tokens but cannot revoke them when
+  the task ends. They expire within the hour.
 - In the first minute of a task, gh can be without a token until the daemon's next
   check or the agent's first git command that needs credentials.

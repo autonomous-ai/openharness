@@ -317,7 +317,8 @@ export function ownsProject(state: SuperTabState, userId: string, project: Swarm
 
 /** Whom a group's work is for, as its pull requests say (`requestedByLine`): the person who asked for it (`requesterId`) while
  *  they can still read its project, else the project's owner. Until 11-01 it was always the owner, and agents on Tony's Mac
- *  opened Tony's pull requests as Ken's (#2486, #2488, #2491). It names a person only. */
+ *  opened Tony's pull requests as Ken's (#2486, #2488, #2491). It names a person only: the GitHub App's token, who gets one
+ *  and its commit trailers (store.ts githubAssignment, githubStart) never depend on it. */
 export function workRequesterId(state: SuperTabState, project: SwarmProject, group: Conversation | undefined): string {
   const id = group && (group.projectId ?? 'lead') === project.id ? group.requesterId : undefined
   const member = id ? state.people.find(p => p.id === id) : undefined
