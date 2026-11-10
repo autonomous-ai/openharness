@@ -1,6 +1,5 @@
 import { v3Stopping, withdrawV3Stops } from './agentStops.js'
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
-import { buddyIds, convertBuddies, holdsBuddies } from './buddyConversion.js'
 import { canReadProject } from './projects.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
@@ -3979,48 +3978,8 @@ export class SuperTabStore {
   }
 
   /**
-   * Every Buddy of a Swarm becomes an ordinary agent, its Buddy chat its 1:1 chat (buddyConversion.ts), once after the release
-   * that removed Buddies (migration/buddiesJob.ts), and in each time check after it, for one an older backend still added. One
-   * read when the Swarm holds none, and no write. How many Buddies and Buddy starts it converted or ended.
-   */
-  async convertBuddies(tabId: string): Promise<number> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt || row.format !== 2) return 0
-      const loaded = await loadRow(tx, requireParts(row), {})
-      if (!holdsBuddies(loaded.state)) return 0
-      const count = buddyIds(loaded.state).length + (loaded.state.starts ?? []).filter(s => s.request.buddyOf && !s.harnessId && !s.error).length
-      const { base, state } = await this.withoutBuddies(tx, tabId, loaded, [])
-      await this.save(tx, base, state, clock.next())
-      return count
-    })
-  }
-
-  /** [loaded] with every Buddy converted, in a copy to save from [base]: a Buddy's chat, and those of [agentIds], are loaded first,
-   *  dormant ones too, so the save compares them with what was read. [all] holds every conversation loaded. What waited for a
-   *  session the conversion removed ends with it, as a command's removal ends it. */
-  private async withoutBuddies(tx: Transaction, tabId: string, loaded: Loaded, agentIds: string[]): Promise<{ base: Loaded; state: SuperTabState; all: SuperTabState }> {
-    const named = [...agentIds, ...buddyIds(loaded.state)]
-    const ensured = named.length ? await this.ensure(tx, loaded, { agentIds: named }) : loaded
-    if (!holdsBuddies(loaded.state)) return { base: loaded, state: cloneData(loaded.state), all: ensured.state }
-    const state = cloneData(ensured.state)
-    const ids = convertBuddies(state).map(a => a.id)
-    // A few sessions at most, each status by its own `[tabId, agentId, status]` match: no `in` filter on a hot collection (hotFilters.test.ts).
-    if (ids.length) {
-      await this.endDeliveries(tx, tabId, { matches: row => ids.includes(row.agentId) }, async () => {
-        let count = 0
-        for (const agentId of ids) for (const status of CANCELLABLE_DELIVERY) {
-          count += (await tx.superTabDelivery.updateMany({ where: { tabId, agentId, status }, data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
-        }
-        return { count }
-      })
-    }
-    return { base: ensured, state, all: state }
-  }
-
-  /**
    * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts). Since Swarm v4 (anh Dee, 2026-11-09) they
-   * run only v4's jobs: every Buddy becomes an ordinary agent, every agent gets its 1:1 chat, the stops v3 asked for are withdrawn once, and the PM's "owes an answer"
+   * run only v4's jobs: every agent gets its 1:1 chat, the stops v3 asked for are withdrawn once, and the PM's "owes an answer"
    * note v3 kept for its host's restart is cleared. Each run is one write, so a second run, or one racing it, finds nothing new.
    * They write no messages.
    */
@@ -4032,8 +3991,10 @@ export class SuperTabStore {
       // Swarm v4 (anh Dee 2026-11-09): the server runs no v3 rule on its own (no lost-work sweeps, stuck alerts, proposal
       // cards or PM reminders). It gives every agent its 1:1 chat with its person (agentChats.ts), looked for among its
       // conversations, dormant ones too, for an agent that keeps none.
-      const { base, state, all } = await this.withoutBuddies(tx, tabId, loaded, chatlessAgents(loaded.state))
-      giveAgentsChats(state, this.now(), all)
+      const chatless = chatlessAgents(loaded.state)
+      const all = chatless.length ? (await this.ensure(tx, loaded, { agentIds: chatless })).state : loaded.state
+      const state = cloneData(loaded.state), now = this.now()
+      giveAgentsChats(state, now, all)
       // A PM's "owes an answer" note told its host to restart it while it hung (v3). Nothing writes it now, so a stale one would
       // restart a PM forever: it goes, once.
       for (const project of projectsOf(state)) delete project.owed
@@ -4044,14 +4005,14 @@ export class SuperTabStore {
       for (const a of stopping) {
         const scope = await tx.superTabSessionScope.findUnique({ where: { id: stableId('swarm-session', state.environment, a.machineOwnerId, a.id) },
           select: { closeLeaseUntil: true } })
-        if (scope?.closeLeaseUntil && scope.closeLeaseUntil.getTime() > this.now()) closing.add(a.id)
+        if (scope?.closeLeaseUntil && scope.closeLeaseUntil.getTime() > now) closing.add(a.id)
       }
       for (const stop of withdrawV3Stops(state, closing)) {
         await tx.superTabRun.deleteMany({ where: { id: stop.agentId, tabId, assignmentId: `release-${stop.releaseId}` } })
         await tx.superTabSessionScope.updateMany({ where: { id: stableId('swarm-session', state.environment, stop.machineOwnerId, stop.agentId),
           stopReleaseId: stop.releaseId }, data: { stopReleaseId: null } })
       }
-      await this.save(tx, base, state, clock.next())
+      await this.save(tx, loaded, state, clock.next())
       return 0
     })
   }

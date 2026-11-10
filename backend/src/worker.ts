@@ -13,7 +13,7 @@ import {
   pruneLegacyDeviceBindings,
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
-import { prisma } from './lib/prisma.js'
+import { prisma, prismaSecondary } from './lib/prisma.js'
 import { startQueryStats } from './lib/queryStats.js'
 import { startRetryStats } from './superTabs/retryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
@@ -27,7 +27,6 @@ import { startDeliveryCompaction } from './superTabs/deliveryCompaction.js'
 import { startThreadBackfill } from './superTabs/threadBackfill.js'
 import { markFeedIds } from './superTabs/read/feedIds.js'
 import { startTimeChecks } from './superTabs/timeChecks.js'
-import { startBuddyConversion } from './superTabs/migration/buddiesJob.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries, announceSwarmTerminal } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
@@ -81,7 +80,6 @@ async function start(): Promise<void> {
   let stopAccountNames = (): void => {}
   let stopTeamMachines = (): void => {}
   let stopTimeChecks = (): void => {}
-  let stopBuddies = (): void => {}
   let stopDeliveries = (): void => {}
   let stopRepush = (): void => {}
   let stopCompaction = (): void => {}
@@ -102,7 +100,6 @@ async function start(): Promise<void> {
     stopAccountNames()
     stopTeamMachines()
     stopTimeChecks()
-    stopBuddies()
     stopDeliveries()
     stopRepush()
     stopCompaction()
@@ -154,8 +151,6 @@ async function start(): Promise<void> {
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
   // no v1-v3 job: no decisions, task archive, pull request watch, release steps, merge train, routing reflection or scorecards.
   stopTimeChecks = startTimeChecks(prisma, swarms)
-  // Once after this release: every Buddy becomes an ordinary agent of its person, quiet Swarms' too (superTabs/migration/buddiesJob.ts).
-  stopBuddies = startBuddyConversion(prisma, swarms)
   // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
   stopDeliveries = startDeliverySettle(prisma, swarms)
   // Every 15 s, the machine of each agent with a delivery still queued after 10 s is told again, in case its push was lost:
