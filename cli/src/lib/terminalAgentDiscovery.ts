@@ -16,6 +16,7 @@ import {
   ambiguousAgentProcess,
   engineProcessMatchScore,
   enrichProcessRows,
+  hermesGatewaysUnder,
   launchArgs,
   processRows,
   processTreePids,
@@ -56,6 +57,9 @@ export interface DiscoveredTerminalAgent {
    * Backend-agnostic for the same reason `gateway` is: it is a fact about the process, not the pane.
    */
   grid?: GridAssignment | null
+  /** Processes under this one that an older build recorded as this pane's engine (Hermes' shared gateway,
+   *  processTable.ts `hermesGatewaysUnder`): a row holding one of them is this agent, not one it replaces. */
+  formerProcesses?: ProcessIdentity[]
   /** Sanitized launch markers; classified after the binding pass, never awaited by it. */
   gridProcess?: GridAssignmentProcess
   /**
@@ -284,6 +288,10 @@ export async function probeTerminalAgents(
     agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine)
     // And the DSH it was created as — same read, so a pane the daemon did not create is labelled too.
     agent.dsh = await probeDsh(agent.processIdentity)
+    if (agent.engine === 'hermes') {
+      const former = hermesGatewaysUnder(enrichedRows, agent.processIdentity)
+      if (former.length) agent.formerProcesses = former
+    }
   }))
   return { processTableAvailable: true, targets, ...discovered }
 }
