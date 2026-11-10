@@ -9,7 +9,8 @@ import 'desktop_chrome.dart';
 import 'desktop_prompt_surface.dart';
 
 /// Profile (task #2654), from the avatar menu and Settings ▸ Account: the
-/// account's name, everywhere. One flat sheet.
+/// account's name, which every Swarm the person is in shows for them (the
+/// backend's personNames.ts). One flat sheet.
 Future<void> showAccountProfileSheet(BuildContext context, AppNotifier app) =>
     showAppDialog<void>(
       context: context,

@@ -3690,6 +3690,13 @@ class SuperTabController extends ChangeNotifier {
     id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
+    final group = snapshot!.conversation(id)!;
+    // A task's project's closed tasks, read once: its menu offers Archived
+    // conversations only when there are some (view.dart _mayHaveArchived).
+    // A Buddy chat reads none.
+    if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
+      unawaited(loadDormant(group.projectId));
+    }
     _moveView(to: id);
     // Held from an earlier visit: what arrived meanwhile is not among them.
     if (_messages[id]?.isNotEmpty ?? false) {

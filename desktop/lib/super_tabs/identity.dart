@@ -24,12 +24,12 @@ class SuperTabAvatar extends StatelessWidget {
 
   SuperTabAvatar.person(SuperTabPerson person, {super.key, this.size = 30})
     : identity = 'person:${person.id}',
-       name = person.shownName,
-       picture = person.avatar,
-       engine = null,
-       face = false,
-       lead = false,
-       offline = false;
+      name = person.shownName,
+      picture = person.avatar,
+      engine = null,
+      face = false,
+      lead = false,
+      offline = false;
 
   /// [engineBadge] off where the row already shows the engine beside the
   /// name (the roster, messages), so it shows once. [lead] marks a PM with
@@ -90,10 +90,7 @@ class SuperTabAvatar extends StatelessWidget {
   }
 
   Widget _drawn(Widget face, double badge) {
-    final said = [
-      if (lead) 'Lead',
-      if (offline) 'offline',
-    ];
+    final said = [if (lead) 'Lead', if (offline) 'offline'];
     return Semantics(
       label: said.isEmpty ? null : said.join(', '),
       child: SizedBox.square(

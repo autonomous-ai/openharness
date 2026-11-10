@@ -67,8 +67,7 @@ import 'crew_panel.dart';
 import 'instructions_panel.dart';
 import 'project_rules.dart';
 import 'model.dart';
-import 'agent_details.dart';
-import 'identity.dart' show SuperTabAvatar, superTabMachineName;
+import 'identity.dart' show SuperTabAvatar;
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
 import 'project_people.dart';
@@ -2949,12 +2948,6 @@ class _SuperTabViewState extends State<SuperTabView>
         _light(message.id);
       },
     );
-  }
-
-  void _openGroup(String id) {
-    setState(() => _showPullRequests = false);
-    c.select(id);
-    c.selectTerminal(id, null);
   }
 
   void _openAgent(SuperTabAgent agent) {

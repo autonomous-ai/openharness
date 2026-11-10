@@ -330,7 +330,7 @@ them their due without disturbing the work.
 dialogs, the footer, Settings) stay calm: everything above applies unchanged
 and nothing there celebrates. Harness's own UI uses no emoji on instrument
 surfaces; what people and programs write shows as written. Team surfaces (the
-leaderboard, profiles and the project chat) are where people appear, and they
+leaderboard, the people list and the project chat) are where people appear, and they
 may be warm: they may name a moment, carry a mark and smile in their words.
 
 **Earned, not ambient.** One real event earns one moment: a person ships,
