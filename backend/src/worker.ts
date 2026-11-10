@@ -135,9 +135,9 @@ async function start(): Promise<void> {
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, terminalWaiting: announceSwarmTerminal, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges, phoneNotices: notices => { void sendPhoneNotices(prisma, phones, notices) } })
   stopSweeps = startSwarmSweeps(prisma)
-  // The collections of what Swarm v4 removed, and the dead old state of migrated Swarms, go by themselves, a few rows at a time
-  // (superTabs/migration/dropLegacyJob.ts).
-  stopLegacyDrop = startLegacyDrop(prisma)
+  // The collections of what Swarm v4 removed, the Leads conversations through the store's own write, and the dead old state of
+  // migrated Swarms, go by themselves, a few rows at a time (superTabs/migration/dropLegacyJob.ts).
+  stopLegacyDrop = startLegacyDrop(prisma, swarms)
   // Once after this release: each Swarm's people take their accounts' names (superTabs/migration/accountNamesJob.ts).
   stopAccountNames = startAccountNames(prisma, swarms)
   // Every 30 s, each active Swarm's time checks: v4's jobs only (superTabs/timeChecks.ts). Swarm v4 (anh Dee, 2026-11-09) runs
