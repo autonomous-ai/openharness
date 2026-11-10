@@ -75,7 +75,7 @@ export function usageSnapshot(v: AgentTokenUsage | null): AgentTokenUsage | null
 }
 
 /** At most MAX_USAGE_MODELS plainly named models, each with exactly its four counts. */
-export function validModelTokens(v: unknown): v is Record<string, ModelTokens> {
+function validModelTokens(v: unknown): v is Record<string, ModelTokens> {
   return object(v) && Object.keys(v).length <= MAX_USAGE_MODELS && Object.entries(v).every(([model, t]) => usageModelName(model) === model
     && object(t) && Object.keys(t).length === MODEL_TOKEN_KEYS.length && MODEL_TOKEN_KEYS.every(k => count(t[k])))
 }

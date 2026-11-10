@@ -774,17 +774,18 @@ describe('createInput', () => {
 describe('message', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('carries a bounded opaque context with the actual composed message, without treating it as identity', async () => {
+  // The native-turn record that read it went with #3901: an input context a window still sends is taken and goes nowhere.
+  it('writes a message that names an input context as any other, and passes the context on to nothing', async () => {
     const promptTyped = vi.fn(), run = deps({ promptTyped }), inputs = createInput(run.deps)
-    const context = 'conversation-input-context'
-    inputs.messageRequest({ agentId: 'a1', content: 'Scoped composed input', inputContext: context })
-    await vi.waitFor(() => expect(promptTyped).toHaveBeenCalledWith(agents.get('a1'), READY_PANE, expect.any(Object), context))
+    inputs.messageRequest({ agentId: 'a1', content: 'Scoped composed input', inputContext: 'conversation-input-context' })
+    await vi.waitFor(() => expect(promptTyped).toHaveBeenCalledOnce())
+    expect(promptTyped.mock.calls[0]).toEqual([agents.get('a1'), READY_PANE, expect.any(Object)])
     inputs.input.forget('a1')
     const plain = vi.fn(), request = createMessageRequest(plain)
     request({ agentId: 'a1', content: 'Unscoped', inputContext: { user: 'untrusted' } })
-    expect(plain).toHaveBeenCalledWith('a1', 'Unscoped')
-    // An observer is optional; a scoped message still uses the original writer.
-    expect(await messageWriter(deps().deps)('a1', 'Without observer', undefined, context)).toEqual(ok)
+    expect(plain.mock.calls).toEqual([['a1', 'Unscoped']])
+    // An observer is optional.
+    expect(await messageWriter(deps().deps)('a1', 'Without observer')).toEqual(ok)
   })
 
   it('writes what a person typed into the agent the frame names, and reads no tab an older window still names', () => {
@@ -817,7 +818,7 @@ describe('message', () => {
     expect(receipt.mock.calls).toEqual([['invalid'], ['invalid']])
     message({ content: 'hi', agentId: 'a1' }, receipt)
     message({ content: 'scoped', agentId: 'a1', inputContext: 'conversation-input-context' }, receipt)
-    expect(submit.mock.calls).toEqual([['a1', 'hi', undefined, receipt], ['a1', 'scoped', 'conversation-input-context', receipt]])
+    expect(submit.mock.calls).toEqual([['a1', 'hi', receipt], ['a1', 'scoped', receipt]])
     expect(receipt).toHaveBeenCalledTimes(2)
 
     const inputs = createInput(deps().deps)
@@ -825,7 +826,7 @@ describe('message', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     inputs.messageRequest({ content: 'hello', agentId: 's1' }, receipt)
     inputs.messageRequest({ content: 'hello', agentId: 's1', inputContext: 'conversation-input-context' }, receipt)
-    expect(into.mock.calls).toEqual([['a1', 'hello', undefined, undefined, receipt], ['a1', 'hello', undefined, 'conversation-input-context', receipt]])
+    expect(into.mock.calls).toEqual([['a1', 'hello', undefined, receipt], ['a1', 'hello', undefined, receipt]])
   })
 })
 

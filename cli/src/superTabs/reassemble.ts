@@ -28,16 +28,13 @@ function progressOf(stored: Json, projectId: unknown, leadConversationId: unknow
 }
 
 /** `visibleState`'s per-agent rules: down since the computed time or not down; a limit while it lasts (a part never holds
- *  one, so one that ran out is simply absent); the stored decision unless one is derived (`awaiting`); on Custom skills the
- *  role it runs (null when its kind has none), else no role. */
-function overlayAgent(agent: Json, derived: Json | undefined, projects: Json[]): Json {
+ *  one, so one that ran out is simply absent); the stored decision unless one is derived (`awaiting`). */
+function overlayAgent(agent: Json, derived: Json | undefined): Json {
   if (!derived) return agent
   if (typeof derived.downSince === 'string') agent.downSince = derived.downSince
   else delete agent.downSince
   if (typeof derived.limitedUntil === 'string') agent.limitedUntil = derived.limitedUntil
   if (typeof derived.workDecision === 'string') agent.workDecision = derived.workDecision
-  if (projects.find(p => p.id === agent.projectId)?.skillSet === 'custom') agent.roleId = typeof derived.roleId === 'string' ? derived.roleId : null
-  else delete agent.roleId
   return agent
 }
 
@@ -49,7 +46,7 @@ export function reassemble(store: PartsStore): Json {
   const projects = Array.isArray(head.projects) ? head.projects.map(object) : null
   const state: Json = { ...head,
     people: dataOf(store, 'member'),
-    agents: dataOf(store, 'agent').map(agent => overlayAgent(agent, object(derived.agents)[String(agent.id)] as Json | undefined, projects ?? [])),
+    agents: dataOf(store, 'agent').map(agent => overlayAgent(agent, object(derived.agents)[String(agent.id)] as Json | undefined)),
     conversations: groups.map(group => Object.fromEntries(Object.entries(group).filter(([key]) => !GROUP_INTERNALS.includes(key)))),
     machines: dataOf(store, 'machine').map(machine => ({ ...machine, ...object(object(derived.machines)[String(machine.machineId)]) })),
     starts: dataOf(store, 'start') }
