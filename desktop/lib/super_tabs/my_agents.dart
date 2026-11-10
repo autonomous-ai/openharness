@@ -1,3 +1,4 @@
+import 'controller.dart';
 import 'model.dart';
 
 /// The agents in [accountId]'s My agents, for the left pane (Swarm v3, task #4118): their Buddy first, then the others by
@@ -9,10 +10,7 @@ List<SuperTabAgent> superTabMyAgents(
 ) {
   final own = [
     for (final agent in snapshot.agents)
-      if (agent.myAgent ??
-          (agent.contributorId == accountId &&
-              (agent.buddyOf == null || agent.buddyOf == accountId)))
-        agent,
+      if (_mine(agent, accountId)) agent,
   ];
   String name(SuperTabAgent agent) =>
       (agent.displayName ?? agent.name).toLowerCase();
@@ -21,6 +19,11 @@ List<SuperTabAgent> superTabMyAgents(
     return buddy != 0 ? buddy : name(a).compareTo(name(b));
   });
 }
+
+bool _mine(SuperTabAgent agent, String accountId) =>
+    agent.myAgent ??
+    (agent.contributorId == accountId &&
+        (agent.buddyOf == null || agent.buddyOf == accountId));
 
 /// Whether [agent] is a PM, to wear the Lead ring: the backend's kind when it sends one (#4116), else whether it leads a
 /// project, as before.
@@ -36,4 +39,21 @@ SuperTabConversation? superTabAgentChat(
   // Swarm v4: an agent's row opens its own chat with its person (#4116), never its project's channel or a task's chat.
   if (agent.chatId case final id?) return snapshot.conversation(id);
   return null;
+}
+
+/// The 1:1 chats of the reader's agents with something new for them, by its read marks: an agent there asks its person
+/// (Swarm v4: an agent reaches its person only in that chat). What a Swarm's count, the Dock and the menu bar show; read
+/// on every change of every open Swarm, so it neither copies nor sorts the agents.
+List<(SuperTabAgent, SuperTabConversation)> superTabAgentsAsking(
+  SuperTabController c,
+) {
+  final snapshot = c.snapshot;
+  if (snapshot == null || c.accessRevoked) return const [];
+  return [
+    for (final agent in snapshot.agents)
+      if (agent.buddyOf == null && _mine(agent, c.accountId))
+        if (superTabAgentChat(snapshot, agent) case final chat?
+            when c.unreadShown(chat))
+          (agent, chat),
+  ];
 }

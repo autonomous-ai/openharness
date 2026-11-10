@@ -3,8 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../agent_messages/shared_tab_dialogs.dart';
-import '../../super_tabs/join_machine.dart'
-    show SwarmInviteAccepts, swarmNewMemberRole;
+import '../../super_tabs/join_machine.dart' show SwarmInviteAccepts;
 import '../../agent_messages/shared_tab_placement.dart' show shortSharedText;
 import '../../agent_messages/shared_tabs.dart';
 import '../../agent_messages/update_harness.dart';
@@ -107,12 +106,6 @@ class _TabInvitesSectionState extends State<TabInvitesSection>
       }
       if (!mounted) return;
       app.openSuperTab(tabId, invite['name'] as String);
-      // Accepted by the person at this computer: it joins the Swarm too, then
-      // the system asks once for the Harness Team account.
-      // Only when this accept made the membership: someone who already joined
-      // by link on another computer shares nothing more.
-      final role = swarmNewMemberRole(result);
-      if (role != null) unawaited(app.addMachineOnJoin(tabId, role: role));
       await _refreshSuper();
       if (mounted) await Navigator.of(context).maybePop();
     } catch (failure) {

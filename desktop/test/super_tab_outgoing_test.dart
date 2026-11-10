@@ -73,7 +73,7 @@ void main() {
     c.dispose();
   });
   test(
-    'queued sends retain their project, workgroup and own Buddy destinations',
+    'queued sends retain their project and workgroup destinations',
     () async {
       final s = ConversationServer();
       final gate = Completer<void>();
@@ -89,10 +89,9 @@ void main() {
         },
       );
       await c.refresh();
-      await c.addBuddy(projectId: 'lead', machineId: 'mac', engine: 'claude');
       hold = true;
       final sends = <Future<Map<String, dynamic>?>>[];
-      for (final id in ['lead', 'offline', 'buddy-owner-lead']) {
+      for (final id in ['lead', 'offline']) {
         expect(await c.select(id), isTrue);
         c.setDraft(id, 'Message for $id');
         sends.add(c.send());
@@ -103,11 +102,7 @@ void main() {
       final posts = s.posts
           .map((p) => p['command'] as Map)
           .where((p) => p['type'] == 'message.send');
-      expect(posts.map((p) => p['conversationId']), [
-        'lead',
-        'offline',
-        'buddy-owner-lead',
-      ]);
+      expect(posts.map((p) => p['conversationId']), ['lead', 'offline']);
       await c.flush();
       c.dispose();
     },

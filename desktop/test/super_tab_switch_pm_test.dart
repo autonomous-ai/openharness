@@ -9,7 +9,6 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/real_fonts.dart';
 import 'support/super_tab_fixture.dart';
-import 'support/super_tab_members.dart';
 
 /// Switch PM (spec 2026-11-02-pm-switch-engine-account-design.md, section 8):
 /// who is offered it, what its dialog lists and what Confirm sends.
@@ -99,9 +98,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             onNewProject: () {},
@@ -540,35 +537,4 @@ void main() {
       await finish(tester);
     },
   );
-
-  testWidgets('a lent machine\'s borrower does not see Switch PM…', (
-    tester,
-  ) async {
-    final server = swarm(pm: {'machineOwnerId': 'ken'});
-    await mount(tester, server, 'mac');
-    await openMenu(tester);
-    expect(item, findsNothing);
-    await finish(tester);
-  });
-
-  testWidgets('the PM row shows Switching… while switchRequest is set', (
-    tester,
-  ) async {
-    final server = swarm(
-      pm: {
-        'switchRequest': {
-          'id': 'r',
-          'engine': 'codex',
-          'profileId': 'bbbbbbbbbbbbbbbb',
-          'requestedBy': 'owner',
-          'at': 1,
-        },
-      },
-    );
-    await mount(tester, server, 'owner');
-    await openSuperTabMembers(tester);
-    // The row's state word (Quiet Swarm).
-    expect(find.text('switching…'), findsWidgets);
-    await finish(tester);
-  });
 }

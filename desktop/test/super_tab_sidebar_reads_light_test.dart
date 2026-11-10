@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/swarm_type.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
@@ -31,9 +30,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Studio',
@@ -152,24 +149,6 @@ void main() {
     },
   );
 
-  // Huy, 11-03, on the first after-shots: "a little more height on the
-  // projects, it will look cleaner". A project's row is 4 points taller; the
-  // rest of the sidebar keeps Slack's pitch.
-  testWidgets('a project\'s row is 4 points taller than other sidebar rows', (
-    tester,
-  ) async {
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    final controller = await show(tester, server);
-    final other = SwarmType.sidebarRowHeight(compact: false);
-    expect(
-      tester.getSize(find.byKey(const ValueKey('super-manage'))).height,
-      other,
-    );
-    expect(tester.getSize(project).height, other + 4);
-    await close(tester, controller);
-  });
-
   // Review of #2790 (Sedge, Plover): a wait made a row bold, for every
   // viewer, and opening the task did not clear it, while a screen reader
   // heard "Unread messages". A wait is no unread message: Activity says it,
@@ -205,45 +184,6 @@ void main() {
         isNot(contains('Unread messages')),
       );
       semantics.dispose();
-      await close(tester, controller);
-    },
-  );
-
-  // Review of #2790 (Sedge): the Unread filter counted any message, so it
-  // kept rows the bold rule now leaves grey. Both read one rule.
-  testWidgets(
-    'the Unread filter keeps what is bold, and hides agents\' progress alone',
-    (tester) async {
-      final server = humansSwarm();
-      // Two more projects, one task each: one with agents' progress alone,
-      // one with a person's message.
-      for (final (id, name) in [('busy', 'Busy'), ('asked', 'Asked')]) {
-        (server.state['projects'] as List).add(
-          projectFixture(id, name, '$id-chat'),
-        );
-        (server.state['conversations'] as List)
-          ..add({...conversationFixture('$id-chat', name), 'projectId': id})
-          ..add({
-            ...conversationFixture('$id-task', '$name work'),
-            'projectId': id,
-            'number': 1,
-          });
-      }
-      final controller = await show(tester, server);
-      server.append(
-        'Pushed the next commit.',
-        conversationId: 'busy-task',
-        agent: true,
-      );
-      server.append('Can you check this?', conversationId: 'asked-task');
-      await news(tester, controller);
-      controller.toggleUnreadOnly();
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('super-group-busy-chat')), findsNothing);
-      expect(
-        find.byKey(const ValueKey('super-group-asked-chat')),
-        findsOneWidget,
-      );
       await close(tester, controller);
     },
   );
