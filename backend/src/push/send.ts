@@ -29,7 +29,8 @@ export function phoneSendersFromEnv(env: PushEnv): PhoneSenders {
 
 /**
  * Sends `notices` to the phones of the people they are for (task #2905), after the write that made them committed, less
- * those of chats their person muted (push/muted.ts), an agent chat's quiet while it is unread (push/unread.ts). One read of those people's phones; each notice to each of its person's phones, AT_ONCE at a time. A dead token is forgotten, a
+ * those of chats their person muted (push/muted.ts), an agent chat's quiet while it is unread (push/unread.ts). One read of those
+ * people's phones; each notice to each of its person's phones, AT_ONCE at a time. A dead token is forgotten, a
  * sandbox one remembered. It never throws: what failed is logged, by platform and Apple's or Google's reason, and counted.
  */
 export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, given: PhoneNotice[]): Promise<void> {
@@ -37,7 +38,10 @@ export async function sendPhoneNotices(db: PrismaClient, senders: PhoneSenders, 
   const started = Date.now()
   let notices = given
   try {
-    notices = await quietUnread(db, await dropMuted(db, given))
+    // Both read by key, at once: the muted chats drop out, and the unread ones go quiet.
+    const [unmuted, weighed] = await Promise.all([dropMuted(db, given), quietUnread(db, given)])
+    const quiet = new Set(weighed.filter(n => n.quiet).map(n => `${n.personId}\u0000${n.key}`))
+    notices = unmuted.map(n => !n.quiet && quiet.has(`${n.personId}\u0000${n.key}`) ? { ...n, quiet: true as const } : n)
     const phones = new Map<string, PushDevice[]>()
     for (const device of await devicesOf(db, [...new Set(notices.map(n => n.personId))])) phones.set(device.userId, [...phones.get(device.userId) ?? [], device])
     const sends = notices.flatMap(notice => (phones.get(notice.personId) ?? []).map(device => ({ notice, device })))
