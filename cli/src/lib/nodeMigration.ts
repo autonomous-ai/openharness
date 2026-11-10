@@ -8,10 +8,11 @@ import type { NodeMigrationReason } from './runtimeInstall.js'
 // (architecture.spec.ts); selfUpdate.ts and the master write it.
 export const NODE_MIGRATION_FILE = 'node-migration.json'
 
-/** Why the daemon is not on the minimum Node: what lib/runtimeInstall.ts `ensureNodeMeetsMinimum` said, or that the
- *  update that moved it there was rolled back. */
-export type NodeMigration = NodeMigrationReason | 'rolled-back'
-const NODE_MIGRATIONS: readonly NodeMigration[] = ['no-manifest-entry', 'manifest-unreachable', 'download-failed', 'does-not-run', 'unmanaged', 'rolled-back']
+/** Why the daemon is not on the minimum Node: what lib/runtimeInstall.ts `ensureNodeMeetsMinimum` said, that the
+ *  update that moved it there was rolled back, or that this Harness could not switch to it (current-node could not be
+ *  written, or a master that cannot re-execute: masterProcess.ts). */
+export type NodeMigration = NodeMigrationReason | 'rolled-back' | 'cannot-switch'
+const NODE_MIGRATIONS: readonly NodeMigration[] = ['no-manifest-entry', 'manifest-unreachable', 'download-failed', 'does-not-run', 'unmanaged', 'rolled-back', 'cannot-switch']
 
 type Recorded = { reason?: unknown; node?: unknown }
 

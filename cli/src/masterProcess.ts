@@ -326,7 +326,8 @@ export interface BundleMasterDeps {
   /**
    * The master stays on the Node it runs on although `node` named another (a lean bundle that did not answer there,
    * which [failed] says, or a master that runs from cli.js): `current-node` is put back on this one, or the next start
-   * (launchd, systemd, `harness start`) would go onto a Node no probation judged. Returns this process's Node named
+   * (launchd, systemd, `harness start`) would go onto a Node no probation judged. `harness status` says why:
+   * 'does-not-run' for a Node that failed, 'cannot-switch' for a master that cannot move. Returns this process's Node named
    * `harnessd`, or null when `node` named this one.
    */
   nodeBack?: (failed: boolean) => string | null
@@ -372,7 +373,7 @@ export const processBundleDeps = (): BundleMasterDeps => ({
   nodeBack: (failed) => {
     const own = baseNode(process.execPath)
     if (masterNode(own) === own) return null
-    putNodeBack(env.ADAPTER_CLI_DIR, own, failed ? 'does-not-run' : null)
+    putNodeBack(env.ADAPTER_CLI_DIR, own, failed ? 'does-not-run' : 'cannot-switch')
     return namedNode(own, 'harnessd', env.ADAPTER_RUNTIME_DIR, { log: (line) => console.log(`${ts()} ${line}`) })
   },
   start: startMaster,

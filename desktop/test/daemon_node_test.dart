@@ -16,5 +16,12 @@ void main() {
       })!.line,
       'Node v22.23.2 · stays on 22: Node 24 did not come up; back on 22',
     );
+    expect(
+      DaemonNode.fromStatus({
+        'version': 'v22.23.2',
+        'migration': 'cannot-switch',
+      })!.line,
+      'Node v22.23.2 · stays on 22: this Harness cannot switch Node here yet',
+    );
   });
 }

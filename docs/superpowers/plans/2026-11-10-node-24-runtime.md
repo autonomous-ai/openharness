@@ -157,13 +157,13 @@
 - Test: `cli/src/scripts/install.spec.ts`, `desktop/test/environment_provisioner_test.dart`, `desktop/test/dsh_install_panel_test.dart`
 
 - [ ] **Step 1: Write the failing tests.**
-  - `install.sh replaces a managed Node below 24`: a pre-made `runtime/node-v22.23.2-<key>`, and a fake CDN with `v24.22.2`. Expect `current-node` = v24, with v22 kept.
-  - `the provisioner refuses Node 22`, which accepts it today.
-  - Update the copy expectations.
+  - `install.sh replaces a managed Node below 22 and keeps 22 and 24`: a pre-made `runtime/node-v20.*-<key>` is replaced by the fake CDN's Node; a managed v22 or v24 is reused. A fresh install gets the manifest's Node.
+  - `the provisioner refuses Node 20 and accepts Node 22`.
+  - Update the copy expectations (`Managed Node 22+`, `brew install node@22`).
 - [ ] **Step 2: Run them and see them fail.** Run: `cd cli && npx vitest run src/scripts/install.spec.ts`, then `cd desktop && flutter test test/environment_provisioner_test.dart test/dsh_install_panel_test.dart`. Expected: FAIL.
-- [ ] **Step 3: Implement.** A source install on an older Node prints `error: Harness needs Node 24.16 or newer (found <v>)`.
+- [ ] **Step 3: Implement.** A source install on an older Node prints `error: Harness needs Node 22.15 or newer (found <v>)`.
 - [ ] **Step 4: Run them and see them pass.** Expected: PASS.
-- [ ] **Step 5: Commit** (once Ken asks): `Installers: Node 24 floor`.
+- [ ] **Step 5: Commit** (once Ken asks): `Installers: Node 22 floor`.
 
 ### Task 7: Publish through staging
 
@@ -231,6 +231,7 @@
 - [ ] **Step 3: Idle numbers.** Record daemon CPU and RSS at rest for 10 minutes with the same agents, on 22 and then on 24 (`ps -o %cpu,rss` every 10 s). Expected: not worse. Put both tables in the PR.
 - [ ] **Step 4: Gates.** Run once, on Node 24: `cd cli && npm run test:core && npm run test:harnessd && npm run test:resume && npm run test:orchestrator && npm run test:sharing && npm run test:remote-viewers && npm run test:portability && npm run test:local-models`, plus Desktop's macOS tests. Compare against a clean `main` worktree, and record the receipts.
 - [ ] **Step 5: Production, then release.** Only on Ken's word, and inside the release window (memory `release-window`):
+  - deploy the backend first: an older backend refuses the `health_cli_node_*` names (400), and the CLI then drops those counters;
   - publish both runtimes with `METADATA_PATH=harness/runtime/metadata.json`;
   - verify all six production keys show `v<NODE24>`;
   - then release the CLI;

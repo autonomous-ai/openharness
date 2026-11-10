@@ -16,6 +16,7 @@ class DaemonNode {
     'unmanaged':
         'this Harness runs on a Node it does not manage; install Node 24',
     'rolled-back': 'Node 24 did not come up; back on 22',
+    'cannot-switch': 'this Harness cannot switch Node here yet',
   };
 
   /// Null from a daemon too old to send `node`: nothing is shown for it.

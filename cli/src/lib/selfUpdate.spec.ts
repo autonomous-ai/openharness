@@ -1570,8 +1570,10 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
     expect(nodeMigration(dir)).toBeNull()
   })
 
-  it('leaves current-node on the Node the daemon runs on when the canary refuses the build', async () => {
-    serveUpdate(Buffer.from('process.exit(3)\n'))
+  it('leaves current-node on the Node the daemon runs on while the canary on Node 24 runs, and after it refuses the build', async () => {
+    // The canary says where it ran and what current-node named meanwhile; neither answer is the version, so it refuses.
+    serveUpdate(Buffer.from(`const named = process.getBuiltinModule('fs').readFileSync(${JSON.stringify(currentNode)}, 'utf8')
+console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.') ? 'named 24 early' : 'on 24, current-node untouched') : 'not on 24')\n`))
     const dir = tempDir()
     const events: string[] = []
     const refused = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -1579,7 +1581,9 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
     try {
       await vi.waitFor(() => expect(refused.mock.calls.flat().join('\n')).toContain('failed its canary'), { timeout: 10_000 })
     } finally { poller.stop() }
-    expect(events).toEqual([`ensure on ${v22}`])
+    expect(refused.mock.calls.flat().join('\n')).toContain('failed its canary (it says it is on 24, current-node untouched)')
+    // A refused build is tried again 40 ms on, so another check may have begun before the stop: none staged.
+    expect([...new Set(events)]).toEqual([`ensure on ${v22}`])
     expect(managedNodePath()).toBe(v22)
   })
 
@@ -1631,6 +1635,24 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
       expect(moved).toEqual([`ensure on ${v22}`, `staged with ${newer}`])
       expect(nodeMigration(dir)).toBeNull()
     } finally { rmSync(dirname(dirname(newer)), { recursive: true, force: true }) }
+  })
+
+  it('stages on the Node the daemon runs on when current-node cannot be named, and says it cannot switch', async () => {
+    serveUpdate(Buffer.from('console.log("9.9.9")\n'))
+    const dir = tempDir()
+    const events: string[] = []
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // current-node is written whole through its .tmp beside it: a folder there makes that write fail.
+    mkdirSync(`${currentNode}.tmp`)
+    const poller = updater(dir, events)
+    try {
+      await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
+    } finally { poller.stop(); rmSync(`${currentNode}.tmp`, { recursive: true, force: true }) }
+    expect(events).toEqual([`ensure on ${v22}`, `staged with ${v22}`])
+    expect(said.mock.calls.flat().join('\n')).toContain(`could not name ${v24} in current-node`)
+    expect(nodeMigration(dir)).toBe('cannot-switch')
+    // Node 24 did not fail here: the next update may move to it.
+    expect(failedNode(dir)).toBeNull()
   })
 
   it('puts current-node back on the Node the master runs on when the lean bundle does not answer on Node 24', () => {
