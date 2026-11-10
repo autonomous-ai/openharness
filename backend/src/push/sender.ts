@@ -14,6 +14,9 @@ import type { PushDevice } from './devices.js'
 export interface PhoneNotice {
   personId: string; key: string; title: string; subtitle: string; body: string; link: string; slot: string; quiet?: true
   setting?: string
+  /** An agent's 1:1 chat's: its person's read mark of the chat, and the chat's newest main row before this write. Sent while
+   *  that row is someone else's and the mark is behind it, the notice is quiet: it sounds once until they read (push/unread.ts). */
+  unreadBefore?: { mark: string; tabId: string; conversationId: string; sequence: number }
 }
 
 /** The app's id for the notice in `slot` (mobile lib/notify/system_notices.dart swarmNoticeIdFor: FNV-1a over UTF-16 code

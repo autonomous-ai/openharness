@@ -1,8 +1,7 @@
-import { agentOnly, stableId, type MessageDraft, type SuperTabState } from '../superTabs/model.js'
+import { stableId, type MessageDraft, type SuperTabState } from '../superTabs/model.js'
 import { actorName } from '../superTabs/activity.js'
 import { taggerName } from '../superTabs/mentions.js'
 import { isAgentChat, projectChannels, projectsOf } from '../superTabs/projects.js'
-import { agentDisplayName } from '../superTabs/agentNames.js'
 import { isSwarmBuddyChat } from '../superTabs/buddies.js'
 import type { PhoneNotice } from './sender.js'
 
@@ -55,7 +54,7 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
     subtitle: project(row.conversationId), body: BODY, link: linkOf(tabId, row.conversationId, row.messageId, row.threadId),
     slot: threadSlot(tabId, row.conversationId, row.threadId),
   }))
-  const channels = projectChannels(state)
+  const channels = written.tags.length ? projectChannels(state) : new Set<string>()
   const tags = written.tags.filter(row => !row.holdUntil).flatMap((row): PhoneNotice[] => {
     const message = byId.get(row.messageId)
     if (!message || message.author.kind !== 'person') return []
@@ -68,29 +67,38 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
       // project's channel's mute does not hold (projects.ts projectChannels), so its tag carries no setting to weigh.
       ...channels.has(row.conversationId) ? {} : { setting: stableId(tabId, row.conversationId, row.personId, 'notify') } }]
   })
-  return [...replies, ...tags, ...chatNotices(tabId, state, messages)]
+  return [...replies, ...tags]
 }
 
 /**
  * Swarm v4 (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat, so its own words there ring that person, unless
  * they muted the chat (push/muted.ts). One notice per chat a write posts in, for its newest words, under the phone's own key
  * and slot for that chat (mobile lib/swarm/swarm_notices.dart announceChat), so the app's "New messages" notice and the push
- * are one notification. Only what the agent wrote: never a row the server writes in its name (one with a source), nor one
- * only agents read; and only to the person listed on the chat while they are still in the Swarm at that generation.
+ * are one notification. It sounds once until the person reads the chat: one sent while their read mark is behind what the chat
+ * held before this write is quiet (push/unread.ts), as the app's own is. Only the agent's own post (`post`), never a row the
+ * server writes in its name; only to the person listed on the chat while they are still in the Swarm at that generation, and
+ * only from their own agent, on their own account, as the chat's readers are (projects.ts readsAgentChat).
  */
-function chatNotices(tabId: string, state: SuperTabState, messages: MessageDraft[]): PhoneNotice[] {
-  const told = new Map<string, PhoneNotice>()
+export function chatNotices(tabId: string, state: SuperTabState, messages: MessageDraft[]): PhoneNotice[] {
+  const newest = new Map<string, { message: MessageDraft; main: number }>()
   for (const message of messages) {
-    if (message.author.kind !== 'agent' || message.source || agentOnly(message.source, message.recipients)) continue
+    if (message.author.kind !== 'agent' || !message.post) continue
+    const was = newest.get(message.conversationId)
+    const main = (was?.main ?? 0) + (!message.thread || message.thread === message.id || message.alsoInChat ? 1 : 0)
+    newest.set(message.conversationId, { message, main })
+  }
+  return [...newest.values()].flatMap(({ message, main }): PhoneNotice[] => {
     const group = state.conversations.find(c => c.id === message.conversationId)
-    if (!group || !isAgentChat(group) || !group.agentIds.includes(message.author.id)) continue
+    if (!group || !isAgentChat(group) || !group.agentIds.includes(message.author.id)) return []
     const listed = group.audience?.people[0]
     const to = listed && state.people.find(p => p.id === listed.id && p.generation === listed.generation)
-    if (!to) continue
+    const agent = state.agents.find(a => a.id === message.author.id)
+    if (!to || agent?.contributorId !== to.id || agent.machineOwnerId !== to.id) return []
     const key = `chat:${tabId}:${group.id}`
     const thread = message.thread && message.thread !== message.id && !message.alsoInChat ? message.thread : null
-    told.set(group.id, { personId: to.id, key, slot: key, title: `${agentDisplayName(state.agents, message.author.id) ?? 'Agent'} wrote to you`,
-      subtitle: '', body: BODY, link: linkOf(tabId, group.id, message.id, thread), setting: stableId(tabId, group.id, to.id, 'notify') })
-  }
-  return [...told.values()]
+    const before = (group.lastMainSequence ?? 0) - main
+    return [{ personId: to.id, key, slot: key, title: `${actorName(state, 'agent', agent.id, message.author)} wrote to you`, subtitle: '',
+      body: BODY, link: linkOf(tabId, group.id, message.id, thread), setting: stableId(tabId, group.id, to.id, 'notify'),
+      ...before > 0 ? { unreadBefore: { mark: stableId(tabId, group.id, to.id), tabId, conversationId: group.id, sequence: before } } : {} }]
+  })
 }

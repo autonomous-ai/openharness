@@ -10,7 +10,8 @@ A notice never says what was written: it can be read on a locked phone. It says 
 ## The rule
 
 Tony's rule (2026-11-06, task #3607), on top of the one he approved on 2026-11-05 ("Yes, as proposed"). A phone
-rings only when a person must act, or when a person speaks to you. Push and Local follow it together.
+rings only when a person must act, when a person speaks to you, or when your own agent writes to you in its 1:1 chat
+(Swarm v4, 2026-11-10). Push and Local follow it together.
 
 **Rings** (sound, banner):
 - an agent asks you to approve a command on its machine, and the work waits on you. Swarm v4 has no decisions (anh Dee,
@@ -148,5 +149,6 @@ and buzz on an agent, the new-device and removed-device bands, and snackbars.
     event 3), the Local decision notice (event 6) and the Local "waiting at a prompt" notice (event 9, from the read's
     `promptsWaiting`) are gone; an older app reads no decisions and no prompt waits from the server.
 15. (2026-11-10, anh Dee) Swarm v4: an agent reaches its person in their 1:1 chat. What the agent writes there now pushes to
-    that person (event 15), unless they muted the chat. This replaces, for v4, the tag and decision pushes v3 agents rang
+    that person (event 15), unless they muted the chat, sounding once until they read it. Not yet: the app takes down only
+    the chat notices it posted itself, so a pushed one stays in the notification centre after the chat is read (a phone change). This replaces, for v4, the tag and decision pushes v3 agents rang
     their person with.
