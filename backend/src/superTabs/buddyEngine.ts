@@ -22,8 +22,8 @@ export function askBuddyEngine(state: SuperTabState, actor: Actor, engine: strin
     fail('NO_BUDDY', 'You have no Buddy running.', 404)
   }
   if (buddy.switchRequest || buddy.switchLanded || buddy.modelRequest) fail('BUDDY_SWITCHING', 'Your Buddy is already switching.', 409)
-  const pool = state.machines?.find(m => m.machineId === buddy.machineId && m.contributorId === me.id && !m.removal && !m.hostMachineId)
-  if (!pool || buddy.machineOwnerId !== me.id || pool.observation?.sessionKind === 'team') {
+  const pool = state.machines?.find(m => m.machineId === buddy.machineId && m.contributorId === me.id && !m.removal)
+  if (!pool || buddy.machineOwnerId !== me.id) {
     fail('BUDDY_OWN_MACHINE', 'A Buddy switches only on your own machine.', 403)
   }
   if (machineOffline(pool, now)) fail('MACHINE_OFFLINE', `Wait for a fresh reading from ${pool.name}.`, 409)

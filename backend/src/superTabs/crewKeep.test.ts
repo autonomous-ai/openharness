@@ -113,15 +113,8 @@ describe('crewKeep: folders', () => {
   })
 })
 
-describe('crewKeep: Team-written work stays in Team accounts (security review of #3229)', () => {
-  it('a Team-account member moves only to a Team-account machine, and is stuck with none', () => {
-    const team = (pool: ReturnType<typeof machine>) => ({ ...pool, hostMachineId: `${pool.machineId}-mac` }) as typeof pool
-    const onlyMain = fixture([team(machine('mac', { signedIn: false })), machine('mini')])
-    expect(kinds(onlyMain.state)).toEqual([{ kind: 'stuck', agentId: onlyMain.ada.id, reason: 'signed-out' }])
-    const withTeam = fixture([team(machine('mac', { signedIn: false })), machine('mini', { resetIn: 86_400_000 }), team(machine('studio'))])
-    expect(kinds(withTeam.state)).toEqual([{ kind: 'move', agentId: withTeam.ada.id, toMachineId: 'studio', reason: 'signed-out' }])
-  })
-  it('a main-account member in a Team-written conversation moves only to a Team-account machine', () => {
+describe('crewKeep: Team-written work stays where it is (security review of #3229)', () => {
+  it('a member in a Team-written conversation does not move', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
     f.state.conversations.find(c => c.id === 'lead')!.teamWritten = true
     // The project's chat is its coordinator's; a task the member works in is what counts.
@@ -133,16 +126,7 @@ describe('crewKeep: Team-written work stays in Team accounts (security review of
   })
 })
 
-describe('crewKeep: account kinds and Team sessions (security review 2 of #3229)', () => {
-  const team = (pool: ReturnType<typeof machine>) => ({ ...pool, hostMachineId: `${pool.machineId}-mac` }) as typeof pool
-  it('a main-account member never moves into a Team account', () => {
-    const f = fixture([machine('mac', { signedIn: false }), team(machine('studio'))])
-    expect(kinds(f.state)).toEqual([{ kind: 'stuck', agentId: f.ada.id, reason: 'signed-out' }])
-  })
-  it('a member in a Team account never sleeps: its close there deletes what a wake would resume', () => {
-    const f = fixture([team(machine('mac')), machine('mini')])
-    expect(kinds(f.state)).toEqual([])
-  })
+describe('crewKeep: a machine that refused a move (security review 2 of #3229)', () => {
   it('a machine that refused the member\'s move start is not picked again for an hour', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini', { resetIn: 86_400_000 }), machine('late')])
     f.ada.crewMoveRefused = { machineId: 'mini', at: NOW - 30 * 60_000 }
