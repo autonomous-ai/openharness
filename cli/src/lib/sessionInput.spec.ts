@@ -527,6 +527,22 @@ describe('SessionInputController', () => {
       }
     })
 
+    // The frame comes once: a window that connects meanwhile reads the wait off the agent's row (standard 9).
+    it('says the agent waits for its engine while its reader starts, and nothing once it is up', async () => {
+      let started: (ok: boolean) => void = () => {}
+      const onSubmitted = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(),
+        onSubmitted, onWaiting: vi.fn(), engineStarting: () => new Promise<boolean>(resolve => { started = resolve }) })
+      expect(controller.waitingFor('s1')).toBeNull()
+      controller.submit('s1', 'sent as it started')
+      await vi.waitFor(() => expect(controller.waitingFor('s1')).toBe('engine'))
+      started(true)
+      await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+      expect(controller.waitingFor('s1')).toBeNull()
+      controller.forget('s1')
+    })
+
     it('says nothing of a wait when its engine\'s reader is up', async () => {
       const onWaiting = vi.fn(), onSubmitted = vi.fn()
       const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
