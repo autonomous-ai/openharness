@@ -407,11 +407,11 @@ describe('Agents: the PM, by name like people (Dee, 2026-10-29)', () => {
     expect(of(view, 'river')).toMatchObject({ points: 6, shipped: 2, rank: 1 })
   })
 
-  it('credits a group opened from a proposal with no person named as its requester (review of #2097)', () => {
+  it('credits the PM for a group with no person named as its requester (review of #2097)', () => {
     const run = { assignmentId: 'a1', engine: 'claude', model: 'opus', effort: 'high', at: WEEK }
-    const fromProposal = group({ leadId: 'river', status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'],
-      ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, runs: [run], proposal: { buddyId: 'sparky', messageId: 'm1' } } })
-    const view = board(agents(swarm()), [fromProposal])
+    const unasked = group({ leadId: 'river', status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'],
+      ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, mergedAt: WEEK + HOUR, runs: [run] } })
+    const view = board(agents(swarm()), [unasked])
     expect(of(view, 'river')).toMatchObject({ points: 3, shipped: 1 })
     expect(view.byModel.find(m => m.model === 'opus')!.shipped.count).toBe(1)
     // A person's points still need them to have asked.

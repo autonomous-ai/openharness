@@ -52,7 +52,7 @@ import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
 import { crewNeedOf } from './crewNeeds.js'
 import { swarmUsernames } from './usernames.js'
-import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, owedLines, personLine, turnInboxHost, type InboxSection } from './inbox.js'
+import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, personLine, turnInboxHost, type InboxSection } from './inbox.js'
 import { deleteInstructions, instructionsId, readNotes, revisionId, writeInstructions, writeNotes } from './instructionsStore.js'
 import { currentRules, deleteRules, readRules, readRulesHistory, writeRules } from './policyStore.js'
 import { SEED_RULES, seedRules, validMachineRules, type MachineRule } from './policy.js'
@@ -66,7 +66,6 @@ import { sessionRows } from './memberRows.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
 import { teamMachineIds } from './migration/teamMachinesJob.js'
 import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
-import { endedReply, taskLineChats } from './taskLine.js'
 import { clock, insertParts, loadActive, loadGroups, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { listingDrops, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
@@ -418,7 +417,7 @@ export interface Polled {
    *  it loaded: while all three are unchanged, a held delivery is answered without loading the Swarm (deliveries). The
    *  grants of the agent and of the agents that sent what it allowed, by agent id, are checked again on every such answer:
    *  they rest on machines and shares, which no Swarm write records. */
-  open?: { prioritized?: boolean; stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
+  open?: { stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
 }
 
 /** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
@@ -1308,13 +1307,6 @@ export class SuperTabStore {
         || command.type === 'machine.engineResume' || command.type === 'rules.set') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
-      }
-      if (command.type === 'conversation.create' && command.requestMessageId) {
-        // By id within this tab: the person's chat message the new group answers (commands.ts requestOf checks where it is).
-        const request = await tx.superTabMessage.findFirst({ where: { id: command.requestMessageId, tabId },
-          select: { id: true, conversationId: true, author: true, source: true, replyTo: true } })
-        if (request) context.request = { id: request.id, conversationId: request.conversationId, author: request.author as unknown as Author,
-          source: request.source, replyTo: request.replyTo }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
@@ -2525,7 +2517,7 @@ export class SuperTabStore {
 
 
   /** The projects a person may pick a main project from, in Cmd-N and when joining (projectList.ts, task #4540): only those they
-   *  read. A project's chat holds its pulse; a quiet one is not in the first load, so the readable ones missing are loaded by id
+   *  read. A project's chat names its Lead; a quiet one is not in the first load, so the readable ones missing are loaded by id
    *  (at most the Swarm's 100 projects). */
   async projectList(user: AuthUser, tabId: string, invitedTo?: string): Promise<ProjectList> {
     let { state } = await this.readLoad(user, tabId)
@@ -3249,7 +3241,7 @@ export class SuperTabStore {
     const gathered = turn !== undefined ? await agentGatheredDeliveries(this.db, tabId, agentId, NOTICE_DIGEST_MAX) : []
     const releasing = gathered.some(d => d.inboxSection === 'people') || inboxDue(gathered, this.now(), turn)
     if (!releasing && last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
-      const open = await openDeliveries(this.db, tabId, agentId, last.open?.prioritized)
+      const open = await openDeliveries(this.db, tabId, agentId)
       if (!open.length) return []
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
@@ -3262,7 +3254,7 @@ export class SuperTabStore {
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
     const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view, turn)
     await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
-      ? { open: { prioritized: !!ledProject(state, agentId)?.boardMode, stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
+      ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
       .catch(pollMemoryFailed)
     return allowed.map(d => withTurnEnd(d, this.now()))
   }
@@ -3324,7 +3316,7 @@ export class SuperTabStore {
         const more = gathered.length === NOTICE_DIGEST_MAX ? await agentGatheredCount(tx, tabId, agentId) - notices.length : 0
         const lines = (section: InboxSection) => notices.filter(n => n.section === section).map(n => n.line)
         const text = digestText(notices[0]!.delivery.createdAt, lines('results'), more, notices.some(n => n.otherAccount),
-          led ? owedLines(state, projectOf(state, led.id), this.now()) : [], { people: lines('people'), crew: lines('crew') })
+          { people: lines('people'), crew: lines('crew') })
         written.push(digestMessage(agentId, gathered[0]!.id, projectOf(state, led!.id).leadConversationId, author(state, { kind: 'agent', agentId, machineOwnerId: target.machineOwnerId }), text, notices.length))
         // By status too: two polls racing digest each row once. One by one: no `in` on this hot collection (hotFilters).
         for (const { delivery } of notices) await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: 'gathered' }, data: { status: 'digested' } })
@@ -3400,7 +3392,7 @@ export class SuperTabStore {
 
   /** The agent's open deliveries, and those of them its Swarm still lets reach it. */
   private async allowedDeliveries(tx: Transaction, state: SuperTabState, tabId: string, agentId: string) {
-    const open = await openDeliveries(tx, tabId, agentId, !!ledProject(state, agentId)?.boardMode)
+    const open = await openDeliveries(tx, tabId, agentId)
     const allowed: SuperTabDelivery[] = []
     for (const delivery of open) {
       if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
@@ -3794,10 +3786,7 @@ export class SuperTabStore {
     let ended: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
       ended = []
-      let loaded = await this.load(tx, user, tabId)
-      // The stop says Not building this in its task's project-chat thread (below): that chat is read when the load left it out.
-      const lines = taskLineChats(loaded.state)
-      if (lines.length) loaded = await this.ensure(tx, loaded, { groupIds: lines })
+      const loaded = await this.load(tx, user, tabId)
       const state = cloneData(loaded.state)
       const before = { agents: state.agents, conversations: cloneData(state.conversations) }
       const group = state.conversations.find(c => c.assignment?.id === assignmentId)
@@ -3833,9 +3822,6 @@ export class SuperTabStore {
             author: author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId }),
             text: `Stopped\n\n${assignment.result}`, replyTo: null, recipients: lead ? [lead] : [] })
         }
-        // And its project chat's thread says Not building this, as a stop a command records does (task #2693).
-        notices.push(...endedReply(state, group, stableId('task-line-stopped', tabId, assignmentId),
-          worker && author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId })))
       }
       const sequences = numberMessages(state, notices, this.now())
       // A confirmed stop finishes its worker; no command reads that decision now, so it touches

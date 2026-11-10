@@ -36,7 +36,7 @@ export function crewNeedOf(source: unknown): CrewNeed | null {
 }
 
 /** The PM of [group]'s project: the lead of the project's chat, while it is in that chat; null when the project has none. */
-export function projectPm(state: SuperTabState, group: Conversation): string | null {
+function projectPm(state: SuperTabState, group: Conversation): string | null {
   const project = groupProject(state, group)
   const chat = state.conversations.find(c => c.id === project.leadConversationId)
   return chat?.leadId && chat.agentIds.includes(chat.leadId) ? chat.leadId : null

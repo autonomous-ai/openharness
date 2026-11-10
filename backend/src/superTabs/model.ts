@@ -9,14 +9,12 @@ import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, RETIRED_MACHINE_FIELDS, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { FIRST_INSTRUCTIONS } from './instructions.js'
-import { projectCard, withExtra } from './statusCard.js'
 import { processOf, projectColumns } from './process.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, ownerlessProjects, ownsProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
+
 export interface Person {
-  /** Own future task decisions; absent keeps Auto approve. */
-  approvalMode?: import('./taskApproval.js').ApprovalMode
   id: string
   email: string
   role: Role
@@ -229,8 +227,8 @@ export interface Assignment {
   agentId: string
   status: WorkStatus
   configuration: AgentConfiguration
-  /** `contributorId`: whose login its agent runs under (Agent.contributorId), so the person's Tasks feed keeps it after the agent
-   *  is closed (read/feedIds.ts). Absent on assignments made before 2026-11-07. */
+  /** `contributorId`: whose login its agent runs under (Agent.contributorId), kept after the agent is closed. Absent on
+   *  assignments made before 2026-11-07. */
   execution: { machineId: string; harnessId: string; machineOwnerId: string; contributorId?: string }
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
@@ -310,8 +308,6 @@ export function renderWorkTask(task: WorkTask): string {
 }
 
 export interface Conversation {
-  /** Person decision, separate from execution status for old clients. */
-  taskApproval?: import('./taskApproval.js').TaskApproval
   id: string
   /** The removed Swarm-wide Leads conversation, still stored in an older Swarm (leadsRemoved), or an agent's 1:1 chat with its
    *  person: a kind of its own, so an older release parks it unread (parkLaterConversations) instead of reading it as a
@@ -350,9 +346,6 @@ export interface Conversation {
   talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
-  /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
-   *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
-  unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
   /** When its brief was last set (conversation.create, work.define): a person's rule moved into this task leaves the
    *  instructions only for a pull request GitHub says merged after it (ruleGuard.ts rulePlaces, #3463). No command writes
    *  it otherwise. Absent on a task from before. */
@@ -383,11 +376,6 @@ export interface Conversation {
   /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
    *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
   foldedInto?: string[]
-  /** A proposal card, written until proposals went (2026-11-10), as its readers still take it: a card its PM did not accept or
-   *  reshape is no task to queue, start or approve (taskApproval.ts undecidedProposal), and a person's Tasks show it with its
-   *  senders, its decision and its merge (read/personalTasks.ts, read/feedIds.ts). Goes with the task records (slice S13). */
-  proposal?: { senders: Array<{ personId: string; generation: string }>; decision?: { kind: 'accept' | 'reshape' | 'later' | 'no'; reason: string }
-    mergedInto?: string }
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -407,28 +395,12 @@ export interface Conversation {
   notBefore?: string
   /** Why its not-before date holds it (heldReason.ts), set with the date by work.queue. Absent on a hold from before reasons. */
   hold?: import('./heldReason.js').HeldReason
-  /** A pause by someone who steers its project (boardRights.ts, task #3819): who (actorKey), when and why. While set, the task
-   *  is not handed out (dispatch.ts) and shows held (pulse.ts). */
-  paused?: { by: string; at: number; reason?: string }
   /** How urgent its task is (taskPriority.ts), set by conversation.create and work.priority. Absent on a step, a chat and a task
    *  from before priorities, which reads as P2. */
   priority?: import('./taskPriority.js').TaskPriority
   /** The member it waits for, without active work (dispatch.ts): its builder, after another agent's failed check, red CI or a
    *  merge conflict. The next assignment clears it. */
   pin?: { agentId: string; why: 'findings' | 'ci' | 'conflict'; at: number }
-  /** What its project's PM owes here (pulse.ts): people's messages that reached it, not answered, reacted to or made a task
-   *  yet, at most MAX_OWED. Bookkeeping: readers get it counted in the pulse, never this list. */
-  owed?: import('./pulse.js').OwedAsk[]
-  /** The PM's answers here (answers.ts): each message it answered, where and by which message, at most MAX_ANSWERED, so a
-   *  second `answer` is refused with where the first is. Bookkeeping: never sent to readers. */
-  answered?: import('./answers.js').AnsweredAsk[]
-  /** Project-chat post limits: at most 50 asks, no text; bookkeeping hidden from readers (chatLimits.ts). */
-  chatLimits?: import('./chatLimits.js').ChatLimits
-  /** On a project's chat: its project's pulse as last worked out (pulse.ts recordPulse), which every read sends in `derived`. */
-  pulse?: import('./pulse.js').Pulse
-  /** On a task: its line on its project's status card as the server last wrote it (statusCard.ts noteTaskLines, task #4419).
-   *  Readers get the lines in the project's `status` text (visibleState), never as a field. */
-  statusLine?: import('./statusCard.js').StatusLine
 }
 /** A step up: the attempt it opened (2 or 3), the least quality from then on, why, when, and what the failed attempt left for
  *  the next one's brief; the failed start that caused it, if one did. */
@@ -464,15 +436,10 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
 
-/** The most unlinked pull requests a task remembers. */
-export const UNLINKS_KEPT = 50
-/** Whether [url] was unlinked from [group]: no later text links it again. */
-const unlinked = (group: Pick<Conversation, 'unlinkedPullRequests'>, url: string): boolean => !!group.unlinkedPullRequests?.some(entry => entry.url === url)
-
 /** Adds the pull request links of [texts] to [group] and corrects the ones it holds, by the project's [repositoryUrl]. */
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
   const urls = new Set((group.pullRequestUrls ?? []).flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -687,7 +654,7 @@ export const NOTICE_READERS = {
   // "<machine> left the Swarm: ..." in every project chat, no longer written (anh Dee, 11-04, #2742): the rows stored before are
   // read by nobody (they have no recipients), and a project chat ending in one is served as read (read/servedTops.ts).
   'machine-left': 'agent',
-  // A task's one line in its project chat, edited as it moves (taskLine.ts): people read a task's state there.
+  // A task's one line in its project chat, where people read its state; no longer written (Swarm v4, 2026-11-10).
   'task-line': 'people',
   // A project PM's private line in a person's one Buddy chat, no longer written (task #4558: only the person and their own agent
   // post there): its person reads the rows stored before.
@@ -982,7 +949,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
   delete visible.machineCleanups
   delete visible.parkedConversations
-  for (const group of visible.conversations) { delete group.chatLimits; delete group.talkedAt }
+  // The project-chat post limits stored before Swarm v4 (read/views.ts Unwritten) are bookkeeping no reader gets.
+  for (const group of visible.conversations as Array<Conversation & { chatLimits?: unknown }>) { delete group.chatLimits; delete group.talkedAt }
   numberConversations(visible)
   delete visible.retiredConversationNumber
   delete visible.groupCounter
@@ -993,22 +961,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
     visible.conversations = visible.conversations.filter(c => canReadGroup(state, actor, c))
     // The status card is read exactly by those who read the project chat (projects.ts SwarmProject.status); without the chat
-    // loaded, by nobody.
-    visible.projects = visible.projects.map(({ owed: _owed, ...p }) => {
-      // What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
+    // loaded, by nobody. It is the coordinator's own lines alone: a card saved before they were its own (#3593) held the task
+    // lines the server no longer writes (Swarm v4, 2026-11-10), and is not shown. What the PM owed is its host's alone
+    // (projects.ts SwarmProject.owed).
+    visible.projects = visible.projects.map(({ owed: _owed, status, ...p }) => {
       const chat = state.conversations.find(c => c.id === p.leadConversationId)
-      if (chat && canReadGroup(state, actor, chat)) {
-        // The server's lines, built from the tasks' own (statusCard.ts), then the coordinator's own; the stored status text is only
-        // the latter.
-        if (p.status?.shown) return p
-        const card = projectCard(state, p, now)
-        if (!card.text) return p
-        const lastChange = card.changedAt ?? Date.now()
-        return { ...p, status: { text: withExtra(card.text, p.status?.own ? p.status.text : null), at: new Date(lastChange).toISOString(), by: p.status?.by ?? chat.leadId ?? '', shown: true } }
-      }
-      if (p.status === undefined) return p
-      const { status: _status, ...rest } = p
-      return rest
+      return chat && canReadGroup(state, actor, chat) && status?.own ? { ...p, status } : p
     })
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))

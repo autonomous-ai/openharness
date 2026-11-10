@@ -18,3 +18,4 @@ export function storeStatus(db: PrismaClient, tab: string, conversationId: strin
     ENDED.has(status) ? tx.superTabRun.deleteMany({ where: { tabId: tab, assignmentId: assignment.id } }) : Promise.resolve())
 }
 const ENDED: ReadonlySet<WorkStatus> = new Set(['done', 'stopped', 'cancelled', 'lost'])
+

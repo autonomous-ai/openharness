@@ -10,7 +10,6 @@ import { availableSlots, slotCounter, type ContributedMachine } from '../machine
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf } from '../projects.js'
-import { storedPulse, type Pulse } from '../pulse.js'
 import { coordinatorNameOf, roleNameOf } from '../instructions.js'
 import { agentChatId, agentKind, inMyAgents, ledProjects } from '../agentKind.js'
 import { personView, withAvatarView } from '../profile.js'
@@ -47,9 +46,12 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
  *  leaderboard's (the leaderboard read sums it), except when it shipped. The `releasing` list of the release watch Swarm v4
  *  removed is still stored on old tasks and never sent: nothing would ever clear it, so an older app would show them waiting. */
 /** What a group stored before Swarm v4 that nothing writes now (2026-11-10): its pull requests' heads, events and check states as
- *  the PR watch read them, and its steps' listings. Left stored and never sent, so no reader shows a state frozen at the release. */
+ *  the PR watch read them, and its steps' listings; on a project chat, its pulse, the asks its PM owed, its answers and its post
+ *  limits; on a task, its line on the status card. Left stored and never sent, so no reader shows a state frozen at the release; they go with the old Swarm
+ *  data's one-time drop (migration/dropCollections.ts), on the owner's go. */
 type Unwritten = { releasing?: unknown; pullRequestHeads?: unknown; pullRequestEvents?: unknown; pullRequestChecks?: unknown; stepIds?: unknown
-  waitingLinuxStep?: unknown; waitingWindowsStep?: unknown; openedBy?: unknown }
+  waitingLinuxStep?: unknown; waitingWindowsStep?: unknown; openedBy?: unknown; owed?: unknown; pulse?: unknown; statusLine?: unknown
+  answered?: unknown; chatLimits?: unknown }
 
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
   const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, releasing: _releasing,
@@ -91,7 +93,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const agentPart = part(parts.agents), groupPart = part(parts.groups), machinePart = part(parts.machines), startPart = part(parts.starts)
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   // Every project names its coordinator; one from before the field reads as the Product Manager (instructions.ts). The progress
-  // is the server's bookkeeping: no reader shows it. What the PM owes is its host's alone (timeChecks.ts owedAsk): it may name a message in someone's private chat.
+  // is the server's bookkeeping: no reader shows it. v3's note of what the PM owed (projects.ts SwarmProject.owed) may name a message in someone's private chat.
   // Swarm v3's `schedule`, `processNote` and release list (`releases`) are still stored on old projects: no reader gets them (the stored copies can go from 2026-12-09).
   if (head.projects) head.projects = head.projects.map(({ progress: _progress, releases: _releases, owed: _owed, schedule: _schedule, processNote: _note, ...project }: NonNullable<typeof head.projects>[number] & { schedule?: unknown; processNote?: unknown; releases?: unknown }) => ({ ...project, coordinatorName: coordinatorNameOf(project) }))
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
@@ -116,35 +118,6 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
 export const progressView = (data: NonNullable<SwarmParts['progress'][number]['data']>): ProgressView =>
   ({ ...data, requestedAt: data.requestedAt ?? null })
 
-/** The board's pulse of each project the reader sees (pulse.ts, task #3384), as last recorded on its chat: the same from a full
- *  read and from a change poll's light base, which keeps the project chats and their pulse (parts/light.ts). A project with
- *  none recorded yet is left out, and the board draws no strip. Its lists name conversations: a project's reader reads every
- *  one of them (none is private: pulse.ts counted), each checked again where it is loaded. */
-function pulses(state: SuperTabState, visible: SuperTabState, actor: Actor): Record<string, Pulse> | undefined {
-  if (!visible.projects?.length) return undefined
-  // One lookup by id for every listed conversation: a list names up to 50 per count (pulse.ts PULSE_LIST_MAX).
-  const groups = new Map(state.conversations.map(c => [c.id, c])), checked = new Map<string, boolean>()
-  const reads = (id: string) => {
-    const known = checked.get(id)
-    if (known !== undefined) return known
-    const group = groups.get(id)
-    const readable = !group || canReadGroup(state, actor, group)
-    checked.set(id, readable)
-    return readable
-  }
-  const out: Record<string, Pulse> = {}
-  for (const seen of visible.projects) {
-    const project = state.projects?.find(p => p.id === seen.id)
-    const pulse = project && storedPulse(state, project)
-    if (!pulse) continue
-    out[project.id] = { ...pulse,
-      asks: { ...pulse.asks, list: pulse.asks.list.filter(ask => reads(ask.conversationId)) },
-      nextUp: { ...pulse.nextUp, conversationIds: pulse.nextUp.conversationIds.filter(reads) },
-      lost: { ...pulse.lost, conversationIds: pulse.lost.conversationIds.filter(reads) },
-      held: { ...pulse.held, list: pulse.held.list.filter(hold => reads(hold.conversationId)) } }
-  }
-  return out
-}
 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   // Every listed machine's slots from one pass over the Swarm's lists (machines.ts slotCounter).
@@ -157,7 +130,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     return [pool.machineId, { availableSlots: availableSlots(state, stored, slots(stored)), ...(version ? { clientVersion: version } : {}),
       ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(machineSuspended ? { machineSuspended } : {}) }] as const
   }
-  const pulse = pulses(state, visible, actor)
   // Each visible agent's stored row, looked up once rather than once per derived field.
   const storedAgents = new Map(state.agents.map(a => [a.id, a]))
   // Whether the reader reads each project, worked out once for every agent naming it as its main project.
@@ -174,7 +146,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
   const led = ledProjects(state)
   const shownMain = (agent: Agent) => { const main = led.get(agent.id) ?? agent.mainProjectId; return main && readsProject(main) ? main : null }
   return {
-    ...(pulse ? { pulse } : {}),
     agents: Object.fromEntries(visible.agents.map(seen => {
       const stored = storedAgents.get(seen.id)!
       return [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,

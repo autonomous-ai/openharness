@@ -1,6 +1,6 @@
 /**
  * Nothing is typed into a busy agent (task #3403, anh Dee's Swarm redesign, 11-05): a post by an agent other than the PM to
- * any agent that is not a PM (crew as the board counts it, pulse.ts; not only #3222's standing crew) waits for
+ * any agent that is not a PM (not only #3222's standing crew) waits for
  * that agent's turn to end or TURN_END_WAIT_MS, whichever comes first. Its delivery row says until
  * when (`SuperTabDelivery.waitsUntil`); the host holds it while the agent works (cli superTabs/host.ts), and an older host
  * types it as before. A person's message, the PM's own post (a redirect), and every system row (a stop, a cancel, an

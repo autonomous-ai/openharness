@@ -23,13 +23,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   const leadCheck = (projectId: string | undefined) => { if (actor.kind === 'agent') group(leadGroupOf(projectId)) }
   const agentProject = (id: string) => { const a = before.agents.find(x => x.id === id); return a && agentProjectId(before, a) }
   /** Every slot `machineSlots` counts for a start on this machine: the Mac and its team account share them (machines.ts). */
-  /** A Member's start, from the first Accept or the dispatch pass (members.ts, task #4697): its free name is claimed on the head,
-   *  and its computer's slots counted as any start's. */
-  const newMemberStarts = () => {
-    for (const start of effects.state.starts ?? []) {
-      if ((start.request.member || start.request.helperOf) && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
-    }
-  }
   const slots = (machineId: string) => machine(machineId)
 
   // D1: the actor's own part (spec ruling 2).
@@ -57,15 +50,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
-    case 'task.suggest': case 'task.approve': case 'task.reject': {
-      head()
-      const card = before.conversations.find(c => c.id === command.conversationId)
-      member(card?.taskApproval?.personId)
-      agent(card?.taskApproval?.suggestedAgentId)
-      leadCheck(card && groupProject(before, card).id)
-      newMemberStarts()
-      break
-    }
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
@@ -104,9 +88,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
       break
     }
-    case 'conversation.unlink':
-      leadCheck(projectOfGroup(command.conversationId)?.id)
-      break
     case 'conversation.requester':
       leadCheck(projectOfGroup(command.conversationId)?.id)
       member(command.personId ?? undefined)

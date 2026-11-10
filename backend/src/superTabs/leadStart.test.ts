@@ -318,7 +318,7 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     expect(f.lead('owner-mac').result.machineId).toBe('owner-mac')
   })
 
-  it('never taken by its machine, fails as a Buddy\'s does', async () => {
+  it('never taken by its machine, fails', async () => {
     const { sweepLiveness, PM_PICKUP_MS } = await import('./liveness.js')
     const f = swarm()
     f.lead('owner-mac')

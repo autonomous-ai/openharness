@@ -17,7 +17,6 @@ import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
-import { recordPulse } from '../src/superTabs/pulse.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
@@ -97,8 +96,7 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
   })
   const more = extra(s, { web, done, lead, secret })
   // Stored before its removal: the Swarm-wide Leads conversation, with the Lead in it; no read sends it now (model.ts leadsRemoved).
-  // The board's pulse as the commands that wrote this scene would have recorded it (pulse.ts), once its Leads are stored.
-  s.edit(state => { storeOldLeads(state, [lead]); recordPulse(state, MIGRATED) })
+  s.edit(state => storeOldLeads(state, [lead]))
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
@@ -124,15 +122,6 @@ async function writeGroup(tabId: string, key: string, at: number, change: (group
 
 describe('first load (design 4.3)', () => {
 
-  it('pages the person\'s Tasks feed by its cursor, and refuses a cursor it never gave (task #4203)', async () => {
-    const s = await scene()
-    const page = await get(`/api/super-tabs/${s.tabId}/personal-tasks`, peer)
-    expect(page.status).toBe(200)
-    expect(page.body.data).toEqual({ approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null })
-    const bad = await get(`/api/super-tabs/${s.tabId}/personal-tasks?before=bm90LWEtY3Vyc29y`, peer)
-    expect(bad.status).toBe(400)
-    expect(bad.body.error.code).toBe('INVALID_CURSOR')
-  })
 
   it('answers the design\'s shape: cursor 30 s before the read, epoch, newest change, the reader\'s parts and derived values', async () => {
     const s = await scene()
@@ -141,6 +130,7 @@ describe('first load (design 4.3)', () => {
     expect(status).toBe(200)
     expect(Object.keys(body.data).sort()).toEqual(['agents', 'cursor', 'derived', 'derivedEtag', 'epoch', 'format', 'groups', 'head', 'lastChangedAt',
       'machines', 'members', 'personalTasks', 'progress', 'serverTime', 'starts', 'steps', 'tabId'].sort())
+    // The Tasks feed Swarm v4 retired: empty and reset, so a Desktop drops the rows it saved (retired.ts).
     expect(body.data.personalTasks).toEqual({ approvalMode: 'autoApprove', reset: true, upserts: [], removed: [], olderCursor: null })
     expect(body.data).toMatchObject({ format: 2, tabId: s.tabId, serverTime: NOW, epoch: 1, lastChangedAt: MIGRATED, steps: true,
       head: { key: 'head', version: R, changedAt: MIGRATED, data: { id: s.tabId, name: 'Pilot' } } })
@@ -969,8 +959,8 @@ describe('what a read costs the database (group 3b)', () => {
     const bytes = await databaseBytes(async () => {
       groups = (await get(`/api/super-tabs/${s.tabId}/changes?cursor=${cursor}`, peer)).body.data.groups.map((g: { key: string }) => g.key)
     })
-    // The task, and its project's chat: the post is an ask the PM now owes, which the board's pulse there counts (task #3384).
-    expect(groups.sort()).toEqual([s.web, 'lead'].sort())
+    // The task alone: no board pulse on its project's chat moves with it (Swarm v4).
+    expect(groups).toEqual([s.web])
     expect(bytes).toBeLessThan(30_000)
   })
 
@@ -1349,37 +1339,3 @@ describe('a change poll reads only the starts it can send (prod 10-29)', () => {
 })
 })
 
-// Task #3384, ReviewPulse2's review of #3209: a change poll reads only the light base (the project chats and running work, light
-// fields), so a pulse worked out at read time from it lost the asks and Next up a first load showed, and both apps replace
-// `derived` on each poll. Every read now sends the pulse recorded on the project's chat: the same on a first load and on every
-// change poll after it, whether nothing changed or something did, through the read cache or straight from the database.
-describe('the board pulse on a first load and the change polls after it (task #3384)', () => {
-  for (const cached of [true, false]) {
-    it(`is the same on every read, ${cached ? 'through the read cache' : 'straight from the database'}`, async () => {
-      const s = await scene(state => { state.group('Next task') })
-      const store = new SuperTabStore(db, () => clock, null, cached ? {} : { readCache: null })
-      const reads = new SwarmReads(store, { now: () => clock })
-      const ask = (as: AuthUser, text: string) => store.execute(as, s.tabId, { operationId: randomUUID(),
-        command: { type: 'message.send', conversationId: 'lead', text, replyTo: null, recipientIds: [] } as never })
-      clock = Date.now()
-      await ask(peer, 'Can the board show who works?')
-      const pulseOf = (derived: { pulse?: Record<string, unknown> }) => Object.values(derived.pulse ?? {}) as Array<{ asks: { count: number }; nextUp: { count: number } }>
-      const first = await reads.firstLoad(owner, s.tabId)
-      const [pilot] = pulseOf(first.derived)
-      expect(pilot?.asks.count).toBe(1)
-      expect(pilot?.nextUp.count).toBeGreaterThan(0)
-
-      clock = Date.now()
-      const quiet = await reads.changes(owner, s.tabId, first.cursor)
-      expect(quiet.reload).toBe(false)
-      expect((quiet as { derived: { pulse?: unknown } }).derived.pulse).toEqual(first.derived.pulse)
-
-      await ask(owner, 'And who is idle?')
-      clock = Date.now()
-      const changed = await reads.changes(owner, s.tabId, (quiet as { cursor: string }).cursor)
-      const full = await reads.firstLoad(owner, s.tabId)
-      expect(pulseOf(full.derived)[0]?.asks.count).toBe(2)
-      expect((changed as { derived: { pulse?: unknown } }).derived.pulse).toEqual(full.derived.pulse)
-    })
-  }
-})

@@ -50,7 +50,6 @@
     "integration/superTabReflection.test.ts": 3300,
     "integration/superTabRouteDecisions.test.ts": 5000,
     "integration/superTabSharing.test.ts": 1100,
-    "integration/superTabTaskLines.test.ts": 900,
     "integration/superTabThreads.test.ts": 600,
     "integration/superTabTidy.test.ts": 24700,
     "integration/superTabWorkspaces.test.ts": 5300,

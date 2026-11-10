@@ -98,12 +98,12 @@ describe('the notices the Swarm writes into a chat', () => {
     // review steps and the archive pass (11-10), the PM and people; work.resume's line to the agent it woke, gone with the work
     // commands (Swarm v4, 11-10: tasks are GitHub issues), the recipients; the machine owner's line when another person moved a PM
     // onto their other account, gone once a PM runs on the default account alone (pmAccount.ts, 11-10), people; a Buddy's proposal,
-    // its line in its person's chat and a card's question, answer and merge, gone with proposals (11-10), people; a computer's move
-    // and a decider's override of a person's rule, told in that person's Buddy chat, gone with Buddies (11-10), people; a woken agent's timing row, gone with the last wakes (11-10), nobody.
+    // its line in its person's chat and a card's question, answer and merge, gone with proposals (11-10), people; a task approval's line, gone with task approval (11-10), the PM; a computer's move and a decider's override of a person's rule,
+    // told in that person's Buddy chat, gone with Buddies (11-10), people; a woken agent's timing row, gone with the last wakes (11-10), nobody.
     const retired = ['decision-delegated', 'decision-asked', 'decision-answered', 'decision-must-agree', 'idle-stop', 'idle', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request',
       'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice', 'crew-nudge',
       'review-failed', 'review-capacity', 'auto-archive', 'work-resumed', 'pm-switch-notice', 'proposal-card', 'proposal-answer',
-      'proposal-merged', 'computer-moved', 'rule-approved', 'crew-timing']
+      'proposal-merged', 'task-approval', 'computer-moved', 'rule-approved', 'crew-timing']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })

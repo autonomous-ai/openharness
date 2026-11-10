@@ -12,7 +12,6 @@ import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
 import { waitedOn } from './leaderboard/record.js'
-import { endedReply } from './taskLine.js'
 import { handed, pickUp, unclaimedReason } from './handed.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
@@ -219,9 +218,7 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
     recipients: [], text: wake, source }).map(row => reachable(state, row))),
   reachable(state, { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
-    text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }),
-  // And its project chat's thread says Stuck, as no command saw the loss (task #2693).
-  ...endedReply(state, group, stableId('task-line-lost', assignment.id, loss), sender)]
+    text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` })]
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,

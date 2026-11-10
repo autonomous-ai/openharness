@@ -4,7 +4,6 @@ import { activeWork, stableId, type AgentStart, type Agent } from '../model.js'
 import type { GroupData, MachineData, PartKind } from './types.js'
 import { RETENTION_MS } from './types.js'
 import { ALL_HOSTS, noteChange } from '../cache.js'
-import { feedIdsOf } from '../read/feedIds.js'
 
 type Transaction = Prisma.TransactionClient
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
@@ -108,7 +107,7 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
     case 'group': {
       const group = data as GroupData
       return { projectId: group.projectId ?? null, kind: group.kind ?? null, archived: group.archived, dormant: !!group.dormant,
-        agentIds: group.agentIds, feedIds: feedIdsOf(group), executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
+        agentIds: group.agentIds, executionMachineId: activeWork(group) ? group.assignment!.execution.machineId : null,
         messageSeq: group.messageSeq ?? 0, reportSeq: group.reportSeq ?? 0,
         lastActivityAt: group.lastActivityAt ? new Date(group.lastActivityAt) : new Date(stamp), hostDigest: hostDigest(group),
         // A finished task, never a step. Nothing reads it since the archive pass went (Swarm v4); its index goes with the schema (S19).

@@ -50,12 +50,6 @@ export interface SwarmProject {
   /** Tasks up to this number stay Simple after returning to Full. One watermark covers dormant tasks and repeated
    *  switches without loading or rewriting any task history; absent until the first Simple→Full switch (#3896). */
   simpleThrough?: number
-  /** The Board way of working (boardRights.ts, task #3819): `boardMode` true once its owner switched it on, absent otherwise;
-   *  `canChat` the people its owner granted the right to write in its chat (its owners always have it); `decider` its top
-   *  decider, who sets P0 and pauses as its owners do. Every reader of the project reads them. */
-  boardMode?: true
-  canChat?: string[]
-  decider?: string
   /** v3's note of the oldest message a person sent its PM that the PM had not answered, which told its host to restart it while
    *  it hung (task #3385). Swarm v4 writes none and its time checks clear what is left (store.ts runTimeChecks); kept to read and
    *  clear old Swarms. Readers never get it: it may name a message in a person's private chat with the PM. */
@@ -126,12 +120,9 @@ export type GitHubSeen = typeof GITHUB_SEEN[number]
 
 /** A project's status card: its text, when (ISO time) and by which agent it was written. */
 export interface ProjectStatus { text: string; at: string; by: string
-  /** The text is the coordinator's own lines, shown after the server's (statusCard.ts, task #3593). Absent on a card saved before:
-   *  that text was the whole card, whose lines the server now writes, so it is not shown beside them. */
-  own?: true
-  /** Set by visibleState on the text it shows readers (the server's lines with the coordinator's own): a view applied again to a
-   *  view leaves it as it is. Never stored. */
-  shown?: true }
+  /** The text is the coordinator's own lines (task #3593). Absent on a card saved before: that text held the lines of its tasks,
+   *  which Swarm v4 no longer writes, so it is not shown (model.ts visibleState). */
+  own?: true }
 export const PROJECT_STATUS_MAX = 2_000
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
@@ -158,6 +149,9 @@ export function projectsOf(state: SuperTabState): SwarmProject[] {
     ...(state.project ? { repository: state.project } : {}),
   }]
 }
+
+/** Whether [group] is a project's own chat (its channel). */
+export const isProjectChat = (state: SuperTabState, group: Conversation): boolean => projectsOf(state).some(project => project.leadConversationId === group.id)
 
 export function projectOf(state: SuperTabState, projectId: string): SwarmProject {
   return projectsOf(state).find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
@@ -236,7 +230,6 @@ export function settleOwners(state: SuperTabState): Array<{ projectId: string; f
  *  a project from before ownerGeneration whose owner left is never matched to them again (security reviews of #3082). */
 export function admitPerson(state: SuperTabState, member: Person): void {
   settleOwners(state)
-  settleBoardRights(state)
   state.people.push(member)
 }
 
@@ -244,23 +237,8 @@ export function admitPerson(state: SuperTabState, member: Person): void {
 export function dismissPeople(state: SuperTabState, leaving: ReadonlySet<string>): void {
   state.people = state.people.filter(p => !leaving.has(p.id))
   settleOwners(state)
-  settleBoardRights(state)
 }
 
-/** Takes everyone no longer in the Swarm out of each project's Can chat and decider seat (task #4216). Both name a person by
- *  id only, and any member reads a public project, so without this a person removed and invited back had them again. Run
- *  before a person is admitted too, which clears a right kept from before this ran on leaving. */
-function settleBoardRights(state: SuperTabState): void {
-  const people = new Set(state.people.map(p => p.id))
-  for (const project of state.projects ?? []) {
-    if (project.canChat) {
-      const kept = project.canChat.filter(id => people.has(id))
-      if (kept.length) project.canChat = kept
-      else delete project.canChat
-    }
-    if (project.decider && !people.has(project.decider)) delete project.decider
-  }
-}
 
 /** Whose active work other projects' Leads see and are alerted about. A private project's work stays with its own people. */
 export const sharedWithLeads = (project: SwarmProject): boolean => project.visibility !== 'private'

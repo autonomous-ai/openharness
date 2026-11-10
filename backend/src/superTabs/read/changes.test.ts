@@ -31,10 +31,10 @@ function write(parts: SwarmParts, kind: Kind, key: string, change: (part: Part) 
   return part
 }
 /** What the reader receives: its view of the active (live) parts, then the changed parts run through its read check. */
-function receive(parts: SwarmParts, changed: Part[], actor: Actor, cursor?: number) {
+function receive(parts: SwarmParts, changed: Part[], actor: Actor) {
   const active = { ...parts, ...Object.fromEntries((['members', 'agents', 'groups', 'machines', 'starts', 'progress'] as Kind[])
     .map(kind => [kind, (parts[kind] as Part[]).filter(p => !p.deleted && !p.dormant)])) } as SwarmParts
-  return changesFor(readerView(active, actor, LATER, {}), changed, actor, undefined, cursor)
+  return changesFor(readerView(active, actor, LATER, {}), changed, actor)
 }
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
@@ -45,32 +45,6 @@ describe('changes since a cursor (design 4.4)', () => {
     const head = { ...parts.head, version: R + 1, changedAt: LATER }
     parts.head = head
     expect(receive(parts, [head], peer).head).toMatchObject({ key: 'head', version: R + 1 })
-  })
-
-  // Tasks #3593, #4419: each task keeps its own status line, but readers get the card in the head's project; a change poll that
-  // sent only the task would leave Desktop and web on the old card until something else moved the head. The head goes only when
-  // a changed task's line moved since the reader's cursor: a task changes with every message, and the head is large.
-  it('sends the head with a task whose status line moved since the cursor, so a live reader sees the card move', () => {
-    const { s, parts } = scene()
-    const line = { text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW }
-    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object }).statusLine = line })]
-    const received = receive(parts, changed, owner, NOW - 1_000)
-    expect(received.head).not.toBeNull()
-    expect(received.head!.data.projects![0]!.status!.text).toContain('#1 "Web": working.')
-  })
-
-  it('sends the head with a task whose line left the card since the cursor', () => {
-    const { s, parts } = scene()
-    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object }).statusLine = { text: '', since: NOW } })]
-    expect(receive(parts, changed, owner, NOW - 1_000).head).not.toBeNull()
-  })
-
-  it('leaves the head out for a task change that left its line as the reader already has it', () => {
-    const { s, parts } = scene()
-    // The line moved long before the reader's cursor; the task changed since for another reason (a message, a title).
-    const line = { text: '#1 "Web": working. Waits on: nothing. Owner: Ada.', since: NOW - 3_600_000 }
-    const changed = [write(parts, 'groups', s.web, p => { (p.data as { statusLine?: object; title: string }).statusLine = line; (p.data as { title: string }).title = 'Web 3' })]
-    expect(receive(parts, changed, owner, NOW - 1_000).head).toBeNull()
   })
 
   it('sends a changed group whole to its readers and nothing to anyone else', () => {
