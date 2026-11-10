@@ -661,6 +661,15 @@ const _harnesses = <String, EngineIdentity>{
     color: Color(0xff36876b),
     asset: 'assets/engine-icons/web-studio.png',
   ),
+  'autonomous/files': EngineIdentity(
+    id: 'autonomous/files',
+    label: "Files",
+    category: "Documents",
+    tagline: "Read, edit and look through a folder's files",
+    creator: "Autonomous",
+    color: Color(0xffc98a2b),
+    asset: 'assets/engine-icons/files.png',
+  ),
   'autonomous/data-studio': EngineIdentity(
     id: 'autonomous/data-studio',
     label: "Data Studio",
@@ -834,6 +843,7 @@ const knownHarnessBase = <String, String>{
   'autonomous/dimos': 'codex',
   'autonomous/bonsai-mcp': 'codex',
   'autonomous/web-studio': 'claude',
+  'autonomous/files': 'opencode',
   'autonomous/data-studio': 'claude',
   'autonomous/quantum-studio': 'claude',
   'autonomous/gis': 'claude',
