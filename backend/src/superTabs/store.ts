@@ -108,11 +108,10 @@ const ABOVE_ROWS = 20
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
 const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-/** The fields of a Swarm's row the store reads. A migrated row still keeps its whole old state (`legacyState`, about 1 MB
- *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
 /** The most Swarms a rename reaches at once, as many as a host reads (read/host.ts FULL_TABS); its readings do the rest. */
 const MACHINE_RENAME_SWARMS = 500
 
+/** The fields of a Swarm's row the store reads: every command and read loads this row. */
 const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true, deletedAt: true } satisfies Prisma.SuperTabSelect
 export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 /** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */

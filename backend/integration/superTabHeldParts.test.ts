@@ -11,9 +11,8 @@ import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { HeldParts } from '../src/superTabs/parts/held.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { richSwarm } from '../src/superTabs/read/fixture.test-support.js'
 import { profiled } from './plans.test-support.js'
 
@@ -43,9 +42,7 @@ async function scene(): Promise<string> {
   const s = richSwarm(Date.now())
   s.contribute('spare')
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
-  const report = await migrateSwarm(db, tabId)
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   return tabId
 }
 

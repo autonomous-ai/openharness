@@ -17,12 +17,11 @@ import { configureSwarmStamps, swarmTransaction, SwarmCache } from '../src/super
 import { MemoryStamps } from '../src/superTabs/cache.test-support.js'
 import { readDelta } from '../src/superTabs/cachedReads.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
@@ -104,9 +103,7 @@ async function scene() {
   // Briefs about a task's size, so the change feeds carry what a busy Swarm's do.
   s.edit(state => { for (const c of state.conversations) c.brief = `${c.title}: ${'what to build and why. '.repeat(80)}` })
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 }, MIGRATED)
   return { tabId, lead, web, agents, quiet, busy }
 }
 
@@ -227,9 +224,7 @@ async function everyKind() {
   })
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
-  await writeLegacySwarm(db, { state, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 700 }, MIGRATED)
   // Stored without a number, as 111 live groups on prod are (11-04): a whole read numbers an awake one after every other
   // (model.ts numberConversations); a quiet one reads without. Migration numbers them, so the number goes after it.
   await db.$runCommandRaw({ update: 'SwarmGroup', updates: [{ q: { tabId, key: { $in: [legacy, quietLegacy] } }, u: { $unset: { 'data.number': '' } }, multi: true }] })

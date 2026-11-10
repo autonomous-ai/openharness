@@ -15,13 +15,12 @@ import { errorHandler } from '../src/middlewares/errorHandler.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { writeReadMark } from '../src/superTabs/readMarks.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment, storedStatus, storedTask } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
@@ -92,16 +91,15 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
       audience: { people: [{ id: peer.sub, generation }] } })
     const finished = state.conversations.find(c => c.id === done)!
     finished.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
+    finished.dormant = true
   })
   const more = extra(s, { web, done, lead, secret })
   // Stored before its removal: the Swarm-wide Leads conversation, with the Lead in it; no read sends it now (model.ts leadsRemoved).
   s.edit(state => storeOldLeads(state, [lead]))
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
-  await writeLegacySwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
-    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: R, messages: [{ id: `${tabId}-m1`, conversationId: done, sequence: 5, text: 'Done',
+    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] }, MIGRATED)
   return { tabId, lead, worker, web, done, secretGroup, privateId, peerChat, secret, leads: state.leadsConversationId!, more }
 }
 const get = async (url: string, as: AuthUser = owner) => {
@@ -149,35 +147,27 @@ describe('first load (design 4.3)', () => {
     for (const [as, agent] of [[peer], [outsider], [owner], [owner, s.lead]] as const) expect(await groups(as, agent)).not.toContain(s.privateId)
   })
 
-  it('migrates a Swarm still in one row on first access', async () => {
-    const s = swarm(MIGRATED)
+  /** A Swarm stored before the parts: its whole state in its one row (format 1). Every one is from before the wipe's cut-off. */
+  async function singleRow() {
     const tabId = `tab-${randomUUID()}`
-    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId }, revision: 3 })
+    await db.superTab.create({ data: { id: tabId, ownerId: owner.sub, autonomousEnv: 'prod', memberIds: [owner.sub], invitedEmails: [], machineIds: [],
+      revision: 3, state: JSON.parse(JSON.stringify({ ...swarm(MIGRATED).state, id: tabId })) } })
+    return tabId
+  }
+
+  it('answers a Swarm still in one row as one that does not exist, and leaves it as it is: the wipe removes it', async () => {
+    const tabId = await singleRow()
     const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
-    expect(status).toBe(200)
-    expect(body.data.head.version).toBe(3)
-    expect(await db.superTab.findUnique({ where: { id: tabId } })).toMatchObject({ format: 2 })
+    expect(status).toBe(404)
+    expect(body.error!.code).toBe('NOT_FOUND')
+    expect(await db.superTab.findUnique({ where: { id: tabId }, select: { format: true, revision: true } })).toEqual({ format: 1, revision: 3 })
   })
 
-  it('opens a legacy Swarm with deleted-conversation history without exposing that history', async () => {
-    const s = swarm(MIGRATED)
-    const tabId = `tab-${randomUUID()}`
-    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId }, revision: 3 })
-    await db.superTabMessage.create({ data: { id: `${tabId}-orphan`, tabId, conversationId: 'gone', sequence: 1, author: {}, text: 'x', recipientIds: [], mentions: [] } })
-    const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
+  it('leaves a Swarm still in one row out of its members\' list', async () => {
+    const tabId = await singleRow()
+    const { status, body } = await get('/api/super-tabs/list')
     expect(status).toBe(200)
-    expect(keys(body.data.groups)).not.toContain('gone')
-    expect((await get(`/api/super-tabs/${tabId}/conversations/gone/messages`)).status).toBe(404)
-    expect((await db.superTabMessage.findUnique({ where: { id: `${tabId}-orphan` } }))?.text).toBe('x')
-  })
-
-  it('answers "being upgraded" when a Swarm cannot be migrated yet, and every client retries that', async () => {
-    const s = swarm(MIGRATED)
-    const tabId = `tab-${randomUUID()}`
-    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId, version: 2 as 1 }, revision: 3 })
-    const { status, body } = await get(`/api/super-tabs/${tabId}/parts`)
-    expect(status).toBe(503)
-    expect(body.error!.code).toBe('SWARM_MIGRATING')
+    expect(body.data.tabs.map((t: { id: string }) => t.id)).not.toContain(tabId)
   })
 })
 
@@ -953,49 +943,6 @@ describe('what a read costs the database (group 3b)', () => {
 
   // Every host reads each second (a production backend went to 5 pods on it, 2026-10-27): a Swarm with no change for it
   // must not cost the newest-change aggregate, seven groupBy over all its parts.
-  it('the host poll reads a Swarm that keeps an old state without ever loading that state', async () => {
-    const machineId = `m-${randomUUID().slice(0, 8)}`
-    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
-    const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
-    const padding = 'old-state-'.repeat(2_000)
-    await db.superTab.update({ where: { id: s.tabId }, data: { legacyState: { padding } } })
-    const reads: Array<{ operation: string; select: Record<string, unknown> | undefined }> = []
-    const rawRows: Array<Record<string, unknown>> = []
-    // A named-index read (parts/indexed.ts readBy) names its fields in the $project that ends its pipeline: only an inclusion
-    // projection counts, since one that only leaves fields out (`{ _id: 0 }`, `{ padding: 0 }`) still returns the old state.
-    const included = (stage: { $project?: Record<string, unknown> } | undefined) => {
-      const fields = Object.entries(stage?.$project ?? {})
-      return fields.some(([, on]) => on === 1 || on === true)
-        && fields.every(([field, on]) => on === 1 || on === true || (field === '_id' && (on === 0 || on === false))) ? stage!.$project : undefined
-    }
-    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      const raw = operation === 'aggregateRaw'
-      if (model === 'SuperTab') {
-        reads.push({ operation, select: raw ? included((args as { pipeline?: Array<{ $project?: Record<string, unknown> }> }).pipeline?.at(-1))
-          : (args as { select?: Record<string, unknown> }).select })
-      }
-      const result = await query(args)
-      // And what the database answered: no raw row holds the old state, whatever the pipeline says.
-      if (model === 'SuperTab' && raw) rawRows.push(...result as unknown as Array<Record<string, unknown>>)
-      return result
-    } } } }) as unknown as PrismaClient
-    const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
-    clock = Date.now()
-
-    const first = await hosts.changes(owner, machineId, { full: true })
-    clock = Date.now()
-    const idle = await hosts.changes(owner, machineId, { cursor: first.cursor })
-
-    expect(first.tabs).toHaveLength(1)
-    expect(JSON.stringify([first, idle])).not.toContain('old-state-')
-    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields (Prisma's select, or a raw
-    // read's closing inclusion $project): none is the old state, and no raw row the database returned holds it.
-    expect(reads.length).toBeGreaterThan(0)
-    for (const read of reads) expect(read.select, read.operation).toBeDefined()
-    for (const read of reads) expect(read.select).not.toHaveProperty('legacyState')
-    for (const row of rawRows) expect(Object.keys(row)).not.toContain('legacyState')
-  })
-
   it('the host form asks for the newest change only of the Swarms it answers for', async () => {
     const machineId = `m-${randomUUID().slice(0, 8)}`
     await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })

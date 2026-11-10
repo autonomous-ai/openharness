@@ -5,9 +5,6 @@ import { SuperTabError } from '../model.js'
 const purged: string[] = []
 const purgeRecords = vi.fn(async (_db: unknown, tabId: string) => { purged.push(tabId); return 'purged' as 'purged' | 'waiting' })
 vi.mock('../purge.js', () => ({ purgeRecords: (...args: [unknown, string]) => purgeRecords(...args), purgeFiles: () => null }))
-const migrated: string[] = []
-const migrateSwarm = vi.fn(async (_db: unknown, tabId: string) => { migrated.push(tabId); return { tabId, ok: true } })
-vi.mock('./migrate.js', () => ({ migrateSwarm: (...args: [unknown, string]) => migrateSwarm(...args) }))
 const { beforeCutoff, MAX_RETRY_MS, PAGE, PASS_MS, PAUSE_MS, retryIn, startSwarmWipe, WIPE_CUTOFF, wipeOnce } = await import('./wipeJob.js')
 
 type Row = { _id: string; createdAt?: { $date: string }; deletedAt?: { $date: string } | null; purgeAt?: { $date: string } | null; machineIds?: string[]; format?: number }
@@ -15,25 +12,31 @@ const at = (time: number) => ({ $date: new Date(time).toISOString() })
 const DAY = 24 * 60 * 60 * 1000
 const NOW = WIPE_CUTOFF + DAY
 
-/** Swarm rows by id, as the job pages them: those after the cursor, in order, at most `$limit`. */
+type Update = { q: { _id: string; format: { $ne: number }; deletedAt: null }; u: { $set: { deletedAt: { $date: string }; purgeAt: { $date: string } } } }
+/** Swarm rows by id, as the job pages them: those after the cursor, in order, at most `$limit`. A single-row Swarm's retirement
+ *  ([updates]) sets its deletion on the row it still matches. */
 function database(rows: Row[]) {
-  const reads: number[] = []
+  const reads: number[] = [], updates: Update[] = []
   const db = { superTab: { aggregateRaw: async ({ pipeline }: { pipeline: Array<{ $match?: { _id: { $gt: string } }; $limit?: number }> }) => {
     const after = pipeline.find(s => s.$match)?.$match?._id.$gt
     const page = rows.filter(r => !after || r._id > after).slice(0, pipeline.find(s => s.$limit)!.$limit!)
     reads.push(page.length)
     return page
-  } } } as unknown as PrismaClient
-  return { db, reads }
+  } }, $runCommandRaw: async ({ update, updates: [one] }: { update: string; updates: [Update] }) => {
+    expect(update).toBe('SuperTab')
+    updates.push(one)
+    const index = rows.findIndex(r => r._id === one.q._id && r.format !== one.q.format.$ne && !r.deletedAt)
+    if (index >= 0) rows[index] = { ...rows[index]!, ...one.u.$set }
+    return { ok: 1, n: index >= 0 ? 1 : 0, nModified: index >= 0 ? 1 : 0 }
+  } } as unknown as PrismaClient
+  return { db, reads, updates }
 }
 const old = (id: string, more: Partial<Row> = {}): Row => ({ _id: id, createdAt: at(WIPE_CUTOFF - DAY), deletedAt: null, purgeAt: null, machineIds: [], format: 2, ...more })
 const deleted = (id: string, more: Partial<Row> = {}) => old(id, { deletedAt: at(NOW - DAY), purgeAt: at(NOW + 6 * DAY), ...more })
 
 afterEach(() => {
   purged.length = 0
-  migrated.length = 0
   purgeRecords.mockClear()
-  migrateSwarm.mockClear()
   vi.useRealTimers()
 })
 
@@ -56,18 +59,18 @@ describe('one pass of the wipe', () => {
       deleted('b-hosts', { machineIds: ['m'] }),
       // Its 7 days are over: it goes whatever its hosts did.
       deleted('b-late', { machineIds: ['m'], purgeAt: at(NOW - 1) }),
-      // No date, and still in a single row: split first, then deleted.
-      { _id: 'c-no-date', deletedAt: null, machineIds: [] },
+      // No date, and still in a single row: due for the purge at once, never split.
+      { _id: 'c-no-date', deletedAt: null, machineIds: ['m'] },
       { _id: 'd-new', createdAt: at(WIPE_CUTOFF), deletedAt: null, machineIds: ['m'] },
       { _id: 'd-new-deleted', createdAt: at(WIPE_CUTOFF + 1), deletedAt: at(NOW), purgeAt: at(NOW - 1), machineIds: [] },
     ].sort((x, y) => x._id < y._id ? -1 : 1)
-    const { db, reads } = database(rows)
+    const { db, reads, updates } = database(rows)
     const wiped: string[] = []
     let pauses = 0
     const pass = await wipeOnce(db, { wipeSwarm: async id => { wiped.push(id); return id === 'a-0001' ? 'gone' : 'deleted' } }, null,
       { now: () => NOW, pause: async () => { pauses++ } })
-    expect(wiped).toEqual([...live.map(r => r._id), 'c-no-date'])
-    expect(migrated).toEqual(['c-no-date'])
+    expect(wiped).toEqual(live.map(r => r._id))
+    expect(updates).toEqual([{ q: { _id: 'c-no-date', format: { $ne: 2 }, deletedAt: null }, u: { $set: { deletedAt: at(NOW), purgeAt: at(NOW) } } }])
     expect(purged).toEqual(['b-done', 'b-late'])
     // The purge keeps the row only while it is still the deletion this pass read.
     expect(purgeRecords.mock.calls.map(c => (c as unknown[])[2])).toEqual([new Date(NOW + 6 * DAY), new Date(NOW - 1)])
@@ -77,18 +80,29 @@ describe('one pass of the wipe', () => {
   })
 
   it('counts a Swarm that failed by its code, goes on with the rest, and is not done', async () => {
-    const { db } = database([old('a'), old('b'), deleted('c'), old('d', { format: 1 })])
+    const { db } = database([old('a'), old('b'), deleted('c')])
     purgeRecords.mockImplementationOnce(async () => { throw Object.assign(new Error('down'), { name: 'MongoNetworkError' }) })
-    migrateSwarm.mockImplementationOnce(async (_db, tabId) => ({ tabId, ok: false }))
     const wiped: string[] = []
     const pass = await wipeOnce(db, { wipeSwarm: async id => {
       wiped.push(id)
       if (id === 'a') throw new SuperTabError('STARTS_PENDING', 'An agent is starting in this Swarm.')
       return 'deleted'
     } }, null, { now: () => NOW })
-    expect(pass).toEqual({ deleted: 1, purged: 0, left: 4, hosts: 0, files: 0, failed: 3, codes: { STARTS_PENDING: 1, MongoNetworkError: 1, SWARM_MIGRATING: 1 } })
-    // One that could not be split is not deleted from its single row.
+    expect(pass).toEqual({ deleted: 1, purged: 0, left: 3, hosts: 0, files: 0, failed: 2, codes: { STARTS_PENDING: 1, MongoNetworkError: 1 } })
     expect(wiped).toEqual(['a', 'b'])
+  })
+
+  it('purges a Swarm still in a single row on the next pass, never split nor its hosts asked, and two runners delete it once', async () => {
+    const { db, updates } = database([old('a', { format: 1, machineIds: ['m'] })])
+    const store = { wipeSwarm: vi.fn(async () => 'deleted' as const) }
+    // Both read it live; the second's write matches nothing any more.
+    const runs = await Promise.all([wipeOnce(db, store, null, { now: () => NOW }), wipeOnce(db, store, null, { now: () => NOW })])
+    expect(runs.map(run => run.deleted)).toEqual([1, 0])
+    expect(updates).toHaveLength(2)
+    expect(purged).toEqual([])
+    expect(await wipeOnce(db, store, null, { now: () => NOW + 1 })).toMatchObject({ deleted: 0, purged: 1, left: 0, hosts: 0 })
+    expect(purgeRecords.mock.calls.map(c => (c as unknown[])[2])).toEqual([new Date(NOW)])
+    expect(store.wipeSwarm).not.toHaveBeenCalled()
   })
 
   it('leaves a deleted Swarm for a later pass when a stored file could not go, or the attachment settings are invalid', async () => {

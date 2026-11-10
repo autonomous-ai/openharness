@@ -9,7 +9,6 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { machineSwarms, swarmsIn } from '../src/superTabs/swarmRows.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
@@ -17,7 +16,7 @@ import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import { swarmReadCache } from '../src/superTabs/cache.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
@@ -74,10 +73,8 @@ async function scene({ sharedMachine, edit }: { sharedMachine?: string; edit?: (
   const tabId = `tab-${randomUUID()}`
   const state = { ...structuredClone(s.state), id: tabId } as SuperTabState
   const message = `${tabId}-m1`
-  await writeLegacySwarm(db, { state, revision: 700, messages: [{ id: message, conversationId: done, sequence: 5, text: 'Done',
-    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state, revision: 700, messages: [{ id: message, conversationId: done, sequence: 5, text: 'Done',
+    author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) }] }, MIGRATED)
   await db.swarmGroup.updateMany({ where: { tabId, key: { in: quiet } }, data: { dormant: true } })
   const delivery = { tabId, conversationId: done, machineId, membershipGeneration: tabId, authorKind: 'person', authorId: owner.sub,
     authorGeneration: tabId, status: 'confirmed' }

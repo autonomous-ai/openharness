@@ -291,6 +291,3 @@ export interface HostPool {
   capabilitiesWanted?: true
 }
 
-/** HTTP 503 on the new routes while a Swarm is still on the old format; clients retry. */
-export const SWARM_MIGRATING = { code: 'SWARM_MIGRATING', status: 503, message: 'This Swarm is being upgraded. Try again in a moment.' } as const
-

@@ -11,9 +11,8 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { DIRECT, readDelta } from '../src/superTabs/cachedReads.js'
 import { hostInputs } from '../src/superTabs/read/hostInputs.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { owner as ownerActor, richSwarm, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { planDatabase, profiled, reads } from './plans.test-support.js'
@@ -51,9 +50,7 @@ async function scene() {
   await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
   const poster = s.add('poster-harness', s.web, false, ownerActor, machineId, owner.sub)
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
-  const report = await migrateSwarm(db, tabId)
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   await swarmTransaction(db, async tx => {
     const all = await parts.loadAll(tx, tabId)
     const model = all.groups.find(g => g.key === s.web)!
@@ -230,9 +227,7 @@ describe('a host check', () => {
     const web = s.group('Web')
     s.add('worker-harness', web, false, ownerActor, machineId, owner.sub)
     const tabId = `tab-${randomUUID()}`
-    await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
-    const report = await migrateSwarm(db, tabId)
-    if (!report.ok) throw new Error(report.error)
+    await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
     const { id: _id, ...row } = (await db.swarmGroup.findFirst({ where: { tabId, key: web } }))!
     await db.swarmGroup.createMany({ data: Array.from({ length: EXTRA }, (_, i) => {
       const key = `more-${String(i).padStart(3, '0')}`

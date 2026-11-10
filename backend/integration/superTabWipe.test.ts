@@ -203,6 +203,20 @@ describe('the wipe of every Swarm from before Swarm v4', () => {
     expect(await leftOf(gone.tab)).toEqual([])
   })
 
+  it('takes a Swarm still in one row at once, never split and its hosts never asked, and everything it kept on the next pass', async () => {
+    const w = world(), tab = `single-${randomUUID()}`
+    // From before the parts and before the row's creation time and format were written: neither field is there.
+    await seed('SuperTab', { _id: tab, ownerId: owner.sub, autonomousEnv: 'prod', memberIds: [owner.sub], invitedEmails: [], machineIds: ['m'],
+      revision: 3, state: { version: 1, id: tab } })
+    await seed('SuperTabMessage', { _id: `${tab}-m1`, tabId: tab, conversationId: 'lead', sequence: 1, author: {}, text: 'old', recipientIds: [], mentions: [] })
+    expect(await pass(w)).toMatchObject({ deleted: 1, purged: 0, left: 1, failed: 0 })
+    expect(await db.superTab.findUnique({ where: { id: tab }, select: { format: true, revision: true, deletedAt: true, purgeAt: true } }))
+      .toEqual({ format: 1, revision: 3, deletedAt: new Date(w.clock.now), purgeAt: new Date(w.clock.now) })
+    expect(await refusal(() => w.reads.firstLoad(owner, tab))).toEqual(MISSING)
+    expect(await pass(w)).toMatchObject({ deleted: 0, purged: 1, hosts: 0, left: 0, failed: 0 })
+    expect(await leftOf(tab)).toEqual([])
+  })
+
   it('removes a record of the old Swarm from every collection that names one, none of a new Swarm, and no row that is not a Swarm\'s', async () => {
     const w = world(), gone = await swarm(w, 'Gone'), kept = await swarm(w, 'Kept', WIPE_CUTOFF + 1)
     expect(SWARM_KEYED.length).toBeGreaterThan(20)

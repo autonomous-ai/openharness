@@ -8,12 +8,11 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
-import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { foldReplies, refreshThreads, threadFacet } from '../src/superTabs/pageReads.js'
 import { backfillThreads } from '../src/superTabs/threadBackfill.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { LOOP_NOTICE_AT } from '../src/superTabs/commands.js'
-import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
+import { storeSwarm } from './storedSwarm.test-support.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
 import { filterOf, plan, profiled, reads } from './plans.test-support.js'
@@ -67,9 +66,7 @@ async function scene() {
       brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: owner.sub, generation }] } })
   })
   const tabId = `tab-${randomUUID()}`
-  await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 })
-  const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
-  if (!report.ok) throw new Error(report.error)
+  await storeSwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 700 }, MIGRATED)
   const note = (to: string) => ({ source: { kind: 'note', recipientsOnly: true }, recipientIds: [to] })
   // Message ids are unique across Swarms: each scene's carry its own prefix.
   const prefix = `s${++scenes}-`, id = (name: string) => prefix + name

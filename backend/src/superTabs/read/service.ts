@@ -15,7 +15,6 @@ import type { SuperTabStore } from '../store.js'
 import { transaction } from '../store.js'
 import { sizeOf, type CacheView } from '../cache.js'
 import { readAccess, readChanged, readLastChangedAt, readLastChangedAts, readLight, readLightGroups, readParts } from '../cachedReads.js'
-import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, canReadProject, projectsOf, readConversation, readProject } from '../projects.js'
@@ -26,7 +25,7 @@ import type { PeriodName } from '../leaderboard/rolling.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
 import { derivedEtag, marksOf } from './derivedEtag.js'
-import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
+import { READ_FORMAT, type Changes, type Derived, type ReaderMarks, type MachineReadings, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
@@ -42,7 +41,7 @@ interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedA
 export const GROUP_ROWS_BYTES = 8 * 1024 * 1024
 /** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
 const MACHINE_READS_MS = 15_000
-/** The format and deletion metadata can be reused briefly: deletion and migration take effect on each pod within this window. */
+/** The format and deletion metadata can be reused briefly: a deletion takes effect on each pod within this window. */
 export const SWARM_ROW_READS_MS = 3_000
 const MAX_SWARM_ROW_READS = 2_000
 type SwarmRow = { format: number | null; deletedAt: Date | null }
@@ -425,17 +424,15 @@ export class SwarmReads {
     // People at the owner's domain join Swarms with auto-join on by themselves, before the first page is read (autoJoin.ts).
     if (!after) await this.store.autoJoin(user)
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
-    const page = rows.slice(0, 100)
-    // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
-    const unsplit = page.filter(r => r.format !== 2).map(r => r.id)
-    const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
-    const ids = page.filter(r => r.format === 2).map(r => r.id)
+    // A Swarm still in one row is from before the parts: it is never served, and the wipe removes it (migration/wipeJob.ts).
+    const page = rows.slice(0, 100).filter(r => r.format === 2)
+    const ids = page.map(r => r.id)
     // Every head changed after the epoch: one read of each listed Swarm's head part.
     // Each Swarm's newest change through the read cache, at its stamp: a list every few seconds no longer recomputes it.
     const [heads, newest] = await Promise.all([transaction(this.db, tx => parts.loadChanged(tx, ids, new Date(0), ['head'])),
       this.store.view(ids).then(view => readLastChangedAts(this.db, view, ids))])
     return { tabs: page.map(row => {
-      const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
+      const head = heads.get(row.id)![0]!.data as { name: string; paused: boolean }
       // Only the reader's own Personal Swarm is marked (a round dial's Personal | Team picker); another person's is not theirs
       // to be told apart. Its id is derived from its owner and environment (deletion.ts), so no read is needed.
       const personal = row.ownerId === user.sub && isPersonalSwarm({ id: row.id, environment: user.autonomousEnv, ownerId: row.ownerId })
@@ -445,17 +442,16 @@ export class SwarmReads {
   }
 
   /** Runs a read, outside any transaction: its parts come through the read cache at the stamps `body` is given (cache.ts),
-   *  and only the read of the base parts on a miss is a transaction (cachedReads.ts). A Swarm still in one row is migrated
-   *  first, as a safety net for one the job did not see (design 6.1), and answers 503 while that cannot be done. */
+   *  and only the read of the base parts on a miss is a transaction (cachedReads.ts). */
   private async read<T>(user: AuthUser, tabId: string, body: (tx: PrismaClient, view: CacheView) => Promise<T>): Promise<T> {
     const row = await this.swarmRow(user, tabId)
-    // A deleted Swarm reads as one that does not exist (deletion.ts).
-    if (!row || row.deletedAt) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
-    if (row.format !== 2 && !(await migrateSwarm(this.db, tabId)).ok) fail(SWARM_MIGRATING.code, SWARM_MIGRATING.message, SWARM_MIGRATING.status)
+    // A deleted Swarm reads as one that does not exist (deletion.ts), and so does one still in one row: it is from before the
+    // parts, and the wipe removes it (migration/wipeJob.ts).
+    if (!row || row.deletedAt || row.format !== 2) fail('NOT_FOUND', 'This Super Tab is unavailable.', 404)
     return body(this.db, await this.store.view([tabId]))
   }
 
-  /** The row's format only: a migrated row still holds its old state, as large as the Swarm, until the owner drops it. */
+  /** The row's format and deletion only, never its other fields. */
   private swarmRow(user: AuthUser, tabId: string): Promise<SwarmRow | null> {
     const now = this.now(), key = JSON.stringify([user.autonomousEnv, tabId])
     const kept = this.swarmRows.get(key)
