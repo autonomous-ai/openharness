@@ -134,7 +134,13 @@ void ram_telemetry_periodic(const char *tag)
         "proj_refresh",
         "ptt",
         "beep",
-        "commander_ws",
+        "cable_link",
+        "cable_session",
+        "habitat_actions",
+        "habitat_touch",
+        "habitat_render",
+        "voice_capture",
+        "voice_send",
     };
     for (size_t i = 0; i < sizeof(tasks) / sizeof(tasks[0]); i++) log_task_stack(tasks[i]);
 }
