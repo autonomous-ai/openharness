@@ -81,6 +81,9 @@ class SuperTabFixtureConnection extends WsConn {
   /// reads and rejects the command it does not know.
   bool backendFailureOnCommandsOnly = false;
   bool failResume = false;
+
+  /// Refuses a Stop, as a computer refuses one it may not make.
+  bool refuseClose = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
 
@@ -337,6 +340,14 @@ class SuperTabFixtureConnection extends WsConn {
         'agent': native,
       };
     }
+    if (type == 'agent_close' && refuseClose) {
+      throw const WsRequestFailure(
+        responseType: 'agent_close_result',
+        code: 'CLOSE_REFUSED',
+        detail: 'This computer would not stop it.',
+        payload: {},
+      );
+    }
     if (type == 'agent_create' &&
         refuseLaunchModel &&
         (payload['model'] != null || payload['effort'] != null)) {
@@ -415,6 +426,7 @@ class SuperTabFixtureConnection extends WsConn {
       },
       'codex_profiles_list' => {'profiles': <dynamic>[]},
       'dsh_list' => {'dsh': <dynamic>[]},
+      'agent_close' => {'closed': true},
       'fs_list_dir' => {'path': '/work/project', 'entries': <dynamic>[]},
       _ => {},
     };
