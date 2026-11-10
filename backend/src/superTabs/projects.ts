@@ -9,7 +9,7 @@ export type SkillMode = 'default' | 'orchestration'
 export type SkillSet = SkillMode | 'custom'
 export const SKILL_SET_NAMES: Record<SkillSet, string> = { default: 'Default', orchestration: 'Harness orchestration', custom: 'Custom' }
 export type RoleKind = 'lead' | 'builder' | 'reviewer'
-/** A role of a project's custom set as the tab state keeps it. Its text lives outside the state (store.ts roleText), so a
+/** A role of a project's custom set as the tab state keeps it. Its text lives outside the state (SuperTabRoleText), so a
  *  roster or tab read never carries up to 20 x 64 KB of skill text; `version` names the text. */
 export interface ProjectRole { id: string; name: string; kind: RoleKind; version: string; defaults?: RoleDefaults }
 /** What an agent of a role starts on when its start names no model: an engine, and on it a model and effort. */
@@ -26,7 +26,6 @@ export function withRoleDefaults<T extends { engine: string; model?: string; eff
   const effort = request.effort ?? defaults.effort
   return { ...request, model: defaults.model, ...(effort ? { effort } : {}) }
 }
-export const MAX_ROLES = 20
 export const roleVersion = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
 export interface SwarmProject {
   id: string
@@ -69,22 +68,12 @@ export interface SwarmProject {
   leadWaiting?: Array<{ id: string; at: number }>
   /** The one start of its Lead a Desktop of its person's claimed (lead.claim), from [machineId]; cleared when a Lead joins. */
   leadClaim?: { id: string; machineId: string; at: number }
-  /** Its instructions' revision and short hash (instructions.ts): the text lives outside the state. Absent on a project
-   *  from before instructions until the migration writes its document; it runs on the built-in template meanwhile. */
-  instructionsRevision?: number
-  instructionsHash?: string
-  /** The base its instructions were moved onto once (migration/rebase.ts, task #3600): a later save is never rewritten. */
-  instructionsBase?: number
-  /** Moves on each note the coordinator keeps or a member removes (instructions.ts), so an open panel knows to read them. */
-  notesRevision?: number
   /** Moves when its repository's GitHub access may have changed: someone allowed it, GitHub sent someone back after
    *  installing the app, or a check that asked GitHub again found a different answer (store.ts githubChanged, githubSeen).
    *  Members' apps read the access again when it moves rather than keeping it 5 minutes (task #2316, Dee 2026-11-03). */
   githubRevision?: number
   /** What the last check that asked GitHub again found (github/projectAccess.ts), so only a different answer moves it. */
   githubSeen?: GitHubSeen
-  /** What its coordinator is called; reads give "Product Manager" when absent (instructions.ts coordinatorNameOf). */
-  coordinatorName?: string
   /** Agents answer every person's message in that message's thread, never right below it in the main chat (task #3747, anh
    *  Dee 11-06: "i don't know which one you reply to which"). Absent: as before. Set with `project.answers`. */
   answersInThread?: true

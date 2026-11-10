@@ -56,7 +56,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'project.report': case 'project.repository':
     // The coordinator's own writes check it leads the project, which a concurrent Lead change ends (review of phase 2).
-    case 'instructions.save': case 'note.add': case 'note.remove': case 'project.coordinatorName': case 'project.answers': case 'project.about':
+    case 'project.answers': case 'project.about':
       leadCheck(command.projectId)
       break
     // A rules save writes its own collection, no part of the project: by anyone, it guards on the project's Lead chat, which a
@@ -64,10 +64,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     // #3929). The Lead check above is part of the same touch.
     case 'rules.set':
       group(leadGroupOf(command.projectId))
-      break
-    // An older CLI's rule is a save to its project's instructions, the coordinator's like instructions.save (commands.ts).
-    case 'rule.set':
-      leadCheck(command.projectId ?? (actor.kind === 'agent' ? agentProject(actor.agentId) : undefined))
       break
     case 'project.sharing':
       // Rule (b): everyone who loses the project sees the change through their own part (design section 1.2).

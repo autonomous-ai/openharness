@@ -84,16 +84,13 @@ async function swarm({ client = db, hooks, engines = ['codex'], lent = false }: 
   /** The member name people and the Lead read for an agent. */
   const name = async (agentId: string) => (await timed.read(owner, tab)).state.agents.find(a => a.id === agentId)!.displayName
   const assignment = async () => (await timed.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!
-  /** What the Lead's host receives now (this poll is also the Lead's wake-up path), with each row's text, and what it hears in a
-   *  digest (noticeDigest.ts): gathered for one, or named by one. Those of no digest of its own come first, in the order written. */
+  /** What the Lead's host receives now (this poll is also the Lead's wake-up path): each row's message, in the order written. */
   const leadInbox = async () => {
     // The worker's time checks run every 30 s (timeChecks.ts): one runs before each poll here.
     await timed.runTimeChecks(tab)
-    const rows = await timed.deliveries(host, tab, lead)
-    const digest = await db.superTabDelivery.findMany({ where: { tabId: tab, agentId: lead, status: { in: ['gathered', 'digested'] } }, orderBy: { createdAt: 'asc' } })
-    const ids = [...rows, ...digest].map(r => r.messageId)
+    const ids = (await timed.deliveries(host, tab, lead)).map(r => r.messageId)
     const messages = await db.superTabMessage.findMany({ where: { id: { in: ids } } })
-    return ids.map(id => messages.find(m => m.id === id)!).filter(m => (m.source as { kind?: string } | null)?.kind !== 'notice-digest')
+    return ids.map(id => messages.find(m => m.id === id)!)
   }
   return { timed, tab, execute, lead, group, worker, harness, observe, beat, name, assignment, leadInbox, add,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
@@ -708,10 +705,16 @@ describe('the push for a new delivery', () => {
       const forWorker = await claimedFor(f, f.worker, 'For the worker', 'claim-worker')
       await claimedFor(f, f.lead, 'For the lead', 'claim-lead')
       waiting.length = 0
-      await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [f.lead] }, host, f.worker)
+      await f.execute({ type: 'message.send', conversationId: f.group, text: 'Done.', replyTo: forWorker, recipientIds: [] }, host, f.worker)
       expect(waiting).toContainEqual({ machineId: 'test-host', tabId: f.tab, agentId: f.worker })
-      // The reply, naming the Lead (#2963), waits for the Lead's digest (#3387): no host is told of it, nor again for the claim it holds.
       expect(waiting.filter(w => w.agentId === f.lead)).toHaveLength(0)
+      // A post naming the Lead reaches the Lead's machine at once (no digest holds it since Swarm v4), to wait there for its
+      // turn to end (turnEnd.ts).
+      waiting.length = 0
+      const named = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Lead, it is merged.', replyTo: null, recipientIds: [f.lead] }, host, f.worker)
+      expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
+      expect(await db.superTabDelivery.findFirst({ where: { messageId: String(named.result.messageId), agentId: f.lead } }))
+        .toMatchObject({ status: 'queued', waitsUntil: expect.any(Date) })
     })
 
     /** A conversation with no task in it, so its agent may leave and it may be archived, with a claimed delivery of the worker's. */

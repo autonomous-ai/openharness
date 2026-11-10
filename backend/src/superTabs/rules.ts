@@ -7,7 +7,7 @@ import type { Agent, SuperTabState } from './model.js'
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const engine = z.enum(['claude', 'codex'])
 const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
-export const ruleSchema = z.discriminatedUnion('kind', [
+const ruleSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('forbidModel'), engine: engine.optional(), model: z.string().trim().min(1).max(200) }).strict(),
   z.object({ kind: z.literal('machines'), machineIds: z.array(id).min(1).max(50) }).strict(),
   z.object({ kind: z.literal('minEffort'), engine: engine.optional(), effort: z.enum(EFFORTS) }).strict(),
@@ -16,7 +16,6 @@ export const ruleSchema = z.discriminatedUnion('kind', [
   // Simple work goes to a model on the Swarm's grid first (cli/src/superTabs/route.ts softOf); this owner says not to.
   z.object({ kind: z.literal('noGridFirst') }).strict(),
 ])
-export const ruleTextSchema = z.string().trim().min(1).max(200)
 export const askedInSchema = z.object({ conversationId: id, messageId: id }).strict()
 /** Per project. */
 export const MAX_RULES = 50

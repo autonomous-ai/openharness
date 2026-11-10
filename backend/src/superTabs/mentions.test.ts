@@ -77,14 +77,14 @@ describe('people tagging people', () => {
   })
 
   // Who tags a person is workflow (project instructions, phase 4): any agent of the project, in its own project only.
-  it('checks any agent’s tags, and routes a worker’s to the PM', () => {
+  it('checks any agent’s tags, and a worker’s reach the people it tags', () => {
     const f = fixture()
     const worker: Actor = { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' }
     const group = (id: string) => f.state.conversations.find(c => c.id === id)!
     expect(checkMentions(f.state, worker, group(f.group), ['peer', 'third', 'peer'])).toEqual(['peer', 'third'])
-    // People talk only to the PM (crewNeeds.ts, task #3404): the worker's tags are checked as before, and go to the PM.
-    expect(f.send(f.group, ['peer'], worker).mentions ?? []).toEqual([])
-    expect(f.say(f.group, '@third please confirm', worker).mentions ?? []).toEqual([])
+    // Swarm v4 routes no tag through the PM: a worker tags a person as the PM does.
+    expect(f.send(f.group, ['peer'], worker).mentions).toEqual(['peer'])
+    expect(f.say(f.group, '@third please confirm', worker).mentions).toEqual(['third'])
     expect(() => checkMentions(f.state, worker, group(storeOldLeads(f.state)), ['peer']))
       .toThrow(expect.objectContaining({ code: 'INVALID_MENTION' }))
   })
@@ -141,14 +141,13 @@ describe('tags in the text', () => {
     expect(f.say(f.group, '@owner and @peer').mentions).toEqual(['peer'])
   })
 
-  it('tags from the text of the PM, and not of another agent', () => {
+  it('tags from the text of the PM and of any other agent', () => {
     const f = fixture()
     const lead = { kind: 'agent' as const, agentId: f.lead, machineOwnerId: 'owner' }
     expect(f.say(f.app.conversationId, '@peer please confirm', lead).mentions).toEqual(['peer'])
-    // A worker posts in a task: the project chat holds only its coordinator among agents (#2207). People talk only to the PM
-    // (crewNeeds.ts, task #3404): its tag is the PM's crew need, and its words are kept.
+    // A worker posts in a task: the project chat holds only its coordinator among agents (#2207).
     const worker = f.say(f.group, '@peer please confirm', { kind: 'agent', agentId: f.worker, machineOwnerId: 'owner' })
-    expect(worker.mentions ?? []).toEqual([])
+    expect(worker.mentions).toEqual(['peer'])
     expect(worker.text).toBe('@peer please confirm')
   })
 
