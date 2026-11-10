@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/harness_cli_runner.dart';
+import '../core/home_dir.dart';
 import '../core/runtime_platform.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
@@ -33,12 +34,14 @@ String? teamConfigPath() => RuntimePlatform.isMacOS
     : null;
 
 /// Whether this computer has an old Team account for this person to remove:
-/// its config is there and names this account as the computer's owner (a
-/// config that cannot be read is the CLI's to judge). Another account on the
-/// same computer is not asked about the owner's.
+/// its config is there and names this account as the computer's owner, by
+/// name or by home folder (a config that cannot be read is the CLI's to
+/// judge). Another account on the same computer is not asked about the
+/// owner's.
 Future<bool> oldTeamAccountHere({
   String? path,
   String? user,
+  String? home,
   bool? windows,
 }) async {
   final file = path ?? teamConfigPath();
@@ -52,24 +55,34 @@ Future<bool> oldTeamAccountHere({
   final env = RuntimePlatform.environment;
   final isWindows = windows ?? RuntimePlatform.isWindows;
   final me = user ?? (isWindows ? env['USERNAME'] : env['USER']);
-  Object? owner;
+  final myHome = home ?? maybeHomeDir(isWindows: isWindows);
+  Map<Object?, Object?>? config;
   try {
-    final config = jsonDecode(text);
-    owner = config is Map ? config['owner'] : null;
+    final read = jsonDecode(text);
+    if (read is Map) config = read;
   } on FormatException {
     return true;
   }
-  if (owner is! String || me == null || me.isEmpty) return true;
-  // Windows' account names are not case-sensitive.
-  return isWindows ? owner.toLowerCase() == me.toLowerCase() : owner == me;
+  final owner = config?['owner'], ownerHome = config?['ownerHome'];
+  // Windows' account names and paths are not case-sensitive.
+  bool same(Object? a, String? b) =>
+      a is String &&
+      b != null &&
+      (isWindows ? a.toLowerCase() == b.toLowerCase() : a == b);
+  if (owner is! String && ownerHome is! String) return true;
+  if ((me == null || me.isEmpty) && myHome == null) return true;
+  return same(owner, me) || same(ownerHome, myHome);
 }
 
 /// What the CLI answered for the removal (team/remove.ts `TeamRemoval`).
 @immutable
 class TeamAccountRemoval {
-  const TeamAccountRemoval.removed({this.left}) : code = null, message = null;
+  const TeamAccountRemoval.removed({this.left, this.wasThere = true})
+    : code = null,
+      message = null;
   const TeamAccountRemoval.failed(String this.code, String this.message)
-    : left = null;
+    : left = null,
+      wasThere = true;
 
   /// Null when removed; else `CANCELLED`, `NO_PROMPT`, `KEPT` or `FAILED`.
   final String? code;
@@ -78,37 +91,52 @@ class TeamAccountRemoval {
   /// What the system removes only later (Windows' held profile), when said.
   final String? left;
 
+  /// False when the CLI found no account to remove (gone meanwhile).
+  final bool wasThere;
+
   bool get removed => code == null;
 
-  /// The CLI's one JSON line, the last on [stdout].
-  static TeamAccountRemoval parse(String stdout, String stderr) {
+  /// The CLI's one JSON line, the last on [stdout]; [exitCode] when there is
+  /// none.
+  static TeamAccountRemoval parse(String stdout, String stderr, int exitCode) {
     final line = const LineSplitter()
         .convert(stdout)
         .lastWhere((l) => l.trimLeft().startsWith('{'), orElse: () => '');
+    Object? json;
     try {
-      final json = jsonDecode(line) as Map<String, Object?>;
+      json = jsonDecode(line);
+    } on FormatException {
+      json = null;
+    }
+    if (json is Map) {
+      String? text(String key) =>
+          json is Map && json[key] is String ? json[key] as String : null;
       if (json['ok'] == true) {
-        return TeamAccountRemoval.removed(left: json['left'] as String?);
-      }
-      return TeamAccountRemoval.failed(
-        json['code'] as String? ?? 'FAILED',
-        json['message'] as String? ?? 'The removal stopped.',
-      );
-    } catch (_) {
-      // A CLI older than the command answers "Unknown command"; it updates
-      // itself, and the next launch asks again.
-      if (stderr.contains('Unknown command')) {
-        return const TeamAccountRemoval.failed(
-          'FAILED',
-          'Harness on this computer needs its update first. Try again later.',
+        return TeamAccountRemoval.removed(
+          left: text('left'),
+          wasThere: json['removed'] != false,
         );
       }
-      final said = stderr.trim().split('\n').last.trim();
       return TeamAccountRemoval.failed(
-        'FAILED',
-        said.isEmpty ? 'Harness could not run the removal.' : said,
+        text('code') ?? 'FAILED',
+        text('message') ?? 'The removal stopped.',
       );
     }
+    // A CLI older than the command answers "Unknown command"; it updates
+    // itself, and the next launch asks again.
+    if (stderr.contains('Unknown command')) {
+      return const TeamAccountRemoval.failed(
+        'FAILED',
+        'Harness on this computer needs its update first. Try again later.',
+      );
+    }
+    final said = stderr.trim().split('\n').last.trim();
+    return TeamAccountRemoval.failed(
+      'FAILED',
+      said.isEmpty
+          ? 'Harness could not run the removal (exit $exitCode).'
+          : said,
+    );
   }
 }
 
@@ -121,7 +149,11 @@ Future<TeamAccountRemoval> removeOldTeamAccount({
       runner ?? HarnessCliRunner(runTimeout: const Duration(minutes: 16));
   try {
     final result = await cli.run(const ['__remove-team-account']);
-    return TeamAccountRemoval.parse('${result.stdout}', '${result.stderr}');
+    return TeamAccountRemoval.parse(
+      '${result.stdout}',
+      '${result.stderr}',
+      result.exitCode,
+    );
   } on ProcessException catch (error) {
     return TeamAccountRemoval.failed('FAILED', error.message);
   }
@@ -143,8 +175,8 @@ class OldTeamAccountAsk extends StatefulWidget {
   final Future<bool> Function()? here;
   final Future<TeamAccountRemoval> Function()? remove;
 
-  /// Set once this launch has asked: the workspace can be built again (a
-  /// sign-out and back) without asking twice.
+  /// Set once this launch has its answer (asked, or nothing to ask): the
+  /// workspace can be built again (a sign-out and back) without asking twice.
   @visibleForTesting
   static bool askedThisLaunch = false;
 
@@ -159,22 +191,42 @@ class _OldTeamAccountAskState extends State<OldTeamAccountAsk> {
     final here =
         widget.here ?? (kUnderTest || kIsWeb ? null : oldTeamAccountHere);
     if (here == null || OldTeamAccountAsk.askedThisLaunch) return;
-    OldTeamAccountAsk.askedThisLaunch = true;
     unawaited(_ask(here));
   }
 
   Future<void> _ask(Future<bool> Function() here) async {
-    if (!await here() || !mounted) return;
-    appLog.info('team', 'an old Team account is on this computer: asking');
-    await showTerminalPrompt<void>(
-      context,
-      builder: (_) =>
-          OldTeamAccountPrompt(remove: widget.remove ?? removeOldTeamAccount),
-    );
+    try {
+      final there = await here();
+      // Gone before the answer (signed out): the next workspace asks. Asked
+      // meanwhile by a workspace built again: once is enough.
+      if (!mounted || OldTeamAccountAsk.askedThisLaunch) return;
+      OldTeamAccountAsk.askedThisLaunch = true;
+      if (!there) return;
+      appLog.info('team', 'an old Team account is on this computer: asking');
+      await showTerminalPrompt<void>(
+        context,
+        builder: (_) =>
+            OldTeamAccountPrompt(remove: widget.remove ?? removeOldTeamAccount),
+      );
+    } catch (error) {
+      appLog.warn(
+        'team',
+        'could not ask about an old Team account',
+        error: error,
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) => widget.child;
+}
+
+/// [text] as a sentence of its own: a capital first, one full stop last.
+String _sentence(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return trimmed;
+  final capital = trimmed[0].toUpperCase() + trimmed.substring(1);
+  return capital.endsWith('.') ? capital : '$capital.';
 }
 
 enum _Step { ask, removing, removed, failed }
@@ -209,14 +261,19 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
 
   Future<void> _remove() async {
     if (_step == _Step.removing) return;
+    // The button goes while it runs: keep the keys in the dialog.
+    _focus.requestFocus();
     setState(() => _step = _Step.removing);
     final result = await widget.remove();
-    if (result.removed) {
-      appLog.info('team', 'old Team account removed');
+    // The code alone: the CLI's reason can name accounts and folders.
+    if (!result.removed) {
+      appLog.warn('team', 'old Team account not removed: ${result.code}');
     } else {
-      appLog.warn(
+      appLog.info(
         'team',
-        'old Team account not removed: ${result.code}: ${result.message}',
+        result.wasThere
+            ? 'old Team account removed'
+            : 'no old Team account to remove',
       );
     }
     if (!mounted) return;
@@ -224,6 +281,8 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
       _result = result;
       _step = result.removed ? _Step.removed : _Step.failed;
     });
+    // The keys come back to the dialog, where Escape now closes it.
+    _focus.requestFocus();
   }
 
   // Escape closes only once the removal has run: the account is to go.
@@ -243,7 +302,11 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
         color: DesktopChrome.muted,
       ),
       _Step.removed => DesktopPromptMessage(
-        result?.left == null ? 'Removed.' : 'Removed. ${result!.left}.',
+        result?.wasThere == false
+            ? 'Already removed.'
+            : result?.left == null
+            ? 'Removed.'
+            : 'Removed. ${_sentence(result!.left!)}',
         color: DesktopChrome.muted,
       ),
       _Step.failed => DesktopPromptMessage(
@@ -251,40 +314,46 @@ class _OldTeamAccountPromptState extends State<OldTeamAccountPrompt> {
         color: danger,
       ),
     };
-    return TerminalPromptKeys(
-      focusNode: _focus,
-      cancel: _close,
-      child: DesktopPromptSurface(
-        body: DesktopPromptScrollBody(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('Old Team Account', style: DesktopChrome.heading()),
-              const SizedBox(height: DesktopChrome.groupGap),
-              Text(
-                'An old Harness Team account is still on this computer. Remove it.',
-                style: DesktopChrome.text(size: 13),
-              ),
-            ],
+    final done = _step == _Step.removed || _step == _Step.failed;
+    // Nothing closes it before the removal has run: not Escape, not a click
+    // on the veil outside it.
+    return PopScope(
+      canPop: done,
+      child: TerminalPromptKeys(
+        focusNode: _focus,
+        cancel: _close,
+        child: DesktopPromptSurface(
+          body: DesktopPromptScrollBody(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Old Team Account', style: DesktopChrome.heading()),
+                const SizedBox(height: DesktopChrome.groupGap),
+                Text(
+                  'An old Harness Team account is still on this computer. Remove it.',
+                  style: DesktopChrome.text(size: 13),
+                ),
+              ],
+            ),
           ),
+          footer: footer == null
+              ? null
+              : Semantics(liveRegion: true, child: footer),
+          actions: [
+            if (_step == _Step.removed || _step == _Step.failed)
+              TextButton(
+                key: const Key('old-team-account-close'),
+                onPressed: _close,
+                child: const Text('Close'),
+              ),
+            if (_step == _Step.ask || _step == _Step.failed)
+              FilledButton(
+                key: const Key('old-team-account-remove'),
+                onPressed: _remove,
+                child: Text(_step == _Step.ask ? 'Remove' : 'Retry'),
+              ),
+          ],
         ),
-        footer: footer == null
-            ? null
-            : Semantics(liveRegion: true, child: footer),
-        actions: [
-          if (_step == _Step.removed || _step == _Step.failed)
-            TextButton(
-              key: const Key('old-team-account-close'),
-              onPressed: _close,
-              child: const Text('Close'),
-            ),
-          if (_step == _Step.ask || _step == _Step.failed)
-            FilledButton(
-              key: const Key('old-team-account-remove'),
-              onPressed: _remove,
-              child: Text(_step == _Step.ask ? 'Remove' : 'Retry'),
-            ),
-        ],
       ),
     );
   }
