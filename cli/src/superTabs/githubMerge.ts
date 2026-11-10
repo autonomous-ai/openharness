@@ -18,6 +18,7 @@
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
+import { createHash } from 'node:crypto'
 import { labelOf, readerKey, sameKey, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE, Waits, waitWords } from './githubRest.js'
@@ -156,6 +157,60 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
 }
 
 
+/** The most files GitHub lists in one compare: a change of that many or more cannot be read whole. */
+const COMPARE_FILES_MAX = 300
+/** Changes kept by each merger and assigner: what a commit changes since its merge base does not change. */
+const PATCHES_MAX = 1_000
+
+/** A compare's files as one change: each file's status and names and its added and removed lines, without context or line numbers;
+ *  null when one file has no patch (binary, or too large for GitHub to give) or the list may be cut short. */
+function changeOf(files: Json[]): string | null {
+  if (files.length >= COMPARE_FILES_MAX) return null
+  const parts: string[] = []
+  for (const file of [...files].sort((a, b) => String(a.filename ?? '').localeCompare(String(b.filename ?? '')))) {
+    if (typeof file.patch !== 'string' && Number(file.changes ?? 0) > 0) return null
+    const lines = String(file.patch ?? '').split('\n').filter(line => line.startsWith('+') || line.startsWith('-'))
+    parts.push(JSON.stringify([String(file.status ?? ''), String(file.previous_filename ?? ''), String(file.filename ?? ''), lines]))
+  }
+  return createHash('sha256').update(parts.join('\n')).digest('hex')
+}
+
+/**
+ * What [sha] changes since its merge base with [base], as lampOS's lib.sh patch_of reads it (`git diff -U0 <merge base> <sha> |
+ * git patch-id`), from GitHub's compare, kept in [kept]. Null when GitHub cannot give it whole, or does not know the commit: no
+ * failure of the repository, and a verdict on it then counts only on its own head. Whitespace counts here, where patch-id drops
+ * it: a change of spaces alone is read again.
+ */
+async function patchOf(reads: GitHubReads, kept: Map<string, string | null>, repo: string, base: string, sha: string): Promise<string | null> {
+  const key = `${repo}\n${base}\n${sha}`
+  if (kept.has(key)) return kept.get(key)!
+  let change: string | null
+  try {
+    const files = (await reads.one(repo, `/repos/${repo}/compare/${base}...${sha}`)).files
+    change = Array.isArray(files) ? changeOf(files.map(object)) : null
+  } catch (error) {
+    if (!(error instanceof GitHubStop) || error.everywhere) throw error
+    change = null
+  }
+  kept.set(key, change)
+  if (kept.size > PATCHES_MAX) kept.delete(kept.keys().next().value!)
+  return change
+}
+
+/** Which of the verdicts' commits [shas] change what [head] changes (patchOf): lampOS counts a READ-OK for the head "or a head whose
+ *  diff from its merge base is the same patch, i.e. a plain rebase" (train-bot.sh). Updated from main with nothing of its own
+ *  changed, a pull request waited on a reader who had read it all. Read only when a verdict is on an earlier head. */
+export async function sameChange(reads: GitHubReads, kept: Map<string, string | null>, repo: string, base: string, head: string,
+  shas: Iterable<string>): Promise<Set<string>> {
+  const same = new Set<string>()
+  const earlier = [...new Set(shas)].filter(sha => !head.startsWith(sha))
+  if (!earlier.length) return same
+  const now = await patchOf(reads, kept, repo, base, head)
+  if (now === null) return same
+  for (const sha of earlier) if (await patchOf(reads, kept, repo, base, sha) === now) same.add(sha)
+  return same
+}
+
 /** Whether [name] is one of a pull request's [writers] (writersOf), however either is written. */
 export const isWriter = (writers: readonly string[], name: string): boolean => writers.some(writer => sameKey(writer) === sameKey(name))
 
@@ -230,6 +285,8 @@ export class GitHubMerge {
    *  passed only once they hold still (CHECKS_SETTLE_MS). Kept for the heads open now, so the memory is the open work. */
   private readonly seenAt = new Map<string, number>()
   private readonly looked = new Map<string, string>()
+  /** What commits change (sameChange). */
+  private readonly patches = new Map<string, string | null>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -312,8 +369,10 @@ export class GitHubMerge {
       const people = pullPeople(pull, team)
       const { readers, twoReads } = verdicts(comments, String(pull.body ?? ''), people)
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
+      // A READ-OK on an earlier head whose change is the head's is one on it (sameChange).
+      const same = await sameChange(this.reads, this.patches, repo, base, head, [...readers.values()].filter(r => r.verdict === 'READ-OK').map(r => r.sha))
       // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.
-      const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(people.writers, reader))
+      const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && (head.startsWith(r.sha) || same.has(r.sha)) && !isWriter(people.writers, reader))
       const reads = new Map(onHead.filter(([, r]) => !r.ownLogin))
       if (reads.size < (twoReads ? 2 : 1)) {
         // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
