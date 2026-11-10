@@ -24,8 +24,9 @@ import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { releaseVoice, reserveVoice } from '../lib/voiceBudget.js'
+import { withTimeout } from '../lib/withTimeout.js'
 import { wavDurationMs } from '../lib/wav.js'
-import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
+import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_READ_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
 import type { PullRequestFilesRead } from './pullRequestFiles.js'
@@ -44,7 +45,7 @@ import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { projectList, type ProjectList } from './projectList.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
+import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_CHECK_MS, UPLOAD_LINK_MS,
   type Attachment, type Attachments, type AvatarStore } from './attachments.js'
 import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
@@ -2703,8 +2704,9 @@ export class SuperTabStore {
     if (!row.purpose) return sendable(row.mime, row.image)
     let stored: { size: number } | null, head: Buffer
     try {
-      stored = await direct.stored(row.objectKey)
-      head = stored && stored.size === row.size ? await direct.head(row.objectKey, 16) : Buffer.alloc(0)
+      // Bounded as a voice message's read is: the bucket's client retries for minutes, and the person waits on this.
+      stored = await withTimeout(() => direct.stored(row.objectKey), UPLOAD_CHECK_MS)
+      head = stored && stored.size === row.size ? await withTimeout(signal => direct.head(row.objectKey, 16, signal), UPLOAD_CHECK_MS) : Buffer.alloc(0)
     } catch (error) {
       logger.error('super-tab upload check failed', { tabId, code: errorCode(error) })
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not check the file just now. Try again.', 503)
@@ -2720,7 +2722,8 @@ export class SuperTabStore {
     let image: StoredImage | null = null
     const place = THUMBNAILED_TYPES.has(mime) && stored!.size <= MAX_READ_BACK_BYTES ? thumbnailsReserve() : null
     if (place) {
-      try { image = await this.pictureOf(attachments, row.objectKey, await direct.read(row.objectKey)) } catch (error) {
+      // Within UPLOAD_CHECK_MS too: the read holds one of the server's few thumbnail places, and a silent bucket kept them all.
+      try { image = await this.pictureOf(attachments, row.objectKey, await withTimeout(signal => direct.read(row.objectKey, signal), UPLOAD_CHECK_MS)) } catch (error) {
         logger.warn('super-tab upload thumbnail failed', { tabId, code: errorCode(error) })
       } finally { place() }
     }
@@ -2785,7 +2788,7 @@ export class SuperTabStore {
     let facts: StoredVoice
     try {
       let wav: Buffer
-      try { wav = await direct.head(row.objectKey, row.size) } catch (error) {
+      try { wav = await withTimeout(signal => direct.head(row.objectKey, row.size, signal), VOICE_READ_MS) } catch (error) {
         logger.error('super-tab voice read failed', { tabId, code: errorCode(error) })
         await unclaim()
         fail('ATTACHMENTS_UNAVAILABLE', 'Could not read the voice message just now. Try again.', 503)
@@ -3974,6 +3977,27 @@ export class SuperTabStore {
       project.githubRevision = (project.githubRevision ?? 0) + 1
       await this.save(tx, loaded, state, clock.next(), [{ kind: 'head', key: 'head' }])
       return project.repositoryCreation
+    })
+  }
+
+  /**
+   * Removes the Leads conversations [ids] of [tabId] from its state, the Swarm-wide chat Swarm v4 removed (model.ts leadsRemoved),
+   * and the head's pointer to it, through the parts' own write: each group leaves a tombstone at its next version, so caches and
+   * clients drop it as for any removed conversation (migration/dropLeads.ts). Only those still of kind `leads`, in a Swarm stored
+   * by parts and not deleted; a second run, or another pod's, finds them gone and writes nothing. The ids it removed.
+   */
+  async dropLeads(tabId: string, ids: string[]): Promise<string[]> {
+    return transaction(this.db, async tx => {
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
+      if (!row || row.deletedAt || row.format !== 2) return []
+      const loaded = await this.ensure(tx, await loadRow(tx, row, {}), { groupIds: ids })
+      const gone = new Set(loaded.state.conversations.filter(c => ids.includes(c.id) && isLeads(c)).map(c => c.id))
+      if (!gone.size && !loaded.state.leadsConversationId) return []
+      const state = cloneData(loaded.state)
+      state.conversations = state.conversations.filter(c => !gone.has(c.id))
+      delete state.leadsConversationId
+      await this.save(tx, loaded, state, clock.next())
+      return [...gone]
     })
   }
 
