@@ -30,7 +30,7 @@ final _swarmRoute = RegExp(
   '|instructions(?:/revisions(?:/[0-9]+)?)?'
   // The project's rules record, read in Project settings (#3393).
   '|rules)'
-  '|route-decisions/$_id|machines/$_id/removal(?:/v2)?)'
+  '|machines/$_id/removal(?:/v2)?)'
   r')(?:\?[A-Za-z0-9_=&%-]+)?$',
 );
 

@@ -1274,57 +1274,6 @@ List<SuperTabProfile> superTabProfilesOf(Map<String, dynamic>? pool) {
   ];
 }
 
-class SuperTabRouteChoice {
-  const SuperTabRouteChoice(this.id, this.title);
-  final String id, title;
-}
-
-/// The routing decision a Lead message reports: who got the task and why.
-class SuperTabRoute {
-  SuperTabRoute._(
-    this.decisionId,
-    this.via,
-    this.p,
-    this.why,
-    this.pick,
-    this.alternatives,
-  );
-  static SuperTabRoute? fromSource(Map<String, dynamic> s) {
-    final pick = s['pick'];
-    final decisionId = s['decisionId'];
-    if (s['kind'] != 'route' ||
-        decisionId is! String ||
-        pick is! Map ||
-        pick['id'] is! String ||
-        pick['title'] is! String) {
-      return null;
-    }
-    final via = s['via'];
-    final why = s['why'];
-    final alternatives = s['alternatives'];
-    return SuperTabRoute._(
-      decisionId,
-      via is String ? via : 'order',
-      s['p'] is num ? (s['p'] as num).toDouble() : null,
-      why is String ? why : '',
-      SuperTabRouteChoice(pick['id'] as String, pick['title'] as String),
-      [
-        if (alternatives is List)
-          for (final a in alternatives)
-            if (a is Map && a['id'] is String && a['title'] is String)
-              SuperTabRouteChoice(a['id'] as String, a['title'] as String),
-      ],
-    );
-  }
-
-  /// The reason for the task. An older backend's quality-floor flag and
-  /// policy-order fallback are not read: nothing is refused for a floor.
-  final String decisionId, via, why;
-  final double? p;
-  final SuperTabRouteChoice pick;
-  final List<SuperTabRouteChoice> alternatives;
-}
-
 /// A file sent with a message. The chat never loads [url] by itself.
 class SuperTabAttachment {
   SuperTabAttachment.fromJson(Map<String, dynamic> row)
@@ -1710,8 +1659,6 @@ class SuperTabMessage {
   /// a person nothing to do (Dee 11-05, task #3127). The server keeps it for
   /// diagnosis, and a required recovery still reaches the coordinator.
   bool get terminalGap => fromTerminal && source['phase'] == 'gap';
-  SuperTabRoute? get route => SuperTabRoute.fromSource(source);
-  bool get routeOverride => source['kind'] == 'route-override';
 
   /// A task's root the server posted in its person's name (plain chat, #2294):
   /// theirs to read, not their own writing, so it reads nothing before it and
@@ -1747,7 +1694,7 @@ class SuperTabMessage {
 
   /// A line the chat draws as its own row, with no sender's header (view.dart):
   /// a message after it has no header to join (Diego, #2547).
-  bool get drawsOwnRow => shipLine || terminalEvent || route != null;
+  bool get drawsOwnRow => shipLine || terminalEvent;
   String? get terminalNote {
     if (!fromTerminal) return null;
     final phase = source['phase'];

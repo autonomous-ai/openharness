@@ -79,7 +79,6 @@ import 'message_receipt.dart';
 import 'message_text.dart';
 import 'notifications.dart';
 import 'day_pill.dart';
-import 'route_row.dart';
 import 'terminal_row.dart';
 import 'agent_instructions.dart';
 import '../core/test_run.dart';
@@ -3999,17 +3998,6 @@ class _SuperTabViewState extends State<SuperTabView>
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
         message: message,
-        controller: c,
-      );
-    }
-    final route = message.route;
-    if (route != null) {
-      return SuperTabRouteRow(
-        key: ValueKey(
-          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
-        ),
-        message: message,
-        route: route,
         controller: c,
       );
     }

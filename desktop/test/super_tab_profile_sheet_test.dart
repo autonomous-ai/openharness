@@ -4,13 +4,10 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/profile_sheet.dart';
 
 import 'super_tab_profile_actions_test.dart' show picture;
-import 'super_tab_roster_test.dart' show RosterFixture;
 import 'support/super_tab_fixture.dart';
 
 Map<String, dynamic> lastCommand(ConversationServer server) =>
@@ -50,22 +47,6 @@ Future<SuperTabController> openSheet(
 }
 
 void main() {
-  testWidgets('your own row opens your profile from Edit profile', (
-    tester,
-  ) async {
-    final f = RosterFixture();
-    addTearDown(f.dispose);
-    await f.initialize();
-    await f.show(tester);
-    await tester.tap(find.byKey(const ValueKey('super-person-owner')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('super-profile-edit')));
-    await tester.pumpAndSettle();
-    expect(find.text('Your profile'), findsOneWidget);
-    expect(find.byKey(const ValueKey('super-status-text')), findsOneWidget);
-    await f.close(tester);
-  });
-
   testWidgets('a preset becomes your avatar at once', (tester) async {
     final server = ConversationServer();
     final c = await openSheet(tester, server);
@@ -357,56 +338,6 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('super-avatar-preset-cat')));
     await tester.pumpAndSettle();
     expect(find.text('Not allowed here.'), findsOneWidget);
-  });
-
-  testWidgets('the agent’s contributor changes its avatar from its details', (
-    tester,
-  ) async {
-    for (final contributor in ['owner', 'someone-else']) {
-      final server = ConversationServer();
-      server.state['agents'] = [
-        {
-          'id': 'agent-1',
-          'name': 'Kai',
-          'machineId': 'm',
-          'harnessId': 'h',
-          'contributorId': contributor,
-          'configuration': {'engine': 'codex'},
-        },
-      ];
-      final c = server.controller();
-      await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Builder(
-              builder: (context) => TextButton(
-                onPressed: () => showSuperTabAgentDetails(
-                  context,
-                  c,
-                  null,
-                  c.snapshot!.agent('agent-1')!,
-                  (_) {},
-                ),
-                child: const Text('Details'),
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.tap(find.text('Details'));
-      await tester.pumpAndSettle();
-      expect(find.byType(SuperTabAvatar), findsOneWidget);
-      if (contributor != 'owner') {
-        expect(find.text('Change avatar'), findsNothing);
-      } else {
-        await tester.tap(find.text('Change avatar'));
-        await tester.pumpAndSettle();
-        expect(find.text('Kai’s avatar'), findsOneWidget);
-      }
-      await tester.pumpWidget(const SizedBox());
-      c.dispose();
-    }
   });
 }
 

@@ -598,8 +598,6 @@ class ConversationServer {
   bool refuseReusedOperations = false;
   final receiptCommands = <String, String>{};
   final messages = <Map<String, dynamic>>[];
-  // Route decisions by id, answered by GET .../route-decisions/:id.
-  final routeDecisions = <String, Map<String, dynamic>>{};
 
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
@@ -1774,17 +1772,6 @@ class ConversationServer {
                 )['priority'] =
             command['priority'];
         revision++;
-      } else if (command['type'] == 'project.canChat') {
-        // As #3819 keeps it: the people granted Can chat, on the project.
-        final project = (state['projects'] as List).cast<Map>().firstWhere(
-          (p) => p['id'] == command['projectId'],
-        );
-        final granted = {...(project['canChat'] as List? ?? const [])};
-        command['granted'] == true
-            ? granted.add(command['personId'])
-            : granted.remove(command['personId']);
-        project['canChat'] = granted.toList();
-        revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
                 .cast<Map<String, dynamic>>()
@@ -2061,14 +2048,6 @@ class ConversationServer {
         throw const SuperTabFailure('NOT_FOUND', 'No routing policy.');
       }
       return jsonDecode(jsonEncode(policy)) as Map<String, dynamic>;
-    }
-    if (uri.pathSegments.length > 2 &&
-        uri.pathSegments[uri.pathSegments.length - 2] == 'route-decisions') {
-      final decision = routeDecisions[uri.pathSegments.last];
-      if (decision == null) {
-        throw const SuperTabFailure('NOT_FOUND', 'No such decision.');
-      }
-      return jsonDecode(jsonEncode(decision)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'messages') {
       onRead?.call(path);

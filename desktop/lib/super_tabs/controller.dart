@@ -2855,24 +2855,6 @@ class SuperTabController extends ChangeNotifier {
         : operationError ?? 'Another change is on its way. Try again.';
   }
 
-  /// Grants or takes back Can chat in [projectId] for [personId] (#3819 `project.canChat`): its owner or the Swarm's
-  /// owner does. Null when done, else the server's sentence.
-  Future<String?> setCanChat(
-    String projectId,
-    String personId, {
-    required bool granted,
-  }) async {
-    final done = await command({
-      'type': 'project.canChat',
-      'projectId': projectId,
-      'personId': personId,
-      'granted': granted,
-    });
-    return done != null
-        ? null
-        : operationError ?? 'Another change is on its way. Try again.';
-  }
-
   /// Whether the reader may write in [group]: in a project on the Board its chat takes only its owner, the Swarm's
   /// owner and people granted Can chat (#3819); everything else is as today.
   bool mayChatIn(SuperTabConversation? group) {

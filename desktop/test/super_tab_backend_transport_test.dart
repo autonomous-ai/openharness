@@ -304,6 +304,8 @@ void main() {
       ('GET', '/api/super-tabs/tab1/inbox'),
       ('POST', '/api/super-tabs/tab1/conversations/c1/threads/m1/follow'),
       ('POST', '/api/super-tabs/tab1/conversations/c1/messages/m1/reminder'),
+      // A Lead's routing decision (v3).
+      ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
     ]) {
       final failure = await refusal(
         transport(method, path),
@@ -345,7 +347,6 @@ void main() {
       ('GET', '/api/super-tabs/tab1/projects/p1/instructions/revisions/4'),
       // The project's rules record, read only in Project settings (#3393).
       ('GET', '/api/super-tabs/tab1/projects/p1/rules'),
-      ('GET', '/api/super-tabs/tab1/route-decisions/d1'),
       ('POST', '/api/super-tabs/tab1/machines/m1/removal'),
       ('POST', '/api/super-tabs/tab1/join'),
       ('GET', '/api/super-tabs/tab1/join/preview'),
