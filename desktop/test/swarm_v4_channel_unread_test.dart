@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/super_tabs/project_sidebar.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'support/swarm_v4_channel.dart';
@@ -10,6 +11,23 @@ import 'support/swarm_v4_channel.dart';
 /// notice say too.
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
+
+  /// The Swarm says the channel moved, and Your Team's reader reads it (agent_state.dart): it settles, in real time too.
+  Future<void> arrive(WidgetTester tester, dynamic c) async {
+    await tester.runAsync(() => c.refresh() as Future<void>);
+    final sidebar = find.byType(ProjectSidebar);
+    for (var round = 0; round < 100; round++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      if (tester.widget<ProjectSidebar>(sidebar).agentStates?.busy != true) {
+        await tester.pump(const Duration(milliseconds: 500));
+        return;
+      }
+    }
+    fail('the reader never rested');
+  }
 
   /// The person has read the channel's plan and is in Pip's chat.
   Future<dynamic> openThenLeave(
@@ -22,15 +40,8 @@ void main() {
     final c = await openSwarmV4(tester, server);
     await tester.tap(key('super-agent-pip'));
     await tester.pumpAndSettle();
+    await arrive(tester, c);
     return c;
-  }
-
-  Future<void> arrive(WidgetTester tester, dynamic c) async {
-    await tester.runAsync(() => c.refresh() as Future<void>);
-    await tester.pumpAndSettle();
-    // The count reads the channel's new posts after the state says it moved.
-    await tester.runAsync(() => c.refresh() as Future<void>);
-    await tester.pumpAndSettle();
   }
 
   testWidgets(
@@ -57,6 +68,22 @@ void main() {
       await tester.pumpAndSettle();
       expect(key('super-new-channel'), findsNothing);
       expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'more posts than a page since the person read it: the row says at least the page, never a number it does not know',
+    (tester) async {
+      final server = swarmV4Channel();
+      swarmV4Post(server, 'Faye', 'Plan: @Pip takes #12.');
+      final c = await openThenLeave(tester, server);
+      for (var i = 0; i < 140; i++) {
+        swarmV4Post(server, i.isEven ? 'Pip' : 'Juno', 'Step $i.');
+      }
+      await arrive(tester, c);
+      final words = tester.widget<Text>(key('super-new-channel')).data!;
+      expect(words, matches(RegExp(r'^\d+\+ new$')));
+      expect(int.parse(words.split('+').first), lessThan(140));
     },
   );
 

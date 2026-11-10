@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:collection' show SplayTreeSet;
 import 'dart:math' show max;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 
 import '../logging/app_log.dart';
+import 'buddy_chat.dart' show kCountCap;
 import 'controller.dart';
 import 'github_issues.dart';
 import 'model.dart';
@@ -17,6 +19,9 @@ import 'my_agents.dart';
 /// - `free`: its latest post in its project's channel says `free: <its name>`, as the Swarm's basics ask of an agent with no
 ///   task.
 /// A state not read yet, or that cannot be, shows nothing.
+///
+/// The same reads say how many posts are new in each of those channels, for its project's row ([newIn]): the posts not the
+/// person's own in the channel's own stream past their read mark (anh Dee 2026-11-09: "i dont see any agent to agent chat").
 ///
 /// Read only while Your Team is open (a folded list shows no state), only for the projects the person's own agents are in
 /// (at most [maxProjects]), and only what changed: a channel again when the Swarm says it moved past what was read (the posts
@@ -63,6 +68,11 @@ class SwarmAgentStates extends ChangeNotifier {
   final _free = <String, bool>{};
   final _channelRead = <String, int>{};
 
+  /// Each channel's posts not the person's own, by sequence, the newest [kCountCap] of them; and where what is known of them
+  /// starts: a first read, or one after a gap, has the latest page alone, so older posts are not known.
+  final _others = <String, SplayTreeSet<int>>{};
+  final _knownFrom = <String, int>{};
+
   /// Each repository's taken tasks by agent, and when they were read; and the repository of each project read for, worked out
   /// once a run, not once a row.
   final _taken = <String, Map<String, int>>{};
@@ -78,6 +88,18 @@ class SwarmAgentStates extends ChangeNotifier {
 
   /// Whether a read is waiting to start or going on: what a change asked for is not done yet.
   bool get busy => _settling != null || _running;
+
+  /// How many posts in [channel] are new to the person, past their read mark, and whether there may be more than that (the posts
+  /// before what was read, or past [kCountCap]); null when the channel is not read here or none is new.
+  ({int count, bool more})? newIn(String channel) {
+    final others = _others[channel];
+    if (others == null) return null;
+    final mark = controller.readMark(channel);
+    final count = others.where((sequence) => sequence > mark).length;
+    if (count == 0) return null;
+    final from = _knownFrom[channel];
+    return (count: count, more: from != null && mark < from - 1);
+  }
 
   /// The state of [agent] as its row says it, or null for none.
   String? of(SuperTabAgent agent) {
@@ -167,6 +189,8 @@ class SwarmAgentStates extends ChangeNotifier {
         : repositories.contains(key.substring(6));
     _free.removeWhere((agent, _) => !agents.contains(agent));
     _channelRead.removeWhere((channel, _) => !channels.contains(channel));
+    _others.removeWhere((channel, _) => !channels.contains(channel));
+    _knownFrom.removeWhere((channel, _) => !channels.contains(channel));
     _taken.removeWhere((repository, _) => !repositories.contains(repository));
     _boardRead.removeWhere(
       (repository, _) => !repositories.contains(repository),
@@ -217,9 +241,11 @@ class SwarmAgentStates extends ChangeNotifier {
         'GET',
         read == null ? path : '$path?after=$read',
       );
+      var latest = read == null;
       // More than a page since the mark: the latest page says where they are now, as the open chat reads after a gap.
       if (read != null && answer['next'] != null) {
         answer = await controller.request('GET', path);
+        latest = true;
       }
       if (_disposed) return false;
       final rows = answer['messages'];
@@ -229,16 +255,37 @@ class SwarmAgentStates extends ChangeNotifier {
       ]..sort(superTabMessageOrder);
       var moved = false;
       var upTo = read ?? 0;
+      final was = {...?_others[channel]};
+      final others = latest
+          ? (_others[channel] = SplayTreeSet<int>())
+          : _others.putIfAbsent(channel, SplayTreeSet<int>.new);
+      // The latest page alone: posts older than it are not known, unless it is the whole channel.
+      if (latest) {
+        final first = messages.firstOrNull?.sequence;
+        if (answer['next'] != null && first != null) {
+          _knownFrom[channel] = first;
+        } else {
+          _knownFrom.remove(channel);
+        }
+      }
       for (final message in messages) {
         if (message.conversationId != channel) continue;
         upTo = max(upTo, message.sequence);
-        if (!message.fromAgent || !message.inMainStream) continue;
+        if (!message.inMainStream || controller.isOwn(message)) continue;
+        others.add(message.sequence);
+        if (!message.fromAgent) continue;
         final free = isFreePost(message.text);
         if (_free[message.authorId] != free) {
           _free[message.authorId] = free;
           moved = true;
         }
       }
+      // Bounded: past the cap the row says "99+", and what is older is not known.
+      while (others.length > kCountCap) {
+        others.remove(others.first);
+        _knownFrom[channel] = others.first;
+      }
+      moved |= !setEquals(was, others.toSet());
       // What the Swarm said of the channel counts too: a post the reader may not see moves its counter.
       _channelRead[channel] = max(upTo, group.lastMessageSequence);
       _recovered('channel/$channel');

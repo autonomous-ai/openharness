@@ -3438,7 +3438,7 @@ class SuperTabController extends ChangeNotifier {
   /// How many of [group]'s messages from others came after the reader's read
   /// mark: exact once the messages held reach back to the mark
   /// ([_heldSinceRead]), else a lower bound, one at least, while more are read
-  /// ([_readUnreadCounts]).
+  /// ([_readUnreadBuddyChats]).
   int unreadCount(SuperTabConversation group) {
     if (!unread(group)) return 0;
     final readAt = readMark(group.id);
@@ -3502,24 +3502,11 @@ class SuperTabController extends ChangeNotifier {
       if (notifyOf(chat.id) != SuperTabNotify.muted) unreadCount(chat),
   ].fold(0, (a, b) => a + b);
 
-  /// The chats whose unread count is read exact: the Buddy chats the Swarm
-  /// badge counts, and each project's channel, whose row says how many posts
-  /// are new (Swarm v4, anh Dee 2026-11-09). A muted channel says nothing.
-  Iterable<SuperTabConversation> get _countedChats sync* {
-    yield* _countedBuddyChats;
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
-      if (snapshot?.conversation(project.leadConversationId) case final chat?
-          when notifyOf(chat.id) != SuperTabNotify.muted) {
-        yield chat;
-      }
-    }
-  }
-
-  /// Reads each counted chat whose count is still open ([_countOpen]), page
-  /// by page, so the count is exact up to [kCountCap]; nothing once every
-  /// chat's count is known.
-  void _readUnreadCounts() {
-    for (final chat in _countedChats) {
+  /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
+  /// page, so the count is exact up to [kCountCap]; nothing once every chat's
+  /// count is known.
+  void _readUnreadBuddyChats() {
+    for (final chat in _countedBuddyChats) {
       if (!_countOpen(chat) || !_counting.add(chat.id)) continue;
       unawaited(
         _countChat(chat.id).whenComplete(() {
@@ -3531,7 +3518,7 @@ class SuperTabController extends ChangeNotifier {
 
   final _counting = <String>{};
 
-  /// A counted chat off screen, unread, under [kCountCap] and not held back to its
+  /// A Buddy chat off screen, unread, under [kCountCap] and not held back to its
   /// read mark: past the cap the badge says "99+" whatever the rest holds, so
   /// a device with no read mark never reads the whole history.
   bool _countOpen(SuperTabConversation chat) =>
@@ -4212,7 +4199,7 @@ class SuperTabController extends ChangeNotifier {
       // Every state read, a quiet one too: a count a failed read left open is
       // finished; one that is known reads nothing.
       _dropLeft();
-      _readUnreadCounts();
+      _readUnreadBuddyChats();
       _partsReadAt = clock.now();
       error = null;
       // Counters that did not move have no news for the conversation,

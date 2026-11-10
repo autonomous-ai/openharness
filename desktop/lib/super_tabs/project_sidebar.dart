@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show min;
 
 import 'package:flutter/material.dart';
 
@@ -19,7 +20,7 @@ import 'attention.dart';
 import 'controller.dart';
 import 'delete_agent.dart';
 import 'buddies.dart';
-import 'buddy_chat.dart' show countText;
+import 'buddy_chat.dart' show kCountCap;
 import 'model.dart';
 import 'my_agents.dart';
 import 'personal_agents.dart';
@@ -327,9 +328,10 @@ class ProjectSidebar extends StatelessWidget {
     // Swarm v4: how many posts are new in the project's channel, its agents'
     // among them (anh Dee 2026-11-09: "i dont see any agent to agent chat"),
     // while the name stays bold for people and tags alone.
+    // Read with Your Team's states, from the same reads of the channel (agent_state.dart).
     final fresh = board && project != null && !selected
-        ? controller.unreadCount(group)
-        : 0;
+        ? agentStates?.newIn(group.id)
+        : null;
     return _drawRow(
       group,
       project: project,
@@ -352,7 +354,7 @@ class ProjectSidebar extends StatelessWidget {
     String? key,
     required bool selected,
     required bool unread,
-    int fresh = 0,
+    ({int count, bool more})? fresh,
     int badge = 0,
     String? badgeTooltip,
     SuperTabConversation? buddyChat,
@@ -467,10 +469,12 @@ class ProjectSidebar extends StatelessWidget {
                                             style: style,
                                           ),
                                   ),
-                                  if (fresh > 0 && !muted) ...[
+                                  if (fresh != null && !muted) ...[
                                     const SizedBox(width: 8),
                                     Text(
-                                      '${countText(fresh)} new',
+                                      fresh.count >= kCountCap - 1 || fresh.more
+                                          ? '${min(fresh.count, kCountCap - 1)}+ new'
+                                          : '${fresh.count} new',
                                       key: ValueKey('super-new-${group.id}'),
                                       maxLines: 1,
                                       style:
