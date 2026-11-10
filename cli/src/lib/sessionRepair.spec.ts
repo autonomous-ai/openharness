@@ -1,7 +1,7 @@
 import { clearEngineHomeFixture } from '../testing/engineHomeFixture.js'
 import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
 import { darwinProcessImages } from '../testing/darwinProcessImages.js'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
@@ -519,6 +519,9 @@ describe('session repair — Codex profiles', () => {
 })
 
 describe('session repair — a Codex process names its own rollout', () => {
+  // On a Mac the live cases need the process-image helper, compiled once by the release's builder: 1.5 s of a compiler
+  // idle, more loaded, and nothing the cases are about. Linux has no helper to build.
+  beforeAll(() => { if (process.platform === 'darwin') darwinProcessImages() }, 120_000)
   it('reads the native child of the npm launcher, never another launcher or a nested tool', async () => {
     const { processFilesOf } = await import('./sessionRepair.js')
     const own = '/tmp/profile/sessions/rollout-own.jsonl'

@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { ProcessRow } from '../lib/processTable.js'
+import { removeLink } from '../lib/removePath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
 const fixture = vi.hoisted(() => ({ root: '', rows: [] as ProcessRow[], lsof: new Map<number, string[]>() }))
@@ -115,7 +116,7 @@ function processRow(pid: number, parentPid: number, executable = '/fixture-tools
   const fields = ['S', String(parentPid), ...Array(17).fill('0'), String(pid * 100)]
   file(path('proc', String(pid), 'stat'), `${pid} (${executable}) ${fields.join(' ')}\n`)
   file(path('proc', String(pid), 'cmdline'), args.split(' ').join('\0') + '\0')
-  const exe = path('proc', String(pid), 'exe'); rmSync(exe, { force: true }); symlinkSync(executable, exe)
+  const exe = path('proc', String(pid), 'exe'); removeLink(exe); symlinkSync(executable, exe)
   return { pid, parentPid, executable, args, startMarker, startTicks: pid * 100 }
 }
 function row(pid = 42): RegisteredSession {

@@ -3,6 +3,7 @@ import { linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, sym
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { removeLink } from '../../lib/removePath.js'
 
 const control = vi.hoisted(() => ({
   failures: new Map<string, string>(),
@@ -201,7 +202,7 @@ it('deduplicates aliases to one physical store but retains all path evidence', a
   symlinkSync(profile, join(home, 'profiles', 'alias'), 'dir')
   expect(await find()).toEqual({ sessionId: id, hermesHome: profile })
   expect(control.queries).toHaveLength(1)
-  control.afterQuery = () => { rmSync(join(home, 'profiles', 'alias')); control.afterQuery = undefined }
+  control.afterQuery = () => { removeLink(join(home, 'profiles', 'alias')); control.afterQuery = undefined }
   await held(find())
 })
 
