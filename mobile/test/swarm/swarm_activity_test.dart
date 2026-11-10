@@ -19,7 +19,6 @@ void main() {
 
   const chatPath = activityChatPath;
   const backend = activityBackend;
-  const message = activityMessage;
   const thread = activityThread;
 
   Future<SwarmSession> start(
@@ -291,7 +290,10 @@ void main() {
       expect(again.activity.count(SwarmActivityFilter.threads), 0);
 
       // A new reply: news again.
-      next = {...page(), 'threads': [thread('root-1', last: 14)]};
+      next = {
+        ...page(),
+        'threads': [thread('root-1', last: 14)],
+      };
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
         derived: {'decisionsWaiting': 1, 'mentionsWaiting': 1},

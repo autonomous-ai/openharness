@@ -15,7 +15,6 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 
 import 'model.dart';
 import 'swarm_activity.dart';
-import 'swarm_activity_feed.dart';
 import 'swarm_asks.dart' show SwarmAsks;
 import 'swarm_home_rows.dart' show SwarmInvitationRow, swarmNeedAsk;
 import 'swarm_inbox.dart';
@@ -416,8 +415,7 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
     List<SwarmActivityItem> items,
   ) {
     final activity = session.activity, inbox = session.inbox;
-    final fromChats =
-        _filter == null || _filter == SwarmActivityFilter.threads;
+    final fromChats = _filter == null || _filter == SwarmActivityFilter.threads;
     final note = AppType.caption(color: AppPalette.textSecondary, height: 1.35);
     final missing = _focusMissing(session, items);
     if (missing == null) _showFocus();
@@ -1295,4 +1293,3 @@ class SwarmActivityRow extends StatelessWidget {
     ),
   };
 }
-

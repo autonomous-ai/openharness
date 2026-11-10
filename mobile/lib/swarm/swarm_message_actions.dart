@@ -119,7 +119,6 @@ class _Action extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.color,
-    this.top = AppSpace.s,
   });
 
   final IconData icon;
@@ -128,9 +127,6 @@ class _Action extends StatelessWidget {
 
   /// Its ink; the primary text's when null.
   final Color? color;
-
-  /// The room above its words.
-  final double top;
 
   @override
   Widget build(BuildContext context) {
@@ -145,9 +141,9 @@ class _Action extends StatelessWidget {
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: minTouchTarget),
             child: Padding(
-              padding: EdgeInsets.fromLTRB(
+              padding: const EdgeInsets.fromLTRB(
                 AppSpace.m,
-                top,
+                AppSpace.s,
                 AppSpace.m,
                 AppSpace.s,
               ),
