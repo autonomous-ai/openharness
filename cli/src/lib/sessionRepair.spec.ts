@@ -520,8 +520,9 @@ describe('session repair — Codex profiles', () => {
 
 describe('session repair — a Codex process names its own rollout', () => {
   // On a Mac the live cases need the process-image helper, compiled once by the release's builder: 1.5 s of a compiler
-  // idle, more loaded, and nothing the cases are about. Linux has no helper to build.
-  beforeAll(() => { if (process.platform === 'darwin') darwinProcessImages() }, 120_000)
+  // idle, more loaded, inside the first live case's budget, and nothing the cases are about. Linux has no helper to
+  // build. A build that fails is said by the live cases, which ask for it again; the others never need it.
+  beforeAll(() => { if (process.platform === 'darwin') try { darwinProcessImages() } catch { /* said by the live cases */ } }, 120_000)
   it('reads the native child of the npm launcher, never another launcher or a nested tool', async () => {
     const { processFilesOf } = await import('./sessionRepair.js')
     const own = '/tmp/profile/sessions/rollout-own.jsonl'

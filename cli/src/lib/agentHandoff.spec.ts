@@ -109,7 +109,7 @@ function depsFor(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {})
     // and "finds the exclude file" and "goes by one clock" answered `gitRepo: false`.
     // Nor is the shipped 5 s deadline: publication alone makes 73 fsyncs, each a full flush on a Mac (F_FULLFSYNC),
     // 2.5 s of a 3.3 s preparation on an Intel Mac at load 8 (2026-11-11), and a loaded one went past 5 s. The cases
-    // about the deadline set their own, or the shipped one with an injected clock.
+    // about the deadline set their own, or move an injected clock past it.
     gitTimeoutMs: LOADED_HANDOFF_MS,
     deadlineMs: LOADED_HANDOFF_MS,
     publish: (prepared, permit) => publishHandoff(join(root, 'daemon-data', 'handoff-receipts'), prepared, facts => {
@@ -648,12 +648,12 @@ describe('prepareAgentHandoff: a repository', () => {
       { type: 'turn_started', payload: { userMessage: 'add a login page' } },
       { type: 'text_delta', payload: { content: 'Added login.tsx' } },
     ]
-    // Only the injected clock moves: the shipped 5 s timer of the race never fires, so stopping is up to `now`.
+    // Only the injected clock moves: the 30 s timer of the race never fires, so stopping is up to `now`.
     let clock = 1_700_000_000_000
-    const midRead = depsFor([s], { deadlineMs: undefined, git: gitPath, now: () => clock, readHistory: () => async () => { clock += 60_000; return events } })
+    const midRead = depsFor([s], { git: gitPath, now: () => clock, readHistory: () => async () => { clock += 60_000; return events } })
     await expect(prepareAgentHandoff(midRead, request(cid(1)))).rejects.toMatchObject({ code: 'TIMEOUT' })
     const beforeGit = depsFor([s], {
-      deadlineMs: undefined, git: gitPath, now: () => clock, readHistory: () => async () => events,
+      git: gitPath, now: () => clock, readHistory: () => async () => events,
       lastFullText: () => { clock += 60_000; return undefined },
     })
     await expect(prepareAgentHandoff(beforeGit, request(cid(2)))).rejects.toMatchObject({ code: 'TIMEOUT' })
@@ -724,7 +724,7 @@ describe('prepareAgentHandoff: a repository', () => {
 
   it('rechecks the deadline at the publication boundary', async () => {
     let now = Date.now()
-    const d = depsFor([session()], { deadlineMs: undefined, now: () => now })
+    const d = depsFor([session()], { now: () => now })
     const commit = d.publish!
     d.publish = (prepared, permit) => { now += 60_000; return commit(prepared, permit) }
     await expect(prepareAgentHandoff(d, request())).rejects.toMatchObject({ code: 'TIMEOUT' })

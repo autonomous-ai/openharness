@@ -1763,7 +1763,7 @@ describe('Super Tab attachments in delivered input', () => {
   /** A pass, given half a second: an old host waited on the download for the whole of it. */
   const pass = (host: SuperTabHost) => Promise.race([host.tick(), new Promise(resolve => setTimeout(resolve, 500))])
   /** Turns the event loop until [done], without a timer: with setTimeout faked, a pass waiting on one never ends, and fails
-   *  here after 4 s of real time instead, inside the case's 5. */
+   *  here after 4 s of real time with what it waits for, rather than at the case's timeout. */
   const until = async (done: () => boolean) => {
     const giveUp = performance.now() + 4_000
     while (!done()) {
@@ -1909,11 +1909,12 @@ describe('Super Tab attachments in delivered input', () => {
     try {
       const host = t.open({ attachedFiles, downloadWaitMs: 200 })
       let passed = false
-      const pass = host.tick().then(() => { passed = true })
-      // One wait of 200 ms; one per waiting delivery would be 5 x 200.
+      const first = host.tick().then(() => { passed = true })
+      // The pass's wait is set as its first download starts. One wait of 200 ms; one per waiting delivery would be 5 x 200.
+      await until(() => attachedFiles.mock.calls.length > 0)
       await vi.advanceTimersByTimeAsync(200)
       await until(() => passed)
-      await pass
+      await first
       expect(delivered()).toEqual(['harness-z: Hello.'])
       expect(attachedFiles).toHaveBeenCalledTimes(6)
       // Known to be slow, they hold no later pass at all: it ends without the clock moving.
