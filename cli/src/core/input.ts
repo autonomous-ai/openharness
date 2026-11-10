@@ -80,6 +80,8 @@ export interface InputDeps {
   /** Whether an engine's reader is starting: null when there is nothing to wait for, else whether it came up within its start
    *  wait (core/serviceLinks.ts `whenStarting`). */
   engineStarting?: (engine: string) => Promise<boolean> | null
+  /** An agent's frame changed outside the registry (its `waitingFor`): pushed to every window again. */
+  sync?: (id: string) => void
 }
 
 /**
@@ -247,6 +249,7 @@ export function sessionInputDeps(
     capture: captureTerminal,
     engineStarting: (session) => deps.engineStarting?.(session.engine) ?? null,
     // The app hears that the message waits, and why: it shows the agent as starting until the message is typed or refused (`error`).
+    onWaitChanged: (id) => deps.sync?.(id),
     onWaiting: (sessionId, reason) => {
       clients.send({ type: 'message_waiting', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { reason } })
     },

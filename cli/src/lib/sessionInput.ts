@@ -169,6 +169,8 @@ export interface SessionInputDeps {
   engineStarting?: (session: RegisteredSession) => Promise<boolean> | null
   /** A message waits for something before it is typed: said once, as it starts to wait. */
   onWaiting?: (sessionId: string, reason: 'engine_starting') => void
+  /** An agent's `waitingFor` changed (its first message began to wait, or its last stopped): its frame is pushed again. */
+  onWaitChanged?: (id: string) => void
   /** Clock and timer for the lease wait; real ones by default. */
   now?: () => number
   sleep?: (ms: number) => Promise<void>
@@ -248,13 +250,26 @@ export class SessionInputController {
     console.warn(`[inject] ${sid(sessionId)} waiting · engine=${session.engine} · its reader is starting`)
     if (!team) this.deps.onWaiting?.(sessionId, 'engine_starting')
     const since = (this.deps.now ?? Date.now)()
-    this.waitingEngine.set(sessionId, (this.waitingEngine.get(sessionId) ?? 0) + 1)
-    const up = await starting
-    const left = (this.waitingEngine.get(sessionId) ?? 1) - 1
-    if (left > 0) this.waitingEngine.set(sessionId, left)
-    else this.waitingEngine.delete(sessionId)
+    // A person's wait is on the agent's frame too, as message_waiting said it (a team delivery's is not), and every window hears
+    // when it starts and ends (`onWaitChanged`).
+    if (!team) this.countWait(sessionId, 1)
+    let up = false
+    try { up = await starting } finally { if (!team) this.countWait(sessionId, -1) }
     console.warn(`[inject] ${sid(sessionId)} ${up ? 'reader up' : 'ENGINE_NOT_STARTED reader did not start'} · engine=${session.engine} · after ${Math.round(((this.deps.now ?? Date.now)() - since) / 1000)} s`)
     return true
+  }
+
+  /** What a message to [id] (an agent's id or its session's, as it was sent) waits for now: `engine` while one waits for its
+   *  engine's reader (the agent's frame says so). */
+  waitingFor(id: string): 'engine' | null {
+    return this.waitingEngine.has(id) ? 'engine' : null
+  }
+
+  private countWait(id: string, by: 1 | -1): void {
+    const count = (this.waitingEngine.get(id) ?? 0) + by
+    if (count > 0) this.waitingEngine.set(id, count)
+    else this.waitingEngine.delete(id)
+    if (count === (by > 0 ? 1 : 0)) this.deps.onWaitChanged?.(id)
   }
 
   /**
@@ -265,10 +280,6 @@ export class SessionInputController {
    * it twice. Found end to end: a message sent as a resume was confirmed was refused 140 ms later and
    * lost, and a real engine takes seconds to confirm.
    */
-  /** What a message to [sessionId] waits for now: `engine` while one waits for its engine's reader (the agent's frame says so). */
-  waitingFor(sessionId: string): 'engine' | null {
-    return this.waitingEngine.has(sessionId) ? 'engine' : null
-  }
 
   private async injectWhenLeased(
     write: () => Promise<boolean | TerminalActionResult>,
