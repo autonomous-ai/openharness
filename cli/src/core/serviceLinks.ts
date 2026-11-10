@@ -157,7 +157,8 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const startOver = (service: string): void => {
     starts.delete(service)
     unstarted.add(service)
-    for (const [id, entry] of waiting) if (entry.service === service && entry.frame) settle(id, entry, unavailable(service))
+    // What waits for a service not connected waits for its start: what was sent to it was answered as it went (`heldFor`).
+    for (const [id, entry] of waiting) if (entry.service === service) settle(id, entry, unavailable(service))
     for (const up of upWaiters.get(service) ?? []) up(false)
     upWaiters.delete(service)
   }
