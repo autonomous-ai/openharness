@@ -326,7 +326,7 @@ void main() {
     ]);
     final c = server.controller();
     await c.refresh();
-    await c.loadDormant('lead');
+    await c.loadGroup('done');
     List<String> ids() =>
         superTabAgentTerminalGroups(c, 'agent').map((g) => g.id).toList();
     expect(c.snapshot!.conversation('done'), isNotNull);

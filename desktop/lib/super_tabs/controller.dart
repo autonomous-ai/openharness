@@ -12,15 +12,12 @@ import '../logging/app_log.dart';
 import '../measurement/speed_marks.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
-import 'task_priority.dart' show SuperTabTaskPriority;
 import 'message_link.dart';
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'parts.dart';
 import 'read_marks.dart';
 import 'reading.dart';
-import 'linked_tasks.dart';
-import 'task_steps.dart';
 
 /// A messages read started beside a state read, and what it asked for.
 typedef _EarlyRead = ({
@@ -1792,62 +1789,6 @@ class SuperTabController extends ChangeNotifier {
       !m.terminalGap &&
       !m.instructionsSave;
 
-  /// [id]'s messages with its steps' rows merged in by time (task steps
-  /// design): each step keeps its own conversation, shown inside its task.
-  List<SuperTabMessage> taskMessages(String id) {
-    final state = snapshot;
-    final task = state?.conversation(id);
-    final steps = state == null || task == null
-        ? const <SuperTabConversation>[]
-        : superTabStepsOf(state, task);
-    if (steps.isEmpty) return messages(id);
-    // Merged from the rows held, as they are held: an unchanged chat is the
-    // same list, not sorted again on each of a build's reads of it.
-    final merged = (_merges[id] ??= SuperTabStepsMerge()).of(
-      _messages[id] ?? const [],
-      {for (final step in steps) step.id: _messages[step.id] ?? const []},
-    );
-    return merged.every(_listed)
-        ? merged
-        : List.unmodifiable(merged.where(_listed));
-  }
-
-  final _merges = <String, SuperTabStepsMerge>{};
-
-  /// A number that moves when [id] or one of its steps has something new.
-  int? taskProgress(String id) {
-    final state = snapshot;
-    final task = state?.conversation(id);
-    if (state == null || task == null) return null;
-    return superTabStepsOf(state, task).fold<int>(
-      task.lastMessageSequence,
-      (sum, step) => sum + step.lastMessageSequence,
-    );
-  }
-
-  /// Reads a task that is not the selected conversation, with its steps.
-  Future<void> loadTaskMessages(String id) async {
-    await loadMessages(id);
-    if (!_disposed) _readSteps(id, light: false);
-  }
-
-  /// The name of the step [message] was written in; null for a task's own.
-  String? stepNameOf(SuperTabMessage message) {
-    final group = snapshot?.conversation(message.conversationId);
-    return group != null && superTabIsStep(group)
-        ? superTabStepName(group)
-        : null;
-  }
-
-  /// [group]'s linked tasks with their checks' results ([superTabLinkedLine]);
-  /// null without any.
-  String? linkedLine(SuperTabConversation? group) {
-    final state = snapshot;
-    return group == null || state == null
-        ? null
-        : superTabLinkedLine(state, group);
-  }
-
   bool hasOlder(String id) => _before[id] != null;
 
   /// Conversations whose reader is scrolled up ([readingBack]).
@@ -2706,7 +2647,7 @@ class SuperTabController extends ChangeNotifier {
       Map.unmodifiable(_mentions[conversationId] ?? const {});
 
   /// Makes conversation [id] part of [snapshot]: one not held (a closed
-  /// group a link or Work details names) is read by id. False when it cannot
+  /// group a link names) is read by id. False when it cannot
   /// be read.
   Future<bool> loadGroup(String id) async {
     if (snapshot == null) return false;
@@ -2823,37 +2764,6 @@ class SuperTabController extends ChangeNotifier {
     return done != null
         ? null
         : operationError ?? 'Another change is on its way. Try again.';
-  }
-
-  /// Sets task [taskId]'s priority for everyone (backend `work.priority`,
-  /// task #3117): null once done, else why it was refused. Only a person or
-  /// the project's PM may; an older server refuses the command as unknown.
-  Future<String?> setTaskPriority(
-    String taskId,
-    SuperTabTaskPriority priority,
-  ) async {
-    final done = await command({
-      'type': 'work.priority',
-      'conversationId': taskId,
-      'priority': priority.badge,
-    });
-    return done != null
-        ? null
-        : operationError ?? 'Another change is on its way. Try again.';
-  }
-
-  /// Whether the reader may set P0 and pause or resume any task of [project] (spec "Who may do what on the Board").
-  bool maySteer(SuperTabProject project) =>
-      project.canSteer(accountId, swarmOwner: isOwner);
-
-  /// Whether the reader may give [task] [priority]: anyone who may write, in a project not on the Board; on the
-  /// Board, P1 to P3 on their own card, and anything when they steer ([maySteer]). The server decides (#3819).
-  bool mayPrioritize(SuperTabConversation task, SuperTabTaskPriority priority) {
-    if (!canWrite) return false;
-    final project = snapshot?.projectById(task.projectId);
-    if (project == null || !project.boardMode) return true;
-    if (maySteer(project)) return true;
-    return task.requesterId == accountId && priority != SuperTabTaskPriority.p0;
   }
 
   /// Whether [group] is out of the app: there is no private channel to the
@@ -3053,13 +2963,6 @@ class SuperTabController extends ChangeNotifier {
     id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
-    final group = snapshot!.conversation(id)!;
-    // A task's project's closed tasks, read once: its menu offers Archived
-    // conversations only when there are some (view.dart _mayHaveArchived).
-    // A Buddy chat reads none.
-    if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
-      unawaited(loadDormant(group.projectId));
-    }
     _moveView(to: id);
     // Held from an earlier visit: what arrived meanwhile is not among them.
     if (_messages[id]?.isNotEmpty ?? false) {
@@ -3473,13 +3376,6 @@ class SuperTabController extends ChangeNotifier {
           // Still open: a conversation this read leaves out closed it above.
           unawaited(loadThread());
         }
-        // A new store holds no closed groups yet, nor one a saved view drew:
-        // the open projects read theirs.
-        if (read.full || stateReads == 1) {
-          // A read for the parts before has nothing to give these.
-          _dormantPages.clear();
-          _dormantReads.clear();
-        }
       }
       // A first open draws its sidebar now, not once its chat answers.
       if (stateReads == 1) _changed();
@@ -3503,7 +3399,7 @@ class SuperTabController extends ChangeNotifier {
       error = null;
       // Counters that did not move have no news for the conversation,
       // whatever else changed: no read of it (spec 2026-11-02-poll-cost,
-      // Part 2). Its task's steps keep their own counters.
+      // Part 2).
       if (early != null || !_messagesCurrent(selectedId)) {
         await (selectedId == earlyId && messagesRead != null
             ? messagesRead
@@ -3513,8 +3409,6 @@ class SuperTabController extends ChangeNotifier {
                     ? (query: earlyQuery!, page: early, clock: took)
                     : null,
               ));
-      } else {
-        _readSteps(selectedId, light: false);
       }
       if (stateReads == 1) {
         // Where a first open's time went, from the tab asking to the chat it shows.
@@ -3695,67 +3589,6 @@ class SuperTabController extends ChangeNotifier {
     } on SuperTabFailure catch (failure) {
       if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) return false;
       rethrow;
-    }
-  }
-
-  /// The closed groups read for each project: where the next earlier page
-  /// starts, null when there is none. A project not here has not been read.
-  final _dormantPages = <String, String?>{};
-  final _dormantReads = <String, Future<void>>{};
-
-  /// Whether [projectId]'s closed groups have been read.
-  bool dormantLoaded(String projectId) => _dormantPages.containsKey(projectId);
-
-  /// Whether a read of [projectId]'s closed groups is under way.
-  bool dormantLoading(String projectId) => _dormantReads.containsKey(projectId);
-
-  /// Whether [projectId] has closed groups older than those read.
-  bool hasEarlierDormant(String projectId) => _dormantPages[projectId] != null;
-
-  /// Reads [projectId]'s closed groups, newest first, a page at a time: the
-  /// first page once, [earlier] the next one. Joins a read under way.
-  Future<void> loadDormant(String projectId, {bool earlier = false}) {
-    if (_disposed || accessRevoked || _parts == null) return Future.value();
-    if (_dormantReads[projectId] case final reading?) return reading;
-    if (earlier ? !hasEarlierDormant(projectId) : dormantLoaded(projectId)) {
-      return Future.value();
-    }
-    _changed();
-    late final Future<void> reading;
-    reading = _readDormant(projectId, earlier).whenComplete(() {
-      if (identical(_dormantReads[projectId], reading)) {
-        _dormantReads.remove(projectId);
-      }
-      _changed();
-    });
-    return _dormantReads[projectId] = reading;
-  }
-
-  Future<void> _readDormant(String projectId, bool earlier) async {
-    final parts = _parts!;
-    final before = earlier ? _dormantPages[projectId] : null;
-    try {
-      final answer = await request(
-        'GET',
-        '$_path/groups?dormant=1&projectId=${Uri.encodeQueryComponent(projectId)}'
-            '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
-      );
-      if (_disposed || accessRevoked || !identical(parts, _parts)) return;
-      final change = parts.addDormant(answer['groups'] as List);
-      _dormantPages[projectId] = answer['next'] as String?;
-      // Nothing new read changes nothing drawn, nor the view kept.
-      if (change.changed) _redraw();
-    } catch (failure) {
-      if (_isUpdateRequired(failure)) {
-        _requireUpdate();
-        return;
-      }
-      // Not read: the next open of the list asks again.
-      appLog.warn(
-        'swarm',
-        'closed groups read failed: '
-            '${failure is SuperTabFailure ? '${failure.code} (status ${failure.statusCode})' : failure.runtimeType}',
-      );
     }
   }
 
@@ -4056,25 +3889,7 @@ class SuperTabController extends ChangeNotifier {
           // A block: whenComplete would wait on the removed future, itself.
           _reading.remove((id, older));
         });
-    // The open task's steps are read with it: its chat shows their rows.
-    if (!older && id == selectedId) _readSteps(id, light: light);
     return read;
-  }
-
-  void _readSteps(String id, {required bool light}) {
-    final state = snapshot;
-    final task = state?.conversation(id);
-    if (state == null || task == null) return;
-    for (final step in superTabStepsOf(state, task)) {
-      // Read again only when the Swarm says the step moved past what was read
-      // (final review, minor 8: every poll read every step); a step with no
-      // message yet is read once.
-      if (_messages[step.id] != null &&
-          step.lastMessageSequence <= _readUpTo(step.id)) {
-        continue;
-      }
-      unawaited(_readMessages(step.id, light: light));
-    }
   }
 
   Future<void> _loadMessages(

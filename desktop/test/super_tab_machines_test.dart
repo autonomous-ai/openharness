@@ -25,6 +25,7 @@ import 'package:harness/widgets/browser_menu_guard.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
+import 'swarm_attention_test.dart' show waitingQuestion;
 import 'support/capture.dart';
 import 'support/super_tab_fixture.dart';
 
@@ -242,10 +243,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: SuperTabMachines(
-              controller: c,
-              onAddAgent: (_) {},
-            ),
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
           ),
         ),
       );
@@ -552,7 +550,7 @@ void main() {
     });
 
     testWidgets(
-      'tapping the line lists every agent, Working, Waiting, Idle, then Kept (closed), with name, role and status',
+      'tapping the line lists every agent, Working, Waiting, Idle, then Closed, with name, role and status',
       (tester) async {
         final f = SuperTabLaunchFixture();
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -571,31 +569,26 @@ void main() {
           agent('dev', 'Nova'),
           agent('rev', 'Sage'),
           agent('idle', 'Iris'),
-          // Closed on its machine and kept by someone: not Idle (Huy, 2026-11-02).
-          agent('kept', 'Kai')
-            ..['workDecision'] = 'keep'
-            ..['downSince'] = DateTime.now().toUtc().toIso8601String()
-            ..['configuration'] = {
-              'engine': 'claude',
-              'model': 'opus',
-              'effort': 'high',
-            },
+          // Its session gone on a machine that is there: Closed, never Idle.
+          agent('gone', 'Kai')
+            ..['downSince'] = DateTime.now().toUtc().toIso8601String(),
         ];
         (server.state['agents'] as List)[2]['role'] = 'reviewer';
         (server.state['conversations'] as List)[0]
           ..['leadId'] = 'pm'
-          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle', 'kept']
-          ..['assignment'] = {'agentId': 'rev', 'status': 'needs_human'};
+          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle', 'gone'];
         f.app.machineStates['m']!
           ..agents = [
-            for (final id in ['pm', 'dev', 'rev', 'idle', 'kept'])
+            for (final id in ['pm', 'dev', 'rev', 'idle', 'gone'])
               Agent.fromJson({
                 'id': 'native-$id',
                 'name': id,
                 'engine': 'codex',
               }),
           ]
-          ..processingAgentIds.addAll(['native-pm', 'native-dev']);
+          ..processingAgentIds.addAll(['native-pm', 'native-dev'])
+          // Sage waits at a question in its terminal.
+          ..blockedAgents['native-rev'] = waitingQuestion('native-rev');
         final c = await f.app.superTabs.open(tabId);
         await c.refresh();
         c.toggleMachineExpanded('m');
@@ -629,7 +622,7 @@ void main() {
         expect(list, findsOneWidget);
         double top(Finder finder) => tester.getTopLeft(finder).dy;
         final headings = [
-          for (final group in ['Working', 'Waiting', 'Idle', 'Kept (closed)'])
+          for (final group in ['Working', 'Waiting', 'Idle', 'Closed'])
             find.descendant(of: list, matching: find.text(group)),
         ];
         for (final heading in headings) {
@@ -647,7 +640,7 @@ void main() {
           headings[2],
           row('idle'),
           headings[3],
-          row('kept'),
+          row('gone'),
         ];
         for (var i = 1; i < order.length; i++) {
           expect(top(order[i]), greaterThan(top(order[i - 1])));
@@ -679,18 +672,6 @@ void main() {
           );
         }
         expect(find.descendant(of: list, matching: agentAvatar), findsNothing);
-        // Hovering the kept, closed agent reads as its line does, the mockup Huy approved: status, machine, model, effort.
-        Finder tip(String id) => find.ancestor(
-          of: row(id),
-          matching: find.byWidgetPredicate(
-            (w) =>
-                w is Tooltip &&
-                (w.message ?? '').startsWith('Kept (closed) · ') &&
-                (w.message ?? '').endsWith(' · Opus · high'),
-          ),
-        );
-        expect(tip('kept'), findsOneWidget);
-        expect(tip('idle'), findsNothing);
 
         await tester.tap(row('rev'));
         await tester.pump();
@@ -723,8 +704,7 @@ void main() {
       ];
       (server.state['conversations'] as List)[0]
         ..['leadId'] = 'pm'
-        ..['agentIds'] = ['pm', 'dev']
-        ..['assignment'] = {'agentId': 'dev', 'status': 'needs_human'};
+        ..['agentIds'] = ['pm', 'dev'];
       server.state['machines'] = [
         {
           'machineId': 'm',
@@ -782,14 +762,6 @@ void main() {
           ),
         ),
         findsOneWidget,
-      );
-      expect(
-        tester
-            .widget<ActivityMark>(
-              find.descendant(of: dev, matching: find.byType(ActivityMark)),
-            )
-            .activity,
-        HarnessActivity.needsInput,
       );
       await tester.tap(dev);
       await tester.pumpAndSettle();
@@ -1352,7 +1324,10 @@ void main() {
       final more = find.byKey(const ValueKey('super-machine-more-studio'));
       final rowKey = find.byKey(const ValueKey('super-machine-studio'));
 
-      Future<dynamic> show(WidgetTester tester, {String owner = 'owner'}) async {
+      Future<dynamic> show(
+        WidgetTester tester, {
+        String owner = 'owner',
+      }) async {
         final server = _RemovalServer();
         server.state['machines'] = [machine(owner)];
         final c = server.controller();
@@ -1893,7 +1868,6 @@ void main() {
       await tester.pump();
     },
   );
-
 }
 
 /// A hardware reading's value in a machine's expanded readings.

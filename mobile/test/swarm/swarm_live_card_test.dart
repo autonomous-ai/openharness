@@ -491,21 +491,4 @@ void main() {
     expect(card('m1'), findsNothing);
     expect(find.text('Add a sign-in screen.'), findsOneWidget);
   });
-
-  test("a task's status reads in the desktop's words", () {
-    final desktop = File('../desktop/lib/super_tabs/live_card.dart')
-        .readAsStringSync();
-    final words = {
-      for (final m in RegExp(
-        r"((?:'\w+'(?: \|\| )?)+) => '([^']+)'",
-      ).allMatches(desktop))
-        for (final status in RegExp(r"'(\w+)'").allMatches(m.group(1)!))
-          status.group(1)!: m.group(2)!,
-    };
-    expect(words, isNotEmpty);
-    for (final MapEntry(key: status, value: word) in words.entries) {
-      expect(swarmCardStatus({'status': status}), word, reason: status);
-    }
-    expect(swarmCardStatus(null), 'Not started');
-  });
 }
