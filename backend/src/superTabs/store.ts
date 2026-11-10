@@ -2157,7 +2157,7 @@ export class SuperTabStore {
         const next = Math.max(0, ...own.map(m => sequences.get(m.id) ?? 0))
         if (next) await writeReadMark(tx as unknown as PrismaClient, { tabId, personId: actor.userId, conversationId: command.conversationId, sequence: next, now: context.now })
       }
-      this.tellPhones(tx, tabId, effects.state, effects.messages)
+      this.tellPhones(tx, tabId, effects.state, effects.messages, original)
       // The cleaned text (commands.ts WORDS), never the command as it was sent (security review 2 of #2967).
       if (effects.messageEdit) {
         await tx.superTabMessage.update({ where: { id: effects.messageEdit.messageId }, data: { text: effects.messageEdit.text, editedAt: new Date(context.now) } })
@@ -5030,14 +5030,14 @@ export class SuperTabStore {
   }
 
   /** The phones of whoever `written` tells hear of it once the write commits (push/send.ts). */
-  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[]): void {
+  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], before: SuperTabState = state): void {
     const tell = this.hooks.phoneNotices
     // Only an agent's post can be its words in its 1:1 chat (push/notices.ts chatNotices): nothing else is looked at for a write without.
     if (!tell || !messages.some(m => m.author.kind === 'agent' && m.post)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {
-      notices = chatNotices(tabId, state, messages)
+      notices = chatNotices(tabId, state, messages, before)
     } catch (error) {
       logger.warn('phone push failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       return
