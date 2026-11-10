@@ -116,7 +116,7 @@ class SuperTabMessageText extends StatelessWidget {
       for (final name in mentions)
         if (!said.any((tag) => _says(tag, name, addresses))) '@$name',
     ];
-    return MarkdownBody(
+    final body = MarkdownBody(
       data: withTags(unsaid, text),
       selectable: false,
       softLineBreak: true,
@@ -156,7 +156,35 @@ class SuperTabMessageText extends StatelessWidget {
         style: DesktopChrome.metadata(),
       ),
     );
+    // Arabic or Hebrew reads from the right, its lines ending at the bubble's right edge, whatever the app's direction.
+    final own = directionOf(text);
+    return own == null || own == Directionality.of(context)
+        ? body
+        : Directionality(textDirection: own, child: body);
   }
+
+  /// The direction [text]'s words run in, by Unicode's rule (its first strong letter): rtl for Hebrew, Arabic and the other
+  /// right-to-left scripts, ltr for any other letter, null with no letter at all. Tags and task numbers that open it (`@Pip`,
+  /// `#12`) are names, not its words, and do not decide it.
+  static TextDirection? directionOf(String text) {
+    final words = text.replaceFirst(_openingNames, '');
+    for (final rune in words.runes) {
+      if (_rightToLeft(rune)) return TextDirection.rtl;
+      if (_letter.hasMatch(String.fromCharCode(rune))) return TextDirection.ltr;
+    }
+    return null;
+  }
+
+  static final _openingNames = RegExp(r'^(?:\s*[@#][^\s]+)+\s*');
+  static final _letter = RegExp(r'\p{L}', unicode: true);
+
+  static bool _rightToLeft(int rune) =>
+      (rune >= 0x0590 && rune <= 0x08FF) || // Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan, Mandaic
+      (rune >= 0xFB1D &&
+          rune <= 0xFDFF) || // Hebrew and Arabic presentation forms
+      (rune >= 0xFE70 && rune <= 0xFEFF) ||
+      (rune >= 0x10800 && rune <= 0x10FFF) || // historic right-to-left scripts
+      (rune >= 0x1E800 && rune <= 0x1EFFF);
 }
 
 /// GFM encodes '%' again in bare URLs. Keep the original URL, including encoded

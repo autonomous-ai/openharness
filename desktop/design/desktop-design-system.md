@@ -550,7 +550,9 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   you and a chat's own agent (a Buddy chat, an agent chat) there are no names
   or faces; in a group chat a speaker's name sits over their first bubble in
   13 plain secondary ink, and their round 28 face by their last. No engine
-  mark: colour is the face's. Text reads at 14 on 20 px lines (`SwarmType`).
+  mark: colour is the face's. Text reads at 14 on 20 px lines (`SwarmType`). A
+  message reads in its own words' direction (Unicode's first strong letter, an opening `@name` or `#12` aside): Arabic or
+  Hebrew from the bubble's right edge, whatever the app's (`SuperTabMessageText.directionOf`).
 - **Chat times.** No time in a bubble's row. A time sits centered between
   messages only after a pause of more than five minutes (`SwarmChatTime`);
   a bubble's full date and time are on its tooltip.
