@@ -164,7 +164,8 @@ export class GitHubTrain<T extends TrainPull> {
     // A fork's pull request is not carried: its head is no commit of this repository, so the merges API cannot merge it into
     // the train's branch. It merges on its own checks, as before the train, and only while no train is open to be moved under.
     const forks = ready.filter(pull => pull.fork)
-    if (forks.length) return forks
+    // Nothing to carry: nothing more is read (the merger passes every 30 seconds).
+    if (forks.length || !ready.length) return forks
     const { riders, alone } = nextTrain(ready, (await this.closed()).filter(closed => closed.red && !closed.mergedAs))
     for (const { pull, train: carried } of alone) await this.host.failedAlone(pull, carried)
     if (!riders.length) return []
