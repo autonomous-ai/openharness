@@ -171,20 +171,20 @@ describe('restarting an agent', () => {
     expect(restartAgent).toHaveBeenCalledOnce()
   })
 
-  // Security review 2 of #2255: a Mac offline over a week has a lapsed local roster, which once restarted an old Buddy
+  // Security review 2 of #2255: a Mac offline over a week has a lapsed local roster, which once restarted an old Swarm session
   // without its role.
-  it('restarts an old Buddy with its role after the local roster lapsed', async () => {
+  it('restarts an old Swarm session with its role after the local roster lapsed', async () => {
     const data = mkdtempSync(join(tmpdir(), 'restart-roster-'))
     try {
       retainContributions(data, 'machine', [{ tabId: 'tab', agent: { harnessId: 'a1', machineId: 'machine' } }], Date.now() - RETENTION_LAPSE_MS - 60_000)
       const session = agent({ startedBy: 'agent' })
-      const role = vi.fn(async () => ({ role: 'buddy' as const }))
+      const role = vi.fn(async () => ({ role: 'agent' as const }))
       const adoptSwarmSkill = createSwarmSkillAdoption({ role, save: vi.fn(), candidate: id => retainedHarnesses(data).has(id),
         authority: createLaunchAuthority({ byAgent: () => session, revision: () => 0, cancelled: () => false }) })
       const run = setup(session, { adoptSwarmSkill })
       expect(await run.restart('a1')).toMatchObject({ ok: true })
       expect(role).toHaveBeenCalledOnce()
-      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'buddy', key: 'a1' } }),
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'agent', key: 'a1' } }),
         expect.anything(), expect.any(Function), undefined)
     } finally { rmSync(data, { recursive: true, force: true }) }
   })

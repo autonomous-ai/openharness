@@ -490,7 +490,6 @@ void main() {
       freeAgents: 3,
       own: false,
       native: false,
-      team: true,
       owner: diego,
     ),
     LeadMachine(
@@ -703,14 +702,13 @@ void main() {
     online: true,
     freeAgents: 0,
   );
-  const diegoTeam = LeadMachine(
+  const diegoMac = LeadMachine(
     id: 'diego-mac',
     name: 'Diego MacBook',
     online: true,
     freeAgents: 3,
     own: false,
     native: false,
-    team: true,
   );
 
   for (final brightness in Brightness.values) {
@@ -774,12 +772,12 @@ void main() {
 
   for (final brightness in Brightness.values) {
     testWidgets(
-      'A teammate’s Team account takes the PM when yours are full in ${brightness.name}',
+      'A teammate’s machine takes the PM when yours are full in ${brightness.name}',
       (tester) async {
         final (box, boundary) = await mount(
           tester,
           brightness: brightness,
-          leadMachines: [studioFull, diegoTeam],
+          leadMachines: [studioFull, diegoMac],
           setup: agentIn,
           lead: 'diego-mac',
         );
@@ -787,7 +785,7 @@ void main() {
         expect(box.leadSwarmMachine, 'diego-mac');
         // The repo stays the one chosen on your machine; Diego's Mac clones it.
         expect(box.machineId, 'm');
-        // Its own name only: no owner, no "Team account" words.
+        // Its own name only: no owner.
         expect(chipLabel(tester, 'machine'), 'Diego MacBook');
         expect(find.textContaining('there first'), findsNothing);
         box.setTask('Plan the launch');
@@ -824,7 +822,7 @@ void main() {
   testWidgets('Choosing your machine again starts the PM here', (tester) async {
     final (box, _) = await mount(
       tester,
-      leadMachines: [studio, diegoTeam],
+      leadMachines: [studio, diegoMac],
       setup: agentIn,
     );
     expect(box.leadThroughSwarm, isFalse);
@@ -1222,7 +1220,7 @@ void main() {
       tester,
       width: 520,
       textScale: 2,
-      leadMachines: [studioFull, diegoTeam],
+      leadMachines: [studioFull, diegoMac],
       setup: agentIn,
       lead: 'diego-mac',
     );

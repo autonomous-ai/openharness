@@ -133,7 +133,7 @@ void main() {
       ..connectionStatus = ConnectionStatus.connected;
   }
 
-  // The Buddy-chat post the web app sends (a person's message in their chat).
+  // The agent-chat post the web app sends (a person's message in their chat).
   Future<Object?> post() => app.superTabs.transport(
     'POST',
     '/api/super-tabs/tab/commands',
@@ -141,7 +141,7 @@ void main() {
       'operationId': 'op-1',
       'command': {
         'type': 'message.send',
-        'conversationId': 'buddy-chat',
+        'conversationId': 'agent-chat',
         'text': 'hi',
       },
     },
@@ -247,7 +247,7 @@ void main() {
 
     Future<Object?> upload() => app.superTabs.upload(
       tabId: 'tab',
-      conversationId: 'buddy-chat',
+      conversationId: 'agent-chat',
       name: 'shot.png',
       mime: 'image/png',
       file: HarnessAttachment('shot.png', Uint8List.fromList([1, 2, 3])),

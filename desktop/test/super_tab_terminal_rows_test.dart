@@ -182,7 +182,7 @@ void main() {
     );
   }
 
-  // Scholes, 10-29: his Buddy's "waiting at a prompt" line stayed after the
+  // Scholes, 10-29: his agent's "waiting at a prompt" line stayed after the
   // prompt was answered, and a new one came under every message after it.
   testWidgets(
     'a prompt warning shows once, while its agent still waits, and goes once it is answered',

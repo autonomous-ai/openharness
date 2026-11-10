@@ -1920,8 +1920,8 @@ class _SuperTabViewState extends State<SuperTabView>
     // reader may read it, and a refusal looks like a message that is gone.
     final readable = await c.loadGroup(id);
     if (!mounted || request != _jumpRequest || c.accessRevoked) return;
-    // The app may open another chat for it (an old Chat with PM, with Buddies
-    // on): that is not this message, so the reader stays where they are.
+    // The app may open another chat for it (a private chat it hides): that
+    // is not this message, so the reader stays where they are.
     if (!readable || c.landsOn(id) != id) {
       say('Message unavailable');
       return;
@@ -2086,12 +2086,7 @@ class _SuperTabViewState extends State<SuperTabView>
       (agentId) => c.snapshot?.agent(agentId),
     );
     return messages
-        .where(
-          (m) =>
-              _shown(m) &&
-              (replies || m.inMainStream) &&
-              !answered.contains(m.id),
-        )
+        .where((m) => (replies || m.inMainStream) && !answered.contains(m.id))
         .toList();
   }
 
@@ -2101,27 +2096,6 @@ class _SuperTabViewState extends State<SuperTabView>
     for (final m in _shownMessages(id))
       if (m.conversationId == id) m,
   ];
-
-  /// What people never read in a chat, in the list and as a reply's quote: a
-  /// message waiting for an agent, notices older backends stored, the PM's own
-  /// notices about the work (backend NOTICE_READERS).
-  static const _neverShown = {
-    'delivery-hold',
-    'work-stalled',
-    'work-lost',
-    'work-resumed',
-    'idle-stop',
-    'idle',
-    'review-failed',
-    'update-request',
-    'digest-request',
-    'overlap',
-    'pair-loop',
-    'notice-digest',
-  };
-
-  static bool _shown(SuperTabMessage m) =>
-      !_neverShown.contains(m.source['kind']);
 
   /// The row of [id]'s list that shows [messageId], its own. Null while the
   /// message is not loaded.
@@ -3274,6 +3248,21 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _projectSettings(
     SuperTabConversation group,
+    SuperTabProject opened,
+  ) => showProjectSettings(
+    context,
+    c,
+    opened,
+    () => _projectSettingsRows(
+      group,
+      c.snapshot?.projectById(opened.id) ?? opened,
+    ),
+    rowHeight: _phone ? kFingerTarget : 32,
+  );
+
+  /// Project settings' rows from what is held now: the dialog asks again on each change (task #4705).
+  List<ProjectSettingsRow> _projectSettingsRows(
+    SuperTabConversation group,
     SuperTabProject project,
   ) {
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
@@ -3290,7 +3279,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // (task #3194).
     final repository = project.repository;
     final leadId = c.snapshot?.conversation(project.leadConversationId)?.leadId;
-    return showProjectSettings(context, c, project, [
+    return [
       if (editable && owner)
         row('Rename project', 'rename', value: project.name),
       row(
@@ -3311,7 +3300,7 @@ class _SuperTabViewState extends State<SuperTabView>
           value: leadId == null ? 'Starting…' : c.snapshot!.agentName(leadId),
         ),
       if (editable && owner) row('Delete Project', 'delete', danger: true),
-    ], rowHeight: _phone ? kFingerTarget : 32);
+    ];
   }
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
@@ -3561,9 +3550,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final quoted = answers == null || byId.containsKey(answers)
         ? null
         : c.quoted(message.conversationId, answers);
-    final fetched = quoted?.message;
-    final reply =
-        byId[answers] ?? (fetched != null && _shown(fetched) ? fetched : null);
+    final reply = byId[answers] ?? quoted?.message;
     final writable = c.canWrite && c.selected?.archived == false;
     final root = message.thread;
     final thread = inThread || root != message.id
@@ -3875,7 +3862,7 @@ class _SuperTabViewState extends State<SuperTabView>
     bool tagged(SuperTabMessage m) =>
         (talk && m.namesAgents) ||
         switch (c.thread(m.conversationId, m.id)) {
-          final thread? => thread.askTag != null || thread.replies > 0,
+          final thread? => thread.replies > 0,
           null => false,
         };
     final at = split == null
@@ -4531,8 +4518,6 @@ class _SuperTabViewState extends State<SuperTabView>
             );
           },
         ),
-        // A chat kept to read gets one muted bar in place of the box, so
-        // nothing looks typeable: a closed group.
         // Swarm v4 (anh Dee 2026-11-08): only agents post in a project's channel and its tasks' chats. People talk to
         // their own agents.
         if (group != null && _agentsOnly(group))
@@ -4557,14 +4542,6 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
-            ),
-          )
-        else if (group != null && group.archived)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-            child: Text(
-              'This group is closed. You can read it but not write.',
-              style: DesktopChrome.metadata(),
             ),
           )
         else
@@ -4709,7 +4686,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                       ? null
                                       : group == null
                                       ? 'Loading conversation…'
-                                      : c.canWrite
+                                      : c.canWrite && !group.archived
                                       ? _messageHint(group)
                                       : 'Read-only conversation',
                                   border: InputBorder.none,

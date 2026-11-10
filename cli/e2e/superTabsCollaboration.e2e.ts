@@ -6,7 +6,6 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { b64e, newIdentity } from '../src/lib/e2ee/core.js'
-import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { superTabCommand } from '../src/superTabs/command.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until, type IsolatedDaemon } from './harness/daemon.js'
@@ -42,7 +41,6 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
   onTestFailed(() => daemons.forEach((daemon, i) => console.log(`Fixture machine ${i}:\n${daemon.log().split('\n').slice(-90).join('\n')}`)))
   const agents: Array<Record<string, any>> = [], messages: Array<Record<string, any>> = []
   const pending = new Map<string, Record<string, any>>()
-  const contexts = new Map<string, Record<string, any>>(), observations: Array<Record<string, any>> = []
   let revision = 0, contributionAllowed = true
   const agentId = (machine: string, harness: string) => createHash('sha256').update(JSON.stringify([machine, harness])).digest('hex').slice(0, 24)
   const failure = () => ({ status: 403, error: { code: 'FORBIDDEN', message: 'This contribution is no longer shared.' } })
@@ -54,25 +52,6 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
         ? agents.filter(agent => agent.machineId === caller.machineId).map(agent => ({ tabId: TAB, agent, observers: [] })) : [] }
     }
     if (!contributionAllowed) return failure()
-    if (path === `/api/super-tabs/${TAB}/native` && method === 'POST') {
-      expect(caller.account).toBe(member.account)
-      const target = agents.find(agent => agent.id === body.agentId)!
-      contexts.set(body.operationId, { contextId: body.operationId, tabId: TAB, conversationId: body.conversationId,
-        harnessId: target.harnessId, machineId: target.machineId, operatorAccount: caller.account, lastEventId: null })
-      return { data: { contextId: body.operationId } }
-    }
-    if (path.startsWith(`/api/super-tabs/${TAB}/native/`)) {
-      const context = contexts.get(path.split('/').at(-1)!)!
-      expect(caller.machineId).toBe(context.machineId)
-      if (method === 'GET') return { data: context }
-      const eventId = createHash('sha256').update(JSON.stringify(['native-event', context.contextId, body.turnId, body.kind])).digest('hex').slice(0, 24)
-      if (!observations.some(row => row.eventId === eventId)) {
-        expect(body.previousEventId).toBe(context.lastEventId)
-        observations.push({ ...body, eventId, operatorAccount: context.operatorAccount, executionAccount: caller.account, conversationId: context.conversationId })
-        context.lastEventId = eventId
-      }
-      return { data: { eventId } }
-    }
     if (path === `/api/super-tabs/${TAB}`) return { data: { revision, state: { id: TAB, agents } } }
     if (path.endsWith('/commands')) {
       const command = body.command, author = body.asAgentId ? agents.find(agent => agent.id === body.asAgentId)! : null
@@ -162,20 +141,6 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
   await until('starter host delivers the member result', () => pending.get(leadId)?.status === 'delivered' || null, 45_000)
   expect(messages.at(-1)!.author.account).toBe(member.account)
   expect((await onB.request('agents_list')).agents).toHaveLength(1)
-  const contextId = 'member-on-own-terminal'
-  expect(await onB.request('super_tabs', { action: 'backend', method: 'POST', path: `/api/super-tabs/${TAB}/native`,
-    body: { operationId: contextId, conversationId: GROUP, agentId: workerId } })).toMatchObject({ value: { contextId } })
-  expect(await viaA.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId })).toMatchObject({ error: 'GUEST_NOT_ALLOWED' })
-  expect(await onB.request('super_tabs', { action: 'prepareNative', tabId: TAB, contextId })).toMatchObject({ inputContext: contextId })
-  const ready = onB.next(frame => frame.type === 'terminal_ready' && frame.payload?.requestId === 'member-terminal')
-  onB.send('terminal_open', { requestId: 'member-terminal', protocolVersion: 3, agentId: harnessId, cols: 100, rows: 30, inputContext: contextId })
-  const streamId = (await ready).payload!.streamId as string
-  await onB.waitForBinary(frame => frame.streamId === streamId && frame.kind === TerminalBinaryKind.keyframe)
-  onB.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 0, compressed: false, bytes: Buffer.from('Keep this change focused') })
-  onB.sendBinary({ kind: TerminalBinaryKind.input, streamId, seq: 1, compressed: false, bytes: Buffer.from('\r') })
-  await until('remote terminal observation', () => observations.length >= 2 || null, 30_000)
-  expect(observations.map(row => row.kind)).toEqual(['prompt', 'answer'])
-  expect(observations.every(row => row.operatorAccount === member.account && row.executionAccount === member.account && row.conversationId === GROUP)).toBe(true)
   expect([...relay.webSent.values()].flat().filter(frame => ['super_tabs', 'agent_create', 'terminal_open'].includes(String(frame.type)))
     .every(frame => !!(frame.payload as any)?.__e2e)).toBe(true)
   contributionAllowed = false

@@ -449,12 +449,12 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
-    // Project instructions, phase 4 (decision 1): a coordinator, an agent or a Buddy. An older Harness sends lead, dev or review
+    // Project instructions, phase 4 (decision 1): a coordinator or an agent. An older Harness sends lead, dev or review
     // (a Reviewer, which keeps its swarm-review file); the next release may send the kinds, so this one takes both.
     const swarm = swarmRole === undefined || swarmRole === null ? null : roleFromWire(swarmRole)
     if (swarmRole !== undefined && swarmRole !== null &&
       (!swarm || !swarmLaunch?.role(swarm.role) || (engine !== 'claude' && engine !== 'codex'))) {
-      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator, agent or buddy (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'A Swarm role is coordinator or agent (or lead, dev or review from an older Harness), for Claude Code or Codex.' }); return
     }
     // The skills of the project the agent joins (superTabs/start.ts); a start from before modes sends none.
     const swarmSkillMode = payload.swarmSkillMode

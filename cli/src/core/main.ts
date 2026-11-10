@@ -1027,8 +1027,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
-      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR),
-        sleepingBuddies: () => swarm.retainedSleepingBuddies(env.ADAPTER_DATA_DIR) } }) } : {}),
+      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
@@ -2955,12 +2954,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     announceSession,
     engineReady: (engine, ms) => engineLinks.ready(engine, ms),
     stoppedAgents,
-    // A Swarm Buddy keeps running when a window closes its view (Diego, 10-30); Stop Harness above still stops it.
     ...(swarm ? {
       leadProtected: (agentId: string, changeId?: string) => swarm.leadCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitching: (agentId: string, changeId: string) => swarm.leadSwitching(env.ADAPTER_DATA_DIR, agentId, changeId),
       leadSwitchEnded: (agentId: string, changeId: string, stopped: boolean) => swarm.leadSwitchEnded(env.ADAPTER_DATA_DIR, agentId, changeId, stopped),
-      buddyProtected: (agentId: string, changeId?: string) => swarm.buddyCloseProtected(env.ADAPTER_DATA_DIR, agentId, changeId),
     } : {}),
   })
   backend.closeAgentService = closing.closeAgentService

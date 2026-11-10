@@ -98,7 +98,7 @@ function multipart(fields: [string, string][], env: NodeJS.ProcessEnv): { body: 
   return { body: Buffer.concat(chunks), type: `multipart/form-data; boundary=${boundary}` }
 }
 
-export function scrub(text: string, secret?: string): string {
+function scrub(text: string, secret?: string): string {
   if (!secret) return text
   for (const form of new Set([secret, encodeURIComponent(secret), encodeURIComponent(secret).replace(/%20/g, '+')])) text = text.split(form).join('[credential]')
   return text
