@@ -109,6 +109,7 @@ import '../super_tabs/attachment_viewer.dart' show superTabForgetPictures;
 import '../super_tabs/image_cache.dart' show superTabImageCache;
 import '../super_tabs/backend_transport.dart';
 import '../super_tabs/client.dart';
+import '../super_tabs/swarm_starts.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/identity.dart' show superTabMachineName;
 import '../super_tabs/view_store.dart';
@@ -1915,6 +1916,9 @@ class AppNotifier extends ChangeNotifier {
   /// What a host keeps of the account on this device beside the Super Tab
   /// views; Settings ▸ Account's Clear now clears it with them.
   final browserCopies = BrowserCopies();
+
+  /// A Swarm's New Project and New Agent going on after their forms closed, each a row in its Swarm's left pane.
+  final swarmStarts = SwarmStarts();
 
   late final SuperTabClient superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
@@ -23545,6 +23549,7 @@ class AppNotifier extends ChangeNotifier {
     agentMessagesRemote.dispose();
     agentMessages.dispose();
     sharedTabs.dispose();
+    swarmStarts.dispose();
     superTabs.dispose();
     for (final project in _orchestratorProjects.values) {
       project.dispose();
