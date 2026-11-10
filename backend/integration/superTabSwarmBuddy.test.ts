@@ -13,7 +13,6 @@ import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
-import { readInbox } from '../src/superTabs/read/inbox.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { profiled } from './plans.test-support.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -628,21 +627,6 @@ describe('the PM\'s lines and losing a project', () => {
   })
 })
 
-describe('the inbox (security review 1 of #2435)', () => {
-  it('never previews a lost project\'s line in the one Buddy chat, nor its session threads', async () => {
-    const f = await swarm()
-    const { chat, main } = await buddy(f)
-    await send(f, chat, 'An earlier word of mine')
-    await secretLine(f, chat, main, 'SECRET PM LINE')
-    const preview = async () => JSON.stringify((await readInbox(f.store, peer, f.tab)).latest.filter(l => l.conversationId === chat))
-    expect(await preview()).toContain('SECRET PM LINE')
-    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
-    const after = await preview()
-    expect(after).not.toContain('SECRET PM LINE')
-    expect(after).toContain('An earlier word of mine')
-  })
-})
-
 describe('a phone\'s message racing Remove Buddy (security review 2 of #2435)', () => {
   it('never leaves a Buddy starting in the old chat once its person removed their one Buddy', async () => {
     const f = await swarm()
@@ -796,16 +780,6 @@ describe('security re-check 2 of #2435', () => {
     expect(JSON.stringify(await f.store.messages(peer, f.tab, chat, { thread }))).not.toContain('TYPED SENTINEL')
   })
 
-  it('counts nothing of a lost project in what the person missed in # buddy', async () => {
-    const f = await swarm()
-    const { chat, main } = await buddy(f)
-    await send(f, chat, 'Mine')
-    await secretLine(f, chat, main, 'SECRET PM LINE')
-    // The secret project's line is the one row not theirs: it is what they missed.
-    expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 1 })
-    await f.execute({ type: 'project.sharing', projectId: f.secret.projectId, visibility: 'private', memberIds: [owner.sub] })
-    expect(await f.store.catchUp(peer, f.tab, chat, 0)).toMatchObject({ unread: 0 })
-  })
 })
 
 // Review of #2447: a phone's message in an older Buddy chat that no Buddy can answer was kept, and its person heard nothing.

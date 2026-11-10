@@ -1,17 +1,16 @@
 /**
- * The message ranges the inbox and the Threads view read (inbox.ts), kept per process so a re-read of a range nothing changed in
- * reads nothing. Apps read the inbox whenever the Swarm moves, about once a second in a busy one, and most of the ranges a read
- * names have not changed since the last: in Ken's slow log of 11-04 those re-reads (the `$or` over threads and each chat's
- * unread scan) were most of the slow message ops.
+ * The message ranges each chat's newest main row is read from (latest.ts), kept per process so a re-read of a range nothing changed
+ * in reads nothing. In Ken's slow log of 11-04 such re-reads were most of the slow message ops (the person's inbox and Threads read
+ * them then; both went with Swarm v4, 2026-11-10).
  *
- * Exact, never a guess: a range is keyed by its Swarm, chat, thread, sequence bounds, row limit and fields, and by its chat's
+ * Exact, never a guess: a range is keyed by its Swarm, chat, sequence bounds and row limit, and by its chat's
  * reactionSeq. A range is bounded above by the chat's newest numbered row (chatTop), so a new row is outside every range kept
  * before it; an edit and a delete bump reactionSeq (messageEdits.ts), so no range kept before them is read again. Rows are the
- * stored rows, the same for every reader: each read still applies its reader's checks to them (inbox.ts readable).
+ * stored rows, the same for every reader: each read still applies its reader's checks to them (latest.ts readable).
  *
  * Design. Growth: at most RANGE_ENTRIES ranges and RANGE_ROWS rows, least recently used out first, each gone after
  * RANGE_TTL_MS. Concurrency: one process's Map, no lock; two reads of one range may both read it and the later one stays.
- * Scale: rows held are SCAN_FIELDS or a preview (~0.3-1 KB), so 200k rows stay under ~200 MB at worst; a pod's memory warns first.
+ * Scale: a row held is what decides who reads it (~0.3 KB), so 200k rows stay under ~60 MB at worst; a pod's memory warns first.
  * Compatibility: old and new pods read the same rows; nothing is stored. Rollback: none needed. Failure: a miss reads Mongo.
  */
 
@@ -64,9 +63,8 @@ export class RangeCache<T> {
 }
 
 /** The key of one range: every part that decides its rows, each JSON-quoted so no id can stand for two parts. */
-export function rangeKey(tabId: string, conversationId: string, thread: string | null, sequence: Record<string, number>, limit: number,
-  version: number, fields: string, namedBy?: string): string {
-  return JSON.stringify([tabId, conversationId, thread, sequence, limit, version, fields, namedBy ?? null])
+export function rangeKey(tabId: string, conversationId: string, sequence: Record<string, number>, limit: number, version: number): string {
+  return JSON.stringify([tabId, conversationId, sequence, limit, version])
 }
 
 /** A chat's newest numbered row: a hidden one (recipients only) moves messageSeq but not lastMessageSequence. A range bounded by
@@ -81,7 +79,7 @@ export const RANGE_ENTRIES = 4_000
 export const RANGE_ROWS = 200_000
 export const RANGE_TTL_MS = 10 * 60_000
 
-/** Test seam: forget every kept range (inbox.ts holds them). */
+/** Test seam: forget every kept range (latest.ts holds them). */
 export const resetRangeCache = (): void => { for (const clear of clears) clear() }
 const clears: Array<() => void> = []
 /** A cache whose ranges resetRangeCache forgets. */

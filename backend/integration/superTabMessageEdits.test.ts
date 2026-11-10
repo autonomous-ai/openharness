@@ -237,7 +237,6 @@ describe('message.delete', () => {
     expect((await f.remove(f.web.conversationId, reply)).result).toMatchObject({ changed: true, kept: false })
     expect(await db.superTabMessage.findUnique({ where: { id: reply } })).toBeNull()
     expect(await db.superTabReaction.count({ where: { messageId: reply } })).toBe(0)
-    expect(await db.superTabActivity.count({ where: { messageId: reply } })).toBe(0)
     expect(await db.superTabDelivery.count({ where: { messageId: reply, status: { in: ['queued', 'claimed', 'gathered'] } } })).toBe(0)
     // Its file goes to the hourly sweep, which removes the stored bytes (lib/attachmentSweep.ts).
     expect((await db.superTabAttachment.findUniqueOrThrow({ where: { id: fileId } })).usedBy).toBe(EXPIRED_UPLOAD)
@@ -248,17 +247,6 @@ describe('message.delete', () => {
     // Gone means gone: no edit, no second delete, no reply to it.
     await expect(f.edit(f.web.conversationId, reply, 'Back')).rejects.toThrow(refused('NOT_FOUND'))
     await expect(f.remove(f.web.conversationId, reply)).rejects.toThrow(refused('NOT_FOUND'))
-  })
-
-  it('removes the tags a deleted message gave, so nobody keeps a waiting tag to a message they cannot open', async () => {
-    const f = await swarm()
-    const tagged = await f.send(f.web.conversationId, '@other can you look?', peer, { mentions: [other.sub] })
-    const kept = await f.send(f.web.conversationId, '@other and this one', peer, { mentions: [other.sub] })
-    await f.send(f.web.conversationId, 'Looking.', owner, { replyTo: kept })
-    expect(await db.superTabMention.count({ where: { messageId: { in: [tagged, kept] } } })).toBe(2)
-    await f.remove(f.web.conversationId, tagged)
-    await f.remove(f.web.conversationId, kept)
-    expect(await db.superTabMention.count({ where: { messageId: { in: [tagged, kept] } } })).toBe(0)
   })
 
   it('keeps a root with replies as "This message was deleted." and its replies keep their thread', async () => {

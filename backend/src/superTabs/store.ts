@@ -10,9 +10,9 @@ import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
 import { isRetiredCommand, retiredAnswer } from './retired.js'
 import { metrics } from '../lib/metrics.js'
-import { writeReplyActivity } from './activity.js'
 import type { ReactionTarget } from './reactions.js'
-import { chatNotices, phoneNotices, type ReplyRow, type TagRow } from '../push/notices.js'
+import { chatNotices } from '../push/notices.js'
+import { writeReadMark } from './readMarks.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
 import type { AccountRename } from './accountRenames.js'
@@ -39,7 +39,7 @@ import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } 
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
-import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery, type ThreadFacet } from './pageReads.js'
+import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
@@ -78,7 +78,6 @@ import { INSTRUCTIONS_TEMPLATE } from './instructionsTemplate.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest } from './projectUpdates.js'
 import { cloneData } from './cloneData.js'
-import { moveChatMark } from './read/threadMarkSeeds.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
@@ -118,8 +117,6 @@ import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, T
 import { costRows, summarizeCosts } from './costs/read.js'
 import { recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestConversations, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
-import { answeredAgents, dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByAnswer, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
-import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
 import { recordMessageRead, type MessageReadKey } from './messageReadStats.js'
 import { recordMessageReach } from './messageReachStats.js'
 import { DEFAULT_ROUTING_POLICY, type RoutingPolicy } from './routingPolicy.js'
@@ -1410,10 +1407,9 @@ export class SuperTabStore {
     const actor = await this.actor(tx, user, state, asAgentId)
     const now = this.now()
     const visible = visibleState(state, actor, now)
-    const mentions = actor.kind === 'person' ? { mentionsWaiting: await mentionsWaiting(tx, tabId, state, actor, now) } : {}
     const versions = visible.machines?.length ? await this.machineVersions(tx, state) : {} as Record<string, string>
     const slots = slotCounter(state)
-    return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, ...mentions, machines: visible.machines?.map(pool => {
+    return { lastChangedAt: await readLastChangedAt(tx, view, tabId) ?? 0, state: { ...visible, machines: visible.machines?.map(pool => {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
       const suspended = suspendedEngines(stored, now)
       const machineSuspended = machineSuspensionReason(stored, now)
@@ -1809,7 +1805,6 @@ export class SuperTabStore {
           thread: reply.thread, threadSource: (root?.source ?? null) as Record<string, unknown> | null,
           ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}), ...(sessionRow ? { sessionThread: true as const, ...(sessionRow.buddyProject ? { sessionProject: sessionRow.buddyProject } : {}) } : {}) }
       }
-      if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       // A person's top-level line in a project chat: the top-level line right above it, whose agent it may answer (commands.ts,
       // #2924). The chat's newest rows by its sequence index; a thread's replies and agent-only notices are not in the chat.
       if (command.type === 'message.send' && actor.kind === 'person' && !command.replyTo && projectsOf(original).some(p => p.leadConversationId === command.conversationId)) {
@@ -1898,7 +1893,6 @@ export class SuperTabStore {
         context.confirmedStopped = !!proof && !!execution && proof.machineId === execution.machineId &&
           proof.harnessId === execution.harnessId && proof.machineOwnerId === execution.machineOwnerId
       }
-      if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'invite.accept' && actor.kind === 'person') context.accountName = await accountNameOf(tx, actor.userId)
       // The files this command sends, and those it takes from the uploads waiting for a message: a chat file it sent before
       // stays with that message, and a proposal may carry one its Buddy's owner sent in their chat.
@@ -2153,38 +2147,22 @@ export class SuperTabStore {
       }
       if (effects.closedAssignment) await closeAssignment(tx, tabId, effects.closedAssignment.assignmentId, effects.closedAssignment.outcome, context.now)
       await recordEvidence(tx, tabId, original, effects.state, context.now)
-      const threads = await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences, false, original)
+      await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences, false, original)
       if (effects.lateDeliveries?.length) await this.writeLateDeliveries(tx, tabId, effects.state, effects.lateDeliveries)
-      if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
-      // Answering an agent settles its tags in other conversations too (mentions.ts answeredAgents).
-      if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
-        const sent = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person' && m.author.id === actor.userId && !m.source)
-        await resolveByAnswer(tx, tabId, actor.userId, answeredAgents(effects.state, actor, effects.state.conversations.find(c => c.id === command.conversationId)!,
-          sent.flatMap(m => m.recipients)), context.now)
-      }
-      if (command.type === 'work.assign') await resolveWhenWorked(tx, tabId, command.conversationId, context.now)
-      // The Lead acting on a group ends the tags it held back about it (mentions.ts), before this command's own are written.
-      const ledId = 'conversationId' in command ? command.conversationId : command.type === 'agent.start' ? command.request.conversationId : undefined
-      const leadAt = (state: SuperTabState) => state.conversations.find(c => c.id === ledId)?.leadAction?.at
-      if (ledId && leadAt(effects.state) !== undefined && leadAt(effects.state) !== leadAt(original)) await dropHeldTags(tx, tabId, ledId, context.now)
-      const tags = await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
-      // Everyone in each thread replied in, from the summaries just computed: no read of the threads' rows (task #2745).
-      const replies = await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now, { state: effects.state, threads })
-      this.tellPhones(tx, tabId, effects.state, { replies, tags }, effects.messages)
       // Their own message leaves the chat read for them on every app, in the same commit its read answers from (task #2265). A reply
       // only in a thread is not in the chat, and a Team session has no marks (read/service.ts markRead).
       if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
         const own = effects.messages.filter(m => m.conversationId === command.conversationId && m.author.kind === 'person'
           && m.author.id === actor.userId && (!m.thread || m.thread === m.id || m.alsoInChat))
         const next = Math.max(0, ...own.map(m => sequences.get(m.id) ?? 0))
-        if (next) await moveChatMark(tx as unknown as PrismaClient, { tabId, state: effects.state, personId: actor.userId, conversationId: command.conversationId, next, now: context.now })
+        if (next) await writeReadMark(tx as unknown as PrismaClient, { tabId, personId: actor.userId, conversationId: command.conversationId, sequence: next, now: context.now })
       }
-      if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
+      this.tellPhones(tx, tabId, effects.state, effects.messages)
       // The cleaned text (commands.ts WORDS), never the command as it was sent (security review 2 of #2967).
       if (effects.messageEdit) {
         await tx.superTabMessage.update({ where: { id: effects.messageEdit.messageId }, data: { text: effects.messageEdit.text, editedAt: new Date(context.now) } })
       }
-      if (command.type === 'message.delete') await this.writeDelete(tx, tabId, command, effects.result.kept === true, effects.state.people.map(p => p.id), context.now)
+      if (command.type === 'message.delete') await this.writeDelete(tx, tabId, command, effects.result.kept === true, context.now)
       if (effects.closedProposal) await closeProposal(tx, tabId, effects.closedProposal, actor.kind === 'person' ? actor.userId : actor.agentId, new Date(context.now))
       if (claimed.length) {
         // Conflicts with a concurrent send of the same file: only one message can take it.
@@ -2970,8 +2948,8 @@ export class SuperTabStore {
   /** What a delete removes beside its row (messageEdits.ts): its reactions and their Activity, the Activity of the reply it was,
    *  deliveries no agent has taken yet, and its files, which the hourly sweep removes from the bucket (lib/attachmentSweep.ts).
    *  A root with replies stays as DELETED_TEXT with nothing else of what it said; a reply's thread summary is written again. */
-  private async writeDelete(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>, kept: boolean, people: string[], now: number) {
-    const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true, mentions: true } })
+  private async writeDelete(tx: Transaction, tabId: string, command: Extract<Command, { type: 'message.delete' }>, kept: boolean, now: number) {
+    const row = await tx.superTabMessage.findUniqueOrThrow({ where: { id: command.messageId }, select: { id: true, conversationId: true, thread: true, attachments: true } })
     const files = Array.isArray(row.attachments) ? (row.attachments as unknown as Attachment[]).map(a => a.id) : []
     // Raw `$in` filters: Prisma sends `in` as $expr, which no index bounds (hotFilters.test.ts). By _id, and by [tabId, messageId].
     // A proposal can carry its owner's chat files without owning them (#3322 security review): expire only this row's
@@ -2980,16 +2958,9 @@ export class SuperTabStore {
       { q: { _id: { $in: files }, tabId, usedBy: row.id }, u: { $set: { usedBy: EXPIRED_UPLOAD } }, multi: true },
       { q: { _id: { $in: files }, tabId, proposedBy: row.id }, u: { $unset: { proposedBy: '' } }, multi: true },
     ] })
-    // Activity has no index by message: its rows go by the ids they were written with (activity.ts), each reaction's from its row,
-    // the reply's for every member it could have told. Reactions were last written 2026-11-09 (reactions.ts): their two lines go
-    // once the last such row is gone, 30 days on, from 2026-12-09.
-    const reactions = await tx.superTabReaction.findMany({ where: { tabId, messageId: row.id }, select: { id: true } })
-    const activityIds = [...reactions.map(r => stableId(tabId, 'reaction', r.id)), ...people.map(personId => stableId(tabId, 'reply', row.id, personId))]
+    // Reactions were last written 2026-11-09 (reactions.ts): this line goes once the last such row is gone, 30 days on, from
+    // 2026-12-09. Its Activity and tag rows, written until Swarm v4 (2026-11-10), hold no words and expire by themselves.
     await tx.superTabReaction.deleteMany({ where: { tabId, messageId: row.id } })
-    if (activityIds.length) await tx.$runCommandRaw({ delete: 'SuperTabActivity', deletes: [{ q: { _id: { $in: activityIds }, tabId }, limit: 0 }] })
-    // Its tags (mentions.ts writeMentions ids): nobody keeps a waiting tag to a message they cannot open (security review 1 of #2967).
-    const tagIds = (row.mentions ?? []).map(personId => stableId(tabId, row.id, personId))
-    if (tagIds.length) await tx.$runCommandRaw({ delete: 'SuperTabMention', deletes: [{ q: { _id: { $in: tagIds }, tabId }, limit: 0 }] })
     await tx.$runCommandRaw({ update: 'SuperTabDelivery', updates: [{ q: { tabId, messageId: row.id, status: { $in: [...CANCELLABLE_DELIVERY] } },
       u: { $set: { status: 'cancelled', holdReason: null, holdSince: null, updatedAt: { $date: new Date(now).toISOString() } } }, multi: true }] })
     if (kept) {
@@ -3300,7 +3271,7 @@ export class SuperTabStore {
    *  kept, and only its missing deliveries are written. One duplicate had stopped every later report and poll
    *  (2026-10-28); any other message under the id still fails, so another task's notice is never delivered as this one. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
-    keepStored = false, before: Pick<SuperTabState, 'agents'> = state): Promise<Map<string, ThreadFacet>> {
+    keepStored = false, before: Pick<SuperTabState, 'agents'> = state): Promise<void> {
     // Only a person and their own agent write in their private chat (task #4558): applyCommand checks a command's rows, and
     // every write is checked again here, so a notice built off that path with the wrong author is refused too (#4547).
     refuseOthersInPrivateChat(state, messages, before)
@@ -3344,8 +3315,8 @@ export class SuperTabStore {
     // A proposal's root joins its chat's open proposals with it, which the Tasks view reads by id (proposals.ts).
     const proposals = openProposalRows(tabId, rows)
     if (proposals.length) await tx.superTabOpenProposal.createMany({ data: proposals })
-    // A reply's thread summary, in this transaction (pageReads.ts refreshThreads); its facet is answered for Activity.
-    const threads = await refreshReplies(tx, tabId, rows)
+    // A reply's thread summary, in this transaction (pageReads.ts refreshThreads).
+    await refreshReplies(tx, tabId, rows)
     for (const message of messages) {
       // Once committed, so a retried write logs once.
       if (message.source?.kind === SESSION_ENDED_KIND && !kept.has(message.id)) {
@@ -3363,7 +3334,6 @@ export class SuperTabStore {
     }
     if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
     for (const delivery of deliveries) if (delivery.status !== 'gathered') this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
-    return threads
   }
 
   /** A Buddy thread session's first deliveries (buddySessions.ts): its person's messages sent in its thread while it started,
@@ -3611,35 +3581,6 @@ export class SuperTabStore {
     return sessionContext(main.map(r => ({ ...r, author: authorForAgent(state, r.author as unknown as Author, names) as ContextRow['author'] })))
   }
 
-  /** What the person missed in one conversation since `after` (catchUp.ts), from the rows past it they may read, as a page
-   *  shows them: the same read check and row filter as messages(). People only, reading as themselves: agents read every
-   *  message as it comes. At most CATCH_UP_SCAN rows are read; `more` says there were more. */
-  async catchUp(user: AuthUser, tabId: string, conversationId: string, after: number): Promise<CatchUp> {
-    this.personOnly(user)
-    const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
-    const actor = await this.actor(this.db, user, state)
-    const group = readConversation(state, actor, conversationId)
-    const buddy = isBuddyReader(state, actor)
-    // In the one Buddy chat, a project its person lost counts nothing toward what they missed (security review 2 of #2435).
-    const lost = sessionReadsRow(undefined, group, state)
-    const rows = await this.db.superTabMessage.findMany({ where: { tabId, conversationId, sequence: { gt: after } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }],
-      take: CATCH_UP_SCAN + 1 })
-    const scanned = rows.slice(0, CATCH_UP_SCAN), reads = readsRow(actor, buddy)
-    // A task chat's copy of a Lead's notice stored before it was marked is read by no one, as on the page (pageReads.ts).
-    const copies = await deliveredCopies(this.db, tabId, scanned)
-    const shown = scanned.filter(m => !copies.has(m.id) && reads(m) && lost(m))
-    recordMessageRead({ reader: readerKind(actor, buddy), cursor: 'catchUp', session: sessionKind(user) }, 1, rows.length, shown.length)
-    return catchUpSummary(buddy ? shown.map(rowForBuddy) : shown, user.sub, { after, more: rows.length > CATCH_UP_SCAN })
-  }
-
-  /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
-  async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
-    this.personOnly(user)
-    // Not every quiet conversation: listMentions reads the quiet ones its tags are in by id (mentions.ts readable).
-    const { state: tab } = await this.readLoad(user, tabId)
-    await this.actor(this.db, user, tab)
-    return { mentions: await listMentions(this.db, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
-  }
 
 
   /**
@@ -5084,22 +5025,19 @@ export class SuperTabStore {
       // A finished step's too: its task handed on again since the load must not lose the step it will need.
       await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
       await this.writeMessages(tx, tabId, state, rows, sequences)
-      this.tellPhones(tx, tabId, state, { replies: [], tags: await writeMentions(tx, tabId, state, rows, now) }, rows)
       return true
     })
   }
 
   /** The phones of whoever `written` tells hear of it once the write commits (push/send.ts). */
-  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[] },
-    messages: MessageDraft[]): void {
+  private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[]): void {
     const tell = this.hooks.phoneNotices
-    // An agent's post may be its words in its 1:1 chat (push/notices.ts chatNotices): nothing else is looked at for a write without.
-    const posted = messages.some(m => m.author.kind === 'agent' && m.post)
-    if (!tell || (!written.replies.length && !written.tags.length && !posted)) return
+    // Only an agent's post can be its words in its 1:1 chat (push/notices.ts chatNotices): nothing else is looked at for a write without.
+    if (!tell || !messages.some(m => m.author.kind === 'agent' && m.post)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {
-      notices = [...phoneNotices(tabId, state, written, messages), ...posted ? chatNotices(tabId, state, messages) : []]
+      notices = chatNotices(tabId, state, messages)
     } catch (error) {
       logger.warn('phone push failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       return

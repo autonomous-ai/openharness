@@ -627,7 +627,6 @@ describe('a team session speaking in a Swarm', () => {
     await expect(store.sharing(team, f.tab)).rejects.toMatchObject(LIMITED)
     await expect(store.previewJoin(team, f.tab, 'token')).rejects.toMatchObject(LIMITED)
     await expect(store.accountPolicy(team)).rejects.toMatchObject(LIMITED)
-    await expect(store.mentions(team, f.tab, 'waiting')).rejects.toMatchObject(LIMITED)
     await expect(store.hostGrids(team)).rejects.toMatchObject(LIMITED)
     await expect(store.machineRemoval(team, f.tab, 'team-mac')).rejects.toMatchObject(LIMITED)
     expect(await store.mayObserve(team, f.tab, 'team-mac', 'any', person.sub)).toBe(false)

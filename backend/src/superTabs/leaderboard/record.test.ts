@@ -487,7 +487,7 @@ describe('who unblocks waiting work', () => {
   })
 })
 
-describe('other ways a person unblocks work: approvals and tags', () => {
+describe('other ways a person unblocks work: approvals', () => {
   const HOUR = 3_600_000
   /** The project's Lead asks in its own conversation at [askedAt], returning what a reply to it carries. */
   const leadAsk = (f: ReturnType<typeof fixture>, askedAt = HOUR) => {
@@ -496,8 +496,8 @@ describe('other ways a person unblocks work: approvals and tags', () => {
     const asked = f.say('lead', f.asAgent(lead), 'Plan: three steps. Reply GO to start.').messages[0]!
     return { lead, reply: { id: asked.id, conversationId: 'lead', author: asked.author, createdAt: askedAt } }
   }
-  const tagged = (f: ReturnType<typeof fixture>, id: string, text: string, openTags: CommandContext['openTags']) =>
-    f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] }, owner, { openTags })
+  const posted = (f: ReturnType<typeof fixture>, id: string, text: string) =>
+    f.run({ type: 'message.send', conversationId: id, text, replyTo: null, recipientIds: [] }, owner)
 
   for (const word of ['GO', 'go ahead', 'Approve', 'approved, thanks', 'Duyệt', 'duyet nhe', 'DUYỆT nhé', '  Go!']) {
     it(`counts "${word}" in reply to the Lead's ask as an approval, with how long the ask waited`, () => {
@@ -533,38 +533,30 @@ describe('other ways a person unblocks work: approvals and tags', () => {
     expect(f.group('lead').ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner', kind: 'approval' })])
   })
 
-  it('credits a reply to the tags waiting on the person once, timed from the oldest', () => {
-    const f = fixture(), id = f.create()
-    f.at(5 * HOUR)
-    tagged(f, id, 'Here you go.', [{ messageId: 'tag-new', createdAt: 3 * HOUR }, { messageId: 'tag-old', createdAt: HOUR }])
-    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 5 * HOUR, waitedMs: 4 * HOUR, kind: 'tag_reply', item: 'tag-old' }])
-    tagged(f, id, 'And again.', [{ messageId: 'tag-old', createdAt: HOUR }])
-    expect(f.group(id).ledger?.unblocks).toHaveLength(1)
-  })
-
-  it('gives one post one credit: an answer to waiting work that also replies to a tag counts as the answer', () => {
+  it('gives an answer to waiting work its credit', () => {
     const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
     f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    tagged(f, id, 'Flag.', [{ messageId: 'tag', createdAt: 0 }])
+    posted(f, id, 'Flag.')
     expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ kind: 'needs_human' })])
   })
 
   it('never credits a private conversation', () => {
     const f = fixture()
     const chat = f.buddyChat()
-    tagged(f, chat, 'Hi.', [{ messageId: 'tag', createdAt: 0 }])
+    posted(f, chat, 'GO')
     expect(f.group(chat).ledger?.unblocks).toBeUndefined()
   })
 
   it(`keeps at most ${MAX_UNBLOCKS} credits on one conversation, the newest`, () => {
-    const f = fixture(), id = f.create()
+    const f = fixture(), { lead } = leadAsk(f)
     for (let i = 0; i <= MAX_UNBLOCKS; i++) {
-      f.at(10_000 + i)
-      tagged(f, id, `Reply ${i}`, [{ messageId: `tag-${i}`, createdAt: 0 }])
+      f.at(10_000 + 2 * i)
+      const ask = f.say('lead', f.asAgent(lead), `Plan ${i}. Reply GO.`).messages[0]!
+      f.say('lead', owner, 'GO', ask.id, { id: ask.id, conversationId: 'lead', author: ask.author, createdAt: 10_000 + 2 * i })
     }
-    const kept = f.group(id).ledger!.unblocks!
+    const kept = f.group('lead').ledger!.unblocks!
     expect(kept).toHaveLength(MAX_UNBLOCKS)
-    expect(kept[0]!.item).toBe('tag-1')
+    expect(kept.every(u => u.kind === 'approval')).toBe(true)
   })
 })
 

@@ -16,6 +16,8 @@ export const RETIRED_COMMANDS = [
   'member.status', 'member.timeZone', 'member.username', 'member.name',
   // Decisions (2026-11-10): an agent reaches its person in their 1:1 chat.
   'decision.ask', 'decision.answer',
+  // Tags (2026-11-10): an older app's Done on a tag.
+  'mention.done',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
@@ -34,7 +36,26 @@ export const RETIRED_READS: Readonly<Record<string, object>> = {
   '/api/super-tabs/:tabId/scorecard': { days: [] },
   // Decisions (2026-11-10): an older Desktop's and phone's Decisions, and an older host's or Buddy's own asks.
   '/api/super-tabs/:tabId/decisions': { more: false, decisions: [] },
+  // Tags, Activity, reminders, followed threads, the inbox and catch-up (2026-11-10): an older Desktop's and phone's.
+  '/api/super-tabs/:tabId/mentions': { mentions: [] },
+  '/api/super-tabs/:tabId/activity': { items: [], more: false },
+  '/api/super-tabs/:tabId/reminders': { due: [], next: null },
+  '/api/super-tabs/:tabId/threads': { unread: [], read: [], more: false },
+  '/api/super-tabs/:tabId/inbox': { threads: [], latest: [], more: false },
+  '/api/super-tabs/:tabId/conversations/:conversationId/catch-up': { after: 0, through: 0, unread: 0, more: false, decisions: 0,
+    landed: { total: 0, items: [] }, blocked: { total: 0, items: [] }, needsYou: { total: 0, items: [] } },
 }
+
+/** Writes of the same reads an older app still sends, each answered as done and changing nothing: Activity read up to a time, and a
+ *  thread followed or unfollowed. As the reads, one constant answer for everyone; they go with them, not before 2026-12-09. */
+export const RETIRED_WRITES: Readonly<Record<string, object>> = {
+  '/api/super-tabs/:tabId/activity/read': { marked: 0 },
+  '/api/super-tabs/:tabId/conversations/:conversationId/threads/:threadId/follow': { follow: null },
+}
+
+/** An older Desktop's Remind me sets a reminder (POST .../messages/:messageId/reminder): refused in these words rather than answered
+ *  as kept, since the app would show one that never comes. Clearing one answers that none was cleared. Goes with the reads above. */
+export const REMINDERS_RETIRED = { code: 'REMINDERS_RETIRED', status: 410, message: 'Reminders are gone. Nothing was set.' } as const
 
 /** What a retired command's result says, where an agent or an older app prints a command's answer. */
 export const RETIRED_NOTE = 'Swarm no longer has this. Nothing was done.'

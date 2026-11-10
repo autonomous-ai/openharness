@@ -128,7 +128,6 @@ describe('a task\'s one message in its project chat', () => {
     await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
     expect(await reactions()).toEqual(before)
     expect(await db.superTabReaction.count({ where: { tabId: s.tab, messageId: asked } })).toBe(0)
-    expect(await db.superTabActivity.count({ where: { tabId: s.tab, personId: peer.sub, kind: 'reaction' } })).toBe(0)
   })
 
   // Diego, 2026-11-04 (task #2693): a stop its host confirms is no command, so its thread kept saying On it.
