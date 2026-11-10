@@ -218,7 +218,6 @@ function namedFor(command: Command): Named {
   const has = (key: string) => key in command
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
   const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
-    command.type === 'conversation.create' ? command.reviewOf : undefined,
     'askedIn' in command ? command.askedIn?.conversationId : undefined,
     // The code tasks an instructions save's rules moved into, merged ones gone quiet included (ruleGuard.ts; #3392).
     ...command.type === 'instructions.save' ? command.tasks ?? [] : []].filter((id): id is string => !!id)
