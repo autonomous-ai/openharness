@@ -82,9 +82,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         home: Scaffold(
           body: SuperTabView(
-            board: false,
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Team Mac',
@@ -121,45 +119,6 @@ void main() {
       'buddy-owner-lead',
     ]);
   });
-
-  testWidgets(
-    'an older server still sends it: listed nowhere, never opened, and project and Buddy chats stay',
-    (tester) async {
-      final server = swarm();
-      final reads = <String>[];
-      server.onRead = reads.add;
-      final controller = await show(tester, server);
-
-      expect(find.byKey(const ValueKey('super-group-leads')), findsNothing);
-      expect(find.text('product-managers'), findsNothing);
-      expect(find.text('# product-managers'), findsNothing);
-      expect(
-        find.text('I will take the roster file after #12 lands.'),
-        findsNothing,
-      );
-      // Project chats and the Buddy chat are listed as before.
-      for (final key in [
-        'super-group-lead',
-        'super-group-os-lead',
-        'super-buddy-lead',
-      ]) {
-        expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
-      }
-      expect(find.text('# openharness'), findsOneWidget);
-
-      // Nothing opens it, a link or a notification included.
-      expect(await controller.select('leads'), isFalse);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'lead');
-      expect(reads.where((path) => path.contains('/leads/')), isEmpty);
-      // The other chats still open.
-      expect(await controller.select('os-lead'), isTrue);
-      expect(await controller.select('buddy-owner-lead'), isTrue);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'buddy-owner-lead');
-      await close(tester, controller);
-    },
-  );
 
   testWidgets(
     'a view saved while it was open lands on the first project chat',

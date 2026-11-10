@@ -8,7 +8,7 @@ import '../../state/app_state.dart';
 import '../../state/harness_activity.dart';
 import '../../state/workspace_chrome.dart';
 import '../../state/workspace_status.dart';
-import '../../super_tabs/buddy_chat.dart' show countText;
+import '../../super_tabs/count_badge.dart' show countText;
 import '../../terminal/terminal_theme.dart';
 import '../../terminal/terminal_theme_store.dart';
 import '../../widgets/finger_target.dart';
@@ -37,15 +37,15 @@ class WebTabSwitcher extends StatelessWidget {
     final index = app.swarms.indexWhere((tab) => tab.id == app.activeSwarmId);
     final name = workspaceTabNames(app)[app.activeSwarmId] ?? '';
     final activity = tabActivity(app, app.activeSwarm);
-    final tags = tabWaiting(app, app.activeSwarm);
+    final asking = tabAgentsAsking(app, app.activeSwarm);
     final panes = app.panes;
     final shown = panes.indexWhere((pane) => pane.id == soloPaneId(app));
     final label = [
       '${index + 1}:$name',
       // Which of the tab's harnesses is on screen: a phone draws one.
       if (panes.length > 1) '· ${shown + 1}/${panes.length}',
-      if (tags > 0)
-        countText(tags)
+      if (asking > 0)
+        countText(asking)
       else if (activity?.mark.isNotEmpty == true)
         activity!.mark,
     ].join(' ');

@@ -29,13 +29,13 @@ let bindings: [[String: Any]] = [
 let map = HarnessNativeKeymap(["version": 1, "contexts": ["workspace": bindings, "terminal": [], "picker": [], "project": [], "swarmChat": []]])!
 
 let swarm: [[String: Any]] = [
-  ["swarmTabId": "pilot", "kind": "decision", "id": "d1", "title": "Wren asks you",
+  ["swarmTabId": "pilot", "kind": "chat", "id": "agent-chat-wren", "title": "Wren",
    "message": "Ship the sidebar cleanup behind a flag first?", "unread": true, "tabName": "Pilot",
-   "detail": "openharness · Desktop sidebar cleanup", "receivedAt": timestamp - 90_000,
+   "detail": "", "receivedAt": timestamp - 90_000,
    "activity": ["mark": "?", "label": "Needs input", "working": false]],
-  ["swarmTabId": "pilot", "kind": "mention", "id": "m1", "title": "River tagged you",
+  ["swarmTabId": "pilot", "kind": "chat", "id": "agent-chat-river", "title": "River",
    "message": "Screenshots of the new sidebar are in the PR. Can you check the dark ones?", "unread": true,
-   "tabName": "Pilot", "detail": "openharness · Lead", "receivedAt": timestamp - 600_000,
+   "tabName": "Pilot", "detail": "", "receivedAt": timestamp - 600_000,
    "activity": ["mark": "?", "label": "Needs input", "working": false]],
 ]
 
@@ -125,7 +125,7 @@ var atlas = swarm[0]
 atlas["swarmTabId"] = "atlas"
 atlas["tabName"] = "Atlas"
 atlas["id"] = "a1"
-atlas["title"] = "Juno asks you"
+atlas["title"] = "Juno"
 atlas["message"] = "Keep the old Linux build for one more release?"
 render("notification-swarms-light", dark: false, entries: [], work: [], swarmEntries: pilot + [atlas])
 render("notification-swarms-dark", dark: true, entries: [], work: [], swarmEntries: pilot + [atlas])

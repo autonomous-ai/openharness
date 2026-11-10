@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-const m = vi.hoisted(() => ({ devicesOf: vi.fn(), forget: vi.fn(), sandbox: vi.fn(), count: vi.fn(), warn: vi.fn(), info: vi.fn() }))
+const m = vi.hoisted(() => ({ devicesOf: vi.fn(), forget: vi.fn(), sandbox: vi.fn(), count: vi.fn(), warn: vi.fn(), info: vi.fn(),
+  muted: vi.fn(async (_db: unknown, n: unknown) => n), unread: vi.fn(async (_db: unknown, n: unknown) => n) }))
 vi.mock('./devices.js', () => ({ devicesOf: m.devicesOf, forgetPushDevice: m.forget, markSandbox: m.sandbox }))
 vi.mock('../lib/metrics.js', () => ({ metrics: { phonePush: m.count } }))
 vi.mock('../utils/logger.js', () => ({ logger: { warn: m.warn, info: m.info, error: m.warn } }))
+vi.mock('./muted.js', () => ({ dropMuted: m.muted }))
+vi.mock('./unread.js', () => ({ quietUnread: m.unread }))
 import { sendPhoneNotices } from './send.js'
 import type { PushDevice } from './devices.js'
 import type { PhoneNotice, Sender, SendResult } from './sender.js'
@@ -18,7 +21,25 @@ const answering = (results: Record<string, SendResult>) => {
 }
 
 describe('sendPhoneNotices (task #2905)', () => {
-  beforeEach(() => vi.resetAllMocks())
+  beforeEach(() => {
+    vi.resetAllMocks()
+    m.muted.mockImplementation(async (_db, n) => n)
+    m.unread.mockImplementation(async (_db, n) => n)
+  })
+
+  // Both are read by key, at once (review of #3811): what a muted chat drops stays dropped, and what is unread goes quiet.
+  it('leaves out a muted chat\'s notice and sends an unread chat\'s quiet, reading both from what was given', async () => {
+    m.devicesOf.mockResolvedValue([phone('a1', 'a')])
+    const seen: PhoneNotice[] = []
+    const sender: Sender = { send: async (_device, n) => { seen.push(n); return { outcome: 'sent' } } }
+    const [kept, muted, unread] = [notice('a', 'chat:t:kept'), notice('a', 'chat:t:muted'), notice('a', 'chat:t:unread')]
+    m.muted.mockImplementation(async (_db, n) => (n as PhoneNotice[]).filter(x => x.key !== muted.key))
+    m.unread.mockImplementation(async (_db, n) => (n as PhoneNotice[]).map(x => x.key === unread.key || x.key === muted.key ? { ...x, quiet: true } : x))
+    await sendPhoneNotices(db, { ios: sender, android: null }, [kept, muted, unread])
+    expect(m.muted).toHaveBeenCalledWith(db, [kept, muted, unread])
+    expect(m.unread).toHaveBeenCalledWith(db, [kept, muted, unread])
+    expect(seen).toEqual([kept, { ...unread, quiet: true }])
+  })
 
   it('sends each notice as phoneNotices made it, a quiet one quiet: nothing read but the phones (2026-11-09)', async () => {
     m.devicesOf.mockResolvedValue([phone('a1', 'a')])
@@ -37,7 +58,9 @@ describe('sendPhoneNotices (task #2905)', () => {
     expect(m.devicesOf).toHaveBeenCalledWith(db, ['a', 'b'])
     expect(ios.sent.sort()).toEqual([['a1', 'mention:t1'], ['a1', 'reply:tab:a'], ['b1', 'reply:tab:b']])
     expect(android.sent.sort()).toEqual([['a2', 'mention:t1'], ['a2', 'reply:tab:a']])
-    expect(m.count).toHaveBeenCalledWith('ios', 'sent')
+    // Counted by kind, the key's first word, so each kind's pushes read apart (a chat push's flood shows on its own).
+    expect(m.count).toHaveBeenCalledWith('ios', 'sent', 'reply')
+    expect(m.count).toHaveBeenCalledWith('ios', 'sent', 'mention')
   })
 
   it('forgets a dead token, sends a sandbox one there from now on, and logs a failure without the token', async () => {
@@ -46,7 +69,7 @@ describe('sendPhoneNotices (task #2905)', () => {
     await sendPhoneNotices(db, { ios: ios.sender, android: null }, [notice('a')])
     expect(m.forget).toHaveBeenCalledWith(db, 'dead')
     expect(m.sandbox).toHaveBeenCalledWith(db, 'dev')
-    expect(m.count.mock.calls.sort()).toEqual([['ios', 'failed'], ['ios', 'gone'], ['ios', 'sandbox']])
+    expect(m.count.mock.calls.sort()).toEqual([['ios', 'failed', 'reply'], ['ios', 'gone', 'reply'], ['ios', 'sandbox', 'reply']])
     expect(m.warn).toHaveBeenCalledWith('phone push failed', expect.objectContaining({ platform: 'ios', reason: 'InternalServerError' }))
     expect(JSON.stringify([m.warn.mock.calls, m.info.mock.calls])).not.toContain('secret-token')
   })
@@ -56,7 +79,7 @@ describe('sendPhoneNotices (task #2905)', () => {
     const ios = answering({ dev: { outcome: 'unconfigured', reason: 'no APNs sandbox key' } })
     await sendPhoneNotices(db, { ios: ios.sender, android: null }, [notice('a')])
     expect(m.forget).not.toHaveBeenCalled()
-    expect(m.count).toHaveBeenCalledWith('ios', 'unconfigured')
+    expect(m.count).toHaveBeenCalledWith('ios', 'unconfigured', 'reply')
     expect(m.warn).toHaveBeenCalledWith('phone push skipped', { platform: 'ios', reason: 'no APNs sandbox key' })
     expect(JSON.stringify(m.warn.mock.calls)).not.toContain('secret-token')
   })
@@ -64,7 +87,7 @@ describe('sendPhoneNotices (task #2905)', () => {
   it('counts and logs a push it cannot send for want of the platform\'s keys', async () => {
     m.devicesOf.mockResolvedValue([phone('a2', 'a', 'android')])
     await sendPhoneNotices(db, { ios: null, android: null }, [notice('a')])
-    expect(m.count).toHaveBeenCalledWith('android', 'unconfigured')
+    expect(m.count).toHaveBeenCalledWith('android', 'unconfigured', 'reply')
     expect(m.warn).toHaveBeenCalledWith('phone push off: no keys for this platform', expect.objectContaining({ platform: 'android', skipped: 1 }))
   })
 

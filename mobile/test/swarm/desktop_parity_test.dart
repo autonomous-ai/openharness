@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/swarm/swarm_buddy.dart';
 
 /// The Swarm models the phone carries as copies of the desktop's
 /// (`../desktop/lib/super_tabs`): phone path → desktop path. The phone is a
@@ -10,11 +9,10 @@ import 'package:harness_mobile/swarm/swarm_buddy.dart';
 /// ⚠️ A fix made to one side only fails nowhere else: a field the backend adds
 /// would parse on a computer and be dropped on the phone. Here a drift fails
 /// until the change is carried across — or, if the two are meant to differ now,
-/// until the file leaves this list on purpose. `profile_model.dart` has:
-/// Desktop no longer has a person's status or reactions, which the phone
-/// still reads and draws.
+/// until the file leaves this list on purpose.
 const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
+  'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
   'lib/swarm/tasks/personal_tasks.dart':
       'lib/super_tabs/tasks/personal_tasks.dart',
   // Live cards (Slack parity, #2212): which messages are cards, and the
@@ -26,8 +24,6 @@ const _copies = {
   // Task steps design: a task's steps and its merged chat.
   'lib/swarm/task_steps.dart': 'lib/super_tabs/task_steps.dart',
   'lib/swarm/instructions_model.dart': 'lib/super_tabs/instructions_model.dart',
-  // Board pulse (task #3384): what waits for the PM and who works.
-  'lib/swarm/pulse_model.dart': 'lib/super_tabs/pulse.dart',
 };
 
 /// The phone's model is ahead of main's desktop copy, so it is no exact copy
@@ -59,22 +55,6 @@ void main() {
     final desktop = fields('../desktop/${_model.$2}');
     expect(desktop, isNotEmpty);
     expect(desktop.difference(fields(_model.$1)), isEmpty);
-  });
-
-  test('the phone offers a Buddy the desktop\'s engines, none turned off', () {
-    // Codex is offered as Claude is since #2832 (Ken, 11-04): neither side
-    // keeps a list of refused engines.
-    final desktop = File(
-      '../desktop/lib/super_tabs/buddies.dart',
-    ).readAsStringSync();
-    final engines = RegExp(
-      r"kBuddyEngines = \{((?:\s*'\w+':\s*'[^']*',?)*)\s*\}",
-    ).firstMatch(desktop)!.group(1)!;
-    expect(swarmBuddyEngines, {
-      for (final m in RegExp(r"'(\w+)':\s*'([^']*)'").allMatches(engines))
-        m.group(1)!: m.group(2)!,
-    });
-    expect(desktop, isNot(contains('kBuddyEngineRefusals')));
   });
 
   test('the phone names a sent message as the desktop does', () {

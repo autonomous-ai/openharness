@@ -185,9 +185,9 @@ void main() {
       });
     });
 
-    // A tag is news for the badge and a notice: a push for an away Swarm is
-    // read at the old pace (the 3 s gap), not held for the idle 15 s.
-    test('shows a tag the server pushes within the old 3 s gap', () {
+    // A message is news for the count and a notice: a push for an away Swarm
+    // is read at the old pace (the 3 s gap), not held for the idle 15 s.
+    test('shows a message the server pushes within the old 3 s gap', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Hello');
         final reads = _Reads(server);
@@ -196,11 +196,11 @@ void main() {
         c.pushUntil = clock.now().add(kSwarmPushLease);
         c.away = true;
         async.elapse(const Duration(seconds: 1));
-        expect(c.snapshot!.mentionsWaiting, 0);
-        server.tag('message-2');
+        expect(c.snapshot!.conversation('lead')!.lastMessageSequence, 1);
+        server.append('Which build?');
         c.told(main: true);
         async.elapse(const Duration(seconds: 2));
-        expect(c.snapshot!.mentionsWaiting, 1);
+        expect(c.snapshot!.conversation('lead')!.lastMessageSequence, 2);
         c.dispose();
       });
     });

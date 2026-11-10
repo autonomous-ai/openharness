@@ -6,7 +6,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_roster_test.dart' show RosterFixture;
 import 'support/super_tab_fixture.dart';
 import 'support/swarm_v4_data.dart';
 
@@ -35,12 +34,10 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Mac Studio',
             github: swarmV4GitHub(),
-            board: true,
           ),
         ),
       ),
@@ -107,41 +104,5 @@ void main() {
       isEmpty,
     );
     expect(commandTypes(server), isNot(contains('agent.avatar')));
-  });
-
-  group('the Members roster', () {
-    testWidgets('one\'s own card offers Manage people and no Edit profile', (
-      tester,
-    ) async {
-      final f = RosterFixture();
-      addTearDown(f.dispose);
-      await f.initialize();
-      await f.show(tester);
-      await tester.tap(key('super-person-owner'));
-      await tester.pumpAndSettle();
-      expect(find.text('Manage people'), findsOneWidget);
-      expect(find.text('Edit profile'), findsNothing);
-      expect(key('super-profile-edit'), findsNothing);
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      expect(find.text('Manage people'), findsNothing);
-      await f.close(tester);
-    });
-
-    testWidgets('an agent\'s details, its contributor looking, have no Change '
-        'avatar', (tester) async {
-      final f = RosterFixture();
-      addTearDown(f.dispose);
-      await f.initialize();
-      await f.show(tester);
-      await tester.tap(f.row(1));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Details…'));
-      await tester.pumpAndSettle();
-      expect(find.text('Engine'), findsOneWidget);
-      expect(find.text('Change avatar'), findsNothing);
-      expect(find.text('Open terminal'), findsOneWidget);
-      await f.close(tester);
-    });
   });
 }

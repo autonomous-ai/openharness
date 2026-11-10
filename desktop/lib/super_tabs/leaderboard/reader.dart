@@ -169,10 +169,9 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   }
 }
 
-/// The board of the open conversation's project, read once for the right
-/// pane's members and the sidebar's Models, so both show one project and one
-/// week. No project open, or the project gone from the Swarm the reader
-/// sees, clears it.
+/// The board of the open conversation's project, read for Manage's Models.
+/// No project open, or the project gone from the Swarm the reader sees,
+/// clears it.
 class SuperTabProjectBoard extends SuperTabLeaderboardReader {
   /// The board moves only as work ships, is answered or runs: every five
   /// minutes is fresh enough, and keeps every open window's reads rare.

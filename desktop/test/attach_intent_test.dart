@@ -195,6 +195,72 @@ void main() {
     await finish(tester);
   });
 
+  /// The tile blames the machine's CLI only when the machine answered the
+  /// capability question without offering `noTakeover`; an unanswered or failed
+  /// question leaves the flag false too, and that is not "older".
+  Future<void> tileSays(
+    WidgetTester tester, {
+    required bool loaded,
+    String? error,
+    required String says,
+    required String doesNotSay,
+  }) async {
+    seedMachine(noTakeover: false);
+    app.stateOf('m')!
+      ..terminalCapabilityLoaded = loaded
+      ..terminalCapabilityError = error;
+    api.doc = DeskDoc(
+      revision: 1,
+      tabs: [
+        _tab('d1', ['a0']),
+      ],
+    );
+    await app.deskStartForTest();
+    await tester.pump(const Duration(milliseconds: 60));
+    app.selectSwarm('d1');
+    await mount(tester);
+    await deskSays(tester, ['a0', 'a1']);
+
+    expect(find.textContaining(says), findsWidgets);
+    expect(find.textContaining(doesNotSay), findsNothing);
+    expect(find.text('Open here'), findsWidgets);
+    await finish(tester);
+  }
+
+  testWidgets('a machine that answered without noTakeover runs an older CLI', (
+    tester,
+  ) async {
+    await tileSays(
+      tester,
+      loaded: true,
+      says: 'runs an older Harness CLI',
+      doesNotSay: 'has not confirmed',
+    );
+  });
+
+  testWidgets('a machine whose answer failed is not called older', (
+    tester,
+  ) async {
+    await tileSays(
+      tester,
+      loaded: true,
+      error: 'Could not negotiate terminal protocol',
+      says: 'has not confirmed how it opens terminals',
+      doesNotSay: 'older Harness CLI',
+    );
+  });
+
+  testWidgets('a machine that has not answered yet is not called older', (
+    tester,
+  ) async {
+    await tileSays(
+      tester,
+      loaded: false,
+      says: 'has not confirmed how it opens terminals',
+      doesNotSay: 'older Harness CLI',
+    );
+  });
+
   testWidgets('a person choosing the pane takes the terminal', (tester) async {
     seedMachine(noTakeover: false);
     // Not awaited: the attach waits for the tile to measure itself, which only

@@ -12,7 +12,7 @@ import { isRetiredCommand, retiredAnswer } from './retired.js'
 import { metrics } from '../lib/metrics.js'
 import { writeReplyActivity } from './activity.js'
 import type { ReactionTarget } from './reactions.js'
-import { phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
+import { chatNotices, phoneNotices, type DecisionRow, type ReplyRow, type TagRow } from '../push/notices.js'
 import type { PhoneNotice } from '../push/sender.js'
 import { accountMachineName, availableSlots, expireRemovals, followAccountName, machineContribution, machineObservationSchema, slotCounter, preparableStart, readingOnly, refusableStart, recordAgentPresence, renamedBy, removalPreview, startPreparing, storedObservation, swarmGridRow, teamAccountRequired, type MachineObservation } from './machines.js'
 import type { AccountRename } from './accountRenames.js'
@@ -2233,7 +2233,7 @@ export class SuperTabStore {
       const tags = await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       // Everyone in each thread replied in, from the summaries just computed: no read of the threads' rows (task #2745).
       const replies = await writeReplyActivity(tx, tabId, effects.messages, sequences, context.now, { state: effects.state, threads })
-      this.tellPhones(tx, tabId, effects.state, { replies, tags }, effects.messages)
+      this.tellPhones(tx, tabId, effects.state, { replies, tags }, effects.messages, original)
       // Their own message leaves the chat read for them on every app, in the same commit its read answers from (task #2265). A reply
       // only in a thread is not in the chat, and a Team session has no marks (read/service.ts markRead).
       if (command.type === 'message.send' && actor.kind === 'person' && !isTeamSession(user)) {
@@ -5240,13 +5240,15 @@ export class SuperTabStore {
 
   /** The phones of whoever `written` tells hear of it once the write commits (push/send.ts). */
   private tellPhones(tx: Transaction, tabId: string, state: SuperTabState, written: { replies: ReplyRow[]; tags: TagRow[]; decisions?: DecisionRow[] },
-    messages: MessageDraft[]): void {
+    messages: MessageDraft[], before: SuperTabState = state): void {
     const tell = this.hooks.phoneNotices
-    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length)) return
+    // An agent's post may be its words in its 1:1 chat (push/notices.ts chatNotices): nothing else is looked at for a write without.
+    const posted = messages.some(m => m.author.kind === 'agent' && m.post)
+    if (!tell || (!written.replies.length && !written.tags.length && !written.decisions?.length && !posted)) return
     // A notice is never worth a write: one that cannot be made is logged and the write goes on (security review 2).
     let notices: PhoneNotice[]
     try {
-      notices = phoneNotices(tabId, state, written, messages)
+      notices = [...phoneNotices(tabId, state, written, messages), ...posted ? chatNotices(tabId, state, messages, before) : []]
     } catch (error) {
       logger.warn('phone push failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       return

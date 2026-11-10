@@ -140,16 +140,9 @@ void main() {
 
   Map<String, dynamic> row(
     String id, {
-    String kind = 'reply',
     required String messageId,
     String? threadId,
-  }) => activityRow(
-    id,
-    kind: kind,
-    messageId: messageId,
-    threadId: threadId,
-    emoji: kind == 'reaction' ? 'thumbs_up' : null,
-  );
+  }) => activityRow(id, messageId: messageId, threadId: threadId);
 
   group('a message in a thread', () {
     testWidgets('a reply opens its thread at it, lit', (tester) async {
@@ -163,26 +156,6 @@ void main() {
       expect(find.byType(SwarmThreadPage), findsOneWidget);
       expect(inView(tester, 'Reply 20 of root-t.'), isTrue);
       expect(lit('root-t-20'), findsOneWidget);
-    });
-
-    testWidgets('a reaction opens its thread at the message', (tester) async {
-      await pump(
-        tester,
-        rows: [
-          row(
-            'x1',
-            kind: 'reaction',
-            messageId: 'root-t-33',
-            threadId: 'root-t',
-          ),
-        ],
-      );
-      await filter(tester, 'reactions');
-      await open(tester, 'swarm-activity-reply-activity:$tab:x1');
-
-      expect(find.byType(SwarmThreadPage), findsOneWidget);
-      expect(inView(tester, 'Reply 33 of root-t.'), isTrue);
-      expect(lit('root-t-33'), findsOneWidget);
     });
 
     testWidgets('a tag opens its thread at it', (tester) async {

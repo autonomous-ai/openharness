@@ -7,7 +7,7 @@ import { buddyOwnerFile, buddyOwnerOf } from '../lib/buddyGuard.js'
 import { worktreeFolderName } from '../lib/agentNames.js'
 import { env } from '../config/env.js'
 import { tmpdir } from 'node:os'
-import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, githubPromptLine, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
+import { BUDDY_CLAUDE_SIGNED_OUT, BUDDY_NOT_OWN_MACHINE, inspectCapacity, MODEL_REPORT_WAIT_MS, startAgent, TEAM_WRITTEN_CLAUDE_ONLY, TEAM_WRITTEN_WORKTREE_ONLY } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
 import { readCapacityDisk } from './disk.js'
 import { SuperTabHostError } from './wire.js'
@@ -16,9 +16,6 @@ const claudeAccount = vi.hoisted(() => ({ signedIn: true as boolean | null }))
 vi.mock('../lib/engineAccount.js', async (original) => ({ ...await original<object>(), engineAccount: async () => ({ signedIn: claudeAccount.signedIn, lastUsedAt: null }) }))
 const prepared = vi.hoisted(() => ({ value: { ready: [] as string[], missing: [] as string[] } }))
 vi.mock('./buddyHome.js', async (original) => ({ ...await original<object>(), prepareBuddyHome: async () => prepared.value, trustBuddyHome: async () => {} }))
-// Whether this process is an old Harness Team account (team/config.ts): never, unless a test says so.
-const teamAccount = vi.hoisted(() => ({ value: false }))
-vi.mock('../team/config.js', async (original) => ({ ...await original<object>(), isTeamAccount: () => teamAccount.value }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A Buddy's start as its owner's own machine's host dispatches it (task #2832): the Swarm's record of the machine and the
  *  account signed in there both its owner's. */
@@ -393,16 +390,15 @@ it('starts a plain Buddy for a thread session whose thread is not an id', async 
   expect(payload.prompt).not.toContain('--thread')
 })
 
-it('starts a Buddy with its owner\'s own permission settings, and never with the GitHub App\'s token (tasks #2832, #4215)', async () => {
+it('starts a Buddy with its owner\'s own permission settings (tasks #2832, #4215)', async () => {
   for (const engine of ['claude', 'codex'] as const) {
     const f = fixture()
     f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
     ownMachine(f)
-    await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start', github: { requester: 'peer' } } as never,
+    await startAgent({ ...OWN_HOST, tabId: 'tab', startId: 'start' } as never,
       f.scoped, where, f.open)
     const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
-    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, undefined, false, undefined])
-    expect(payload.prompt).not.toContain('GitHub')
+    expect([engine, payload.permissionMode, payload.bypassPermission]).toEqual([engine, undefined, false])
   }
 })
 
@@ -468,7 +464,6 @@ describe('a Buddy launches only on its owner\'s own machine', () => {
 
   const refusals: [string, (f: ReturnType<typeof fixture>) => Record<string, unknown>][] = [
     ['not dispatched by its machine\'s own host', () => ({})],
-    ['in an old Harness Team account', () => { teamAccount.value = true; return { signedIn: 'peer' } }],
     ['with another account signed in here', () => ({ signedIn: 'owner' })],
     ['with no account signed in here', () => ({ signedIn: null })],
     ['on a machine the Swarm records as another person\'s', f => { Object.assign(f.start, { machineOwnerId: 'owner' }); return { signedIn: 'peer' } }],
@@ -479,29 +474,28 @@ describe('a Buddy launches only on its owner\'s own machine', () => {
     for (const engine of ['claude', 'codex']) {
       const f = fixture()
       ownStart(f, engine)
-      try {
-        const input = given(f)
-        const result = await startAgent({ tabId: 'tab', startId: 'start', ...input } as never, f.scoped, where, f.open)
-        expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_NOT_OWN_MACHINE })
-        expect(launches(f)).toBe(false)
-        expect(existsSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')))).toBe(false)
-        expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
-        expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_NOT_OWN_MACHINE }) }))
-      } finally { teamAccount.value = false }
+      const input = given(f)
+      const result = await startAgent({ tabId: 'tab', startId: 'start', ...input } as never, f.scoped, where, f.open)
+      expect(result).toMatchObject({ error: 'START_FAILED', detail: BUDDY_NOT_OWN_MACHINE })
+      expect(launches(f)).toBe(false)
+      expect(existsSync(buddyOwnerFile(env.ADAPTER_DATA_DIR, worktreeFolderName('super-tab/start')))).toBe(false)
+      expect(f.request.mock.calls.some(call => call[0] === 'super_tabs' && (call[1] as Record<string, unknown>)?.action === 'reserveCapacity')).toBe(false)
+      expect(f.scoped).toHaveBeenCalledWith(expect.objectContaining({ command: expect.objectContaining({ type: 'agent.startFailed', error: BUDDY_NOT_OWN_MACHINE }) }))
     }
   })
 })
 
-it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation, with the GitHub App\'s token', async () => {
+it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation', async () => {
   const f = fixture()
   f.start.request = { ...f.start.request, leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+  // A host from before the GitHub App's removal still hands in whom it readied the start for: it is read as nothing.
   await startAgent({ tabId: 'tab', startId: 'start', github: { requester: 'owner' } } as never,
     f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('lead')
-  expect(payload.swarmGitHub).toBe(true)
-  // Its name, then the token's line: no manual, no command.
-  expect(payload.prompt).toBe(`You are Builder. ${githubPromptLine()}`)
+  expect(payload).not.toHaveProperty('swarmGitHub')
+  // Its name alone: no manual, no command, no token line.
+  expect(payload.prompt).toBe('You are Builder.')
 })
 
 it('starts a destination Product Manager with the transferred handoff quoted as context', async () => {
@@ -1145,19 +1139,18 @@ it('waits as before when the screen cannot be read, or asks nothing', async () =
   }
 })
 
-describe('Swarm starts for another person\'s project', () => {
-  it('on a contributed machine, goes by what its host readied: the app for whom it named, nothing when it named no one', async () => {
-    const hosted = async (github: unknown) => {
+describe('a Swarm start for another person\'s project', () => {
+  // The Harness GitHub App is gone for new agents: such a start launches as any other, on this machine's own git and gh.
+  it('wires nothing of the GitHub App and names it nowhere in the prompt, whatever its host readied', async () => {
+    for (const github of [{ requester: 'olive@example.com' }, undefined]) {
       const f = fixture()
       Object.assign(f.start, { machineOwnerId: 'host-1' })
-      expect(await startAgent({ tabId: 'tab', startId: 'start', ...(github === undefined ? {} : { github }) }, f.scoped, where, f.open)).toMatchObject({ ok: true })
-      return f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(await startAgent({ tabId: 'tab', startId: 'start', ...(github ? { github } : {}) } as never, f.scoped, where, f.open)).toMatchObject({ ok: true })
+      const payload = f.request.mock.calls.find(c => c[0] === 'agent_create')![1]!
+      expect(payload).toMatchObject({ swarmRole: 'dev' })
+      expect(payload).not.toHaveProperty('swarmGitHub')
+      expect(String(payload.prompt)).not.toContain('GitHub')
     }
-    const payload = await hosted({ requester: 'olive@example.com' })
-    expect(payload).toMatchObject({ swarmRole: 'dev', swarmGitHub: true })
-    expect(String(payload.prompt)).toContain('Each task\'s message ends with the line to start its pull request bodies with.')
-    expect(String(payload.prompt)).not.toMatch(/Requested by|olive/)
-    for (const github of [undefined, null, {}, { requester: '' }]) expect(await hosted(github)).not.toHaveProperty('swarmGitHub')
   })
 })
 

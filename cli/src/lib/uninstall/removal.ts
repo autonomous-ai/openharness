@@ -17,9 +17,10 @@
  * symlink, or on Windows a junction) is removed as a link and never followed: on the Windows VM `del` given a
  * junction emptied the folder it pointed to (B5.4), so the last step never hands del anything that is a folder.
  */
-import { chmodSync, lstatSync, readdirSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, readdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { posix, win32 } from 'node:path'
+import { removeLink } from '../removePath.js'
 import { runPowershell, type PowershellRun } from '../windows/powershell.js'
 
 export interface RootEntry { name: string; dir: boolean; link?: true }
@@ -188,10 +189,6 @@ function between(platform: NodeJS.Platform, root: string, path: string): string[
   return parts.map((_, i) => p.join(root, ...parts.slice(0, i + 1)))
 }
 
-/** The link itself: unlink takes a symlink, and on Windows a junction too; rmdir is for a folder link it would not. */
-function removeLink(path: string): void {
-  try { unlinkSync(path) } catch { rmdirSync(path) }
-}
 
 /**
  * Every check a plan must pass before anything is removed, as removeNow and scheduleFinalRemoval make them: its paths
