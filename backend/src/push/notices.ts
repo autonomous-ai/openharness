@@ -1,4 +1,4 @@
-import { agentOnly, stableId, type MessageDraft, type SuperTabState } from '../superTabs/model.js'
+import { stableId, type MessageDraft, type SuperTabState } from '../superTabs/model.js'
 import { actorName } from '../superTabs/activity.js'
 import { taggerName } from '../superTabs/mentions.js'
 import { isAgentChat, projectChannels, projectsOf } from '../superTabs/projects.js'
@@ -95,13 +95,13 @@ export function phoneNotices(tabId: string, state: SuperTabState, written: { rep
  * Swarm v4 (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat, so its own words there ring that person, unless
  * they muted the chat (push/muted.ts). One notice per chat a write posts in, for its newest words, under the phone's own key
  * and slot for that chat (mobile lib/swarm/swarm_notices.dart announceChat), so the app's "New messages" notice and the push
- * are one notification. Only what the agent wrote: never a row the server writes in its name (one with a source), nor one
- * only agents read; and only to the person listed on the chat while they are still in the Swarm at that generation.
+ * are one notification. Only what the agent wrote: never a row the server writes in its name (one with a source, which is
+ * every row only agents read too); and only to the person listed on the chat while they are still in the Swarm at that generation.
  */
 function chatNotices(tabId: string, state: SuperTabState, messages: MessageDraft[]): PhoneNotice[] {
   const told = new Map<string, PhoneNotice>()
   for (const message of messages) {
-    if (message.author.kind !== 'agent' || message.source || agentOnly(message.source, message.recipients)) continue
+    if (message.author.kind !== 'agent' || message.source) continue
     const group = state.conversations.find(c => c.id === message.conversationId)
     if (!group || !isAgentChat(group) || !group.agentIds.includes(message.author.id)) continue
     const listed = group.audience?.people[0]
