@@ -452,7 +452,9 @@ describe('a train waits for its own checks, then lands or is closed', () => {
   // base's tip. Its pull request's body is anyone's to write who can write to the repository: a member's line taken out lands
   // that member under a HOLD, and a line put in closes a pull request as landed that never was.
   it.each<[string, (f: ReturnType<typeof setup>, body: string) => string]>([
-    ['loses a member', (_f, body) => body.split('\n').filter(line => !line.startsWith('#5 ')).join('\n')],
+    ['loses its last member', (_f, body) => body.split('\n').filter(line => !line.startsWith('#5 ')).join('\n')],
+    // The walk then passes #5's merge and ends one commit short of the base.
+    ['loses its first member', (_f, body) => body.split('\n').filter(line => !line.startsWith('#4 ')).join('\n')],
     ['gains one the branch does not carry', (f, body) => `${body}\n#6 at ${f.state.pulls.get(6)!.head.sha}, READ-OK by Juno`],
   ])('lands nothing when its body %s after it was built', async (_case, edit) => {
     const f = setup()
@@ -463,7 +465,43 @@ describe('a train waits for its own checks, then lands or is closed', () => {
     await f.ends(PASSED)
     expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual([])
     expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its branch does not hold what its body names')
-    expect([5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open'])
+    expect([4, 5, 6].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open', 'open'])
+  })
+
+  it('reads no red or landed train from a closed pull request another login wrote as one', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    // Closed, titled as a train that failed carrying #5 alone, and one merged that names #4: neither is the train's.
+    for (const [number, title, member] of [[60, 'Train, red: #5', 5], [61, 'Train: #4', 4]] as const) {
+      Object.assign(f.add(number), { state: 'closed', title, head: { sha: sha(`forged-${number}`), ref: `harness-train/${number}`, repo: { full_name: 'acme/app' } },
+        body: trainBody('main', sha(`forged-${number}`), [{ number: member, head: f.state.pulls.get(member)!.head.sha, readers: 'Juno' }]),
+        ...number === 61 ? { merged_at: new Date(f.clock.now).toISOString(), merge_commit_sha: sha('forged-merge') } : {} })
+    }
+    await f.settle()
+    expect(f.carried().at(-1)).toEqual([4, 5])
+    expect([4, 5].map(number => f.state.pulls.get(number)!.state)).toEqual(['open', 'open'])
+    expect([...f.said(4), ...f.said(5)]).toEqual([])
+  })
+
+  it('lands a train with no checks where no member had any: a repository with no CI', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    for (const number of [4, 5]) f.state.runs.delete(f.state.pulls.get(number)!.head.sha)
+    await f.settle()
+    f.state.runs.delete(f.train().head.sha)
+    await f.settle()
+    expect(f.writes().filter(w => w.startsWith('PUT'))).toEqual(['PUT /pulls/900/merge'])
+  })
+
+  it('closes a train whose checks never start, 90 minutes after it was built', async () => {
+    const f = setup()
+    f.add(4); f.add(5)
+    await f.settle()
+    f.state.runs.delete(f.train().head.sha)
+    await f.settle()
+    await f.tick(90 * 60_000)
+    expect(f.trains()[0]).toMatchObject({ state: 'closed', merged_at: null })
+    expect(f.logged()).toContainEqual('[super-tab] train acme/app#900 closed: its checks did not finish in 90 min')
   })
 
   it('takes for its train only a pull request this computer\'s login opened', async () => {
