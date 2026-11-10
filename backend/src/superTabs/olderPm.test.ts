@@ -8,11 +8,12 @@ import type { Command } from './commands.js'
 import { owner, stepsFixture } from './steps.test-support.js'
 
 describe('what an older PM sends for the board', () => {
-  it('posts a hand-off as written, to the agent it names, though no ask is owed', () => {
+  it('posts a hand-off to the agent it names, saying which message to answer, though no ask is owed', () => {
     const f = stepsFixture()
     const effects = f.run({ type: 'message.send', conversationId: f.task, text: 'Please answer Ken in the project chat.', replyTo: null,
       recipientIds: [f.dev], handoff: 'ask-1' } as Command, f.as(f.lead))
-    expect(effects.messages.map(m => ({ text: m.text, recipients: m.recipients }))).toEqual([{ text: 'Please answer Ken in the project chat.', recipients: [f.dev] }])
+    expect(effects.messages.map(m => ({ text: m.text, recipients: m.recipients }))).toEqual([{
+      text: 'Please answer Ken in the project chat.\n\nAnswer message ask-1 in lead in its thread.', recipients: [f.dev] }])
   })
 
   it('opens a task from a person\'s message without reading it, and writes nothing in the project chat', () => {
@@ -23,6 +24,13 @@ describe('what an older PM sends for the board', () => {
     expect(task.title).toBe('Dark mode')
     expect(task.cards?.line).toBeUndefined()
     expect(effects.messages.filter(m => m.conversationId === 'lead')).toEqual([])
+  })
+
+  it('opens a task that names only the person\'s message, with no requester', () => {
+    const f = stepsFixture()
+    const effects = f.run({ type: 'conversation.create', title: 'Dark mode', brief: 'Add dark mode.', checks: [{ description: 'Dark mode works', independent: false }],
+      priority: 'P2', requestMessageId: 'm-asked' } as Command, f.as(f.lead))
+    expect(f.group(effects.result.conversationId as string).requesterId).toBeUndefined()
   })
 
   it('owes nothing for a person\'s message to the PM', () => {

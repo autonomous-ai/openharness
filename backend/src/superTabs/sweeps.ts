@@ -62,7 +62,7 @@ async function guarded(db: PrismaClient, write: Parameters<typeof guardedWrite>[
 
 /**
  * A conversation leaves the active set (spec, Archive) when its work is done or cancelled and it has had no message for a
- * day, or when it was archived by hand. Nothing waits on the Lead's report: the server writes the status card (task #3593). A project's
+ * day, or when it was archived by hand. Nothing waits on the Lead's report (task #3593). A project's
  * Lead conversation and the Leads conversation never sleep; a message wakes any of them. Candidates are read oldest
  * first with a cursor, so rejected ones never hold later ones back.
  */

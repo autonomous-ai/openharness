@@ -51,7 +51,8 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
  *  removed is still stored on old tasks and never sent: nothing would ever clear it, so an older app would show them waiting. */
 /** What a group stored before Swarm v4 that nothing writes now (2026-11-10): its pull requests' heads, events and check states as
  *  the PR watch read them, and its steps' listings; on a project chat, its pulse and the asks its PM owed; on a task, its line on
- *  the status card. Left stored and never sent, so no reader shows a state frozen at the release. */
+ *  the status card. Left stored and never sent, so no reader shows a state frozen at the release; they go with the old Swarm
+ *  data's one-time drop (migration/dropCollections.ts), on the owner's go. */
 type Unwritten = { releasing?: unknown; pullRequestHeads?: unknown; pullRequestEvents?: unknown; pullRequestChecks?: unknown; stepIds?: unknown
   waitingLinuxStep?: unknown; waitingWindowsStep?: unknown; openedBy?: unknown; owed?: unknown; pulse?: unknown; statusLine?: unknown }
 

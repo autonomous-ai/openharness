@@ -283,7 +283,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
     proposalMessageId: id.optional(),
     // The person's message in the project chat an older PM opens a task from: its root in the task lines Swarm v4 removed
-    // (2026-11-10). An older CLI still sends it, and it is taken and kept nowhere. Delete it on or after 2026-12-10.
+    // (2026-11-10). An older CLI still sends it, in place of the requester it named: it is never read, and counts as naming
+    // someone in the task's contract, so the task opens with no requester. Delete it on or after 2026-12-10.
     requestMessageId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
@@ -407,10 +408,11 @@ export const commandSchema = z.discriminatedUnion('type', [
     // still sends it, and it is taken and kept nowhere. Delete it on or after 2026-12-09.
     mentionsIfNoWorker: z.literal(true).optional(), agentOnly: z.literal(true).optional(),
     // The message this post answers right below it, in the main flow (anh Dee, 2026-11-04: "every message is a thread"). It
-    // settles and routes as a reply to that message does, and opens no thread. Never with replyTo.
+    // routes as a reply to that message does, and opens no thread. Never with replyTo.
     answers: id.optional(),
     // `handoff` gave an owed ask to the agent this post names, in the owed asks Swarm v4 removed (2026-11-10): an older CLI's PM
-    // still sends it, and it is taken and kept nowhere. Delete it on or after 2026-12-10.
+    // still sends it, and the post still tells that agent which message to answer, in its words. Nothing else is kept. Delete
+    // it on or after 2026-12-10.
     handoff: id.optional(),
     // The answer to the message in `answers` (answers.ts, task #3403): placed in that message's thread when it is a reply in
     // one, else right below it, and refused when it was answered already. Only with `answers`.
@@ -2543,7 +2545,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // An agent's task says its goal, when it is done, its priority and who asked (taskContract.ts, task #3389). A private chat
       // is no task of its own; a Buddy's proposal supplies its brief, priority and person.
       if (actor.kind === 'agent' && prioritized) {
-        const missing = missingContract({ goal: brief, checks: command.checks.length, priority: Boolean(command.priority || proposal), requester: Boolean(requesterId || command.noRequesterReason) })
+        const missing = missingContract({ goal: brief, checks: command.checks.length, priority: Boolean(command.priority || proposal), requester: Boolean(requesterId || command.noRequesterReason || command.requestMessageId) })
         if (missing.length) fail('TASK_CONTRACT_MISSING', contractRefusal(missing), 400)
       }
       const number = nextConversationNumber(state)
@@ -2639,8 +2641,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (tags.length) message(group.id, `Archived without shipping: the task was cancelled${cancelReason(group) ? ` (${cancelReason(group)})` : ''}.`, [], null, SYSTEM_ROW, undefined, tags)
       group.archived = command.archived
       if (command.archived) endStepsOf(group, `${group.title} was archived.`, true)
-      // Archived by hand, it leaves the active set until it is reopened (spec, Archive). No report is waited for: the server writes
-      // the status card (task #3593).
+      // Archived by hand, it leaves the active set until it is reopened (spec, Archive). No report is waited for (task #3593).
       if (command.archived) group.dormant = true
       else delete group.dormant
       break
@@ -3911,7 +3912,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const excludedPm = command.agentOnly ? [] : recipients.filter(id => !pmAcceptsMessage(state, id, undefined))
       recipients = recipients.filter(id => !excludedPm.includes(id))
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, text, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged)
+      const postText = command.handoff ? `${text}\n\nAnswer message ${command.handoff} in ${groupProject(state, group).leadConversationId} in its thread.` : text
+      message(group.id, postText, recipients, command.replyTo, command.agentOnly ? { ...AGENT_ONLY, ...command.notice ? { notice: command.notice } : {} } : undefined, attachments, tagged)
       if (!command.agentOnly) effects.messages.at(-1)!.post = true
       if (command.answers) effects.messages.at(-1)!.answers = command.answers
       // Whom a stuck line in a task tags, with its requester (stuck.ts, task #3915).
