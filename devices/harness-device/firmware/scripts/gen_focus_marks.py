@@ -60,9 +60,11 @@ PET_ENGINES = ('claude', 'codex', 'muse')
 def dedupe(text):
     """Each pixel array once: a later array with the same type and body is dropped and referenced by the first's name."""
     seen, alias, lines = {}, {}, []
+    names = re.compile(r'\b(' + '|'.join(map(re.escape, sorted(set(re.findall(r'^static const \S+ (\w+)\[', text, re.M)),
+                                                                key=len, reverse=True))) + r')\b')
     for line in text.splitlines(keepends=True):
-        for old, new in alias.items():
-            line = line.replace(f'{old},', f'{new},').replace(f'{old}}}', f'{new}}}')
+        if alias:
+            line = names.sub(lambda m: alias.get(m.group(1), m.group(1)), line)
         m = re.match(r'^static const (\S+) (\w+)\[\] = \{(.*)\};$', line.rstrip('\n'))
         if m:
             kind, name, body = m.groups()
