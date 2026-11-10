@@ -20,7 +20,6 @@ import 'swarm_kept.dart';
 import 'swarm_mark_all.dart';
 import 'swarm_message_reads.dart';
 import 'swarm_notices.dart';
-import 'swarm_profile.dart';
 import 'swarm_request.dart';
 import 'swarm_start.dart';
 
@@ -375,7 +374,6 @@ class SwarmHost extends ChangeNotifier {
     SwarmHomeCache? homeCache,
     LocalKeyValueStore? readMarks,
     SwarmKeptStore? kept,
-    this.uploadAvatar,
     this.voice,
   }) : features = features ?? experimentalFeaturesStore,
        homeCache = homeCache ?? SwarmHomeCache.device(),
@@ -418,10 +416,6 @@ class SwarmHost extends ChangeNotifier {
   /// Where the session's read marks are kept on the phone: each chat's id
   /// and how far it was read, under the account and the Swarm.
   final LocalKeyValueStore readMarks;
-
-  /// Sends an avatar photo with the phone's own sign-in; null where none can
-  /// go, and only the built-in pictures are offered.
-  final SwarmAvatarUpload? uploadAvatar;
 
   /// A new microphone for a chat's voice messages (swarm_voice.dart), which
   /// the chat owns and disposes; null where none can be heard, and the
@@ -547,13 +541,6 @@ class SwarmScope extends InheritedNotifier<SwarmHost> {
           ?.notifier
           ?.accountComing ??
       false;
-
-  /// How an avatar photo goes up ([SwarmHost.uploadAvatar]); null outside
-  /// the shell or where none can.
-  static SwarmAvatarUpload? uploadAvatarOf(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<SwarmScope>()
-      ?.notifier
-      ?.uploadAvatar;
 
   /// The account's computers ([SwarmHost.computers]); null outside the shell
   /// or where none were handed in.
