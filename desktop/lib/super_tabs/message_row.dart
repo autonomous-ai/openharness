@@ -21,7 +21,6 @@ import 'message_more_menu.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
-import 'reminders.dart';
 import 'swarm_type.dart';
 import 'voice_length.dart';
 
@@ -88,8 +87,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.dimmed = false,
     this.thread,
     this.threadUnread = false,
-    this.threadTagged = false,
-    this.threadFresh = 0,
     this.onOpenThread,
     this.threadTrailing,
     this.threadEnd,
@@ -98,7 +95,6 @@ class SuperTabMessageRow extends StatefulWidget {
     this.linkTarget,
     this.onOpenLink,
     this.onMarkUnread,
-    this.onRemind,
     this.onEdit,
     this.onDelete,
   });
@@ -116,13 +112,6 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The thread [message] is the root of, once it has a reply.
   final SuperTabThread? thread;
   final bool threadUnread;
-
-  /// Whether an unread reply in [thread] tags the reader.
-  final bool threadTagged;
-
-  /// How many of [thread]'s replies are new to the reader; 0 when none, or
-  /// not known.
-  final int threadFresh;
 
   /// Opens [message]'s thread: from its reply line, or from an also-sent
   /// reply's mark.
@@ -205,9 +194,6 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The More menu's Mark unread: the chat reads as unread from this message
   /// on. Null where it is not offered.
   final VoidCallback? onMarkUnread;
-
-  /// The More menu's Remind me, with when. Null where it is not offered.
-  final ValueChanged<SuperTabRemindIn>? onRemind;
 
   /// The More menu's Edit message: the text turns into a field here, and
   /// this sends what it says once changed. Null where it is not offered (it
@@ -474,25 +460,9 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
         label: 'Copy link to message',
         icon: AppIcons.link2,
         onPressed: () => unawaited(_copyLink(link)),
-        choices: const [],
       ),
     if (widget.onMarkUnread case final markUnread?)
-      (
-        label: 'Mark unread',
-        icon: AppIcons.mail,
-        onPressed: markUnread,
-        choices: const [],
-      ),
-    if (widget.onRemind case final remind?)
-      (
-        label: 'Remind me',
-        icon: AppIcons.clock,
-        onPressed: null,
-        choices: [
-          for (final when in SuperTabRemindIn.values)
-            (label: when.label, onPressed: () => remind(when)),
-        ],
-      ),
+      (label: 'Mark unread', icon: AppIcons.mail, onPressed: markUnread),
   ];
 
   /// The author's own changes, under the menu's rule.
@@ -546,13 +516,20 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
 
   /// The sender's name: opens the agent when it is one.
   Widget _name(TextStyle style, bool finger) {
+    // Beside who a post is to ("Pip to Juno"), one line that gives way with an ellipsis; alone, the whole name.
+    final phrase = widget.to.isNotEmpty;
     final name = fingerTarget(
       enabled: finger,
       Align(
         alignment: Alignment.centerLeft,
         widthFactor: 1,
         heightFactor: 1,
-        child: Text(widget.author, style: style),
+        child: Text(
+          widget.author,
+          maxLines: phrase ? 1 : null,
+          overflow: phrase ? TextOverflow.ellipsis : null,
+          style: style,
+        ),
       ),
     );
     return InkWell(onTap: widget.onOpenAgent, child: name);
@@ -1027,8 +1004,6 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 ),
                                 thread: thread,
                                 unread: widget.threadUnread,
-                                tagged: widget.threadTagged,
-                                fresh: widget.threadFresh,
                                 onOpen: open,
                                 member: widget.member,
                                 trailing: widget.threadTrailing,
@@ -1272,8 +1247,6 @@ class SuperTabThreadLine extends StatelessWidget {
     required this.thread,
     required this.unread,
     required this.onOpen,
-    this.tagged = false,
-    this.fresh = 0,
     this.member,
     this.trailing,
     this.end,
@@ -1281,16 +1254,12 @@ class SuperTabThreadLine extends StatelessWidget {
 
   final SuperTabThread thread;
 
-  /// How many replies are new to the reader, said after the count while
-  /// [unread]; 0 says nothing.
-  final int fresh;
-
   /// Drawn after the line's link, outside it: a thread session's mark.
   final Widget? trailing;
 
   /// Drawn last, outside the line's link: End session.
   final Widget? end;
-  final bool unread, tagged;
+  final bool unread;
   final VoidCallback onOpen;
 
   /// Dresses each reply author as their own messages are: a person's
@@ -1337,18 +1306,13 @@ class SuperTabThreadLine extends StatelessWidget {
       );
     }
     final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
-    final newWords = unread && fresh > 0 ? '$fresh new' : null;
     final last = thread.lastAt;
     final lastReply = last == null
         ? null
         : 'Last reply ${superTabAgo(DateTime.now().difference(last))}';
     final link = _SuperTabThreadBar(
       key: ValueKey('super-thread-bar-${thread.id}'),
-      label: [
-        count,
-        if (unread) newWords ?? 'unread',
-        if (tagged) '@ you',
-      ].join(', '),
+      label: [count, if (unread) 'unread'].join(', '),
       onTap: onOpen,
       builder: (active) => Row(
         children: [
@@ -1374,23 +1338,6 @@ class SuperTabThreadLine extends StatelessWidget {
                         ),
                   ),
                 ),
-                if (newWords != null) ...[
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                  Text(
-                    newWords,
-                    key: ValueKey('super-thread-new-${thread.id}'),
-                    style: DesktopChrome.metadata(color: DesktopChrome.accent)
-                        .copyWith(fontWeight: grid.AppFont.semibold),
-                  ),
-                ],
-                if (tagged) ...[
-                  const SizedBox(width: grid.AppDesktop.controlGap),
-                  Text(
-                    '@ you',
-                    key: ValueKey('super-thread-tagged-${thread.id}'),
-                    style: DesktopChrome.metadata(color: DesktopChrome.accent),
-                  ),
-                ],
                 const SizedBox(width: grid.AppDesktop.controlGap),
                 Flexible(
                   child: Text(

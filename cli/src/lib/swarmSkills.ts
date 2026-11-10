@@ -6,7 +6,6 @@
  */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { buddyLaunchFile, buddyOwnerOf, buddyReadsOf, heldByOldGuard, revokeBuddyWide, signedInAccount } from './buddyGuard.js'
-import { isTeamAccount } from '../team/config.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -177,11 +176,8 @@ function ignoreBuddyFiles(root: string): void {
  */
 function prepareBuddyFolder(root: string, key: string): void {
   // A relaunch (a restart, a model switch, a move) never passes the start's own-machine check (superTabs/start.ts
-  // buddyOnOwnMachine), and a Buddy saved in an older mode relaunches in full mode: in a Harness Team account, which is never
-  // its owner's own, it is held before anything is written or launched (security review 1 of #2832).
-  if (isTeamAccount()) throw new Error(BUDDY_NOT_HERE)
-  // Nor anywhere its start did not check (security review 2 of #2832): the start recorded its owner for this folder after
-  // checking the machine, and an account signed in here since that is not theirs holds it too. Before the host has read who
+  // buddyOnOwnMachine), so a Buddy is held anywhere its start did not check (security review 2 of #2832): the start recorded
+  // its owner for this folder after checking the machine, and an account signed in here since that is not theirs holds it too. Before the host has read who
   // is signed in (a restart restores its sessions first) the record alone decides, as the host's own sign-out clears it.
   const owner = buddyOwnerOf(root), account = signedInAccount()
   if (!owner) throw new Error(BUDDY_START_AGAIN)
@@ -210,7 +206,7 @@ function prepareBuddyFolder(root: string, key: string): void {
   writeFileSync(launchFile, `${randomUUID()}\n`, { mode: 0o600 })
   ignoreBuddyFiles(root)
 }
-/** Why a Buddy is not prepared in a Harness Team account: the server's own words (backend buddyContract.ts). */
+/** Why a Buddy is not prepared where another account is signed in: the server's own words (backend buddyContract.ts). */
 export const BUDDY_NOT_HERE = 'A Buddy runs only on its owner\'s own machine, signed in as them. It is not started here.'
 /** Why a Buddy saved before its start recorded its owner is not relaunched: its owner starts it again, and that start checks. */
 export const BUDDY_START_AGAIN = 'This Buddy was started before Harness checked its machine at each launch. Start your Buddy again.'

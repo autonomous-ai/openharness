@@ -6966,7 +6966,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// Asks the account's own computer [machineId] a Swarm question of its own
   /// (`super_tabs`), such as preparing a Buddy's folder there
-  /// (`prepareContribution`, as the desktop's `prepareBuddyMachine` asks it).
+  /// (`prepareContribution`).
   /// A refusal throws; so does an account change while it was asked.
   Future<Map<String, dynamic>> swarmAskComputer(
     String machineId,

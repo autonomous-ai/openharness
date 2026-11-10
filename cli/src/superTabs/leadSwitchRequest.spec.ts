@@ -89,32 +89,31 @@ describe('a PM host carrying out a switch the Swarm asked for', () => {
     expect(t.calls[3][1]).toEqual({ agentId: 'h1', replacementId: 'h2', changeId, targetEngine: 'claude' })
   })
 
-  it('recreates the PM as a Swarm PM: its role, skill mode, GitHub token, start prompt, then the handoff', async () => {
+  // The PM's row still holds the GitHub App flag it was saved with (PM above): the replacement reads it as nothing.
+  it('recreates the PM as a Swarm PM: its role, skill mode, start prompt, then the handoff, with no GitHub App', async () => {
     const t = setup()
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]
-    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true, startedBy: 'agent', name: 'PM' })
+    expect(create).toMatchObject({ swarmRole: 'lead', swarmSkillMode: 'orchestration', startedBy: 'agent', name: 'PM' })
+    expect(create).not.toHaveProperty('swarmGitHub')
     const prompt = String(create.prompt)
     // Its name alone, as at its first start: no manual and no command (superTabs/start.ts startNote).
     expect(prompt.startsWith('You are PM. ')).toBe(true)
     expect(prompt).not.toContain('super-tab')
-    expect(prompt).toContain('Harness GitHub App token')
-    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(prompt.indexOf('Harness GitHub App token'))
+    expect(prompt).not.toContain('GitHub App')
+    expect(prompt.indexOf('Context handoff')).toBeGreaterThan(0)
   })
 
-  it('starts a PM that has no name to give with the token line and its handoff alone, no line of it opening with a space', async () => {
-    for (const [name, github] of [[undefined, true], ['', true], ['  ', false]] as const) {
-      const t = setup({ old: { defaultName: name, swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github } } })
+  it('starts a PM that has no name to give with its handoff alone, no line of it opening with a space', async () => {
+    for (const name of [undefined, '', '  ']) {
+      const t = setup({ old: { defaultName: name, swarmSkill: { role: 'coordinator', key: 'swarm-lead', mode: 'orchestration', github: true } } })
       await t.switches.serve(row())
-      const create = t.calls.find(c => c[0] === 'agent_create')![1]
-      const prompt = String(create.prompt)
-      expect(prompt, `${JSON.stringify(name)} ${github}`).toMatch(github ? /^git and gh here use a Harness GitHub App token/ : /^Context handoff:/)
-      expect(prompt).toContain('Context handoff:')
-      expect(prompt).not.toContain('You are')
+      const prompt = String(t.calls.find(c => c[0] === 'agent_create')![1].prompt)
+      expect(prompt, JSON.stringify(name)).toMatch(/^Context handoff:/)
     }
   })
 
-  it('keeps a PM without GitHub off the token', async () => {
+  it('names no skill mode for a row without one', async () => {
     const t = setup({ old: { swarmSkill: { role: 'coordinator', key: 'swarm-lead' } } })
     await t.switches.serve(row())
     const create = t.calls.find(c => c[0] === 'agent_create')![1]

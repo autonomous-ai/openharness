@@ -38,6 +38,11 @@ enum ProductFlow {
   /// Import an agent running on this Mac (task #2379): started when its
   /// handoff preview shows, then imported, failed or cancelled.
   agentImport('agent_import'),
+
+  /// A Team account's removal from this computer (anh Dee, 2026-11-10: every
+  /// Team account goes): ok removed or already gone, failed when the system
+  /// refused or kept it, cancelled at the admin prompt.
+  teamAccountRemoval('team_account_removal'),
   // The same card offered once to a computer that never had it, after one of its own harnesses
   // finished a turn (`AppNotifier._offerPhoneAfterWork`): counted apart, so the two offers read apart.
   phoneOfferAfterWork('phone_offer_after_work'),
@@ -68,6 +73,7 @@ enum ProductFlow {
     phoneOfferReturning => 6,
     shareInvite || shareAccept => 5,
     agentImport => 7,
+    teamAccountRemoval => 8,
     phoneOfferAfterWork || phoneOfferAwayWaited || phoneOfferAwayFinished => 4,
     _ => 1,
   };

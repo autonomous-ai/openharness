@@ -51,12 +51,6 @@ export function markTeamWritten(state: SuperTabState, group: Conversation, worke
   mark(group, { kind: 'assigned' })
 }
 
-/** What a step opened on [task] stores: a copy of its task's mark, or an assignment's when it reads as Team-written by its assignee. */
-export function stepMark(state: SuperTabState, task: Conversation): Pick<Conversation, 'teamWritten' | 'teamWrittenBy'> {
-  if (task.teamWritten) return { teamWritten: true, ...task.teamWrittenBy ? { teamWrittenBy: structuredClone(task.teamWrittenBy) } : {} }
-  return teamWrittenTask(state, task) ? { teamWritten: true, teamWrittenBy: { kind: 'assigned' } } : {}
-}
-
 /** Refuses an agent outside a Team account for Team-written code. The project's coordinator stays: it never builds or runs it. */
 export function requireTeamWrittenAccount(state: SuperTabState, group: Conversation, worker: Agent): void {
   if (barredFromTeamWritten(state, group, worker)) failTeamWritten()
@@ -144,7 +138,6 @@ export function applyPushOrigin(state: SuperTabState, group: Conversation, origi
   }
 }
 
-/** [reason]: why GitHub cannot show it, when that is known (repositoryReach.ts unknownPushReason). */
-export function failPushUnknown(reason?: string | null): never {
-  return fail(TEAM_WRITTEN_WORK, reason ?? 'GitHub could not show who pushed this task\'s code, so only the project owner\'s own agent may run it for now. Try again in a minute.', 403)
+export function failPushUnknown(): never {
+  return fail(TEAM_WRITTEN_WORK, 'GitHub could not show who pushed this task\'s code, so only the project owner\'s own agent may run it for now. Try again in a minute.', 403)
 }

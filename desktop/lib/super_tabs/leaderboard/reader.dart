@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../logging/app_log.dart';
 import '../controller.dart';
 import 'model.dart';
 
@@ -142,10 +143,12 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
         error = null;
       } else {
         error = failure.message;
+        _logFailed(failure.code);
       }
-    } catch (_) {
+    } catch (thrown) {
       if (read != _read) return;
       error = "Couldn't read the leaderboard.";
+      _logFailed('${thrown.runtimeType}');
     }
     _notify();
   }
@@ -153,6 +156,10 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   void _notify() {
     if (!_disposed) notifyListeners();
   }
+
+  /// By the failure's name alone: what the server or GitHub said may name the person's own work.
+  void _logFailed(String name) =>
+      appLog.warn('super-tabs', 'Project leaderboard not read ($name)');
 
   @override
   void dispose() {
@@ -162,10 +169,9 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   }
 }
 
-/// The board of the open conversation's project, read once for the right
-/// pane's members and the sidebar's Models, so both show one project and one
-/// week. No project open, or the project gone from the Swarm the reader
-/// sees, clears it.
+/// The board of the open conversation's project, read for Manage's Models.
+/// No project open, or the project gone from the Swarm the reader sees,
+/// clears it.
 class SuperTabProjectBoard extends SuperTabLeaderboardReader {
   /// The board moves only as work ships, is answered or runs: every five
   /// minutes is fresh enough, and keeps every open window's reads rare.

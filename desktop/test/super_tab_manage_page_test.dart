@@ -82,17 +82,15 @@ void main() {
     return (c: c, server: server);
   }
 
-  testWidgets('its five tabs, Devices only where this build has them', (
+  testWidgets('its four tabs, Devices only where this build has them', (
     tester,
   ) async {
     await show(tester);
-    for (final label in const [
-      'Machines',
-      'Models',
-      'Devices',
-      'Swarm',
-      'Backlog',
-    ]) {
+    // Backlog and Scorecard were v3 (the scorecard's backend went in #3629).
+    for (final gone in const ['Backlog', 'Scorecard']) {
+      expect(find.text(gone), findsNothing, reason: gone);
+    }
+    for (final label in const ['Machines', 'Models', 'Devices', 'Swarm']) {
       expect(
         find.descendant(
           of: find.byType(SuperTabManageTabs),
@@ -201,9 +199,7 @@ void main() {
             body: ValueListenableBuilder(
               valueListenable: terminals,
               builder: (context, shown, _) => SuperTabView(
-                board: false,
                 controller: c,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (agent) => opened.add(agent.id),
                 machineName: (_) => 'Mac Studio',
@@ -235,25 +231,6 @@ void main() {
       final c = await inView(tester, [], terminals);
       terminals.value = true;
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('super-manage-tab-machines')),
-        findsNothing,
-      );
-      await close(tester, c);
-    });
-
-    testWidgets('an agent clicked in the right column leaves it', (
-      tester,
-    ) async {
-      final opened = <String>[];
-      final terminals = ValueNotifier(false);
-      final c = await inView(tester, opened, terminals, membersOpen: true);
-      final agent = c.snapshot!.agents.first;
-      await tester.tap(find.byKey(ValueKey('super-member-${agent.id}')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Open terminal'));
-      await tester.pumpAndSettle();
-      expect(opened, [agent.id]);
       expect(
         find.byKey(const ValueKey('super-manage-tab-machines')),
         findsNothing,

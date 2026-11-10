@@ -1,6 +1,6 @@
 // Task #3006 (Dee, 11-05): the Swarm in each new theme, for the pictures Dee
-// okays before it merges: the chat with its sidebar, a thread open beside it,
-// and Activity with a decision waiting. Writes nothing unless THEME_SHOTS
+// okays before it merges: the chat with its sidebar and a thread open beside
+// it. Writes nothing unless THEME_SHOTS
 // names a folder.
 import 'dart:io';
 
@@ -11,8 +11,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/shared/theme/appearance_prefs_store.dart';
 import 'package:harness/shared/theme/color_palette.dart';
-import 'package:harness/super_tabs/activity.dart';
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/harness_customize_pane.dart';
 
@@ -86,17 +84,11 @@ ConversationServer _swarm() {
     minutesAgo: 8,
   );
   say('Release notes are up for review.', ken, minutesAgo: 2);
-  server.tag(root, threadId: root, messageSequence: server.revision);
   say(
     'Which theme should be the default light one?',
     river,
     conversation: 'web-lead',
     minutesAgo: 5,
-  );
-  server.ask(
-    ['Cloud or Plum as the default light theme?'],
-    conversationId: 'web-lead',
-    projectId: 'web',
   );
   ((server.state['conversations'] as List)[0] as Map)['leadId'] = 'lead-agent';
   return server;
@@ -139,11 +131,6 @@ void main() {
         },
       );
       await c.refresh();
-      final attention = SuperTabAttention.of(c);
-      await attention.mentions.load();
-      await attention.decisions.load();
-      await attention.load();
-      SuperTabActivity.of(c);
       await c.select('lead');
       final picture = GlobalKey();
       await tester.pumpWidget(
@@ -156,7 +143,6 @@ void main() {
               body: SuperTabView(
                 controller: c,
                 app: app,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 onNewProject: () {},
@@ -180,12 +166,6 @@ void main() {
         await tester.tap(line);
         await tester.pumpAndSettle();
         await shot('thread');
-      }
-      final activityRow = find.byKey(const ValueKey('super-activity'));
-      if (activityRow.evaluate().isNotEmpty) {
-        await tester.tap(activityRow);
-        await tester.pumpAndSettle();
-        await shot('activity');
       }
       await tester.pumpWidget(const SizedBox());
       await c.flush();

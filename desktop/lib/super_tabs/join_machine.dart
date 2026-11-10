@@ -1,61 +1,6 @@
 import 'dart:async';
 
-import '../core/machine_resources.dart';
 import 'controller.dart';
-
-/// A join waiting for the person to bring their own agent. Never persisted;
-/// closing the prompt starts nothing and never enrolls a machine.
-class SwarmJoinAccountRequest {
-  SwarmJoinAccountRequest(
-    this.swarmName,
-    this.accountId, {
-    required this.tabId,
-  });
-  final String tabId;
-  final String swarmName, accountId;
-  final _answer = Completer<bool?>();
-  bool get answered => _answer.isCompleted;
-  Future<bool?> get answer => _answer.future;
-  void complete(bool? ownAccount) {
-    if (!answered) _answer.complete(ownAccount);
-  }
-}
-
-/// What one more agent needs to start, the CLI's own figure
-/// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
-const _agentMemoryBytes = 2 * 1024 * 1024 * 1024;
-
-/// Add machine's starting number of agents: half the machine's memory in
-/// agents, from 1 to 16. Null while its memory is unknown.
-int? superTabSuggestedAgentSlots(MachineResources? resources) {
-  final total = resources?.memoryTotalBytes;
-  if (total == null) return null;
-  return (total / (2 * _agentMemoryBytes)).floor().clamp(1, 16);
-}
-
-/// Whether [stored], on a machine row saved without its Agents setting, is
-/// the number joining suggested, which the server reads as As memory allows
-/// (backend superTabs/machines.ts agentLimit; Dee, 2026-11-04): 16, or the
-/// suggestion its measured memory gave (from 4 GiB, below which it was a
-/// floor of 1 rather than a figure from memory).
-bool superTabOldJoinSuggestion(int stored, MachineResources? resources) {
-  if (stored == 16) return true;
-  final total = resources?.memoryTotalBytes;
-  return total != null &&
-      total >= 2 * _agentMemoryBytes &&
-      stored == superTabSuggestedAgentSlots(resources);
-}
-
-/// The role [answer] says this account just became a member as: the
-/// server's own answer to the join that asked, a link join (store.ts
-/// `joinSwarm`) or an invitation's accept (commands.ts `invite.accept`). Null
-/// when the person was a member already, whatever an earlier preview said (they
-/// may have joined on another device meanwhile), or when an older server does
-/// not say: this computer is added only to a membership this request made.
-String? swarmNewMemberRole(Map<String, dynamic> answer) =>
-    answer['alreadyMember'] == false && answer['role'] is String
-    ? answer['role'] as String
-    : null;
 
 /// Accepting a Swarm invitation from this computer. Each attempt has its own
 /// operation, kept only for that attempt's retries (a lost reply is asked

@@ -8,7 +8,6 @@ import { removeChunk, startChunkSweep } from '../lib/chunkSweep.js'
 import { logger } from '../utils/logger.js'
 import { fail, stableId } from './model.js'
 import { readBy } from './parts/indexed.js'
-import { ms } from './parts/light.js'
 
 /** A mark untouched this long is removed by a TTL index; the conversation then reads as the device last saw it. */
 export const READ_MARK_EXPIRY_MS = 180 * 24 * 60 * 60_000
@@ -90,7 +89,7 @@ export async function writeReadMark(db: PrismaClient, mark: ReadMarkWrite): Prom
 /** The person's Mark unread: moves their mark of a conversation back to `sequence`, never forward (a chat already unread from
  *  earlier stays as it is), and answers the mark as stored. The one write that lowers a mark. It sets `loweredAt` with
  *  `updatedAt`, so their other devices, which keep the higher of a mark and the one they hold, take this one instead
- *  (readMarkRows `lowered`). A chat with no mark counts as read (read/inbox.ts), so it gets one. One conditional update; when
+ *  (readMarkRows `lowered`). A chat with no mark counts as read, so it gets one. One conditional update; when
  *  another device creates or moves the row between it and the look after it, it runs again, as `raise` does. */
 export async function lowerReadMark(db: PrismaClient, mark: ReadMarkWrite): Promise<number> {
   const { tabId, personId, conversationId, sequence } = mark
@@ -121,64 +120,6 @@ export async function writeThreadMark(db: PrismaClient, mark: ThreadMarkWrite): 
   return stored.sequence
 }
 
-/** Gives one thread the person has no mark of a mark at `sequence` (read/threadMarkSeeds.ts: the chat's mark before a read
- *  moved it past a reply only in this thread), and answers whether it wrote one. A row a Follow alone wrote (sequence 0) takes
- *  it and keeps its Follow; a row with any mark keeps its own, lower or higher, so a thread opened on another device is never
- *  moved by a chat read. Each write matches only a row at 0 or creates one; when another device creates the row between the
- *  two, the match runs again on it. A new row counts toward THREAD_MARK_CAP as any mark. */
-export async function seedThreadMark(db: PrismaClient, mark: ThreadMarkWrite): Promise<boolean> {
-  const { tabId, personId, conversationId, threadId, sequence } = mark
-  const id = stableId(tabId, conversationId, threadId, personId), updatedAt = new Date(mark.now)
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if ((await db.superTabThreadMark.updateMany({ where: { id, sequence: 0 }, data: { sequence, updatedAt } })).count) return true
-    if (await db.superTabThreadMark.findUnique({ where: { id }, select: { sequence: true } })) return false
-    try {
-      await db.superTabThreadMark.create({ data: { id, tabId, personId, conversationId, threadId, sequence, updatedAt } })
-    } catch (error) {
-      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error
-      continue
-    }
-    await capThreadMarks(db, tabId, personId)
-    return true
-  }
-  return fail('READ_MARK_BUSY', 'This conversation is being marked read on another device. Try again.', 503)
-}
-
-export interface ThreadFollowWrite { tabId: string; personId: string; conversationId: string; threadId: string; follow: boolean | null; now: number }
-
-/** Stores the person's Follow (true), Unfollow (false) or neither (null) of one thread on its mark row, and answers it. The
- *  row keeps its sequence: one written here first starts at 0, which reads as no mark (every client keeps the higher of a
- *  mark and the one it holds). A Follow moves the row as a read does, so it counts toward THREAD_MARK_CAP and the 180-day
- *  expiry from now, and goes with the person when they leave the Swarm (sweepThreadMarks). Two first writes racing to create
- *  the row: the loser's create fails on the id and its update runs again on the winner's row. */
-export async function writeThreadFollow(db: PrismaClient, write: ThreadFollowWrite): Promise<boolean | null> {
-  const { tabId, personId, conversationId, threadId, follow } = write
-  const id = stableId(tabId, conversationId, threadId, personId), updatedAt = new Date(write.now)
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if ((await db.superTabThreadMark.updateMany({ where: { id }, data: { follow, updatedAt } })).count) return follow
-    try {
-      await db.superTabThreadMark.create({ data: { id, tabId, personId, conversationId, threadId, sequence: 0, follow, updatedAt } })
-    } catch (error) {
-      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error
-      continue
-    }
-    await capThreadMarks(db, tabId, personId)
-    return follow
-  }
-  return fail('READ_MARK_BUSY', 'This thread is being changed on another device. Try again.', 503)
-}
-
-/** One of the person's thread mark rows: its mark, its Follow choice (null when none) and when it last moved. */
-export interface ThreadMarkRow { conversationId: string; threadId: string; sequence: number; follow: boolean | null; updatedAt: number }
-
-/** Every one of the person's thread mark rows in this tab (at most THREAD_MARK_CAP), most recently moved first, by one raw read
- *  of the (tabId, personId, updatedAt) index, as readThreadMarks. The caller keeps those of conversations the reader may read. */
-export async function readThreadMarkRows(db: Prisma.TransactionClient, tabId: string, personId: string): Promise<ThreadMarkRow[]> {
-  const rows = await readBy(db, 'SuperTabThreadMark', 'person', [{ $match: { tabId, personId } }, { $sort: { updatedAt: -1 } },
-    { $project: { _id: 0, conversationId: 1, threadId: 1, sequence: 1, follow: 1, updatedAt: 1 } }])
-  return rows.map(row => ({ conversationId: row.conversationId as string, threadId: row.threadId as string, sequence: Number(row.sequence),
-    follow: typeof row.follow === 'boolean' ? row.follow : null, updatedAt: ms(row.updatedAt) }))
-}
 
 /** Removes the person's least recently moved thread marks in the Swarm past THREAD_MARK_CAP, by the (tabId, personId,
  *  updatedAt) index: it counts the person's marks and reads only the ids of those past the cap. */

@@ -5,12 +5,13 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'super_tab_shipping_test.dart' show person;
 import 'support/super_tab_fixture.dart';
 
@@ -83,9 +84,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: SuperTabView(
-            board: true,
             controller: c,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (id) => id == 'mac-1' ? 'Mac Studio' : 'Another Mac',
@@ -229,6 +228,34 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a read that fails is in the app log by its name, and on the page; one that cannot be read says so too',
+    (tester) async {
+      final lines = <String>[];
+      Iterable<String> said() =>
+          lines.where((line) => line.contains('Leaderboard'));
+      final before = appLog;
+      appLog = _Recorder(lines);
+      addTearDown(() => appLog = before);
+      final (c, server) = await show(tester);
+      await tap(tester, key('project-sidebar-humans'));
+      await tap(tester, key('super-human-dee'));
+      server.failShippingReads = 1;
+      await tap(tester, find.byTooltip('Refresh leaderboard'));
+      expect(find.text('No connection.'), findsOneWidget);
+      expect(said(), ['warn super-tabs Leaderboard not read (OFFLINE)']);
+      // An answer the app cannot read: the page says so and keeps the board, and the log names it without its content.
+      server.shippingAnswer = (_) => {'people': 'not a list'};
+      await tap(tester, find.byTooltip('Refresh leaderboard'));
+      expect(find.text("Couldn't read the leaderboard."), findsOneWidget);
+      expect(text(tester, 'leaderboard-points-dee'), '4.2');
+      expect(said(), hasLength(2));
+      expect(said().last, startsWith('warn super-tabs Leaderboard not read ('));
+      expect(lines.join('\n'), isNot(contains('not a list')));
+      await end(tester, c);
+    },
+  );
+
   testWidgets('beside an open thread the narrow page still fits', (
     tester,
   ) async {
@@ -328,9 +355,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SuperTabView(
-              board: true,
               controller: c,
-              onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
               machineName: (_) => 'Mac Studio',
@@ -345,4 +370,18 @@ void main() {
       await end(tester, c);
     },
   );
+}
+
+class _Recorder implements AppLog {
+  _Recorder(this.lines);
+  final List<String> lines;
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) => lines.add('${level.name} $category $message');
 }

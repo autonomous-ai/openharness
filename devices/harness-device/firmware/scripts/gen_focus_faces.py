@@ -24,6 +24,7 @@ subtables, which lv_font_conv does not read (without them the face comes out unk
 re-cuts them (INTER). The default run reads the vendored files and needs node and fontTools (pip install
 fonttools: it reads each font's coverage).
 """
+import json
 import re
 import subprocess
 import sys
@@ -39,7 +40,30 @@ FONTS = root / 'fonts'
 # Inter has no check / cross marks; they come from Noto Sans Symbols 2 (OFL, vendored), so recaps keep showing them.
 MARKS = {0x2713, 0x2717}
 MARKS_FONT = FONTS / 'NotoSansSymbols2-Regular.ttf'   # github.com/google/fonts ofl/notosanssymbols2
-KEEP = base.TEXT
+# Latin Extended-A is cut to the letters terminal.c's plookup cannot draw as one ASCII letter: Vietnamese's eight, and
+# every letter neither display_fallbacks.inc nor plookup's stroked-letter table maps to a single ASCII character
+# (Ĳ ĳ ĸ Ŀ ŀ ŉ Ŋ ŋ Œ œ ...); the rest draw their base letter.
+STROKED = {0x126, 0x127, 0x131, 0x141, 0x142, 0x166, 0x167}   # terminal.c plookup's `stroked` table
+VIETNAMESE = {0x102, 0x103, 0x110, 0x111, 0x128, 0x129, 0x168, 0x169}
+
+
+def one_letter_bases():
+    """Codepoints display_fallbacks.inc maps to a single ASCII character (the table plookup consults)."""
+    inc = (root / 'main/ui/habitat/display_fallbacks.inc').read_text()
+    pool = ''.join(json.loads(m.replace('\\000', '\\u0000')) for m in re.findall(r'^    ("[^\n]*")$', inc.split('display_pool[] =')[1].split(';')[0], re.M))
+    offset_bits = int(re.search(r'DISPLAY_OFFSET_BITS = (\d+)', inc).group(1))
+    entries = re.findall(r'^    (0x[0-9a-f]+),$', inc.split('display_entries[] = {')[1], re.M)
+    out = set()
+    for e in entries:
+        value = int(e, 16)
+        text = pool[value & ((1 << offset_bits) - 1):].split('\0')[0]
+        if len(text) == 1 and ord(text) < 0x80:
+            out.add(value >> offset_bits)
+    return out
+
+
+NO_BASE = {cp for cp in range(0x100, 0x180) if cp not in STROKED and cp not in one_letter_bases()} - VIETNAMESE
+KEEP = (base.TEXT - set(range(0x100, 0x180))) | VIETNAMESE | (NO_BASE & base.TEXT)
 assert MARKS <= KEEP
 
 # name -> (font file in fonts/, px, fallback face).
@@ -64,6 +88,41 @@ FACES = [
 ]
 # Faces that set one word: name -> (font file, px, the word). Only its letters (and the space) are kept.
 WORDMARK = [('inter_bold_48', 'Inter-Bold48', 48, 'Harness')]   # while the dial connects (design 2026-10-06)
+
+
+def cut_kerning(font, keep):
+    """Limit a face's kern classes to the glyphs it keeps: renumber the left and right classes those glyphs
+    use (in first-use order of the old numbers, so 0 stays "none") and rebuild the value table, so every pair
+    of kept glyphs kerns by the same amount in a table sized for the face's own letters."""
+    gids = [font['cmap'][cp] for cp in sorted(cp for cp in font['cmap'] if cp in keep)]
+    left = sorted({font['left'][g] for g in gids} - {0})
+    right = sorted({font['right'][g] for g in gids} - {0})
+    lmap = {old: i + 1 for i, old in enumerate(left)}
+    rmap = {old: i + 1 for i, old in enumerate(right)}
+    values = [font['kern'][(l - 1) * font['rcnt'] + (r - 1)] for l in left for r in right]
+    cut = dict(font, kern=values or [0], rcnt=len(right) or 1,
+               left={g: lmap.get(font['left'][g], 0) for g in gids},
+               right={g: rmap.get(font['right'][g], 0) for g in gids})
+    return cut
+
+
+def share_tables(code):
+    """One copy of each generated array that another face repeats: a later array with the same type and body
+    is dropped and its name points at the first (the Inter faces share codes, kl and kr)."""
+    seen, alias, out = {}, {}, []
+    for line in code.splitlines(keepends=True):
+        m = re.match(r'^static const (\S+) (\w+)((?:\[[^\]]*\])+) = \{(.*)\};$', line.rstrip('\n'))
+        if m:
+            key = (m.group(1), m.group(3), m.group(4))
+            if key in seen:
+                alias[m.group(2)] = seen[key]
+                continue
+            seen[key] = m.group(2)
+        out.append(line)
+    code = ''.join(out)
+    for name, first in alias.items():
+        code = re.sub(rf'\b{name}\b', first, code)
+    return code
 
 
 def instance_inter():
@@ -151,6 +210,7 @@ def main():
         for name, source, px, word in WORDMARK:
             font = base.lv_font(convert(source, px, Path(t), name))
             keep = {ord(c) for c in word} | {0x20}   # the space sets the face's width, which a run needs
+            font = cut_kerning(font, keep)
             code, size = base.emit_font(name, font, keep)
             c.append(code)
             h.append(f'extern const ht_pfont_t ht_lv_{name};\n')
@@ -167,7 +227,7 @@ def main():
              '// The same face on the lower arc (the working status, the Listening sweep): upright glyphs whose descenders\n'
              '// point at the glass, so the default mid-caps offset.\n'
              f'const ht_arc_face_t ht_arc_inter_lower = {{.prop = &ht_lv_inter_med_26, .mid = {INTER_ARC_MID_LOWER}}};\n')
-    (root / 'main/ui/habitat/focus_faces.c').write_text(''.join(c))
+    (root / 'main/ui/habitat/focus_faces.c').write_text(share_tables(''.join(c)))
     (root / 'main/ui/habitat/focus_faces.h').write_text(''.join(h))
     print(f'total {total} bytes')
 
