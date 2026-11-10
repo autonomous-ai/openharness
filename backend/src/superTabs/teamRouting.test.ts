@@ -99,20 +99,6 @@ describe('starting a teammate\'s work', () => {
 })
 
 describe('giving an existing agent a teammate\'s work', () => {
-  it('work.assign is admitted for the teammate\'s own agent', () => {
-    const f = swarm(), group = f.group()
-    const personal = f.member('personal', 'mate-mac', 'mate')
-    f.run({ type: 'work.assign', conversationId: group, agentId: personal })
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: personal, status: 'working' })
-  })
-
-  it('work.assign of a person\'s own project to their own agent is unchanged', () => {
-    const f = swarm(), group = f.group(f.mine, mate)
-    const personal = f.member('personal', 'mate-mac', 'mate', f.mine)
-    f.run({ type: 'work.assign', conversationId: group, agentId: personal }, mate)
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: personal })
-  })
-
   it('adding a Reviewer to a group, which hands it the review, is admitted for the teammate\'s own agent', () => {
     const f = swarm(), group = f.group()
     const reviewer = f.member('reviewer', 'mate-mac', 'mate', 'lead', { role: 'reviewer' })

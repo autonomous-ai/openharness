@@ -361,7 +361,7 @@ export interface WorkTask {
 export interface ReviewPlan { focus?: string; reviews?: 1 | 2 }
 
 /** How many independent reviews [task] wants: 2 only when its review plan says so. */
-export const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
+const reviewsWanted = (task: WorkTask | undefined): number => task?.review?.reviews === 2 ? 2 : 1
 /** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
  *  machine by policy order). `machines`: it runs only there. `devices`:
  *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
@@ -909,7 +909,6 @@ export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
   cancelledAgents: string[]
-  previousAttempts: Array<{ conversationId: string; brief: string; checks: Check[]; assignment: Assignment }>
   routeDecisions: RouteDecisionEffect[]
   result: Record<string, unknown>
   /** `message.edit`'s new text, credentials removed (commands.ts WORDS): what the store writes into the row. */
@@ -925,7 +924,7 @@ export interface CommandEffects {
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
   /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
    *  attempt row as a builder's own done does. */
-  closedAssignment?: { assignmentId: string; outcome: 'done' }
+  closedAssignment?: { assignmentId: string; outcome: 'done' | 'cancelled' }
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */

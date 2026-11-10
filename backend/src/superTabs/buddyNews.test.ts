@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, forRecipients, type Actor, type Conversation, type MessageDraft } from './model.js'
 import { buddyChatId } from './buddies.js'
-import { assignedNotice, buddiesTold } from './buddyNews.js'
+import { buddiesTold } from './buddyNews.js'
 import { SHIP_KIND } from './ship.js'
-import { TASK_LINE_KIND } from './taskLine.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -45,7 +44,7 @@ function setup() {
     return run({ type: 'message.send', conversationId: app.conversationId, text, recipientIds: [], replyTo: extra.replyTo?.id ?? null,
       ...(extra.mentions ? { mentions: extra.mentions } : {}) }, actor, reply ? { reply } : {}).messages.at(-1)!
   }
-  return { run, add, app, pm, chat: chat.id, proposed, propose, pmPost, get state() { return state } }
+  return { run, app, pm, chat: chat.id, proposed, propose, pmPost, get state() { return state } }
 }
 
 describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
@@ -119,67 +118,6 @@ describe('which Buddy a project-chat message reaches (Diego, 10-29)', () => {
   })
 })
 
-describe('the assignment notice a Buddy gets for work its person requested', () => {
-  /** A group peer requested, briefed and ready, and a worker in it. */
-  function requested(extra: Record<string, unknown> = {}) {
-    const f = setup()
-    const group = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Offline edits', brief: 'Save edits offline.',
-      checks: [{ description: 'Tests pass', independent: false }], requesterId: 'peer', ...extra } as Command).result.conversationId as string
-    const worker = f.add(group, 'worker')
-    const assign = () => f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages
-    const number = f.state.conversations.find(c => c.id === group)!.number
-    return { f, group, assign, number }
-  }
-  const notices = (messages: MessageDraft[]) => messages.filter(m => m.recipients.includes('buddy'))
-
-  it('is one line inside the task, for the Buddy alone: its number, title and status, nothing more', () => {
-    const { group, assign, number } = requested()
-    expect(notices(assign())).toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' },
-      text: `News for your owner: #${number} "Offline edits", recorded as their request, is assigned and working.` })])
-  })
-
-  it('is sent once per task: a replacement agent taking the work over is no new news (task #4217)', () => {
-    const { f, group, assign } = requested()
-    expect(notices(assign())).toHaveLength(1)
-    const first = f.state.conversations.find(c => c.id === group)!.assignment!
-    f.run({ type: 'agent.alert', agentId: first.agentId, alert: 'model', active: true }, { kind: 'agent', agentId: first.agentId, machineOwnerId: 'host' })
-    expect(f.state.conversations.find(c => c.id === group)!.assignment!.status).toBe('lost')
-    const replacement = f.add(group, 'replacement')
-    expect(notices(f.run({ type: 'work.assign', conversationId: group, agentId: replacement }).messages)).toEqual([])
-  })
-
-  it('is not sent for a private task in a public project, though its person requested it (security review 2 of #2178)', () => {
-    const { f, group, assign } = requested()
-    assign()
-    const task = f.state.conversations.find(c => c.id === group)!
-    task.audience = { people: [{ id: 'peer', generation: 'first' }] }
-    expect(assignedNotice(f.state, task, { kind: 'agent', id: f.pm, name: 'pm', membershipGeneration: 'first' }, 'op')).toBeNull()
-  })
-
-  // The Shipped line's rule, kept for the news (ship.test.ts before #2633): work Done without a pull request never shipped.
-  it('says nothing has shipped for work Done without a pull request, or Done before its merge', () => {
-    for (const result of ['Ready to merge: Yes.', 'Review passed: https://github.com/o/r/pull/7']) {
-      const { f, group, assign } = requested()
-      assign()
-      const task = f.state.conversations.find(c => c.id === group)!
-      const worker = task.assignment!.agentId
-      const done = f.run({ type: 'work.status', conversationId: group, assignmentId: task.assignment!.id, status: 'done', result },
-        agentActor(worker))
-      expect(notices(done.messages)).toEqual([])
-    }
-  })
-
-  it('is not sent when its person cannot read the task, when nobody requested it, or when another person did', () => {
-    const hidden = requested()
-    hidden.f.state.projects!.find(p => p.id === hidden.f.app.projectId)!.visibility = 'private'
-    expect(notices(hidden.assign())).toEqual([])
-    const nobody = requested()
-    delete nobody.f.state.conversations.find(c => c.id === nobody.group)!.requesterId
-    expect(notices(nobody.assign())).toEqual([])
-    expect(notices(requested({ requesterId: 'owner' }).assign())).toEqual([])
-  })
-})
-
 describe('work the PM opens from a Buddy\'s proposal without naming anyone (groups #294 and #327, 10-30)', () => {
   /** peer's Buddy proposes; the PM opens a group from it, the store loading the proposal row by its id. */
   function opened(extra: Record<string, unknown> = {}) {
@@ -188,16 +126,13 @@ describe('work the PM opens from a Buddy\'s proposal without naming anyone (grou
       checks: [{ description: 'Tests pass', independent: false }], proposalMessageId: sent.id, ...extra } as Command, agentActor(f.pm),
       { proposal: { id: sent.id, conversationId: sent.conversationId, author: sent.author, source: sent.source ?? null } })
     const group = created.result.conversationId as string
-    return { f, group, created, find: () => f.state.conversations.find(c => c.id === group)! }
+    return { created, find: () => f.state.conversations.find(c => c.id === group)! }
   }
 
-  it('is requested by the person the proposal was sent for, who gets the assignment news', () => {
-    const { f, group, created, find } = opened()
+  it('is requested by the person the proposal was sent for', () => {
+    const { created, find } = opened()
     expect(find().requesterId).toBe('peer')
     expect(created.result.requesterUnknown).toBeUndefined()
-    const worker = f.add(group, 'worker')
-    expect(f.run({ type: 'work.assign', conversationId: group, agentId: worker }).messages.filter(m => m.recipients.includes('buddy')))
-      .toEqual([expect.objectContaining({ conversationId: group, recipients: ['buddy'], source: { kind: 'agent-only' } })])
   })
 
   it('keeps the requester the PM names, even someone else', () => {

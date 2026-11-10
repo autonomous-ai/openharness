@@ -17,6 +17,7 @@ import { canReadGroup } from '../src/superTabs/projects.js'
 import { recentDecisions, timedDecisionOf } from '../src/superTabs/routeDecisions.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // The Lead's route command reads the route-decision list on every route (prod watch 10-29: 13% of slow Swarm reads). The read
@@ -62,13 +63,13 @@ async function world(quiet = 0) {
   const docs = s.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const secretGroup = s.group('Secret work', secret)
   const secretWorker = s.add('secret-worker', secretGroup, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: secretGroup, agentId: secretWorker })
+  s.edit(state => { storedAssignment(state, secretGroup, secretWorker, MIGRATED) })
   const docsGroup = s.group('Docs work', docs)
   const docsWorker = s.add('docs-worker', docsGroup, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: docsGroup, agentId: docsWorker })
+  s.edit(state => { storedAssignment(state, docsGroup, docsWorker, MIGRATED) })
   const peerChat = s.group('Peer and PM')
   const buddyChat = s.group('Peer\'s Buddy')
   const finished = Array.from({ length: quiet }, (_, i) => s.group(`Done ${i}`))

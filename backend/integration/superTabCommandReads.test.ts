@@ -93,17 +93,13 @@ const measured = (entries: ProfileEntry[]) => {
  *  kind's listing, ~110 bytes a part, and the parts the command wrote: on prod, parts are larger and more. */
 const BUDGET = {
   'conversation.create': { queries: 24, kb: 36 },
-  'work.assign': { queries: 36, kb: 44 },
-  'work.status': { queries: 22, kb: 36 },
-  'work.status review': { queries: 36, kb: 52 },
   'post': { queries: 20, kb: 34 },
   'react': { queries: 22, kb: 34 },
-  'dispatch pass': { queries: 12, kb: 32 },
 } as const
 
 describe('what a common command reads in a prod-sized Swarm (task #4368)', () => {
   let s: Awaited<ReturnType<typeof swarm>>
-  let worker: string, conversationId = '', assignmentId = '', messageId = ''
+  let worker: string, conversationId = '', messageId = ''
   const seen: Record<string, ReturnType<typeof measured>> = {}
   const measure = async (name: keyof typeof BUDGET, run: () => Promise<unknown>) => {
     seen[name] = measured(await profiled(db, run))
@@ -128,31 +124,15 @@ describe('what a common command reads in a prod-sized Swarm (task #4368)', () =>
     await measure('conversation.create', async () => { conversationId = await s.task('Measured') })
     within('conversation.create')
   })
-  it('work.assign', async () => {
-    await measure('work.assign', () => s.execute({ type: 'work.assign', conversationId, agentId: worker }))
-    assignmentId = ((await db.swarmGroup.findFirstOrThrow({ where: { tabId: s.tab, key: conversationId } })).data as { assignment: { id: string } }).assignment.id
-    within('work.assign')
-  })
-  it('work.status', async () => {
-    await measure('work.status', () => s.execute({ type: 'work.status', conversationId, assignmentId, status: 'working', result: 'On it.' } as Command, worker))
-    within('work.status')
-  })
   it('a post', async () => {
+    // The agent posts in the task it is in.
+    await s.execute({ type: 'conversation.agent', conversationId, agentId: worker, present: true, lead: false })
     await measure('post', async () => { messageId = String((await s.execute({ type: 'message.send', conversationId, text: 'hello', replyTo: null, recipientIds: [] } as Command, worker)).result.messageId) })
     within('post')
   })
   it('a reaction', async () => {
     await measure('react', () => s.execute({ type: 'message.react', conversationId, messageId, emoji: 'eyes', on: true } as Command))
     within('react')
-  })
-  it('a Ready, with its GitHub reads', async () => {
-    await measure('work.status review', () => s.execute({ type: 'work.status', conversationId, assignmentId, status: 'review',
-      result: 'Ready: https://github.com/example/repo/pull/1' } as Command, worker))
-    within('work.status review')
-  })
-  it('the dispatch pass a write schedules', async () => {
-    await measure('dispatch pass', () => s.store.dispatchCrew(s.tab))
-    within('dispatch pass')
   })
 })
 

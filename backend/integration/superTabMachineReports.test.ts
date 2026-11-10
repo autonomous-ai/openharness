@@ -16,6 +16,7 @@ import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import type { MachineData } from '../src/superTabs/parts/index.js'
 import { poolRows } from './hostRows.test-support.js'
+import { storeAssignment } from './storedWork.test-support.js'
 
 // Machine reports that change only the machine's reading skip the Swarm load (DB roadmap 2.5). A fresh loopback replica
 // set, created here; Redis is MemoryStamps and an in-process report memory. This suite never reads DATABASE_URL.
@@ -82,7 +83,7 @@ async function swarm(memory?: (now: () => number) => ReportMemory, shared?: { cl
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(group, 'test-host', harness.worker, 'Worker', false, host)
-  await execute({ type: 'work.assign', conversationId: group, agentId: worker })
+  await storeAssignment(db, tab, group, worker, clock.now)
   const reading = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}): MachineObservation => ({
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,
       diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },

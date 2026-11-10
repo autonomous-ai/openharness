@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, authorizeCommandAccess, commandSchema, withoutCredentials, type CommandContext } from './commands.js'
 import { fullSwarm, NOW, owner, peer, outsider } from './read/fixture.test-support.js'
 import type { Actor } from './model.js'
-import { openTasks } from './dispatch.js'
 import { queueSiblings } from './taskQueue.js'
 import { touchesFor } from './parts/touches.js'
 import { GROUP_FIELDS } from './parts/light.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const words = 'Keep offline edits.'
 const task = { goal: words, changes: 'Persist drafts', constraints: 'No sign-in', owns: ['backend/src/superTabs/'] }
@@ -38,22 +38,19 @@ describe('personal approval enforced before work', () => {
   it('keeps default Auto approve unchanged and persists only the acting person’s mode', () => {
     const f = fixture(), id = f.create()
     expect(f.card(id).taskApproval).toBeUndefined()
-    expect(f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm).result.assignmentId).toBeTruthy()
     f.mode('review')
     expect(f.state.people.find(p => p.id === peer.userId)?.approvalMode).toBe('review')
     expect(f.state.people.find(p => p.id === owner.userId)?.approvalMode).toBeUndefined()
     expect(commandSchema.safeParse({ type: 'member.approvalMode', mode: 'review', personId: owner.userId }).success).toBe(false)
     for (const actor of [f.pm, f.buddyActor]) expect(() => f.runCommand({ type: 'member.approvalMode', mode: 'autoApprove' }, actor)).toThrow()
   })
-  it('stages a PM task, excludes dispatch, and blocks assignment, starts and registration until approval', () => {
+  it('stages a PM task, keeps it out of Next up, and blocks starts and registration until approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal', personId: peer.userId } })
     expect(queueSiblings(f.state, f.state.projects![0]!)).not.toContainEqual(f.card(id))
-    expect(openTasks(f.state, 'lead', NOW)).not.toContainEqual(f.card(id))
-    for (const input of [
-      { type: 'work.assign', conversationId: id, agentId: f.candidate },
-      { type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker', cwd: '/repo', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } },
-    ]) expect(() => f.runCommand(input, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
+    expect(() => f.runCommand({ type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
     expect(() => f.runCommand({ type: 'agent.add', conversationId: id, machineId: 'host', harnessId: 'external', name: 'External',
       configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null }, lead: false }, owner,
       { contribution: { machineOwnerId: owner.userId, contributorId: owner.userId } })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
@@ -61,7 +58,7 @@ describe('personal approval enforced before work', () => {
     expect(() => f.mode('autoApprove')).toThrow(expect.objectContaining({ code: 'ACCEPT_ALL_SUBSCRIPTION' }))
     expect(f.card(id).taskApproval?.state).toBe('proposal')
   })
-  it('lets the PM suggest, lets the requester change it, and assigns only their approved choice', () => {
+  it('lets the PM suggest, lets the requester change it, and approves only their choice', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
     expect(f.card(id).assignment).toBeNull()
@@ -69,8 +66,6 @@ describe('personal approval enforced before work', () => {
     const approved = f.runCommand({ type: 'task.approve', conversationId: id })
     expect(f.card(id)).toMatchObject({ taskApproval: { state: 'approved', suggestedAgentId: f.other }, assignment: null })
     expect(approved.messages.some(m => m.recipients.includes(f.lead))).toBe(true)
-    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.other }, f.pm)
-    expect(f.card(id).assignment?.agentId).toBe(f.other)
     expect(approved.messages.some(m => m.recipients.includes(f.other))).toBe(false)
     expect(approved.messages.some(m => m.recipients.includes(f.candidate))).toBe(false)
   })
@@ -108,7 +103,6 @@ describe('personal approval enforced before work', () => {
     f.runCommand({ type: 'task.reject', conversationId: id, reason: 'Keep current behavior' })
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'rejected', reason: 'Keep current behavior' } })
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_DECIDED' }))
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
   // Task #4218: a rejection wrote only the approval, so the PM was told the proposal still waited and could accept it into a task
   // that could never run.
@@ -139,18 +133,12 @@ describe('personal approval enforced before work', () => {
     expect(f.card(id)).toMatchObject({ requesterId: peer.userId, assignment: null,
       taskApproval: { personId: peer.userId, generation: f.state.people.find(p => p.id === peer.userId)!.generation, state: 'proposal' } })
     expect(touchesFor(command, f.pm, before, effects)).toContainEqual({ kind: 'member', key: peer.userId })
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-    f.runCommand({ type: 'task.approve', conversationId: id })
-    // Accepted, it is the requester's ask: another person's agent never takes it by hand (security review 2 of #3575).
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'ASKED_BY_ANOTHER' }))
   })
   it('refuses attribution to a Review requester after assignment without changing the existing task', () => {
     const f = fixture()
     const id = f.runCommand({ type: 'conversation.create', title: 'PM maintenance', task, priority: 'P2', requesterId: owner.userId,
       checks: [{ description: 'Restores drafts' }] }, f.pm).result.conversationId as string
-    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    storedAssignment(f.state, id, f.candidate, NOW)
     f.mode('review')
     expect(() => f.runCommand({ type: 'conversation.requester', conversationId: id, personId: peer.userId }, f.pm))
       .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
@@ -159,7 +147,7 @@ describe('personal approval enforced before work', () => {
   })
   it('keeps existing attribution and Auto approve attribution compatible', () => {
     const f = fixture(), id = f.create()
-    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
+    storedAssignment(f.state, id, f.candidate, NOW)
     f.mode('review')
     f.runCommand({ type: 'conversation.requester', conversationId: id, personId: peer.userId }, f.pm)
     expect(f.card(id).taskApproval).toBeUndefined()
@@ -175,7 +163,6 @@ describe('personal approval enforced before work', () => {
     if (board) {
       f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build it', task,
         checks: [{ description: 'Restores drafts' }] }, f.pm)
-      expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
       f.runCommand({ type: 'task.approve', conversationId: card.id })
       expect(f.card(card.id).taskApproval?.state).toBe('approved')
     }
@@ -198,14 +185,13 @@ describe('personal approval enforced before work', () => {
     expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow()
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal' } })
   })
-  // Task #4252 (audit 20): Approve is the person's consent to the agent shown; whether it is free is the assignment's to check.
-  it('records approval of a busy suggested agent, and the assignment still waits for it to be free', () => {
+  // Task #4252 (audit 20): Approve is the person's consent to the agent shown; whether it is free is not its to check.
+  it('records approval of a busy suggested agent', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate })
     f.edit(s => { s.conversations.find(c => c.id === f.web)!.assignment!.agentId = f.candidate })
     f.runCommand({ type: 'task.approve', conversationId: id })
     expect(f.card(id).taskApproval?.state).toBe('approved')
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)).toThrow(expect.objectContaining({ code: 'AGENT_BUSY' }))
   })
   it('says the suggested agent is gone when it was removed before the approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
@@ -233,12 +219,8 @@ describe('personal approval enforced before work', () => {
     expect(f.card(card.id).taskApproval?.state).toBe('proposal')
     f.runCommand({ type: 'proposal.decide', conversationId: card.id, decision: 'accept', reason: 'Build', task,
       checks: [{ description: 'Restores drafts' }] }, f.pm)
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
     f.runCommand({ type: 'task.approve', conversationId: card.id })
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.other }, f.pm)).toThrow()
-    f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)
-    expect(f.card(card.id).assignment?.agentId).toBe(f.candidate)
+    expect(f.card(card.id).taskApproval?.state).toBe('approved')
   })
   it('refuses approving a proposal the PM marked Later (#4249)', () => {
     const f = fixture(); f.mode('review'); f.propose()
@@ -256,25 +238,6 @@ describe('personal approval enforced before work', () => {
       checks: [{ description: 'Restores drafts' }] }, f.pm)
     expect(f.card(card.id).taskApproval).toMatchObject({ state: 'proposal', suggestedAgentId: f.candidate })
     expect(f.card(card.id).taskApproval?.decidedAt).toBeUndefined()
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-    f.runCommand({ type: 'task.approve', conversationId: card.id })
-    f.runCommand({ type: 'work.assign', conversationId: card.id, agentId: f.candidate }, f.pm)
-    expect(f.card(card.id).assignment?.agentId).toBe(f.candidate)
-  })
-  it('a new scope for an approved, unstarted task goes back to its person (#4249, security review 1)', () => {
-    const f = fixture(); f.mode('review'); const id = f.create()
-    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
-    f.runCommand({ type: 'task.approve', conversationId: id })
-    f.runCommand({ type: 'work.define', conversationId: id, task: { ...task, changes: 'Persist drafts and rewrite sync' },
-      checks: [{ description: 'Restores and syncs drafts' }] }, f.pm)
-    expect(f.card(id).taskApproval).toMatchObject({ state: 'proposal', suggestedAgentId: f.candidate })
-    expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
-    f.runCommand({ type: 'task.approve', conversationId: id })
-    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm)
-    expect(f.card(id).assignment?.agentId).toBe(f.candidate)
   })
   it('a converted older proposal gets a fresh approval, never the card’s decision (#4249)', () => {
     const f = fixture(false); f.mode('review'); const sent = f.propose()
@@ -288,8 +251,6 @@ describe('personal approval enforced before work', () => {
     expect(f.card(id).taskApproval).toMatchObject({ state: 'proposal', personId: peer.userId })
     expect(f.card(id).taskApproval?.suggestedAgentId).toBeUndefined()
     expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.candidate }, f.pm))
-      .toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
   })
   it('cannot merge an approved Review proposal and lose its chosen agent or requester', () => {
     const f = fixture(); f.mode('review'); f.propose()
@@ -335,10 +296,9 @@ describe('personal approval enforced before work', () => {
     f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.other }, state === 'removed' ? f.pm : peer)
     expect(f.card(id)).toMatchObject({ assignment: null, taskApproval: { state: 'proposal', suggestedAgentId: f.other } })
     expect(f.card(id).taskApproval?.decidedAt).toBeUndefined()
-    expect(() => f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.other }, f.pm)).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_REQUIRED' }))
     f.runCommand({ type: 'task.approve', conversationId: id })
-    f.runCommand({ type: 'work.assign', conversationId: id, agentId: f.other }, f.pm)
-    expect(f.card(id).assignment?.agentId).toBe(f.other)
+    // Once its chosen worker holds it, the approval is decided.
+    storedAssignment(f.state, id, f.other, NOW)
     expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.worker })).toThrow(expect.objectContaining({ code: 'TASK_APPROVAL_DECIDED' }))
   })
   it('guards the person and selected agent against concurrent changes, and keeps approval in light loads', () => {

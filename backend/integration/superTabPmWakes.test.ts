@@ -11,6 +11,7 @@ import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
+import { storeAssignment } from './storedWork.test-support.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
@@ -70,7 +71,7 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [] })).result.conversationId)
   const worker = await add(group, 'test-host', 'Worker')
-  const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+  await storeAssignment(db, tab, group, worker, now)
   const clock = { get now() { return now }, set now(value: number) { now = value } }
   /** Its machines report, as live ones do. */
   const report = async () => {
@@ -80,15 +81,11 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
       quotas: [], tools: {}, runningHarnessIds: [harnessOf.get(machineId)!], stoppedHarnessIds: [] })
   }
   const poll = async () => {
-    // Its worker keeps saying where it is, as a live one does; a finished task refuses the line and nothing changes.
-    await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: randomUUID() }, host, worker).catch(() => {})
     await report()
     // The worker's time checks run every 30 s (timeChecks.ts): one runs before each poll here.
     await timed.runTimeChecks(tab)
     return timed.deliveries(host, tab, lead)
   }
-  const status = (s: 'done' | 'blocked' | 'needs_human' | 'working', result = 'A result') =>
-    execute({ type: 'work.status', conversationId: group, assignmentId, status: s, result }, host, worker)
   /** Writes one message as the store writes every message, for a notice no short command here sets off. */
   const write = async (source: Record<string, unknown> | undefined, recipient: string, conversationId = group, text = 'A notice.', as = worker) => {
     const id = randomUUID().replaceAll('-', '').slice(0, 24)
@@ -103,7 +100,7 @@ async function swarm({ fresh = false, told }: { fresh?: boolean; told?: string[]
     })
     return id
   }
-  return { timed, tab, execute, lead, group, worker, assignmentId, clock, poll, status, write, add }
+  return { timed, tab, execute, lead, group, worker, clock, poll, write, add }
 }
 
 const rowsOf = (tabId: string, where: Record<string, unknown> = {}) => db.superTabDelivery.findMany({ where: { tabId, ...where }, orderBy: { createdAt: 'asc' } })

@@ -57,8 +57,7 @@ function swarm() {
   const start = (machineId: string, actor: Actor) => run({ type: 'agent.start', request: { conversationId: task, machineId, engine: 'claude', name: 'Builder',
     cwd: '/swarm/lead', worktree: true, requirements } } as Command, actor, { contribution: { machineOwnerId: machine(machineId).contributorId,
     contributorId: machine(machineId).contributorId, hostGrant: null } as never })
-  const assign = (agentId: string, conversationId = task) => run({ type: 'work.assign', conversationId, agentId } as Command, as(pm))
-  return { run, member, machine, start, assign, as, pm, task, group: (id = task) => state.conversations.find(c => c.id === id)!, get state() { return state } }
+  return { run, member, start, as, pm, task, get state() { return state } }
 }
 
 describe('with Team accounts removed', () => {
@@ -88,20 +87,6 @@ describe('with Team accounts removed', () => {
     expect(record.excluded.map(e => e.title)).toEqual(['c2 on mate-mac'])
   })
 
-  it('lets a teammate\'s own agent take any task of a project they read, in their own account', () => {
-    const f = swarm()
-    const own = f.member('mates-own', 'mate-mac', 'mate')
-    expect(refusal(() => f.assign(own))).toBeNull()
-  })
-
-  // Security review 1 of #3446: reading a project is not enough to work in it; a viewer's agent takes none of its work.
-  it('gives no task to the agent of a person who is only a viewer', () => {
-    const f = swarm()
-    const own = f.member('mates-own', 'mate-mac', 'mate')
-    f.state.people.find(p => p.id === 'mate')!.role = 'viewer'
-    expect(refusal(() => f.assign(own))).toMatchObject({ code: 'READ_ONLY' })
-  })
-
   // Security review 2 of #3446: off the Machines list, or through a machine share, the grant's contributor is not the machine's
   // owner; the start must be its owner's own, with no share, as agent.new checks.
   it('starts nothing on a computer shared through a machine share', () => {
@@ -111,36 +96,19 @@ describe('with Team accounts removed', () => {
     expect(refusal(startOn('strangers-mac', { machineOwnerId: 'stranger', contributorId: 'mate', hostGrant: 'share-1' }))).toMatchObject({ code: 'NOT_YOUR_COMPUTER' })
   })
 
-  it('never lets the owner\'s agent on a machine shared with them take a task a Team agent wrote', () => {
-    const f = swarm()
-    // A machine off the Machines list that its owner, mate, shared with the project owner: the agent runs in mate's account.
-    const shared = f.member('owners-shared', 'strangers-mac', 'owner')
-    Object.assign(f.state.agents.find(a => a.id === shared)!, { machineOwnerId: 'mate', hostGrant: 'share-1' })
-    Object.assign(f.group(), { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
-    expect(refusal(() => f.assign(shared))).toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
-  })
-
-  it('lets only the project owner\'s own agent take over a task a Team agent wrote', () => {
-    const f = swarm()
-    const mates = f.member('mates-own', 'mate-mac', 'mate'), owners = f.member('owners-own', 'owner-mac', 'owner')
-    Object.assign(f.group(), { teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
-    expect(refusal(() => f.assign(mates))).toMatchObject({ code: 'TEAM_WRITTEN_WORK' })
-    expect(refusal(() => f.assign(owners))).toBeNull()
-  })
-
   it('marks the task a Team agent held, unmarked from before the mark, Team-written when its machine leaves (audit H2)', () => {
-    const f = swarm()
+    const f = swarm(), byId = (id: string) => f.state.conversations.find(c => c.id === id)!
     const team = f.member('mates-team', 'mate-team', 'mate')
-    f.group().assignment = { id: 'a1', agentId: team, status: 'working', configuration: config, result: null,
+    byId(f.task).assignment = { id: 'a1', agentId: team, status: 'working', configuration: config, result: null,
       execution: { machineId: 'mate-team', harnessId: 'harness-mates-team', machineOwnerId: 'mate' } } as never
-    const other = f.group(String(f.run({ type: 'conversation.create', projectId: 'lead', title: 'Other', brief: 'Not its.', priority: 'P2',
+    const other = byId(String(f.run({ type: 'conversation.create', projectId: 'lead', title: 'Other', brief: 'Not its.', priority: 'P2',
       requesterId: 'owner', checks: [{ description: 'Done.', independent: false }] } as Command, f.as(f.pm)).result.conversationId))
     f.run({ type: 'machine.teamGone', machineId: 'mate-team' } as Command, owner, { teamMachineGone: true })
     expect(f.state.agents.map(a => a.id)).not.toContain(team)
-    expect(f.group()).toMatchObject({ teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
+    expect(byId(f.task)).toMatchObject({ teamWritten: true, teamWrittenBy: { kind: 'assigned' } })
     expect(other.teamWritten).toBeUndefined()
     // Its own person's agent may not take it over: only the project owner's own agent may.
     const mates = f.member('mates-own', 'mate-mac', 'mate')
-    expect(barredFromTeamWritten(f.state, f.group(), f.state.agents.find(a => a.id === mates)!)).toBe(true)
+    expect(barredFromTeamWritten(f.state, byId(f.task), f.state.agents.find(a => a.id === mates)!)).toBe(true)
   })
 })

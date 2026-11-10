@@ -149,7 +149,7 @@ and buzz on an agent, the new-device and removed-device bands, and snackbars.
       the two agent notices behave alike. It covers an agent's run of messages on one piece of work, and a message after
       a real pause (five minutes or more since the chat last sounded) still sounds.
     - **What stays the same.** No notification is dropped: only the sound and banner wait. A muted chat still gets none.
-      Replies, tags and decisions have no such wait: a person speaking to you, or work waiting on you, rings each time as
+      Replies and tags have no such wait: a person speaking to you, or work waiting on you, rings each time as
       before.
     - **How.** The server keeps one Redis key per person and chat for five minutes (`push/rings.ts`, `SET … PX NX`), shared
       by every server and gone by itself: nothing is stored in the database. Only a push that would sound starts the wait,

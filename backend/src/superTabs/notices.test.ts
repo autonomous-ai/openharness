@@ -95,10 +95,11 @@ describe('the notices the Swarm writes into a chat', () => {
     // gone with it, people; the recorded terminal turns, gone with the recording, people; the crew's 2-hour nudge, gone with the crew
     // keeper (Swarm v4: the server runs no v3 job), the recipients; decisions' lines, gone with Decisions (anh Dee, 11-10), people
     // and the PM; a grid attempt's failed first review, a review capacity notice and an auto-archive line, gone with check verdicts,
-    // review steps and the archive pass (11-10), the PM and people.
+    // review steps and the archive pass (11-10), the PM and people; work.resume's line to the agent it woke, gone with the work
+    // commands (Swarm v4, 11-10: tasks are GitHub issues), the recipients.
     const retired = ['decision-delegated', 'decision-asked', 'decision-answered', 'decision-must-agree', 'idle-stop', 'idle', 'project-report', 'ship', 'machine-left', 'task-line', 'routing-reflection', 'instructions', 'update-request',
       'proposal-notice', 'proposal-overdue', 'pm-line', 'work-stalled', 'schedule-request', 'tidy-request', 'digest-request', 'release', 'native', 'others-work-notice', 'crew-nudge',
-      'review-failed', 'review-capacity', 'auto-archive']
+      'review-failed', 'review-capacity', 'auto-archive', 'work-resumed']
     expect(Object.keys(NOTICE_READERS).filter(kind => !written.has(kind) && !retired.includes(kind))).toEqual([])
     expect(retired.filter(kind => written.has(kind))).toEqual([])
   })

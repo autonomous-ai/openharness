@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { firstMachines, machineRuleRefusal } from './machineRules.js'
+import { machineRuleRefusal } from './machineRules.js'
 import { projectRulesSchema, SEED_RULES, validMachineRules, type MachineRule } from './policy.js'
 
 // Task #3964: the four Machines rules of the Routing instructions, as the project rules record holds them. Generic machines
@@ -41,26 +41,16 @@ describe('machineRuleRefusal', () => {
   })
 })
 
-describe('firstMachines', () => {
-  it('names the machines a lane goes to first, in any case, and none for another lane', () => {
-    expect(firstMachines(RULES, 'mobile')).toEqual(['phone-mac'])
-    expect(firstMachines(RULES, 'Mobile')).toEqual(['phone-mac'])
-    expect(firstMachines(RULES, 'backend')).toEqual([])
-    expect(firstMachines(RULES, null)).toEqual([])
-  })
-})
 
 // The CLI route's early filter reads the same cases (cli/src/superTabs/machineRules.spec.ts): the two cannot drift (security review 1).
 describe('the shared machine rule cases', () => {
   const cases = JSON.parse(readFileSync(new URL('./machineRules.cases.json', import.meta.url), 'utf8')) as {
-    rules: MachineRule[]; refusals: Array<{ at: string; machineId: string; engine: string; review: boolean; why: string | null }>
-    first: Array<{ lane: string | null; machines: string[] }> }
+    rules: MachineRule[]; refusals: Array<{ at: string; machineId: string; engine: string; review: boolean; why: string | null }> }
   it('are rules the record holds', () => {
     expect(projectRulesSchema.parse({ ...structuredClone(SEED_RULES), machines: cases.rules }).machines).toEqual(cases.rules)
   })
-  it('refuse and place as each case says', () => {
+  it('refuse as each case says', () => {
     for (const c of cases.refusals) expect(machineRuleRefusal(cases.rules, c, Date.parse(c.at)), JSON.stringify(c)).toBe(c.why)
-    for (const c of cases.first) expect(firstMachines(cases.rules, c.lane)).toEqual(c.machines)
   })
 })
 

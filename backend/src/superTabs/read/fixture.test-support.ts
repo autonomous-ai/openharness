@@ -2,6 +2,9 @@
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type SuperTabState } from '../model.js'
 import { buddyChatId } from '../buddies.js'
+import { recordPulse } from '../pulse.js'
+import { linesOf } from '../statusCard.js'
+import { storedAssignment } from '../storedWork.test-support.js'
 
 export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000001', email: 'owner@example.com' }
 export const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: '100000000000000000000002', email: 'peer@example.com' }
@@ -42,7 +45,10 @@ export function richSwarm(now = NOW) {
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const web = s.group('Web')
   const worker = s.add('worker-harness', web)
-  const assignmentId = s.run({ type: 'work.assign', conversationId: web, agentId: worker }).assignmentId as string
+  // Stored as work.assign left it before Swarm v4, with the task's status line its command wrote after it (commands.ts recordPulse).
+  const lines = linesOf(s.state, now)
+  const assignmentId = storedAssignment(s.state, web, worker, now).id
+  recordPulse(s.state, now, undefined, lines)
   const done = s.group('Done work')
   const secretGroup = s.group('Secret work', secret)
   // Not a spread: `state` stays a live getter.

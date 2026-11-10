@@ -25,6 +25,7 @@ import { buddyChatId } from '../src/superTabs/buddies.js'
 import { storeOldLeads } from '../src/superTabs/leads.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // GET /api/super-tabs/:tabId/groups/:conversationId (task #2875). Ken's report of 11-04 17:13 VN: ~1,500 of these in two minutes
@@ -193,7 +194,7 @@ async function everyKind() {
   s.run({ type: 'project.sharing', projectId: shared, visibility: 'private', memberIds: [peer.sub] })
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const secretGroup = s.group('Secret work', secret)
   const secretWorker = s.add('secret-harness', secretGroup, false, ownerActor, 'host', owner.sub)
   const sharedGroup = s.group('Shared work', shared)

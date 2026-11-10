@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
 import { MAX_UNBLOCKS } from './record.js'
-
-const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
+import { storedAssignment, storedStatus } from '../storedWork.test-support.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -34,16 +33,20 @@ function fixture() {
       checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: state.people[0]!.generation }] } })
     return 'owner-buddy'
   }
-  /** A worker on [id] with its task assigned, returning the assignment id. */
-  const assign = (id: string, worker = add(`worker-${id}`, id)) => {
-    run({ type: 'work.assign', conversationId: id, agentId: worker })
-    return { worker, assignmentId: group(id).assignment!.id }
+  /** [worker] on [id] as a Swarm from before Swarm v4 stored it: its assignment, and the attempt the leaderboard recorded with
+   *  what it ran on. Returns the assignment id. */
+  const stored = (id: string, worker: string) => {
+    const agent = state.agents.find(a => a.id === worker)!
+    const assignment = storedAssignment(state, id, worker, now)
+    const ledger = group(id).ledger ??= {}
+    const { engine, model, effort } = agent.configuration
+    ledger.runs = [...ledger.runs ?? [], { assignmentId: assignment.id, engine, model, ...effort ? { effort } : {}, at: now,
+      agentId: worker, harnessId: agent.harnessId, machineId: agent.machineId }]
+    return { worker, assignmentId: assignment.id }
   }
-  const status = (id: string, assignmentId: string, worker: string, next: 'working' | 'needs_human' | 'review' | 'done', result: string | null = null) =>
-    run({ type: 'work.status', conversationId: id, assignmentId, status: next, result, ...(next === 'needs_human' ? { hold: HOLD } : {}) }, asAgent(worker))
   const say = (id: string, actor: Actor, text = 'Go with the flag.', replyTo: string | null = null, reply?: CommandContext['reply']) =>
     run({ type: 'message.send', conversationId: id, text, replyTo, recipientIds: [] }, actor, reply ? { reply } : {})
-  return { run, invitePeer, add, asAgent, create, group, buddyChat, assign, status, say,
+  return { run, invitePeer, add, asAgent, create, group, buddyChat, stored, say,
     get state() { return state }, at(ms: number) { now = ms } }
 }
 
@@ -106,141 +109,7 @@ describe('who asked for a group', () => {
   })
 })
 
-describe('when a request ships', () => {
-  it('records the first time its work is done', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.at(9_000)
-    f.status(id, assignmentId, worker, 'done', 'Merged https://github.com/o/r/pull/7')
-    expect(f.group(id).ledger?.shippedAt).toBe(9_000)
-  })
-
-  it('records the machine each attempt ran on, and the attempt it shipped on keeps it (contributor view, #2444)', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'done', 'Merged https://github.com/o/r/pull/7')
-    expect(f.group(id).ledger?.runs?.at(-1)?.machineId).toBe('host')
-    expect(f.group(id).ledger?.shippedBy?.machineId).toBe('host')
-  })
-
-  it('keeps the first ship time when the same group finishes again', () => {
-    const f = fixture(), id = f.create()
-    const first = f.assign(id)
-    f.at(9_000)
-    f.status(id, first.assignmentId, first.worker, 'done', 'Merged')
-    f.run({ type: 'work.define', conversationId: id, brief: 'More', checks })
-    const second = f.assign(id, first.worker)
-    f.at(20_000)
-    f.status(id, second.assignmentId, second.worker, 'done', 'Merged again')
-    expect(f.group(id).ledger?.shippedAt).toBe(9_000)
-  })
-})
-
-describe('who unblocks waiting work', () => {
-  it('credits the person the item waits on with their answer and how long the agent waited', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.at(10_000)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag or everyone?')
-    expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String) })
-    f.at(10_000 + 3 * 3_600_000)
-    f.say(id, owner)
-    expect(f.group(id).ledger?.unblocks).toEqual([{ personId: 'owner', at: 10_000 + 3 * 3_600_000, waitedMs: 3 * 3_600_000, kind: 'needs_human',
-      item: f.group(id).ledger!.waiting!.messageId }])
-    expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 10_000, messageId: expect.any(String), answeredAt: 10_000 + 3 * 3_600_000 })
-  })
-
-  it('opens a new wait when the agent asks again after an answer', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    f.say(id, owner)
-    f.at(50_000)
-    f.status(id, assignmentId, worker, 'needs_human', 'And the default?')
-    expect(f.group(id).ledger?.waiting).toEqual({ assignmentId, since: 50_000, messageId: expect.any(String) })
-    f.say(id, owner, 'Off.')
-    expect(f.group(id).ledger?.unblocks).toHaveLength(2)
-  })
-
-  it('counts one answer per wait: a second post earns nothing more', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    f.say(id, owner)
-    f.say(id, owner, 'And one more thing.')
-    expect(f.group(id).ledger?.unblocks).toHaveLength(1)
-  })
-
-  it('ignores a passer-by who neither is waited on nor replies to the question', () => {
-    const f = fixture()
-    f.invitePeer()
-    const id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    f.say(id, peer, 'Lunch at noon?')
-    expect(f.group(id).ledger?.unblocks).toBeUndefined()
-    expect(f.group(id).ledger?.waiting).toBeDefined()
-  })
-
-  it('credits anyone who replies to the waiting question itself', () => {
-    const f = fixture()
-    f.invitePeer()
-    const id = f.create(), { worker, assignmentId } = f.assign(id)
-    const asked = f.status(id, assignmentId, worker, 'needs_human', 'Flag?').messages[0]!
-    f.say(id, peer, 'Flag.', asked.id, { id: asked.id, conversationId: id, author: asked.author, createdAt: 1_000 })
-    expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'peer' })])
-  })
-
-  it('waits on the project owner when the group has no requester', () => {
-    const f = fixture(), lead = f.add('lead', 'lead', true), id = f.create(f.asAgent(lead))
-    const { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    f.say(id, owner)
-    expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner' })])
-  })
-
-  it('stops waiting when the agent moves on by itself, so a later post earns nothing', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    f.status(id, assignmentId, worker, 'working')
-    f.say(id, owner)
-    expect(f.group(id).ledger?.waiting).toBeUndefined()
-    expect(f.group(id).ledger?.unblocks).toBeUndefined()
-  })
-
-  it('earns nothing for a post after the waiting task was cancelled', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Not needed' })
-    f.say(id, owner)
-    expect(f.group(id).ledger?.unblocks).toBeUndefined()
-  })
-
-  it('credits nothing against a wait left from an earlier attempt', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    // As a group from before answers were recorded reads: the wait on record is another attempt's.
-    f.group(id).ledger!.waiting!.assignmentId = 'earlier-attempt'
-    f.say(id, owner)
-    expect(f.group(id).ledger?.unblocks).toBeUndefined()
-  })
-
-  it('does not credit an agent that posts while work waits', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    f.say(id, f.asAgent(worker), 'Still waiting.')
-    expect(f.group(id).ledger?.unblocks).toBeUndefined()
-  })
-
-  it('keeps only the last five weeks of answers, so a group part stays small', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    const week = 7 * 86_400_000
-    for (const at of [0, 4 * week, 6 * week]) {
-      f.at(at + 1_000)
-      f.status(id, assignmentId, worker, 'needs_human', `Ask at ${at}`)
-      f.at(at + 2_000)
-      f.say(id, owner)
-      f.status(id, assignmentId, worker, 'working')
-    }
-    expect(f.group(id).ledger?.unblocks?.map(u => u.at)).toEqual([4 * week + 2_000, 6 * week + 2_000])
-  })
-})
-
-describe('other ways a person unblocks work: approvals', () => {
+describe('how a person unblocks work: approvals', () => {
   const HOUR = 3_600_000
   /** The project's Lead asks in its own conversation at [askedAt], returning what a reply to it carries. */
   const leadAsk = (f: ReturnType<typeof fixture>, askedAt = HOUR) => {
@@ -270,7 +139,7 @@ describe('other ways a person unblocks work: approvals', () => {
   }
 
   it('counts an approval only in reply to the project\'s Lead, never to another agent', () => {
-    const f = fixture(), id = f.create(), { worker } = f.assign(id)
+    const f = fixture(), id = f.create(), worker = f.add('worker', id)
     const said = f.say(id, f.asAgent(worker), 'Shall I start?').messages[0]!
     f.say(id, owner, 'GO', said.id, { id: said.id, conversationId: id, author: said.author, createdAt: 1_000 })
     expect(f.group(id).ledger?.unblocks).toBeUndefined()
@@ -284,13 +153,6 @@ describe('other ways a person unblocks work: approvals', () => {
     f.say('lead', owner, 'GO again', reply.id, reply)
     f.say('lead', peer, 'Approved', reply.id, reply)
     expect(f.group('lead').ledger?.unblocks).toEqual([expect.objectContaining({ personId: 'owner', kind: 'approval' })])
-  })
-
-  it('gives an answer to waiting work its credit', () => {
-    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
-    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
-    posted(f, id, 'Flag.')
-    expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ kind: 'needs_human' })])
   })
 
   it('never credits a private conversation', () => {
@@ -313,37 +175,17 @@ describe('other ways a person unblocks work: approvals', () => {
   })
 })
 
-describe('the model behind each assignment (roadmap, Dec: about 30% of work on cheaper models)', () => {
+describe('the model an agent reports for its stored attempts (roadmap, Dec: about 30% of work on cheaper models)', () => {
   const independent = [{ description: 'Works', independent: false }, { description: 'Independent review', independent: true }]
-
-  it('records the engine and model each assignment runs on', () => {
-    const f = fixture()
-    f.at(5_000)
-    const id = f.create(owner, { checks: independent })
-    const { assignmentId, worker } = f.assign(id)
-    const harnessId = f.state.agents.find(a => a.id === worker)!.harnessId
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000, agentId: worker, harnessId, machineId: 'host' }])
-  })
-
-  it('records no effort that names none: what Claude Code reports as auto, or a start that left the engine its own', () => {
-    for (const effort of ['auto', 'default', null]) {
-      const f = fixture()
-      const id = f.create(owner, { checks: independent })
-      const worker = f.add(`w-${effort}`, id)
-      f.state.agents.find(a => a.id === worker)!.configuration.effort = effort
-      f.assign(id, worker)
-      expect(f.group(id).ledger!.runs![0], String(effort)).not.toHaveProperty('effort')
-    }
-  })
 
   it('names the model an agent reports after its task began, when it had reported none: never "Codex" alone (Dee, 2026-10-30)', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent }), done = f.create(owner, { checks: independent })
     const worker = f.add('codex-worker', id), earlier = f.add('codex-earlier', done)
     for (const agentId of [worker, earlier]) f.state.agents.find(a => a.id === agentId)!.configuration = { ...config, engine: 'codex', model: null }
-    const { assignmentId } = f.assign(id, worker)
-    const finished = f.assign(done, earlier)
-    f.status(done, finished.assignmentId, earlier, 'done', 'Shipped')
+    const { assignmentId } = f.stored(id, worker)
+    f.stored(done, earlier)
+    storedStatus(f.state, done, 'done', 'Shipped')
     const report = (agentId: string, model: string) => {
       const agent = f.state.agents.find(a => a.id === agentId)!
       f.run({ type: 'agent.configuration', previousVersion: agent.configurationVersion!, configuration: { ...agent.configuration, model } }, f.asAgent(agentId))
@@ -363,7 +205,7 @@ describe('the model behind each assignment (roadmap, Dec: about 30% of work on c
   const codexTasks = (f: ReturnType<typeof fixture>, count: number) => Array.from({ length: count }, (_, i) => {
     const id = f.create(owner, { checks: independent }), worker = f.add(`codex-${i}`, id)
     f.state.agents.find(a => a.id === worker)!.configuration = { ...config, engine: 'codex', model: null }
-    return { id, ...f.assign(id, worker) }
+    return { id, ...f.stored(id, worker) }
   })
   const reportModel = (f: ReturnType<typeof fixture>, agentId: string, configuration: Partial<AgentConfiguration>) => {
     const agent = f.state.agents.find(a => a.id === agentId)!
@@ -389,9 +231,9 @@ describe('the model behind each assignment (roadmap, Dec: about 30% of work on c
   it('names the reported model on an attempt handed on before the report, and only on that agent\'s own (Scholes, 2026-10-30)', () => {
     const f = fixture()
     const [task] = codexTasks(f, 1)
-    f.run({ type: 'work.cancel', conversationId: task!.id, assignmentId: task!.assignmentId, reason: 'Handing it on.' })
+    // Handed on: another agent's attempt is the task's now.
     const next = f.add('claude-next', task!.id)
-    f.assign(task!.id, next)
+    f.stored(task!.id, next)
     reportModel(f, task!.worker, { model: 'gpt-6.1-sol' })
     const runs = f.group(task!.id).ledger!.runs!
     expect(runs.map(r => [r.agentId, r.model])).toEqual([[task!.worker, 'gpt-6.1-sol'], [next, 'opus']])
@@ -417,103 +259,13 @@ describe('the model behind each assignment (roadmap, Dec: about 30% of work on c
       delete run.harnessId
     }
     // The second agent's attempt was handed on, so its group's current assignment is another agent's.
-    f.run({ type: 'work.cancel', conversationId: handedOn!.id, assignmentId: handedOn!.assignmentId, reason: 'Handing it on.' })
-    f.assign(handedOn!.id, f.add('claude-next', handedOn!.id))
+    f.stored(handedOn!.id, f.add('claude-next', handedOn!.id))
     reportModel(f, current!.worker, { model: 'gpt-6.1-sol' })
     reportModel(f, handedOn!.worker, { model: 'gpt-6.1-sol' })
     expect(f.group(current!.id).ledger!.runs![0]!.model).toBe('gpt-6.1-sol')
     expect(f.group(handedOn!.id).ledger!.runs![0]!.model).toBeNull()
   })
 
-  it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
-    const f = fixture()
-    const id = f.create(owner, { checks: independent })
-    const worker = f.add('grid-worker', id)
-    f.state.starts = [{ id: 's1', creationId: 'c1', actorKey: 'agent:lead', contributorId: 'owner', membershipGeneration: 'g', machineOwnerId: 'host-owner',
-      hostGrant: null, harnessId: 'grid-worker', dispatched: true, error: null,
-      request: { conversationId: id, machineId: 'host', engine: 'claude', model: 'default', effort: 'default', name: 'Builder', cwd: '/repo', worktree: true,
-        gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-0123456789ab',
-        requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
-    const { assignmentId } = f.assign(id, worker)
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', effort: 'high', grid: true, at: 1_000,
-      agentId: worker, harnessId: f.state.agents.find(a => a.id === worker)!.harnessId, machineId: 'host' }])
-  })
-
-  // Checks are information (project instructions, phase 4): every check is a review's, whatever `independent` says.
-  it('keeps the last 20 assignments of a group', () => {
-    const f = fixture()
-    const id = f.create(owner, { checks: independent })
-    const worker = f.add('worker', id)
-    let first = ''
-    for (let i = 0; i < 21; i++) {
-      const { assignmentId } = f.assign(id, worker)
-      if (i === 0) first = assignmentId
-      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
-    }
-    expect(f.group(id).ledger!.runs).toHaveLength(20)
-    expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
-  })
-
-  it('takes the asked time for a request recorded before the first assignment was kept, once its first attempt may have rolled off', () => {
-    const f = fixture()
-    f.at(1_000)
-    const id = f.create(owner, { checks: independent })
-    const worker = f.add('worker', id)
-    for (let i = 0; i < 21; i++) {
-      f.at(10_000 + i)
-      const { assignmentId } = f.assign(id, worker)
-      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
-    }
-    // As a group recorded before the time was kept: 20 attempts kept, the first rolled off.
-    delete f.group(id).ledger!.firstAssignedAt
-    f.at(20_000)
-    f.assign(id, worker)
-    expect(f.group(id).ledger!.firstAssignedAt).toBe(1_000)
-  })
-
-  it('takes the first assignment time from the kept attempts for a request recorded before it was kept (review of #2097)', () => {
-    const f = fixture()
-    const id = f.create(owner, { checks: independent })
-    const worker = f.add('worker', id)
-    f.at(10_000)
-    const first = f.assign(id, worker)
-    f.run({ type: 'work.cancel', conversationId: id, assignmentId: first.assignmentId, reason: 'Again.' })
-    // As a group recorded before the time was kept.
-    delete f.group(id).ledger!.firstAssignedAt
-    f.at(10_001)
-    f.assign(id, worker)
-    expect(f.group(id).ledger!.firstAssignedAt).toBe(10_000)
-  })
-
-  it('records the attempt a request shipped on, and keeps it through a later attempt (review of #2097)', () => {
-    const f = fixture()
-    f.at(5_000)
-    const id = f.create(owner, { checks })
-    const { worker, assignmentId } = f.assign(id)
-    f.at(6_000)
-    f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
-    const shippedBy = { assignmentId, at: 5_000, engine: 'claude', model: 'opus', effort: 'high', machineId: 'host' }
-    expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
-    // Reopened and worked again on another model: the ship stays the first attempt's.
-    const other = f.add('other', id)
-    f.state.agents.find(a => a.id === other)!.configuration = { ...config, model: 'sonnet' }
-    f.at(7_000)
-    f.assign(id, other)
-    expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
-  })
-
-  it('keeps the request\'s first assignment time once its first attempt has rolled off (review of #2097)', () => {
-    const f = fixture()
-    const id = f.create(owner, { checks: independent })
-    const worker = f.add('worker', id)
-    for (let i = 0; i < 21; i++) {
-      f.at(10_000 + i)
-      const { assignmentId } = f.assign(id, worker)
-      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
-    }
-    expect(f.group(id).ledger!.runs![0]!.at).toBe(10_001)
-    expect(f.group(id).ledger!.firstAssignedAt).toBe(10_000)
-  })
 })
 
 describe('a group opened from a Buddy\'s proposal (Lead, 2026-10-29: the Buddy earns when it ships)', () => {

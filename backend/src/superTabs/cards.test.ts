@@ -33,13 +33,11 @@ function fixture() {
 }
 
 describe('live cards', () => {
-  it('makes the brief its task card, and a new brief takes the card over', () => {
+  it('makes the brief its task card', () => {
     const f = fixture()
     const created = f.create()
     const id = created.result.conversationId as string
     expect(f.group(id).cards).toMatchObject({ task: created.messages[0]!.id })
-    const defined = f.run({ type: 'work.define', conversationId: id, brief: 'Add round avatars.', checks: [{ description: 'Tests pass', independent: false }] })
-    expect(f.group(id).cards?.task).toBe(defined.messages[0]!.id)
   })
 
   it('makes the first message linking a pull request its card, and later links of it plain messages', () => {

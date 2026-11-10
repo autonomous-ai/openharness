@@ -32,7 +32,6 @@ import { presenceWriteDue, touchDeviceOnlineDay, type PresenceWriteState } from 
 import { countryCodeFromHeaders } from './clientGeo.js'
 import { utcDayKey } from '../types/analytics.js'
 import { agentLimit, recordCreatedAgent } from './agentTracker.js'
-import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 import { fireAndForget } from '../utils/async.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'

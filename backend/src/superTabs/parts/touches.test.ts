@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor } from '../model.js'
 import { openSwarmBuddyChat } from '../buddies.js'
+import { storedAssignment, storedStatus } from '../storedWork.test-support.js'
 import { touchesFor } from './touches.js'
-
-const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config = { engine: 'codex', model: 'm', effort: 'high', contextWindow: null, engineVersion: null }
@@ -26,8 +25,8 @@ function swarm() {
   const group = (title: string) => {
     const id = run({ type: 'conversation.create', title, brief: 'Do it', checks: [{ description: 'Done', independent: false }] }).effects.result.conversationId as string
     const worker = add(`${title}-worker`, id)
-    const assignmentId = run({ type: 'work.assign', conversationId: id, agentId: worker }).effects.result.assignmentId as string
-    return { id, worker, assignmentId }
+    storedAssignment(state, id, worker, 1000)
+    return { id, worker }
   }
   const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
   return { run, lead, group, agentActor, get state() { return state } }
@@ -82,19 +81,6 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     // Already a member now: an ordinary post to it no longer touches it.
     expect(has(f.run({ type: 'message.send', conversationId: a.id, text: 'Again', replyTo: null, recipientIds: [b.worker] }, f.agentActor(a.worker)).touches, 'agent', b.worker)).toBe(false)
   })
-  // The project's progress part was also the fence of the worker decisions the Lead had to make before its next start,
-  // assignment or route (design ruling R5). No command reads those decisions now (project instructions, phase 4, decision 17),
-  // so finishing work and the next start, assignment or route no longer meet there (final review of the branch).
-  it('leaves the project\'s progress part to its reports when work finishes, and when the next is defined, routed or assigned', () => {
-    const f = swarm(), a = f.group('A')
-    const done = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'done', result: 'Shipped' }, f.agentActor(a.worker))
-    expect(has(done.touches, 'progress', 'lead')).toBe(false)
-    const cancelled = f.group('B')
-    expect(has(f.run({ type: 'work.cancel', conversationId: cancelled.id, assignmentId: cancelled.assignmentId, reason: 'Not needed' }).touches, 'progress', 'lead')).toBe(false)
-    expect(has(f.run({ type: 'work.define', conversationId: cancelled.id, brief: 'Again', checks: [] }).touches, 'progress', 'lead')).toBe(false)
-    const next = f.run({ type: 'conversation.create', title: 'C', brief: 'More', checks: [{ description: 'Done', independent: false }] }).effects.result.conversationId as string
-    expect(has(f.run({ type: 'work.assign', conversationId: next, agentId: a.worker }).touches, 'progress', 'lead')).toBe(false)
-  })
 
   it('makes naming a requester meet that person\'s removal on their member part', () => {
     const f = swarm()
@@ -109,17 +95,10 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(named.touches, 'group', 'lead')).toBe(true)
   })
 
-  it('makes a priority change meet a change of who is PM on the project\'s chat (task #3117)', () => {
-    const f = swarm()
-    const id = f.run({ type: 'conversation.create', title: 'R', brief: 'Do it', checks: [{ description: 'Done', independent: false }], priority: 'P2', requesterId: 'owner' }, f.agentActor(f.lead)).effects.result.conversationId as string
-    const changed = f.run({ type: 'work.priority', conversationId: id, priority: 'P0' }, f.agentActor(f.lead))
-    expect(has(changed.touches, 'group', 'lead')).toBe(true)
-  })
-
   it('makes an answer to waiting work meet a change to whom it waits on', () => {
     const f = swarm(), a = f.group('A')
     f.run({ type: 'conversation.requester', conversationId: a.id, personId: 'owner' })
-    f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'needs_human', hold: HOLD, result: 'Flag?' }, f.agentActor(a.worker))
+    storedStatus(f.state, a.id, 'needs_human', 'Flag?')
     const answer = f.run({ type: 'message.send', conversationId: a.id, text: 'Flag.', replyTo: null, recipientIds: [] }, f.agentActor(f.lead))
     expect(has(answer.touches, 'member', 'owner')).toBe(true)
   })

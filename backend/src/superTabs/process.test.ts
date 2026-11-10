@@ -4,6 +4,7 @@ import { createSuperTab, visibleState, type Actor } from './model.js'
 import { projectsOf } from './projects.js'
 import { readerView } from './read/views.js'
 import { split } from './parts/index.js'
+import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -35,17 +36,14 @@ function fixture() {
   const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host' })
   const add = (projectId: string) => run({ type: 'agent.add', conversationId: project(projectId).leadConversationId,
     machineId: 'machine', harnessId: 'pm', name: 'PM', configuration, lead: true }, peer).result.agentId as string
-  const group = (id: string) => state.conversations.find(c => c.id === id)!
   const task = (projectId: string) => {
     const id = run({ type: 'conversation.create', projectId, title: 'Work', brief: 'Finish the work', checks: [] }, peer).result.conversationId as string
     const worker = run({ type: 'agent.add', conversationId: id, machineId: 'machine', harnessId: `worker-${sequence}`, name: `Worker${sequence}`,
       configuration, lead: false }, peer).result.agentId as string
-    run({ type: 'work.assign', conversationId: id, agentId: worker }, peer)
-    const status = (status: string) => run({ type: 'work.status', conversationId: id,
-      assignmentId: group(id).assignment!.id, status, result: status === 'review' ? 'https://github.com/acme/app/pull/1' : 'Finished' }, as(worker))
-    return { id, worker, status }
+    storedAssignment(state, id, worker, 1000)
+    return id
   }
-  return { run, create, set, project, view, as, add, task, group, get state() { return state } }
+  return { run, create, set, project, view, as, add, task, get state() { return state } }
 }
 
 describe('project process settings and board columns', () => {
@@ -129,11 +127,10 @@ describe('project process settings and board columns', () => {
 })
 
 describe('Simple task lifecycle', () => {
-  it('finishes a Simple task directly and exposes Done without any merge or pull request', () => {
+  it('exposes a Simple task\'s Done without any merge or pull request', () => {
     const f = fixture(), project = f.create('simple'), task = f.task(project)
-    expect(f.group(task.id).assignment?.status).toBe('working')
-    task.status('done')
-    const read = f.view(peer).parts.groups.find(p => p.key === task.id)!.data
+    storedStatus(f.state, task, 'done', 'Finished')
+    const read = f.view(peer).parts.groups.find(p => p.key === task)!.data
     expect(read).toMatchObject({ process: 'simple', assignment: { status: 'done' } })
     expect(read.pullRequestUrls ?? []).toEqual([])
   })
