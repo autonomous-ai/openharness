@@ -38,6 +38,14 @@ const VERDICT = /(?<![\w-])(READ-OK|HOLD)\s+([0-9a-f]{7,40})(?![0-9a-f])/
 /** A post's signature: its writer's name first, then a comma, colon or bracket ("Juno, 14:20:", "**Faye** (PM):"). */
 const SIGNATURE = /^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]/
 const SELF = 'Harness'
+/** How each note to a pull request's author begins, after "not merged yet at <head>: ". A note is said once for each pull
+ *  request, kind and head, as lampOS's train bot keys what it told (`<PR> <kind> <head>`, train-bot.sh), never by its words:
+ *  swarm-sandbox #24-#26 got one note 46 times each when its words carried the time (2026-11-10), and the failing checks of one
+ *  head can change and change order. A restart finds a note said by these first words. */
+const NOTES = { unsigned: 'the READ-OK from ', checks: 'checks failed: ', behind: 'it is behind ', dirty: 'it conflicts with ', blocked: 'GitHub\'s rules for ' } as const
+type NoteKind = keyof typeof NOTES
+/** How many notes are remembered, as the train bot keeps the last 5,000 lines of its told list. */
+const TOLD_MAX = 5_000
 
 /** A project whose PM runs on this computer as its person: the merger merges its repository's pull requests, and the
  *  assigner gives its tasks (githubAssign.ts). Its Swarm, its PM and the project, to read its crew as the PM. */
@@ -173,8 +181,8 @@ export class GitHubMerge {
   private readonly reads: GitHubReads
   /** How long each repository is left alone after it failed: one this login cannot read, or one whose pass failed. */
   private readonly waits = new Waits()
-  /** What each pull request was last told, by head and reason, so it is told once for each head. */
-  private readonly told = new Map<string, string>()
+  /** The notes said, as `<repo>#<number> <kind> <head>` (NOTES), so each is said once. */
+  private readonly told = new Set<string>()
   private projects: { at: number; list: LedProject[] } | null = null
   private offUntil = 0
   private logged = ''
@@ -257,19 +265,19 @@ export class GitHubMerge {
       if (reads.size < (twoReads ? 2 : 1)) {
         // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
         const unsigned = onHead.find(([, r]) => r.ownLogin)?.[1]
-        if (unsigned) await this.tellOnce(repo, number, head, author, `the READ-OK from ${unsigned.name} is unsigned, and every agent of its person posts as that `
+        if (unsigned) await this.tellOnce(repo, number, head, author, 'unsigned', `${unsigned.name} is unsigned, and every agent of its person posts as that `
           + `login: its reader signs it, as in "<name>, HH:MM: READ-OK ${head.slice(0, 7)}".`, comments)
         continue
       }
       const runs = object(await this.reads.one(repo, `/repos/${repo}/commits/${head}/check-runs?per_page=${PAGE}`)).check_runs
       const checks = checksOf(Array.isArray(runs) ? runs.map(object) : [], await this.reads.one(repo, `/repos/${repo}/commits/${head}/status`))
       if (checks.state === 'running') continue
-      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, `checks failed: ${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
+      if (checks.state === 'failed') { await this.tellOnce(repo, number, head, author, 'checks', `${checks.failed.slice(0, 3).join(', ')}. Fix them and push.`, comments); continue }
       const detail = await this.reads.one(repo, `/repos/${repo}/pulls/${number}`)
       const state = String(detail.mergeable_state ?? 'unknown')
-      if (state === 'behind') { await this.tellOnce(repo, number, head, author, `it is behind ${base}: update the branch and push.`, comments); continue }
-      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, `it conflicts with ${base}: rebase it on ${base} and push.`, comments); continue }
-      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, `GitHub's rules for ${base} block the merge. Ask your person.`, comments); continue }
+      if (state === 'behind') { await this.tellOnce(repo, number, head, author, 'behind', `${base}: update the branch and push.`, comments); continue }
+      if (state === 'dirty') { await this.tellOnce(repo, number, head, author, 'dirty', `${base}: rebase it on ${base} and push.`, comments); continue }
+      if (state === 'blocked') { await this.tellOnce(repo, number, head, author, 'blocked', `${base} block the merge. Ask your person.`, comments); continue }
       if (!['clean', 'has_hooks', 'unstable'].includes(state)) continue
       const merged = await this.deps.send('PUT', `/repos/${repo}/pulls/${number}/merge`, { merge_method: 'squash', sha: head })
       if (merged.status !== 200) {
@@ -285,18 +293,19 @@ export class GitHubMerge {
     }
   }
 
-  /** Says once for a head why it is not merged. It names the head, and a restart finds it among the pull request's comments:
-   *  remembered only in memory, every release (each restarts the PM's daemon, seven on 2026-11-10) said it again. */
-  private async tellOnce(repo: string, number: number, head: string, author: string | null, what: string, comments: Json[]): Promise<void> {
-    const key = `${repo}#${number}`, said = `${head}\n${what}`
-    if (this.told.get(key) === said) return
-    const line = `not merged yet at ${head.slice(0, 7)}: ${what}`
-    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(line))) {
-      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${line}`)
+  /** Says once for a pull request, [kind] and head why it is not merged (NOTES). It names the head, and a restart finds it among
+   *  the pull request's comments by its first words: remembered only in memory, every release (each restarts the PM's daemon,
+   *  seven on 2026-11-10) said it again. */
+  private async tellOnce(repo: string, number: number, head: string, author: string | null, kind: NoteKind, rest: string, comments: Json[]): Promise<void> {
+    const key = `${repo}#${number} ${kind} ${head}`
+    if (this.told.has(key)) return
+    const start = `not merged yet at ${head.slice(0, 7)}: ${NOTES[kind]}`
+    if (!comments.some(c => TEAM.has(c.author_association) && String(c.body ?? '').slice(0, 500).includes(start))) {
+      await this.comment(repo, number, `${SELF}, ${this.clock()}${author ? `, to **${author}**` : ''}: ${start}${rest}`)
     }
     // Once GitHub has answered: a comment that never reached it (the pass failed, and is tried again) is not told.
-    this.told.set(key, said)
-    if (this.told.size > 1_000) this.told.delete(this.told.keys().next().value!)
+    this.told.add(key)
+    if (this.told.size > TOLD_MAX) this.told.delete(this.told.values().next().value!)
   }
 
   private async comment(repo: string, number: number, body: string): Promise<void> {
