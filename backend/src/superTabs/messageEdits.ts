@@ -5,7 +5,7 @@ import { fail, type Actor } from './model.js'
 export const DELETED_TEXT = 'This message was deleted.'
 
 /** The message `message.edit` or `message.delete` names, found by the store in that conversation and readable by the actor
- *  (store.ts messageChangeTarget, the checks reactionTarget makes). Absent when it is not there or the actor may not see it. */
+ *  (store.ts messageChangeTarget). Absent when it is not there or the actor may not see it. */
 export interface MessageChangeTarget {
   messageId: string
   author: { kind: string; id: string }

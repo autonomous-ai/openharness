@@ -6,7 +6,7 @@
  * `leads` is ever chosen, and its conversation goes through the parts' own write (store.ts dropLeads), never a raw delete: a
  * tombstone at its next version, so every cache and client drops it as any removed conversation. What was written in it goes
  * after, by its Swarm and that conversation's exact id, never by the id `lead` (v4's first project chat): its messages a chunk at
- * a time and, for each chunk, as the store's own message delete does, their deliveries, compacted receipts and reactions, and
+ * a time and, for each chunk, their deliveries, compacted receipts and reactions, and
  * their files released to the unsent-file sweep; then any delivery left of a message removed earlier. Mentions and activity
  * stay (the Mentions family, slice S11, is held).
  *
