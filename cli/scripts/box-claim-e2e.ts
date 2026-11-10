@@ -148,7 +148,8 @@ try {
   backend.stderr!.pipe(backendLog)
   children.push(backend)
   const api = `http://127.0.0.1:${backendPort}`
-  await until('backend health', async () => (await fetch(`${api}/api/health`)).ok, 90_000)
+  // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
+  await until('backend readiness', async () => (await fetch(`${api}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok, 90_000)
   pass('backend up on in-memory Mongo + Redis')
 
   /** The phone: a signed-in account calling the backend. */
