@@ -256,6 +256,8 @@ export interface HostAgentRow {
   resume: null
   agent: Agent
   joinSwarm: boolean
+  /** A CLI or Desktop from before #3912 reads a missing skillMode as Harness orchestration and would launch a v4 agent with its skills: always 'default', until 2026-12-11. */
+  skillMode: 'default'
   lead: boolean
   /** v3's restart of a PM that hung on an unanswered message: null since Swarm v4, for a host from before that reads it. */
   owed: { messageId: string; since: number; restartAfterMs: number } | null

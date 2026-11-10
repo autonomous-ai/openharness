@@ -27,6 +27,8 @@ export interface SwarmProject {
    *  owns nothing, as a member's listing works. Absent on projects from before 2026-11-05 until settleOwners fills it; until
    *  then the owner matches by id, as before. */
   ownerGeneration?: string
+  /** A CLI or Desktop from before #3912 reads a missing skillMode as Harness orchestration and would launch a v4 agent with its skills: always 'default', until 2026-12-11. */
+  skillMode?: 'default'
   leadConversationId: string
   /** Public means every member of this swarm, never anonymous internet access. */
   visibility: ProjectVisibility

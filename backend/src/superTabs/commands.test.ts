@@ -3236,6 +3236,10 @@ describe('an engine that cannot run on a contributed machine', () => {
     f.invite()
     expect(() => f.run(resume, peer)).toThrow('Only the machine\'s owner')
     expect(() => f.run(resume, elsewhere)).toThrow('Only the machine\'s owner')
+    // Hosted on the owner's machine but another person's agent: not the owner's word.
+    const lent = f.run({ type: 'agent.add', conversationId: f.group(), machineId: 'mac', harnessId: 'lent', name: 'Lent', configuration: config, lead: false } as Command,
+      peer, { contribution: { machineOwnerId: 'owner', contributorId: 'peer' } }).result.agentId as string
+    expect(() => f.run(resume, { kind: 'agent', agentId: lent, machineOwnerId: 'owner' })).toThrow('Only the machine\'s owner')
     expect(() => begin()).toThrow('This machine is suspended')
     if (who === 'owner') f.run(resume, owner)
     else {

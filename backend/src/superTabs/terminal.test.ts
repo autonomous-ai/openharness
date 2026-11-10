@@ -48,16 +48,18 @@ describe('reading and typing in an agent terminal', () => {
     expect(() => s.run({ type: 'agent.screen', agentId: s.worker }, peer)).toThrow('read-only')
   })
 
-  // Reading or typing in another agent's terminal is workflow (project instructions, phase 4); the Product Manager's stays private.
-  it('lets any agent of the project read or type in another agent\'s terminal', () => {
+  // Reading another agent's terminal is workflow (project instructions, phase 4); the Product Manager's stays private. Typing in
+  // it is its own login's alone (Swarm v4, 2026-11-11): these agents are hosted on host-owner's login, contributed by owner.
+  it('lets any agent of the project read another agent\'s terminal, and none type in it from another login', () => {
     const s = swarm()
     const second = s.run({ type: 'agent.add', conversationId: s.group, machineId: 'host', harnessId: 'second', name: 'second', configuration: config, lead: false },
       owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
     const outside = s.run({ type: 'agent.add', conversationId: s.state.conversations.find(c => c.leadId === s.otherLead)!.id, machineId: 'host', harnessId: 'outside',
       name: 'outside', configuration: config, lead: false }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
     const target = (id: string) => s.state.agents.find(a => a.id === id)!
-    expect(() => mayDrive(s.state, as(second), target(s.worker))).not.toThrow()
-    expect(s.run({ type: 'agent.input', agentId: s.worker, keys: ['Enter'] }, as(second)).terminal).toMatchObject({ requesterKey: `agent:${second}` })
+    expect(() => mayDrive(s.state, as(second), target(s.worker), false, 'screen')).not.toThrow()
+    expect(s.run({ type: 'agent.screen', agentId: s.worker }, as(second)).terminal).toMatchObject({ requesterKey: `agent:${second}` })
+    expect(() => s.run({ type: 'agent.input', agentId: s.worker, keys: ['Enter'] }, as(second))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(() => mayDrive(s.state, as(second), target(outside))).toThrow()
     expect(() => s.run({ type: 'agent.screen', agentId: outside }, as(second))).toThrow()
     expect(() => mayDrive(s.state, as(second), target(s.lead), false, 'screen')).toThrow(expect.objectContaining({ code: 'TERMINAL_PRIVATE' }))
@@ -101,16 +103,19 @@ describe('reading and typing in an agent terminal', () => {
     // The same login's agents drive each other, and Alice's agent still drives the one on Bob's machine: she could herself.
     expect(run({ type: 'agent.input', agentId: onAlice, keys: ['Enter'] }, hosted(sibling)).terminal).toMatchObject({ machineOwnerId: 'alice' })
     expect(run({ type: 'agent.screen', agentId: onBob }, hosted(onAlice)).terminal).toMatchObject({ machineOwnerId: 'bob' })
-    // In a project Bob reads, his agent drives Alice's as he could.
+    // In a project Bob reads, his agent reads Alice's as he could, but types in it no more than he may (Swarm v4: own login only).
     const open = run({ type: 'project.create', name: 'Open', visibility: 'public', brief: '' }, alice).result.projectId as string
     const shared = storedTask(state, { projectId: open, title: 'Task', brief: 'Do it.', requesterId: 'alice' })
     const herWorker = add(shared, 'her-worker', 'alice'), hisWorker = add(shared, 'his-worker', 'bob', bob)
-    expect(run({ type: 'agent.input', agentId: herWorker, keys: ['Enter'] }, hosted(hisWorker)).terminal).toMatchObject({ machineOwnerId: 'alice' })
+    expect(run({ type: 'agent.screen', agentId: herWorker }, hosted(hisWorker)).terminal).toMatchObject({ machineOwnerId: 'alice' })
+    for (const actor of [hosted(hisWorker), bob]) {
+      expect(() => run({ type: 'agent.input', agentId: herWorker, keys: ['Enter'] }, actor)).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    }
   })
 
-  // The project's coordinator keeps its pre-branch power (to answer an agent's input prompt), even on a machine whose owner
-  // could not drive the target.
-  it('lets the coordinator drive a project agent on another login even where its host could not', () => {
+  // The project's coordinator reads a project agent's terminal even on a machine whose owner could not; typing in one on another
+  // login is that login's alone (Swarm v4, 2026-11-11): it asks by message.
+  it('lets the coordinator read a project agent on another login even where its host could not, and not type in it', () => {
     let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
     state.people.push({ id: 'alice', email: 'alice@example.com', role: 'collaborator', generation: 'a1' },
       { id: 'bob', email: 'bob@example.com', role: 'collaborator', generation: 'b1' })
@@ -129,7 +134,7 @@ describe('reading and typing in an agent terminal', () => {
     const task = storedTask(state, { projectId: created.projectId as string, title: 'Task', brief: 'Do it.', requesterId: 'alice' })
     const worker = add(task, 'worker', 'alice'), helper = add(task, 'helper', 'bob')
     const coordinator = add(created.conversationId as string, 'pm', 'bob', true)
-    expect(run({ type: 'agent.input', agentId: worker, keys: ['Enter'] }, hosted(coordinator)).terminal).toMatchObject({ machineOwnerId: 'alice' })
+    expect(() => run({ type: 'agent.input', agentId: worker, keys: ['Enter'] }, hosted(coordinator))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
     expect(run({ type: 'agent.screen', agentId: worker }, hosted(coordinator)).terminal).toMatchObject({ machineOwnerId: 'alice' })
     // Any other agent there still drives only as its host could.
     expect(() => run({ type: 'agent.screen', agentId: worker }, hosted(helper))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
@@ -152,9 +157,13 @@ describe('reading and typing in an agent terminal', () => {
   it('types the input as given, a credential too, and writes no row anywhere', () => {
     const s = swarm()
     storedAssignment(s.state, s.group, s.worker, 1_000_000)
+    // The person whose machine runs it types in it.
+    const machineOwner: Actor = { kind: 'person', userId: 'host-owner', email: 'host@example.com' }
+    const invited = s.run({ type: 'invite.create', email: 'host@example.com', role: 'collaborator', conversationId: 'lead' })
+    s.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, machineOwner)
     // Assembled at run time from obviously fake parts.
     const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
-    const effects = s.run({ type: 'agent.input', agentId: s.worker, text: `gh auth login --with-token ${token}`, keys: ['Enter'] }, as(s.lead))
+    const effects = s.run({ type: 'agent.input', agentId: s.worker, text: `gh auth login --with-token ${token}`, keys: ['Enter'] }, machineOwner)
     expect(effects.terminal).toMatchObject({ op: 'request', kind: 'input', text: `gh auth login --with-token ${token}`, keys: ['Enter'] })
     expect(effects.messages).toEqual([])
   })

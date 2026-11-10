@@ -44,15 +44,26 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, else
       fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
     }
   }
+  // Swarm v4 (anh Dee, 2026-11-11): only an agent's own login types into it, the person whose machine runs it or their own
+  // agents. One person's work never runs under another's login; a cross-login ask goes as a message, read as data. Asked after
+  // the checks above, so a refusal says nothing of an agent the actor may not see.
+  const ownLogin = () => {
+    if (kind !== 'input') return
+    const own = actor.kind === 'person' ? actor.userId === target.machineOwnerId
+      : actor.machineOwnerId === target.machineOwnerId && agent(state, actor.agentId).contributorId === target.machineOwnerId
+    if (!own) fail('FORBIDDEN', 'Only the person whose machine runs this agent, or their own agents, type in its terminal.', 403)
+  }
   if (actor.kind === 'person') {
     author(state, actor, true)
     readAgent(state, actor, target.id)
-    return closed()
+    closed()
+    return ownLogin()
   }
   closed()
   if (!projectAgent(state, actor, agentProjectId(state, target))) {
     fail('FORBIDDEN', 'Only an agent of this agent’s project, or a person with write access, can read or type in its terminal.', 403)
   }
+  ownLogin()
   // An agent never drives further than the person whose machine runs it, whose own sign-in speaks for it: a teammate hosting
   // an agent of a private project they cannot read would otherwise type, through it, into the project's agents on other
   // people's logins (security review S1). Agents on one login drive each other as before, and the project's coordinator keeps

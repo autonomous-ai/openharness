@@ -759,7 +759,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     if (projects.length >= 100) fail('PROJECTS_FULL', 'A swarm can have up to 100 projects.')
     const leadConversationId = `project-${operationId}`
     const project: SwarmProject = { id: operationId, name, ownerId, ownerGeneration: person(state, ownerId).generation, leadConversationId,
-      visibility, members: [], updateMinutes: 5, process }
+      visibility, members: [], updateMinutes: 5, skillMode: 'default', process }
     projects.push(project)
     state.conversations.push({ id: leadConversationId, projectId: operationId, title: 'Lead', leadId: null,
       agentIds: [], archived: false, brief, checks: [], assignment: null, lastMessageSequence: 0 })
@@ -1128,7 +1128,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // computers, under their login, so its word on its person's machine is theirs (a PM passes on what they said in their 1:1
       // chat). No new button: the only visible change is the struck name.
       const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
-      if ((actor.kind === 'person' ? actor.userId : actor.machineOwnerId) !== pool.contributorId) {
+      const word = actor.kind === 'person' ? actor.userId === pool.contributorId
+        : actor.machineOwnerId === pool.contributorId && agent(state, actor.agentId).contributorId === pool.contributorId
+      if (!word) {
         fail('OWNER_REQUIRED', "Only the machine's owner, or their own agent, resumes an engine there.", 403)
       }
       resumeEngine(pool, command.engine)

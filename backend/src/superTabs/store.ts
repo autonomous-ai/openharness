@@ -993,8 +993,10 @@ export class SuperTabStore {
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
       }
+      // A CLI or Desktop from before #3912 reads a missing skillMode as Harness orchestration and would launch a v4 agent with its skills: always 'default', until 2026-12-11.
+      const read = { ...start, skillMode: 'default' as const }
       // The Lead reads that its machine is still preparing it, and waits instead of starting another (liveness.ts).
-      return startPreparing(state, start, this.now()) ? { ...start, preparing: true as const } : start
+      return startPreparing(state, start, this.now()) ? { ...read, preparing: true as const } : read
     })
   }
 

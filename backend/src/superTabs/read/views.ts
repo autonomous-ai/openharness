@@ -67,7 +67,7 @@ export function agentView(agent: Agent): AgentView {
   // Member's mark names it too (members.ts; security review 2 of #3575), and is its host's alone (read/hostRows.ts sends the
   // agent as stored).
   const { downNamed: _named, downSince: _since, limitedUntil: _limit, mainProjectId: _main, member: _member, ...rest } = agent
-  return rest
+  return personView(rest)
 }
 
 /** `state` is the parts already reassembled, when the caller has it (a read reassembles once). */

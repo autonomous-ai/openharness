@@ -666,6 +666,29 @@ describe('since when a worker is down', () => {
 })
 
 describe('Super Tabs on a real Mongo replica set', () => {
+  it('tells a contributed machine its start\'s skills are Default, for a host from before #3912', async () => {
+    // Swarm v3 (task #4120): the machine is its person's own, who starts its agents, in their own account.
+    // Prod logs 2026-10-28: the host asked for a Swarm status read it may not make (a 400 at every start), then launched
+    // every agent on Harness orchestration, whatever its project ran.
+    const tab = (await store.create(owner, randomUUID(), 'Skills pool')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await db.machine.create({ data: { machineId: 'skills-host', userId: host.sub, apiKey: 'fixture-skills-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await run(tab, { type: 'machine.contribute', machineId: 'skills-host', name: 'Skills laptop', cwd: '/project', engines: ['claude'], maxAgents: 4 }, host)
+    const generation = (await poolRows(store, host, 'skills-host'))[0]!.machine.generation
+    await store.observeMachine(host, tab, 'skills-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [] })
+    // Started in a task: the project chat holds only its coordinator among agents (#2207).
+    const task = String((await run(tab, { type: 'conversation.create', title: 'Skills work', brief: '', checks: [] })).result.conversationId)
+    const start = async () => String((await asHost(tab, { type: 'agent.start', request: { conversationId: task, machineId: 'skills-host', engine: 'claude',
+      name: 'Builder', cwd: '/project', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
+    const skillMode = async (startId: string) => (await store.start(host, tab, startId, undefined, 'skills-host')).skillMode
+
+    expect(await skillMode(await start())).toBe('default')
+  })
+
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
     // Swarm v3 (task #4120): the machine is its person's own, who starts its agents, in their own account.
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id
@@ -2907,11 +2930,12 @@ describe('the Lead reads and types in an agent terminal', () => {
 
   it('hands the host the text and keys, and writes no row', async () => {
     const { tab, worker, group, harnessId, claim } = await terminalFixture()
-    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, text: '/model', keys: ['Enter'] })).result.requestId as string
+    // Its machine's person types in it: only an agent's own login does (Swarm v4).
+    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, text: '/model', keys: ['Enter'] }, host)).result.requestId as string
     expect(await claim()).toEqual([{ tabId: tab, agentId: worker, harnessId, request: { id: requestId, kind: 'input', text: '/model', keys: ['Enter'] } }])
     expect((await store.messages(owner, tab, group, {})).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'terminal-input')).toEqual([])
     await run(tab, { type: 'agent.inputResult', requestId, ok: true }, host, worker)
-    expect(await store.terminalResult(owner, tab, requestId)).toEqual({ requestId, ok: true })
+    expect(await store.terminalResult(host, tab, requestId)).toEqual({ requestId, ok: true })
   })
 
   it('fails with a plain reason when the host never picks up or never answers, and never types late', async () => {
@@ -2919,18 +2943,18 @@ describe('the Lead reads and types in an agent terminal', () => {
     const unseen = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
     expect(await claim(later(11_000))).toEqual([])
     expect(await store.terminalResult(host, tab, unseen, lead)).toEqual({ requestId: unseen, ok: false, error: expect.stringContaining('did not pick up') })
-    const typed = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    const typed = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host)).result.requestId as string
     expect(await claim()).toHaveLength(1)
-    expect(await later(31_000).terminalResult(host, tab, typed, lead)).toEqual({ requestId: typed, ok: false, error: expect.stringContaining('did not answer') })
+    expect(await later(31_000).terminalResult(host, tab, typed)).toEqual({ requestId: typed, ok: false, error: expect.stringContaining('did not answer') })
     await expect(run(tab, { type: 'agent.inputResult', requestId: typed, ok: true }, host, worker)).rejects.toThrow('unavailable')
   })
 
   it('never hands the host a request for a terminal that was replaced', async () => {
     const { tab, lead, worker, claim } = await terminalFixture()
-    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    const requestId = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host)).result.requestId as string
     await db.superTabTerminalRequest.update({ where: { id: requestId }, data: { harnessId: 'replaced-terminal' } })
     expect(await claim()).toEqual([])
-    expect(await store.terminalResult(host, tab, requestId, lead)).toEqual({ requestId, ok: false, error: expect.stringContaining('changed') })
+    expect(await store.terminalResult(host, tab, requestId)).toEqual({ requestId, ok: false, error: expect.stringContaining('changed') })
   })
 
   // Neither demotion has a command (the Lead guard keeps a project's Lead), so the state is edited the way a future one would.
@@ -3041,10 +3065,10 @@ describe('the Lead reads and types in an agent terminal', () => {
     const started = Date.now()
     expect(await late.at.terminalResult(host, tab, unseen, lead, 20_000)).toEqual({ requestId: unseen, ok: false, error: expect.stringContaining('did not pick up') })
     expect(Date.now() - started).toBeLessThan(2_000)
-    const replaced = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host, lead)).result.requestId as string
+    const replaced = (await run(tab, { type: 'agent.input', agentId: worker, keys: ['Enter'] }, host)).result.requestId as string
     await db.superTabTerminalRequest.update({ where: { id: replaced }, data: { harnessId: 'replaced-terminal' } })
     const { at } = watched()
-    const waiting = at.terminalResult(host, tab, replaced, lead, 20_000)
+    const waiting = at.terminalResult(host, tab, replaced, undefined, 20_000)
     await new Promise(resolve => setTimeout(resolve, 300))
     const refusedAt = Date.now()
     expect(await claim(at)).toEqual([])

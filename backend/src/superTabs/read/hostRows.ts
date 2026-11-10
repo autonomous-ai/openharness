@@ -70,6 +70,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
       && state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
       && !state.machines?.some(m => m.machineId === machineId) && !state.removedMachines?.some(r => r.machineId === machineId)
       && !machineLimitReached(state, user.sub),
+    skillMode: 'default',
     lead: !!ledProject(state, target.id),
     // Swarm v4 restarts no PM on the server's word (timeChecks.ts): an older host still reads the field, so it stays, always empty.
     owed: null,

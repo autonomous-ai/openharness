@@ -751,7 +751,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
     agents: [], invitations: [],
     conversations: [{ id: 'lead', title: 'Lead', leadId: null, agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
   }
-  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}) }]
+  state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
   // Swarm as it is, and the owner's first share or run in Your models sets the models up then.
@@ -859,6 +859,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   // Each person as the Swarm names them (usernames.ts), their default included.
   const names = swarmUsernames(state)
   visible.people = visible.people.map(p => ({ ...personView(p), username: names.get(p.id) }))
+  visible.agents = visible.agents.map(personView)
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {
     const raw = readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))
