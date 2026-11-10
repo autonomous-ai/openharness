@@ -19,10 +19,6 @@ const text = (v: unknown) => typeof v === 'string' ? v : null
 const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 // These native validations run before dispatch. Storage errors, conflicts and
 // unknown failures deliberately stay uncertain: they cannot prove no launch.
-/** Why Team-written work starts only on Claude Code off a Team daemon (task #4307). */
-export const TEAM_WRITTEN_CLAUDE_ONLY = 'A Harness Team agent wrote this task\'s code, so on this computer it runs only on Claude Code, which keeps the branch\'s own settings out. Codex would need a sign-in of its own for that, which Harness never makes from yours. Choose Claude Code for this task.'
-/** Why Team-written work starts only in a worktree Harness makes for it (task #4353). */
-export const TEAM_WRITTEN_WORKTREE_ONLY = 'A Harness Team agent wrote this task\'s code, so on this computer it runs only in a worktree Harness makes for it and removes with it, never in the project\'s own checkout. Start it with a worktree.'
 const PRE_DISPATCH_REFUSALS = new Set([
   'INVALID_ENGINE', 'INVALID_CWD', 'INVALID_PROJECT_SOURCE', 'INVALID_REPOSITORY',
   'INVALID_GRID', 'INVALID_CODEX_HOME', 'INVALID_DSH', 'INVALID_PROMPT',
@@ -281,22 +277,6 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
         if (!refusedByBackend(error)) throw error
         return await releaseRefused(error)
       }
-      // Code a Team agent wrote runs with none of its branch's own settings, hooks or trust (backend superTabs/teamWritten.ts,
-      // audit H2). Since Swarm v3 there is no Team machine, and the server sends such work only to the project owner's own
-      // computer (ruling #4120); a refusal here failed every start of it (#4188, 11-07). Claude Code launches there in the
-      // `teamWritten` mode below. Codex keeps the branch's settings out only in an engine home of its own, which has no
-      // sign-in, and Harness never reads or links one (anh Dee, 11-07; loginReads.spec.ts): refused, before anything is made.
-      const projectSettingsOff = request.projectSettings === 'off'
-      if (projectSettingsOff && request.engine !== 'claude') {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_CLAUDE_ONLY } }))
-        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_CLAUDE_ONLY }
-      }
-      // Its Claude trust is saved for the folder it runs in and cleared when Harness removes its worktree (machines.ts, task
-      // #4353). The owner's main checkout is neither Harness's to trust for it nor to remove: refused there.
-      if (projectSettingsOff && request.worktree !== true) {
-        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: TEAM_WRITTEN_WORKTREE_ONLY } }))
-        return { error: 'START_FAILED', startId, detail: TEAM_WRITTEN_WORKTREE_ONLY }
-      }
       // Both direct and contributed-host starts reach this boundary. Existing
       // native receipts are read above and never have their permissions changed.
       // Engines without a full mode retain their existing approving launch flags.
@@ -345,10 +325,8 @@ export async function startAgent(input: Json, scoped: ScopedRequest, where: Wher
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : 'orchestration'
       // Swarm v3 (task #4215): a PM, an agent and a Buddy start with their owner's own permission settings: no mode, so the
       // engine opens in the person's own default. Forced full mode turned off every check on people's own computers, where
-      // Anthropic says to use it only in isolated environments. Team-written work keeps its barrier against the branch's own
-      // settings, and approves nothing on its own either: it runs as the owner, on their own computer (review of #3485).
+      // Anthropic says to use it only in isolated environments.
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: false,
-        ...(projectSettingsOff ? { permissionMode: 'teamWritten' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         // A thread session (#2345) gets its own Buddy note; a coordinator's and an agent's notes name their role (phase 3).
         prompt: buddy ? (session ? projectSession ? projectSessionPrompt(String(input.tabId), String(request.conversationId), session, mode)

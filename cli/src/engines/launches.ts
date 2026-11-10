@@ -116,9 +116,8 @@ export function agentInstructionArgs(engine: AgentEngine | string, said: { instr
 
 /**
  * The argv that gives a launch Harness's status line (kit/statusLine.ts): every session of an engine that declares one,
- * the person's own or an agent's. A Swarm session's folder is a branch, which could commit a status line command, and
- * one Harness ran would run outside the setting sources its launch keeps to (claude/launch.ts `teamWritten`): only the
- * person's own settings are read for it.
+ * the person's own or an agent's. A Swarm session's folder is a branch, which could commit a status line command that
+ * Harness would then run itself: only the person's own settings are read for the status line.
  */
 function statusLineArgs(contract: StatusLineContract | undefined, place: AttributionPlace): string[] {
   if (!contract) return []

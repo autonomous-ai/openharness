@@ -610,10 +610,6 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       || !['ask', 'auto', 'plan', 'full'].includes(permissionMode))) {
       reply({ error: 'INVALID_PERMISSION_MODE' }); return
     }
-    // Team-written work keeps its project settings off: no resume trades that mode for another (audit H2).
-    if (permissionMode !== undefined && byAgent(target)?.permissionMode === 'teamWritten') {
-      reply({ error: 'INVALID_PERMISSION_MODE' }); return
-    }
     // Extra launch flags ride a restart or a resume of an agent the owner may change, and are checked with the engine's
     // own refused list before anything is relaunched. The engine runs them as the owner, so only the owner's own app
     // may send them (a device, an agent's own CLI and a guest may not), as only it may change a permission.
@@ -622,7 +618,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       if (!asker.ownerApp) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: 'Launch flags can only be changed from your own Harness app.' }); return }
       // A harness a bad flag left stopped is in the stopped store, not the registry: the way back is to resume it.
       const known = byAgent(target) ?? stoppedAgent(target)
-      if (typeof payload.launchArgs !== 'string' || known?.permissionMode === 'teamWritten') {
+      if (typeof payload.launchArgs !== 'string') {
         reply({ error: 'INVALID_LAUNCH_ARGS' }); return
       }
       if (!known) { reply({ error: 'AGENT_NOT_FOUND' }); return }

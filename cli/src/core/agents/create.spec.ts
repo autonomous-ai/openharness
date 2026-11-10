@@ -236,8 +236,7 @@ describe('creating an agent', () => {
     mkdirSync(config); writeFileSync(settings, '{"theme":"dark"}\n')
     const launch = { current: () => true, environment: { HOME: home, CLAUDE_CONFIG_DIR: config }, prepareHooks: async () => true } as unknown as NativeLaunch
     try {
-      // Team-written work too: it runs in its owner's own mode and skips nothing (review of #3485).
-      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }, { permissionMode: 'teamWritten', bypassPermission: false }]) {
+      for (const over of [{}, { permissionMode: 'full', bypassPermission: true }]) {
         for (const swarmRole of ['coordinator', 'agent']) {
           expect(await setup({ native: async () => ({ ok: true, launch }) }).create(request({ swarmRole, ...over }))).toMatchObject({ ok: true })
         }
@@ -262,11 +261,6 @@ describe('creating an agent', () => {
     expect(agentTmpLaunch).toHaveBeenLastCalledWith('claude', expect.objectContaining({ role: 'agent', key: expect.any(String) }))
     expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_DSH: 'blender', TMPDIR: '/data/agent-tmp/one' })
     expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
-    // Team-written work gets its folder too, and keeps its project settings off: the mode still carries its own flags.
-    vi.mocked(agentTmpLaunch).mockReturnValueOnce(tmp)
-    expect(await setup().create(request({ swarmRole: 'agent', permissionMode: 'teamWritten', bypassPermission: false }))).toMatchObject({ ok: true })
-    expect(extraArgs().filter(arg => arg.startsWith('--add-dir'))).toEqual(['--add-dir=/data/agent-tmp/one'])
-    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]).toMatchObject({ permissionMode: 'teamWritten' })
   })
 
   // A Buddy launches like its owner's own session (Ken, 11-04, task #2832): on a shared model it keeps the grid's web tools,
