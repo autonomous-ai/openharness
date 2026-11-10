@@ -33,7 +33,7 @@ export function isCrewRow(row: unknown): boolean {
 type Owns = (harnessId: string) => Promise<boolean>
 
 /** What the keeper knows of one crew session here: since when its engine has been seen working without a break. */
-interface Watch { workingSince: number; said?: string }
+interface Watch { workingSince: number }
 /** A continue still owed to a reopened session: when it may be tried next, how many tries it has left, and the screen this
  *  reopen's own typing left, whose Enter is still owed (null until it typed, or once that screen is gone). Only that exact
  *  screen takes the Enter: after a second crash the history shows an earlier continue over an empty composer, and a prompt
@@ -48,9 +48,6 @@ interface Owed { at: number; tries: number; typed: string | null }
  * It reads no screen of its own for a freeze: the terminal watch records when each whole screen last changed
  * (terminal.ts stillSince), and this asks the engines' activity once a minute for all its crew in one call (review of #3222,
  * AGENTS.md standard 4: the daemon's idle work).
- *
- * Never a close where it deletes what the reopen needs: a confidential session's data, and on a Team daemon any session's
- * (inCore/teamPurge.ts deletes a Team-written Codex session's own engine home, security review 1 of #3222).
  */
 export class CrewKeeper {
   private readonly watches = new Map<string, Watch>()
@@ -61,13 +58,11 @@ export class CrewKeeper {
   private readonly log: (message: string) => void
   private readonly owns: Owns
   private readonly stillSince: (harnessId: string) => number | undefined
-  private readonly team: () => boolean
 
   constructor(private readonly core: CoreApi, private readonly machineId: string,
-    options: { owns: Owns; stillSince: (harnessId: string) => number | undefined; team: () => boolean; now?: () => number; log?: (message: string) => void }) {
+    options: { owns: Owns; stillSince: (harnessId: string) => number | undefined; now?: () => number; log?: (message: string) => void }) {
     this.owns = options.owns
     this.stillSince = options.stillSince
-    this.team = options.team
     this.now = options.now ?? Date.now
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
   }
@@ -88,24 +83,24 @@ export class CrewKeeper {
     /** The crew the roster names here; what is owed them is kept while it does, their terminal away for a moment or not
      *  (review 2 of #3222). */
     const named = new Set<string>()
-    const here = new Map<string, Record<string, unknown>>()
+    const here = new Set<string>()
     for (const row of rows.map(object)) {
       const agent = object(row.agent)
       if (!identifier(agent.harnessId) || agent.machineId !== this.machineId || row.closeSession === true || row.stopRequested === true || !isCrewRow(row)) continue
       named.add(agent.harnessId)
       if (!this.core.agents.byAgent(agent.harnessId) || !this.core.agents.terminalAvailable(agent.harnessId)) continue
-      here.set(agent.harnessId, row)
+      here.add(agent.harnessId)
     }
     for (const id of this.watches.keys()) if (!here.has(id)) this.watches.delete(id)
     for (const id of this.owed.keys()) if (!named.has(id)) this.owed.delete(id)
-    for (const harnessId of here.keys()) if (this.owed.has(harnessId)) await this.continueTask(harnessId)
+    for (const harnessId of here) if (this.owed.has(harnessId)) await this.continueTask(harnessId)
     const now = this.now()
     if (now - this.lookedAt < CREW_LOOK_MS) return
     this.lookedAt = now
-    const looked = [...here.keys()].filter(id => !this.owed.has(id))
+    const looked = [...here].filter(id => !this.owed.has(id))
     if (!looked.length) return
     const activity = await this.core.agents.activity(looked).catch(() => ({} as Record<string, string>))
-    for (const harnessId of looked) await this.look(harnessId, activity[harnessId] === 'working', here.get(harnessId)!.confidential === true, now)
+    for (const harnessId of looked) await this.look(harnessId, activity[harnessId] === 'working', now)
   }
 
   /** Types the owed continue: its text, then Enter only on the screen read after it (inputIfScreen, under the pane's write
@@ -141,21 +136,14 @@ export class CrewKeeper {
     this.owed.delete(harnessId)
   }
 
-  private async look(harnessId: string, working: boolean, confidential: boolean, now: number): Promise<void> {
+  private async look(harnessId: string, working: boolean, now: number): Promise<void> {
     const watch = this.watches.get(harnessId)
     // Idle at its prompt: its frozen time starts again from its next work.
-    if (!working || !watch) return void this.watches.set(harnessId, { workingSince: now, ...watch?.said ? { said: watch.said } : {} })
+    if (!working || !watch) return void this.watches.set(harnessId, { workingSince: now })
     const still = this.stillSince(harnessId)
     if (still === undefined) return
     const frozenFor = now - Math.max(still, watch.workingSince)
     if (frozenFor < CREW_FROZEN_MS) return
-    const spared = confidential ? 'its session is confidential: closing it would delete its data'
-      : this.team() ? 'it runs in a Team account, where closing it deletes what reopening it needs' : null
-    if (spared) {
-      if (watch.said !== spared) this.log(`The crew member ${harnessId.slice(0, 8)} looks frozen, but ${spared}, so it is left as it is.`)
-      watch.said = spared
-      return
-    }
     this.log(`The crew member ${harnessId.slice(0, 8)} froze: working with an unchanged screen for ${Math.round(frozenFor / 60_000)} minutes. Closing it to reopen it in place.`)
     this.watches.delete(harnessId)
     const closed = await this.core.agents.closeMember?.(harnessId)

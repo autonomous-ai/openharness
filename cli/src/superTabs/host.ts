@@ -36,7 +36,6 @@ import { LeadSwitchRequests, type SwitchRow } from './leadSwitchRequest.js'
 import { BuddyModelRequests, type BuddyModelRow } from './buddyModel.js'
 import { openDaemon } from '../agentClient/daemon.js'
 import { conversationTokens } from '../lib/conversationSize.js'
-import { isTeamDaemon } from './teamDaemon.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads, type SwarmRead } from './swarmReads.js'
 import { ADDED_MAX, placeLine, recentLines, setOff, taskStateLine, threadLine, workLine } from './deliveryContext.js'
@@ -636,11 +635,11 @@ export class SuperTabHost {
     this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
       owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
         .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
-    this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon,
+    this.crew = new CrewKeeper(core, machineId, { now: this.now, log: this.log,
       stillSince: harnessId => this.terminal.stillSince(harnessId),
       owns: async harnessId => (await this.sources.feed.fresh()).assignments.some(a => a.harnessId === harnessId) })
     this.rebinds = new RebindSender((path, body) => backend(this.core, 'POST', path, body), this.now)
-    this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log, team: isTeamDaemon })
+    this.leadSwitches = new LeadSwitchRequests(core, machineId, { now: this.now, log: this.log })
     // Over this machine's own daemon socket, which answers as the machine owner: the Buddy runs only on its owner's machine.
     this.buddyModels = options.buddyModels ?? new BuddyModelRequests({ dataDir: core.dataDir, now: this.now, log: this.log,
       open: () => openDaemon({ dataDir: core.dataDir, port: core.daemon.port, machineId }),
@@ -1436,7 +1435,7 @@ export class SuperTabHost {
     const key = `${row.tabId}:${row.agent.harnessId}`
     if (this.rested.get(key) === rest) return
     const buddy = isBuddy(object(row.agent)), agent = object(row.agent)
-    if (buddy && (row.buddySleepManaged !== true || agent.buddySession || agent.modelRequest || agent.teamAccount || isTeamDaemon() || rest !== 'sleep')) return
+    if (buddy && (row.buddySleepManaged !== true || agent.buddySession || agent.modelRequest || agent.teamAccount || rest !== 'sleep')) return
     this.rested.set(key, rest)
     const check = Symbol()
     if (buddy) this.buddyRestChecks.set(key, check)
@@ -1676,7 +1675,7 @@ export class SuperTabHost {
           .catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
         if (scrub) {
           const unread = new Set<string>()
-          await scrubClaudeSession(this.claudeHome, scrub, [], undefined, what => {
+          await scrubClaudeSession(this.claudeHome, scrub, what => {
             if (what === 'shared') this.log(`Kept another folder's transcripts that share a Buddy session's transcript folder: agent ${agent.id}`)
             else unread.add(UNREAD_CODES[what])
           }).catch(() => { throw new Error(`Could not remove an ended Buddy session's Claude Code traces yet: agent ${agent.id}, SCRUB_FAILED`) })
