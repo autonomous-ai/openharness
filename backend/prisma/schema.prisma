@@ -1388,7 +1388,7 @@ model SuperTabDecision {
   delegated      Boolean?
   /// With `delegated`: the hourly sweep left it to the PM after 24 hours unanswered, not the person (the sweep Swarm v4 removed).
   overdue        Boolean?
-  /// "routing-reflection" for a proposal of the nightly routing reflection (costs/reflection.ts): never a Buddy's to read,
+  /// "routing-reflection" for a proposal of the nightly routing reflection (gone with Swarm v4): never a Buddy's to read,
   /// and an approved one is kept past the ledger's weeks. Absent on every other decision.
   kind           String?
   /// Closed unanswered because the work it was asked about is over: its task done or cancelled, or its group archived

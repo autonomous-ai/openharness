@@ -128,12 +128,16 @@ const proposalContent = { title: z.string().trim().min(1).max(80).optional(), go
 /** What a Buddy's proposal posts and carries. */
 type ProposalContent = { text: string; projectId?: string } & z.infer<z.ZodObject<typeof proposalContent>>
 /** A worker's question for one named person (work.status `ask`), as the PM's crew need holds it: 2–5 distinct options, the
- *  index of the recommended one, what an answer unblocks, and when it may default. */
+ *  one recommended among them, and when it may default. `unblocks` and `mustAgree` are what a CLI from before Swarm v4 sends
+ *  for a decision (2026-11-10): taken, so its status is not refused, and kept nowhere. Delete them on or after 2026-12-09. */
 const askLine = (max: number) => z.string().trim().min(1).max(max)
 const crewAsk = z.object({ personId: id, options: z.array(askLine(200)).min(2).max(5).refine(o => new Set(o).size === o.length, 'Give distinct options.'),
-  recommended: z.number().int().min(0), unblocks: askLine(300),
+  recommended: z.number().int().min(0),
   defaultAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()).optional(),
-  mustAgree: z.literal(true).optional() }).strict()
+  unblocks: askLine(300).optional(), mustAgree: z.literal(true).optional() }).strict()
+  .refine(ask => ask.recommended < ask.options.length, 'Recommend one of the options.')
+/** Give a person time to see a question before its default time. */
+const MIN_DEFAULT_DELAY_MS = 15 * 60_000
 const swarmEngine = z.string().min(1).max(80).refine((engine): boolean => engine === 'claude' || engine === 'codex', 'A Swarm agent runs only Claude Code or Codex.')
 const configuration = z.object({
   engine: z.string().min(1).max(80), model: z.string().max(200).nullable(),
@@ -4841,6 +4845,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person only when its work needs a human, with the question as its result.', 400)
+        }
+        if (command.ask.defaultAt && Date.parse(command.ask.defaultAt) < context.now + MIN_DEFAULT_DELAY_MS) {
+          fail('INVALID_DECISION', 'Set the default time at least 15 minutes ahead so the person can answer.', 400)
         }
         // For the PM to ask: the person must be in the Swarm.
         if (pmInstead) person(state, command.ask.personId)
