@@ -46,7 +46,6 @@ import { PULL_REQUEST_URL, recordAsked, recordPost, recordReportedModel } from '
 import { reactionSchema, type ReactionTarget } from './reactions.js'
 import { deleteMessage, editMessage, type MessageChangeTarget } from './messageEdits.js'
 import { syncTaskLines } from './taskLine.js'
-import { tellBuddies } from './buddyNews.js'
 import { bindPullRequestCards, bindTaskCard, pullRequestCard } from './cards.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar } from './profile.js'
 import { cancelledTags, cancelReason, switchExpired, unfinishedWork } from './tidy.js'
@@ -59,8 +58,6 @@ import { BUDDY_SESSION_CAPABILITY, chatOwner, endSessionEntry, entryProject, liv
 import { BUDDY_REQUIREMENTS, buddyCapOf, buddyCapRefusal, buddyChatId, buddyChatsOf, buddyCount, defaultBuddy, defaultBuddyChat, hasBuddy, dropBuddyChat, MAX_BUDDY_CAP, openNewBuddyChat, setDefaultBuddy, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, isSwarmBuddy, isSwarmBuddyChat, openBuddyChat, openSwarmBuddyChat, ownAgentAuthor, PRIVATE_CHAT_REFUSAL, refuseOthersInPrivateChat, renameBuddy, requireBuddyCommand, swarmBuddyChatId } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { BUDDY_START_ENDED } from './buddyConversion.js'
-import { askBuddyModel, buddyModelResult, sendBuddyHome, sessionModel } from './buddyModel.js'
-import { askBuddyEngine, buddyEngineChat, buddyEngineName, checkBuddyRebind } from './buddyEngine.js'
 import { launchRefusedLine, leadArrived, LEAD_CLAIM_MS, leadEffort, leadJoined, leadOvertaken, leadStartFailed, leadStarting, leadWaits, LEAD_CAPABILITY, placeLead } from './leadStart.js'
 import { defaultAccountOnly, SWITCH_CAPABILITY } from './pmAccount.js'
 import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
@@ -1423,9 +1420,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       // A usage limit or a model that keeps failing loses its task at once (liveness.ts); a waiting prompt does not.
       if (command.alert !== 'prompt' && command.active) {
         effects.messages.push(...loseTasks(state, context.now, worker => worker.id === command.agentId))
-        // A Buddy on a shared model goes back to its owner's subscription: the member serving it set that limit (AGENTS.md,
-        // contributed capacity, Safe), and a model that keeps failing answers nothing.
-        sendBuddyHome(state, agent(state, command.agentId), command.alert === 'limit' ? 'limit' : 'failing', operationId, context.now)
       }
       break
     }
@@ -1879,11 +1873,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
           text: `${[...names].join(', ')} never started and will not start now.` })
       }
       const pendingHere = state.starts?.filter(s => s.request.machineId === command.machineId && (!s.harnessId || (s.poolGeneration && !s.poolSettled)) && !s.error) ?? []
-      // Its person's own Buddy starting on its Buddy-only record moves with it to the listed one (task #4252): same computer,
-      // person and account, so + New agent right after Bring agent is not refused until that Buddy settles.
-      const buddyOnlyHere = state.machines.some(m => m.machineId === command.machineId && m.buddyOnly && m.contributorId === actor.userId)
-      const carried = buddyOnlyHere ? pendingHere.filter(s => s.request.buddyOf?.personId === actor.userId && s.contributorId === actor.userId) : []
-      if (pendingHere.length > carried.length) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
+      if (pendingHere.length) fail('STARTS_PENDING', 'Reconcile pending starts before changing this contribution.')
       // Saving settings sends the whole contribution again; only machine.pause changes its pause (review of #2084).
       const paused = state.machines.find(m => m.machineId === command.machineId)?.paused ?? false
       // Added as its person joined (Desktop's join): teammates' work only through its Harness Team account, for as long as
@@ -1910,7 +1900,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         ...(previous?.machineSuspension ? { machineSuspension: previous.machineSuspension } : {}),
         ...(previous?.engineSuspensions ? { engineSuspensions: previous.engineSuspensions } : {}),
         ...(previous?.observation ? { observation: previous.observation } : {}) })
-      for (const start of carried) if (start.poolGeneration) start.poolGeneration = operationId
       break
     }
     case 'machine.pause': {
@@ -2736,7 +2725,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('SESSION_CONTRIBUTED', 'The replacement terminal already belongs to another member.')
       }
       if (target.harnessId === command.harnessId && target.replacement?.previousHarnessId === command.previousHarnessId) break
-      if (isBuddy(target)) checkBuddyRebind(target, command.configuration.engine, storedProfileId(target.machineId, command.configuration.engine, command.profileId), context.now)
       if (target.harnessId !== command.previousHarnessId || command.harnessId === command.previousHarnessId) {
         fail('AGENT_CHANGED', 'The member’s terminal changed. Read its current binding before replacing it.')
       }
@@ -2866,17 +2854,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const project = ledProject(state, target.id) ?? (promoted ? ledProject(state, promoted.id) : undefined)
       // A rebind already moved the PM: a failure the host reported as it landed is not what happened.
       const moved = command.ok || !!landed
-      if (isBuddy(target)) {
-        if (moved && !landed) fail('STALE_SWITCH', 'The Buddy has not confirmed its new session yet.', 409)
-        delete target.switchRequest
-        delete target.switchLanded
-        const engine = buddyEngineName(target.configuration.engine)
-        const error = command.error?.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/[.\s]+$/, '')
-        effects.messages.push({ id: operationId, conversationId: buddyEngineChat(state, target), author: sender, replyTo: null, recipients: [], source: SYSTEM_ROW,
-          text: moved ? `Your Buddy now runs on ${engine}.`
-            : `Couldn't switch your Buddy: ${error || 'it failed'}. ${command.down ? `It has not come back on ${engine} yet; its machine keeps trying.` : `It is back on ${engine}.`}` })
-        break
-      }
       if (moved && !landed && target.switchRequest) moveToProfile(target, target.switchRequest.engine, target.switchRequest.profileId)
       delete target.switchRequest
       delete target.switchLanded
@@ -3477,8 +3454,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     const group = state.conversations.find(c => c.id === draft.conversationId)
     if (group) bindPullRequestCards(group, draft, groupRepositoryUrl(state, group))
   }
-  // A Buddy hears the project-chat rows about its person's proposals and requested work (buddyNews.ts).
-  for (const draft of effects.messages) tellBuddies(state, draft, draft.replyTo && draft.replyTo === context.reply?.id ? context.reply.threadSource ?? null : null)
   assertUniqueMessageIds(command.type, effects.messages)
   return effects
 }

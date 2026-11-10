@@ -72,7 +72,6 @@ import { cloneData } from './cloneData.js'
 import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefusal, restoreSessions } from './closedAgents.js'
 import { sessionRows } from './memberRows.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
-import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { finishedWakes } from './crewTimes.js'
 import { teamMachineIds } from './migration/teamMachinesJob.js'
 import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
@@ -3295,16 +3294,7 @@ export class SuperTabStore {
           ...back.length ? await loadGroups(tx, tabId, 'key', { key: { $in: back.flatMap(r => [...r.groupIds, ...r.leadOf]) } }) : []]
         loaded = loadedFrom(row, { ...observed, groups: [...new Map([...observed.groups, ...more].map(g => [g.key, g])).values()] })
       }
-      const idleBuddies = loaded.state.agents.filter(a => a.machineId === machineId && isBuddy(a) && !a.buddySession
-        && observation.idleBuddyHarnessIds?.includes(a.harnessId)
-        && !loaded.state.conversations.some(c => isBuddyChat(c) && c.agentIds.includes(a.id))).map(a => a.id)
-      if (idleBuddies.length) {
-        const homes = await loadGroups(tx, tabId, 'agents', { agentIds: { $in: idleBuddies }, deleted: false,
-          'data.kind': { $in: ['buddy', 'swarm-buddy'] } })
-        loaded = loadedFrom(row, { ...observed, groups: [...new Map([...loaded.parts.groups, ...homes].map(g => [g.key, g])).values()] })
-      }
       const state = cloneData(loaded.state)
-      const buddyTouches: Touch[] = []
       const pool = await strangerRefusal(state, user.sub, () => {
         const found = machineContribution(state, machineId)
         if (!found || found.contributorId !== user.sub || found.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
@@ -3322,7 +3312,7 @@ export class SuperTabStore {
       // when a task there is lost.
       const saved = async (rows: MessageDraft[] = []) => {
         const sequences = numberMessages(state, rows, now)
-        const touches = [...judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId), ...buddyTouches]
+        const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         await recordAttempts(tx, tabId, loaded.state, state, now)
         await recordEvidence(tx, tabId, loaded.state, state, now)
@@ -3367,21 +3357,8 @@ export class SuperTabStore {
       // The starts the server refused this machine's own reports for fail now, with the refusal, not 3 minutes on (#2441); every 30
       // seconds it runs the Swarm's time checks too (liveness.ts sweepLiveness), so they keep running when the Lead's own machine is the
       // one that died. A report loses no task, nudges no worker and keeps no crew now. A woken agent it shows running again clears its
-      // wake mark and has its wake's timing row (crewTimes.ts, task #3462): a Buddy wakes the same way.
+      // wake mark and has its wake's timing row (crewTimes.ts, task #3462).
       const checked = [...failRefusedStarts(state, machineId, now), ...sweep ? sweepLiveness(state, now) : [], ...finishedWakes(state, now)]
-      const sleepy = observation.idleBuddyHarnessIds?.length ? buddySleepCandidates(state, now).filter(a => a.machineId === machineId) : []
-      const busy = new Set<string>()
-      for (const agent of sleepy) {
-        const pending = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [
-          { $match: { tabId, agentId: agent.id, status: { $in: [...OPEN_DELIVERY] } } }, { $limit: 1 }, { $project: { _id: 0, agentId: 1 } }])
-        if (pending.length) busy.add(agent.id)
-      }
-      sleepBuddies(state, sleepy, busy, now)
-      for (const agent of sleepy.filter(a => a.asleep)) {
-        // New input and work meet the agent write; home activity, membership and project switch meet these guards.
-        buddyTouches.push({ kind: 'head', key: 'head' }, { kind: 'member', key: agent.buddyOf!.personId },
-          ...groupsOf(state, agent).map(g => ({ kind: 'group' as const, key: g.id })))
-      }
       // Then the agents it shows closed leave, those with no active work left: the Lead is told of their tasks above (closedAgents.ts).
       const closedOut = removeClosedAgents(state, state.agents.filter(a => closed.includes(a.id)), now).map(a => a.id)
       removedIds.push(...closedOut)

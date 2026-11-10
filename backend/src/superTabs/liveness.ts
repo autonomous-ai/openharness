@@ -9,7 +9,7 @@ import { askedModel, coordinatorCopy, failureNotice, failureRecipients, leadPick
 import { leadOf, toLead } from './terminal.js'
 import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
-import { staleModelRequests, staleSwitches } from './tidy.js'
+import { staleSwitches } from './tidy.js'
 import { pmsToDefaultAccount } from './pmAccount.js'
 import { ledProject, projectsOf } from './projects.js'
 import { coordinatorNameOf } from './instructions.js'
@@ -284,7 +284,7 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
  *  removed confidential session whose data is not deleted say so once; a PM on another account of its machine is moved back to
  *  the default one (pmAccount.ts). Swarm v4 loses no task and nudges no worker. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = [...failStalledStarts(state, now), ...staleSwitches(state, now), ...staleModelRequests(state, now), ...pmsToDefaultAccount(state, now)]
+  const drafts = [...failStalledStarts(state, now), ...staleSwitches(state, now), ...pmsToDefaultAccount(state, now)]
   // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
   dropIdleBuddyMachines(state, now)
   return drafts

@@ -1160,7 +1160,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   visible.buddies = true
   for (const pool of visible.machines ?? []) {
-    // Engine idle proof is for server lifecycle decisions alone, never a member's activity feed (#3824).
+    // What an older release stored of a Buddy's idle proof (#3824) is no member's to read.
     if (pool.observation) delete pool.observation.idleBuddyHarnessIds
     // A Team daemon's privacy check, stored by an older release, can name paths on its Mac: shown to nobody until the Team
     // machines carrying it are taken out (migration/teamMachinesJob.ts); goes with that job, 2026-12-10.

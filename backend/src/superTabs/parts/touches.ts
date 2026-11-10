@@ -3,7 +3,6 @@ import type { Actor, CommandEffects, SuperTabState } from '../model.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
-import { buddiesHearing } from '../buddyNews.js'
 import { defaultBuddy } from '../buddies.js'
 import { mainBuddyOf } from '../buddySessions.js'
 
@@ -49,7 +48,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if (command.type === 'agent.start' && command.request.roleId) head()
 
   // Buddy input also guards an already awake recipient, so a concurrent sleep retries against that input (#3824).
-  for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
 
   switch (command.type) {
     // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one

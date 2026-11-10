@@ -1,6 +1,3 @@
-import { isBuddy, isSwarmBuddy } from './buddies.js'
-import { buddyEngineChat } from './buddyEngine.js'
-import { expiredModelRequests, unservedBuddyModels } from './buddyModel.js'
 import { agentDisplayName } from './agentNames.js'
 import { stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, ledProject } from './projects.js'
@@ -46,29 +43,15 @@ export function staleSwitches(state: SuperTabState, now: number): MessageDraft[]
   const rows: MessageDraft[] = []
   for (const pm of state.agents) {
     const request = pm.switchRequest, project = request && ledProject(state, pm.id)
-    const chat = isSwarmBuddy(pm) && !pm.buddySession ? buddyEngineChat(state, pm) : project?.leadConversationId
+    const chat = project?.leadConversationId
     if (!request || !chat) continue
     if (!switchExpired(request, now)) continue
     delete pm.switchRequest
     rows.push({ id: stableId('switch-stale', pm.id, request.id), conversationId: chat, replyTo: null, recipients: [],
       author: { kind: 'agent', id: pm.id, name: pm.name, displayName: agentDisplayName(state.agents, pm.id), membershipGeneration: pm.membershipGeneration },
-      text: `Couldn't switch ${isBuddy(pm) ? 'your Buddy' : 'the PM'}: its machine did not answer.`, source: { kind: 'switch', agentId: pm.id } })
+      text: `Couldn't switch the PM: its machine did not answer.`, source: { kind: 'switch', agentId: pm.id } })
   }
   return rows
-}
-
-export { BUDDY_MODEL_GONE_MS, BUDDY_MODEL_LEASE_MS } from './buddyModel.js'
-
-/** A Buddy's model switch its machine never reported is dropped (the Buddy stays where it was), and its owner's Buddy chat
- *  says so once. Run by the liveness sweep, as staleSwitches is: the Buddy's own machine may be the one down. */
-export function staleModelRequests(state: SuperTabState, now: number): MessageDraft[] {
-  const drafts = expiredModelRequests(state, now).map(({ buddy, requestId, conversationId, text, machines }): MessageDraft => ({
-    id: stableId('buddy-model-stale', buddy.id, requestId), conversationId, replyTo: null, recipients: [], text,
-    source: { kind: 'system', ...(machines.length ? { machines } : {}) },
-    author: { kind: 'agent', id: buddy.id, name: buddy.name, displayName: agentDisplayName(state.agents, buddy.id), membershipGeneration: buddy.membershipGeneration } }))
-  // After the expiry, so a Buddy whose machine never answered one request home is asked again on the next sweep.
-  unservedBuddyModels(state, now, buddy => stableId('buddy-model-gone', buddy.id, String(now)))
-  return drafts
 }
 
 /** Work that ended without finishing: only a cancel with a reason closes it, never an archive alone (#558). */
