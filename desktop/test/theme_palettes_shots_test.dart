@@ -84,17 +84,11 @@ ConversationServer _swarm() {
     minutesAgo: 8,
   );
   say('Release notes are up for review.', ken, minutesAgo: 2);
-  server.tag(root, threadId: root, messageSequence: server.revision);
   say(
     'Which theme should be the default light one?',
     river,
     conversation: 'web-lead',
     minutesAgo: 5,
-  );
-  server.ask(
-    ['Cloud or Plum as the default light theme?'],
-    conversationId: 'web-lead',
-    projectId: 'web',
   );
   ((server.state['conversations'] as List)[0] as Map)['leadId'] = 'lead-agent';
   return server;
