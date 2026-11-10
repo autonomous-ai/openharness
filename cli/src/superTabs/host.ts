@@ -2050,6 +2050,18 @@ export class SuperTabHost {
     // The durable intent must exist before the core can write. A thrown disk write must not deliver, and leaves the delivery
     // untyped, so the next pass types it: left 'submitting', it was reported interrupted and never typed (task #3514). The reply
     // it owes its person is saved by the same write, so a restart in the middle of its turn still posts the answer.
+    // A person's message closes the question it answers, only the one of this machine's own signed-in account, and only a
+    // question opened after it was written (core/input.ts `beforeTeamWrite`).
+    const answers = fromPerson && !['agent-only', 'native'].includes(String(object(message.source).kind))
+      && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
+    // Its pane held it before: the core is asked what holds it now, with nothing written, and it waits while something does. Tried
+    // every second, each try wrote and fsynced the journal twice, its intent and then 'prepared' again (Q3, 2026-11-10). Only the
+    // write itself may close a question for a person's answer, so such a delivery goes on to it.
+    if (claim.refused && !answers) {
+      const hold = await this.core.turns.holdOf(entry.harnessId, id)
+      if (this.stopped || this.journal.entries[deliveryId] !== entry) { this.authorized.delete(id); return false }
+      if (hold) { this.authorized.delete(id); this.reportWithheld(entry, hold); return false }
+    }
     const before = entry.stage
     entry.stage = 'submitting'
     if (plain) this.replies.owe({ ...entry, name: shownName(target.agent, 'The agent') }, message, text)
@@ -2060,10 +2072,6 @@ export class SuperTabHost {
       throw error
     }
     this.active.add(id)
-    // A person's message closes the question it answers, only the one of this machine's own signed-in account, and only a
-    // question opened after it was written (core/input.ts `beforeTeamWrite`).
-    const answers = fromPerson && !['agent-only', 'native'].includes(String(object(message.source).kind))
-      && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
     const writtenAt = typeof message.createdAt === 'string' ? Date.parse(message.createdAt) : NaN
     this.core.turns.deliver(entry.harnessId, text, id, ...(answers ? [{ answersQuestion: true as const, ...(Number.isFinite(writtenAt) ? { writtenAt } : {}) }] : []))
     return false

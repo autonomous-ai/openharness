@@ -174,6 +174,15 @@ const questionOf = (screen: ScreenReading | null): string | undefined =>
 const freeTextEmpty = (screen: ScreenReading | null): boolean =>
   screen?.question?.kind === 'question' && !!screen.question.typeRow
 
+/** What holds a typed delivery from the pane as read. A maker's chat may use the native input queue (`typesWhileBusy`), while Agent
+ *  Messages still waits for idle; both keep the same draft and dialog checks. */
+function paneHold(deps: Pick<InputDeps, 'typesWhileBusy' | 'submission'>, session: RegisteredSession, screen: ScreenReading | null,
+  capture: string | null, deliveryId?: string): string | null {
+  if (!screen) return 'team_waiting_unavailable'
+  return deliveryId && deps.typesWhileBusy?.(deliveryId) && deps.submission.policy(session.engine)?.typesWhileBusy
+    ? teamHold(session.engine, capture ?? '', screen.pane, screen.question, true) : screen.teamHold
+}
+
 /** What `SessionInputController` is given: every write takes the device's pane lock first. */
 export function sessionInputDeps(
   deps: InputDeps,
@@ -182,13 +191,8 @@ export function sessionInputDeps(
   const { resolve, terminal, deliveries, device, clients, agentIdFor, commandcode, emit } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
-  // A maker's chat may use the native input queue (`typesWhileBusy`), while Agent Messages still waits for idle.
-  // Both paths keep the same draft and dialog checks under the pane's writer lock.
-  const deliveryHold = (session: RegisteredSession, screen: ScreenReading | null, capture: string | null, deliveryId?: string): string | null => {
-    if (!screen) return 'team_waiting_unavailable'
-    return deliveryId && deps.typesWhileBusy?.(deliveryId) && deps.submission.policy(session.engine)?.typesWhileBusy
-      ? teamHold(session.engine, capture ?? '', screen.pane, screen.question, true) : screen.teamHold
-  }
+  const deliveryHold = (session: RegisteredSession, screen: ScreenReading | null, capture: string | null, deliveryId?: string) =>
+    paneHold(deps, session, screen, capture, deliveryId)
   return {
     ...(deps.moveGate ? { moveGate: deps.moveGate } : {}),
     readScreen: deps.readScreen,
@@ -357,7 +361,17 @@ export function createInput(deps: InputDeps) {
     else input.submit(target, adapted, deliveryId)
   }
   const messageRequest = createMessageRequest((id, content, context, receipt) => submitAgent(id, content, undefined, context, receipt), deps.typed)
-  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest }
+  /** What holds a typed delivery from [id]'s pane now, read as its write reads it (`beforeTeamWrite`, `injectTeam`), with nothing
+   *  typed, pressed or locked: a question a person's message would close is said as it is, since only the write may press Escape. */
+  const holdOf = async (id: string, deliveryId: string): Promise<string | null> => {
+    const session = resolve(id)
+    if (!session) return 'team_waiting_unavailable'
+    if (deps.shortTurns?.holding(session.sessionId)) return 'team_waiting_control'
+    const capture = await deps.terminal.captureTerminal(session.agentId)
+    return paneHold(deps, session, await deps.readScreen(session, capture), capture, deliveryId)
+      ?? (deps.deliveries.canWrite(deliveryId) ? null : 'team_waiting_control')
+  }
+  return { input, deviceInput, acquireTerminalControl, submitAgent, messageRequest, holdOf }
 }
 
 /**

@@ -37,6 +37,8 @@ export interface DeliveriesDeps {
   tell(service: string, event: TurnDelivery): void
   /** The services in their own processes that may deliver turns: writing into an agent is no other's to ask. */
   deliverers: ReadonlySet<string>
+  /** What holds a typed delivery from the agent's pane now, read with nothing written (core/input.ts `holdOf`); absent, nothing. */
+  hold?: (agentId: string, deliveryId: string) => Promise<string | null>
   log?: (line: string) => void
   now?: () => number
 }
@@ -94,7 +96,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
     if (maker) deps.tell(maker, event)
   }
 
-  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries'> = {
+  const holdOf = async (agentId: string, deliveryId: string): Promise<string | null> => await deps.hold?.(agentId, deliveryId) ?? null
+  const turns: Pick<CoreApi['turns'], 'deliver' | 'cancelDelivery' | 'onDelivery' | 'leaseDeliveries' | 'holdOf'> = {
     deliver: (agentId, content, deliveryId, options) => {
       if (options?.answersQuestion) answering.set(deliveryId, answers(options.writtenAt))
       submit(agentId, content, deliveryId)
@@ -105,6 +108,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
       return () => { listeners.delete(listener) }
     },
     leaseDeliveries: async (service, input) => lease(service, input),
+    holdOf,
   }
 
   return {
@@ -136,8 +140,8 @@ export function createDeliveries(deps: DeliveriesDeps) {
 
     /** A service in its own process delivering a turn, or taking one back (`service_query`): null when the
      *  query is not one of these. Refused for a service that is not a deliverer. */
-    answer(service: string, query: string, payload: Payload): Payload | null {
-      if (query !== 'deliver' && query !== 'cancel_delivery' && query !== 'lease_deliveries') return null
+    answer(service: string, query: string, payload: Payload): Payload | Promise<Payload> | null {
+      if (query !== 'deliver' && query !== 'cancel_delivery' && query !== 'lease_deliveries' && query !== 'delivery_hold') return null
       if (!deps.deliverers.has(service)) return { error: 'NOT_A_DELIVERER' }
       if (query === 'lease_deliveries') return { leased: lease(service, payload.leases) }
       const deliveryId = text(payload.deliveryId)
@@ -145,6 +149,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
       if (guarded(deliveryId) && !owned(service, deliveryId)) return { error: 'INVALID_DELIVERY' }
       if (query === 'cancel_delivery') return { cancelled: cancel(deliveryId) }
       const agentId = text(payload.agentId)
+      if (query === 'delivery_hold') return agentId ? holdOf(agentId, deliveryId).then(hold => ({ hold })) : { error: 'INVALID_DELIVERY' }
       if (!agentId || typeof payload.text !== 'string') return { error: 'INVALID_DELIVERY' }
       // Known before it is written: the input says `queued` as it takes it, and that is the maker's to hear.
       makers.delete(deliveryId)
