@@ -230,7 +230,8 @@ void app_main(void)
     // Create the refresh task BEFORE the first tiles exist: tile creation fragments the remaining internal
     // heap enough that a contiguous stack allocation can fail afterwards, which would leave the carousel on
     // the loading spinner forever because nobody drains ui_request_agent_reload().
-    BaseType_t rt_ok = xTaskCreate(refresh_task, "proj_refresh", 7168, NULL, 4, NULL);
+    // 4096: measured peak use 2,248 B (STACK free_min 4,920 of 7,168, fw >= 0.0.94).
+    BaseType_t rt_ok = xTaskCreate(refresh_task, "proj_refresh", 4096, NULL, 4, NULL);
     if (rt_ok != pdPASS) {
         ESP_LOGE(TAG, "refresh task create failed (%d), free_int=%u largest_int=%u; rebooting",
                  (int)rt_ok,

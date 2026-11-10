@@ -449,9 +449,9 @@ void display_init(void)
         assert(pixels[i]);
     }
     display_bump_activity();
-    // 24576 was sized for the ROM inflater of the companion art, which is gone; Task 8 of the
-    // round-dial-resources plan re-measures it.
-    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 24576, NULL, 5, &renderer, 1) ==
+    // 12288: the old 24 KB was for the ROM inflater, which only the deleted companion pack used.
+    // Measured peak use 5,596 B (lowest alive stack_free 18,980 of 24,576, fw >= 0.0.94).
+    assert(xTaskCreatePinnedToCore(render_task, "habitat_render", 12288, NULL, 5, &renderer, 1) ==
            pdPASS);
     touch_init();
     ESP_LOGI("habitat", "direct C renderer on a %dpx face: two %d-byte internal DMA buffers over %s",
