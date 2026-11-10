@@ -417,7 +417,7 @@ String swarmBuddyMachineName(
 /// The setup a Buddy sends for [machineId], one of the person's own machines
 /// outside the Swarm: prepared there as Add machine prepares one (its folder
 /// and engines, `prepareContribution`), so the server records it for their
-/// Buddies alone (the desktop's `prepareBuddyMachine`). Asked again a second
+/// Buddies alone. Asked again a second
 /// apart while it reports `preparing`, for up to five minutes; [setupId] names
 /// the setup, so asking again joins the one under way. A refusal throws.
 Future<Map<String, dynamic>> prepareSwarmBuddyMachine(
