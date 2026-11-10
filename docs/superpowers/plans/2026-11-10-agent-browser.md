@@ -75,6 +75,7 @@ Read it before starting any task. This plan does not repeat its reasons.
   | `profile_unwritable` | "Browser can't save its login" | Retry |
   | `proxy_failed` | "Proxy is not reachable" | Retry |
   | `browser_limit` | "Too many browsers on this machine" | Retry |
+  | `device_failed` | "Device settings didn't apply" | Retry |
 
 - **Panel-only states** (not in the agent frame):
   - "Browser is slow here" with Retry: the stream closed with reason `rate` or `backlog`.

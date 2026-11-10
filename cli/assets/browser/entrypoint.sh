@@ -1,7 +1,7 @@
 #!/bin/bash
 # Starts the agent's browser: Xvnc (X server and VNC in one), openbox, a silent speaker, and Google Chrome on the
-# agent's profile. The service reads its exit code: 3 is `profile_unwritable` and 4 is `proxy_failed`, which it does not
-# restart.
+# agent's profile. The service reads its exit code: 3 is `profile_unwritable`, 4 is `proxy_failed` and 5 is
+# `device_failed`, which it does not restart.
 set -uo pipefail
 
 SCREEN="${SCREEN:-1920x1080}"
@@ -68,6 +68,12 @@ trap 'kill -TERM "$BROWSER" "$XVNC" 2>/dev/null; wait "$BROWSER"; exit 0' TERM I
 # Ready is CDP answering and VNC accepting, checked for at most 60 s; the service looks for the marker as long.
 for _ in $(seq 1 300); do
   if curl -sf --max-time 1 http://127.0.0.1:9222/json/version > /dev/null && (exec 3<> /dev/tcp/127.0.0.1/5900) 2> /dev/null; then
+    # With Device on, also the device script attached: a tab opened before it would report this machine's own values.
+    # Once CDP answers it needs at most about 10 s (its WebSocket and the attach answer, 5 s each); 15 s bounds it.
+    if [ -n "${DEVICE:-}" ]; then
+      for _ in $(seq 1 75); do [ -e /tmp/device-ready ] && break; sleep 0.2; done
+      if [ ! -e /tmp/device-ready ]; then echo "device script did not attach" >&2; exit 5; fi
+    fi
     touch /tmp/harness-ready
     break
   fi

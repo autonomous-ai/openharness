@@ -48,6 +48,7 @@ const NOT_READY: Record<string, string> = {
   profile_unwritable: "Browser can't save its login",
   proxy_failed: 'Proxy is not reachable',
   browser_limit: 'Too many browsers on this machine',
+  device_failed: "Device settings didn't apply",
 }
 
 const failed = (text: string) => ({ isError: true, content: [{ type: 'text', text }] })

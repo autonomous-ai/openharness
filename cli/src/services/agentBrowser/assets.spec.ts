@@ -109,6 +109,18 @@ describe('browser assets', () => {
     expect(file.split('device-inject.mjs').length).toBe(2)
   })
 
+  it('entrypoint, with DEVICE set, is ready only once the device script attached, and exits 5 when it does not in 15 s', () => {
+    const file = onDisk('entrypoint.sh')
+    // A tab opened right after ready would otherwise report this machine's own values.
+    expect(onDisk('device-inject.mjs')).toContain("'/tmp/device-ready'")
+    const block = /^ {4}if \[ -n "\$\{DEVICE:-\}" \]; then\n[\s\S]*?^ {4}fi$/m.exec(file)?.[0] ?? ''
+    expect(block).toMatch(/for _ in \$\(seq 1 75\); do \[ -e \/tmp\/device-ready \] && break; sleep 0\.2; done/)
+    expect(block).toMatch(/if \[ ! -e \/tmp\/device-ready \]; then[^\n]*exit 5; fi/)
+    const at = file.indexOf(block)
+    expect(at).toBeGreaterThan(file.indexOf('http://127.0.0.1:9222/json/version'))
+    expect(file.indexOf('touch /tmp/harness-ready')).toBeGreaterThan(at + block.length)
+  })
+
   it('browser-tools.json names exactly the eleven tools', () => {
     const { tools } = browserTools()
     expect(tools.map(tool => tool.name)).toEqual([

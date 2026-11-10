@@ -296,8 +296,8 @@ describe('Browsers', () => {
     }
   })
 
-  it('exit codes 3 and 4 go straight to failed and are not restarted', async () => {
-    for (const [code, state] of [[3, 'profile_unwritable'], [4, 'proxy_failed']] as const) {
+  it('exit codes 3, 4 and 5 go straight to failed and are not restarted', async () => {
+    for (const [code, state] of [[3, 'profile_unwritable'], [4, 'proxy_failed'], [5, 'device_failed']] as const) {
       const r = rig()
       await r.browsers.start('a1')
       r.crash('a1', code)

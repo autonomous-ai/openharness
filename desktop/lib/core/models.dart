@@ -329,6 +329,7 @@ class AgentBrowser {
     'profile_unwritable',
     'proxy_failed',
     'browser_limit',
+    'device_failed',
   };
 
   static AgentBrowser? fromJson(Object? raw) {

@@ -2,13 +2,16 @@
  * Device (Browser settings, Advanced): a standing process in the browser's container, started by entrypoint.sh when
  * `DEVICE` is set. It holds its own CDP connection and attaches to every page, frame and worker as it is created,
  * paused at start, and adds a script that reports the person's GPU, CPU cores and memory before the page's first line
- * runs. So it covers a page a person opens before the agent ever calls a tool. Ported from ai-assitant-sanbox
+ * runs. So it covers a page a person opens before the agent ever calls a tool. Once Chrome has taken the auto-attach it
+ * writes a ready file, which entrypoint.sh waits for before the browser is ready: a tab opened before that would
+ * report the machine's own values. Ported from ai-assitant-sanbox
  * `gateway-source/scripts/sandbox-browser-inject.py`.
  *
  * Node's own modules only: the image's Node (Debian's, 20) has no WebSocket client without a flag, so a minimal one for
  * CDP's text frames is here, as the prior art had its own.
  */
 import { randomBytes } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 
@@ -112,17 +115,24 @@ function webSocket(url) {
   })
 }
 
-/** Connects to the browser at `cdpBase` and keeps every new target reporting `device`; resolves with the socket. */
-export async function startDevice(cdpBase, device) {
+/** Connects to the browser at `cdpBase` and keeps every new target reporting `device`. Resolves with the socket once
+ *  Chrome took the auto-attach, and writes `readyFile` then; rejects when it refused it or did not answer. */
+export async function startDevice(cdpBase, device, readyFile) {
   const source = deviceScript(device)
   const ws = await webSocket(await debuggerUrl(cdpBase))
   let id = 0
   const send = (method, params = {}, sessionId) => ws.send(JSON.stringify({ id: ++id, method, params, ...(sessionId ? { sessionId } : {}) }))
   const auto = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }
   const attached = new Set()
+  let autoAttachId
+  let answered
+  const autoAttached = new Promise((resolve, reject) => { answered = { resolve, reject } })
   ws.onText((text) => {
-    const { method, params = {} } = JSON.parse(text)
-    if (method === 'Target.targetCreated') {
+    const { id: answerTo, error, method, params = {} } = JSON.parse(text)
+    if (answerTo !== undefined && answerTo === autoAttachId) {
+      if (error) answered.reject(new Error(`Target.setAutoAttach failed: ${error.message}`))
+      else answered.resolve()
+    } else if (method === 'Target.targetCreated') {
       // A page that existed before this started, or opened without auto-attach.
       const info = params.targetInfo ?? {}
       if (info.type === 'page' && !info.attached) send('Target.attachToTarget', { targetId: info.targetId, flatten: true })
@@ -146,12 +156,25 @@ export async function startDevice(cdpBase, device) {
     }
   })
   send('Target.setAutoAttach', auto)
+  autoAttachId = id
   send('Target.setDiscoverTargets', { discover: true })
+  let timer
+  try {
+    await Promise.race([autoAttached, new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Target.setAutoAttach was not answered')), TIMEOUT_MS)
+    })])
+  } catch (error) {
+    ws.socket.destroy()
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+  writeFileSync(readyFile, '')
   return ws.socket
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  startDevice('http://127.0.0.1:9222', JSON.parse(process.env.DEVICE)).then((socket) => {
+  startDevice('http://127.0.0.1:9222', JSON.parse(process.env.DEVICE), '/tmp/device-ready').then((socket) => {
     // Without the connection new pages would report the machine's own values; the browser closing it means it is gone.
     socket.on('close', () => {
       console.error('device: the browser closed its CDP connection')

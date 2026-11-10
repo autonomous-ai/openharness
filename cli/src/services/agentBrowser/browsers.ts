@@ -15,6 +15,7 @@ export type BrowserState = { state: 'setup' | 'starting' | 'ready' | 'failed'; s
 const FAILED_STATES = new Set([
   'needs_setup', 'podman_install_failed', 'podman_manual', 'podman_old', 'podman_memory', 'state_unreadable',
   'podman_down', 'image_failed', 'browser_stopped', 'profile_unwritable', 'proxy_failed', 'browser_limit',
+  'device_failed',
 ])
 const READY_TRIES = 60
 const READY_EVERY_MS = 1_000
@@ -24,9 +25,10 @@ const MAX_RESTARTS = 3
 const FIRST_RESTART_MS = 1_000
 // A browser up this long that exits is a person closing its window now and then, not a crash loop.
 const STEADY_MS = 10 * 60_000
-// The entrypoint's named exits (spec § The container): restarting cannot fix either.
+// The entrypoint's named exits (spec § The container): restarting cannot fix any of them.
 const EXIT_PROFILE_UNWRITABLE = 3
 const EXIT_PROXY_FAILED = 4
+const EXIT_DEVICE_FAILED = 5
 
 const STARTING: BrowserState = { state: 'starting' }
 const BUILDING: BrowserState = { state: 'setup', step: 'building' }
@@ -294,6 +296,7 @@ export class Browsers {
     if (code === null) return false
     if (code === EXIT_PROFILE_UNWRITABLE) this.fail(agentId, 'profile_unwritable')
     else if (code === EXIT_PROXY_FAILED) this.fail(agentId, 'proxy_failed')
+    else if (code === EXIT_DEVICE_FAILED) this.fail(agentId, 'device_failed')
     else this.restartLater(agentId, code)
     return true
   }

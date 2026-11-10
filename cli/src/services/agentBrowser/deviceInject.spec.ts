@@ -1,5 +1,8 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import { afterEach, describe, expect, it } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -12,8 +15,9 @@ type Message = { id: number; method: string; params: Record<string, unknown>; se
 const closers: (() => void)[] = []
 afterEach(() => { for (const close of closers.splice(0)) close() })
 
-/** A fake browser: `/json/version` names its WebSocket, which answers every command and records it. */
-async function fakeCdp() {
+/** A fake browser: `/json/version` names its WebSocket, which records every command and answers it as `answer` says:
+ *  a result, an error, or nothing until `release()`. */
+async function fakeCdp(answer: (m: Message) => 'ok' | 'error' | 'hold' = () => 'ok') {
   const http: Server = createServer((req, res) => {
     const { port } = http.address() as AddressInfo
     if (req.url !== '/json/version') return void res.writeHead(404).end()
@@ -22,13 +26,18 @@ async function fakeCdp() {
   const wss = new WebSocketServer({ server: http })
   const messages: Message[] = []
   const waiters: (() => void)[] = []
+  const held: Message[] = []
   let peer: WebSocket | undefined
+  const reply = (message: Message, answer: object) => peer!.send(JSON.stringify({ id: message.id, ...answer, ...(message.sessionId ? { sessionId: message.sessionId } : {}) }))
   wss.on('connection', (socket) => {
     peer = socket
     socket.on('message', (data) => {
       const message = JSON.parse(String(data)) as Message
       messages.push(message)
-      socket.send(JSON.stringify({ id: message.id, result: {}, ...(message.sessionId ? { sessionId: message.sessionId } : {}) }))
+      const how = answer(message)
+      if (how === 'ok') reply(message, { result: {} })
+      else if (how === 'error') reply(message, { error: { code: -32000, message: 'Not allowed' } })
+      else held.push(message)
       for (const wake of waiters.splice(0)) wake()
     })
   })
@@ -39,6 +48,7 @@ async function fakeCdp() {
     base: `http://127.0.0.1:${port}`,
     messages,
     event: (method: string, params: object) => peer!.send(JSON.stringify({ method, params })),
+    release: () => { for (const message of held.splice(0)) reply(message, { result: {} }) },
     /** Resolves once a message matches. */
     until: async (match: (m: Message) => boolean) => {
       while (!messages.some(match)) await new Promise<void>(wake => waiters.push(wake))
@@ -46,9 +56,16 @@ async function fakeCdp() {
   }
 }
 
+/** Where the script says it attached, in a folder of its own. */
+function readyFile() {
+  const dir = mkdtempSync(join(tmpdir(), 'device-inject-'))
+  closers.push(() => rmSync(dir, { recursive: true, force: true }))
+  return join(dir, 'device-ready')
+}
+
 async function started() {
   const cdp = await fakeCdp()
-  const socket = await startDevice(cdp.base, DEVICE)
+  const socket = await startDevice(cdp.base, DEVICE, readyFile())
   closers.unshift(() => socket.destroy())
   await cdp.until(m => m.method === 'Target.setDiscoverTargets')
   return cdp
@@ -62,6 +79,25 @@ describe('device script', () => {
     expect(cdp.messages[0]).toMatchObject({ method: 'Target.setAutoAttach', params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true } })
     expect(cdp.messages[0]!.sessionId).toBeUndefined()
     expect(cdp.messages[1]).toMatchObject({ method: 'Target.setDiscoverTargets', params: { discover: true } })
+  })
+
+  it('writes its ready file only once Target.setAutoAttach succeeded, so the browser is not ready before it', async () => {
+    const cdp = await fakeCdp(m => (m.method === 'Target.setAutoAttach' && !m.sessionId ? 'hold' : 'ok'))
+    const ready = readyFile()
+    const start = startDevice(cdp.base, DEVICE, ready)
+    await cdp.until(m => m.method === 'Target.setDiscoverTargets')
+    expect(existsSync(ready)).toBe(false)
+    cdp.release()
+    const socket = await start
+    closers.unshift(() => socket.destroy())
+    expect(existsSync(ready)).toBe(true)
+  })
+
+  it('a refused Target.setAutoAttach fails the start and writes no ready file', async () => {
+    const cdp = await fakeCdp(m => (m.method === 'Target.setAutoAttach' ? 'error' : 'ok'))
+    const ready = readyFile()
+    await expect(startDevice(cdp.base, DEVICE, ready)).rejects.toThrow('Target.setAutoAttach failed: Not allowed')
+    expect(existsSync(ready)).toBe(false)
   })
 
   it('a new page gets Page.addScriptToEvaluateOnNewDocument and then Runtime.runIfWaitingForDebugger', async () => {

@@ -444,8 +444,10 @@ Saving a change that needs it restarts the browser; the login stays.
   - The screen size, `TZ`, `LANG`, `--lang` and `--accept-lang` come from the agent's settings.
   - openbox runs as the window manager *(call)*, detached so its exit does not end the container. Without one, a
     sign-in popup opens undecorated at 0,0 and cannot be moved or closed by hand. PulseAudio is detached too.
-  - **Ready** means CDP answers `/json/version` and port 5900 accepts a connection. The entrypoint checks both, with
-    a bound, then writes a ready marker. When the service starts a browser it looks for the marker once a second for
+  - **Ready** means CDP answers `/json/version` and port 5900 accepts a connection, and with Device on that
+    `device-inject.mjs` has attached (it writes `/tmp/device-ready` once Chrome took `Target.setAutoAttach`; the
+    entrypoint waits at most 15 s after CDP answers). The entrypoint checks them, with a bound, then writes a ready
+    marker, so a tab opened right after ready never reports the machine's own values. When the service starts a browser it looks for the marker once a second for
     at most 60 s. After that nothing polls.
   - PID 1 traps SIGTERM and stops the browser cleanly, so `podman stop` does not kill it after 10 s and leave
     "Restore pages?" on the next start *(measured)*.
@@ -453,7 +455,8 @@ Saving a change that needs it restarts the browser; the login stays.
     already exited *(measured)*. The container exits when either
     exits, including when a person closes the browser's last window. The service then restarts it.
   - Named exit codes: 3 when the profile dir is not writable (`profile_unwritable`), 4 when the proxy cannot be
-    used at start (`proxy_failed`). These two go straight to Failed; the service does not restart the container for
+    used at start (`proxy_failed`), 5 when Device is on and the device script did not attach (`device_failed`).
+    These go straight to Failed; the service does not restart the container for
     them. The prior art falls back to a throwaway profile, which would silently lose the login.
 - **Names and labels** *(call)*: one container per agent, named `harness-browser-<agentId>`, with the labels
   `harness.agent=<agentId>`, `harness.daemon=<this daemon's data-dir id>` and `harness.settings=<settings hash>`. A
@@ -909,6 +912,7 @@ except the two the form shows before an agent exists.
 | Profile volume not writable | `profile_unwritable` | "Browser can't save its login" + Retry |
 | Proxy unreachable, or its login refused, when the browser starts | `proxy_failed` | "Proxy is not reachable" + Retry |
 | Over the daemon's browser limit | `browser_limit` | "Too many browsers on this machine" + Retry (after another one stops) |
+| Device is on and the device script did not attach within 15 s | `device_failed` | "Device settings didn't apply" + Retry |
 
 The panel also has three states of its own, which are not in the agent frame:
 

@@ -219,10 +219,15 @@ void main() {
       'profile_unwritable': 'Browser can\'t save its login',
       'proxy_failed': 'Proxy is not reachable',
       'browser_limit': 'Too many browsers on this machine',
+      'device_failed': 'Device settings didn\'t apply',
     };
     for (final MapEntry(key: error, value: line) in copy.entries) {
       app.asked.clear();
-      await show(tester, AgentBrowser(state: 'failed', error: error));
+      // Read as the agent frame carries it, so a state the model drops shows up here as "Browser stopped".
+      await show(
+        tester,
+        AgentBrowser.fromJson({'state': 'failed', 'error': error})!,
+      );
       expect(find.text(line), findsOneWidget, reason: error);
       if (error == 'state_unreadable') {
         expect(find.text('Retry'), findsNothing);

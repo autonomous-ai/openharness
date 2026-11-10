@@ -51,6 +51,7 @@ const _failed = {
   'profile_unwritable': 'Browser can\'t save its login',
   'proxy_failed': 'Proxy is not reachable',
   'browser_limit': 'Too many browsers on this machine',
+  'device_failed': 'Device settings didn\'t apply',
 };
 
 /// The setup steps, in order, and the line each one has.

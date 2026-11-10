@@ -219,7 +219,8 @@ export const PRODUCT_USAGE_ACTION_MEASURES = ['requests', 'ok', 'failed', 'pendi
   'under_1s', '1s_to_10s', '10s_to_1m', 'over_1m'] as const
 /** The agent browser's failed states (cli/src/services/agentBrowser/browsers.ts) and its stream's close reasons. */
 export const AGENT_BROWSER_FAILED_STATES = ['needs_setup', 'podman_install_failed', 'podman_manual', 'podman_old', 'podman_memory',
-  'state_unreadable', 'podman_down', 'image_failed', 'browser_stopped', 'profile_unwritable', 'proxy_failed', 'browser_limit'] as const
+  'state_unreadable', 'podman_down', 'image_failed', 'browser_stopped', 'profile_unwritable', 'proxy_failed', 'browser_limit',
+  'device_failed'] as const
 export const AGENT_BROWSER_CLOSE_REASONS = ['closed', 'agent', 'rate', 'backlog', 'route'] as const
 /** The agent browser's outcomes, each a counter of its own (`browser_open` already counts a pane opening an address):
  * from the daemon's service and core, and `agent_browser_opened` from the Desktop. Never an id, URL, host or reason. */
