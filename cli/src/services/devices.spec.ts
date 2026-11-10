@@ -138,16 +138,6 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** The account's machines as the backend lists them while team sign-ins last: one signed in for team work (`team-mac`) and a
- *  computer of the person's own (`mac-mini`). */
-const teamAccount = (core: CoreApi) => {
-  vi.mocked(core.account.machines).mockResolvedValue({ status: 200, body: { success: true, data: { machines: [
-    { machineId: 'team-mac', name: 'Diego’s Mac', sessionKind: 'team' },
-    { machineId: 'mac-mini', name: 'Mac mini', sessionKind: 'computer' },
-  ] } } })
-  return seen.fleet!.deps.machines.refresh()
-}
-
 function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
@@ -415,19 +405,6 @@ describe('what the windows say, reaching the dial', () => {
       port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'summary', text: 'done', recap: 'Built.' } })
       await vi.waitFor(() => expect(calls('summary')).toEqual([['a1', 'Built.', 'done', 'silent', undefined, false]]))
       expect(logs).toContainEqual(expect.stringMatching(/silent · rule:swarm · swarm/))
-    })
-
-    // Team machines went (backend 1.4.52): no Swarm work runs on one, so its card is decided as any other machine's.
-    it('follows the tier a machine signed in for team work decided, as any other machine\'s', async () => {
-      const core = fakeCore({ dataDir })
-      const { port } = start({ core, decideTier: null })
-      await teamAccount(core)
-      const card = (event: FleetEvent) => seen.fleet!.events!(event)
-      card({ machineId: 'team-mac', kind: 'summary', agentId: 'reviewer', text: 'done', recap: 'Reviewed.', tier: 'alert' })
-      card({ machineId: 'mac-mini', kind: 'summary', agentId: 'far', text: 'done', recap: 'Done far.', tier: 'list' })
-      await vi.waitFor(() => expect(calls('summary')).toHaveLength(2))
-      expect(new Map(calls('summary').map((c) => [c[0], c[3]]))).toEqual(new Map([['reviewer', 'alert'], ['far', 'list']]))
-      void port
     })
 
     it('follows the tier another of the person\'s machines decided: a Swarm agent there is silent on this dial', async () => {
