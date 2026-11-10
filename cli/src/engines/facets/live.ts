@@ -8,6 +8,9 @@ export interface LiveTurn {
   readonly identity: string
   readonly turnOpen: boolean
   readonly continued: boolean
+  /** When the engine wrote the record that opened this turn (its own timestamp), epoch ms: a Stop hook it ran
+   *  before then is about an earlier turn (kit/stopHook.ts). Absent when the record or the engine does not say. */
+  readonly openedAt?: number
 }
 
 export interface LiveRead {

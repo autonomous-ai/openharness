@@ -26,6 +26,11 @@ describe('agentFrame', () => {
     expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
       .toMatchObject({ sessionId: 's1', status: 'active', identityHold: row.identityHold })
   })
+  // Null is a real answer: a push without the key would leave a window showing a wait that ended.
+  it('says what a message to it waits for, read as the frame is built, and null when nothing', async () => {
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true })).waitingFor).toBeNull()
+    expect((await agentFrame(session(null), { selectedModel: null, terminalAvailable: true, waitingFor: () => 'engine' })).waitingFor).toBe('engine')
+  })
   it('says its name was not chosen by a person when nobody renamed it, whatever its session title says', async () => {
     const row = { ...session(null), title: 'cd /Users/macbookpro/projects/lamp' }
     const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })

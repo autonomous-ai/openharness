@@ -78,6 +78,7 @@ export interface LivePage {
 export function liveTurn(value: unknown): value is LiveTurn {
   return record(value) && typeof value.identity === 'string' && value.identity.length <= 512
     && typeof value.turnOpen === 'boolean' && typeof value.continued === 'boolean'
+    && (value.openedAt === undefined || Number.isSafeInteger(value.openedAt))
 }
 export function liveStamp(value: unknown): value is LiveStamp | null {
   return value === null || (record(value) && Number.isSafeInteger(value.device) && Number.isSafeInteger(value.inode)
