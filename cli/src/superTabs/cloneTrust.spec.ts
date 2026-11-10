@@ -130,7 +130,8 @@ describe('consented Swarm clones', () => {
     expect(folderTrust('codex', profile)!.trusts(tree)).toBe(true)
     machine.stop()
   })
-  it('leaves Team-written work\'s own Codex home trusting no project, whatever the sweep repairs (audit H2)', async () => {
+  // Backend #3872: no agent is Team-written now; a local Codex agent's own home is repaired whatever mode it saved.
+  it('repairs a local Codex agent\'s own home whatever permission mode it saved', async () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project'))
     const tree = join(home, 'harnesses', 'worktrees', 'project', 'worker')
     git(source, 'worktree', 'add', '-q', '-b', 'super-tab/written', tree)
@@ -141,8 +142,8 @@ describe('consented Swarm clones', () => {
     const machine = new ContributedMachines(f.core, f.core.daemon.machineId(), { backend: takesAll(f.row),
       open: async () => ({ request: async () => ({}), close: vi.fn() }), capabilities: f.deps.capacity, start: vi.fn(), now: () => 1 } as never)
     await machine.tick()
-    expect(folderTrust('codex', profile)!.trusts(source)).toBe(false)
-    expect(folderTrust('codex', profile)!.trusts(tree)).toBe(false)
+    expect(folderTrust('codex', profile)!.trusts(source)).toBe(true)
+    expect(folderTrust('codex', profile)!.trusts(tree)).toBe(true)
     machine.stop()
   })
   it('does not follow a Swarm root symlink into the owner repository', async () => {
@@ -228,12 +229,12 @@ describe('consented Swarm clones', () => {
     expect(claudeWrites()).toBe(before)
     machine.stop()
   })
-  it('does not write a Team-written agent\'s own Codex home when a start names it (audit H2)', async () => {
+  it('writes a local Codex agent\'s own home when a start names it, whatever permission mode it saved', async () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project')), profile = join(home, 'written-selected')
     mkdirSync(profile); writeFileSync(join(profile, 'config.toml'), '')
     vi.mocked(f.core.agents.all).mockReturnValue([{ agentId: 'written', engine: 'codex', codexHome: profile, permissionMode: 'teamWritten' }] as never)
     await prepareSwarmProject(f.core, f.row, { request: { conversationId: 'work', cwd: source, codexHome: profile }, dispatched: false }, async () => source)
-    expect(folderTrust('codex', profile)!.trusts(source)).toBe(false)
+    expect(folderTrust('codex', profile)!.trusts(source)).toBe(true)
   })
   it('does not write a backend-selected Codex home that no local agent uses', async () => {
     const f = fixture(true), source = clone(join(f.oldRoot, 'project')), home = join(process.env.HOME!, '.cargo')
