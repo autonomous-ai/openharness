@@ -8,7 +8,7 @@ import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { pmAcceptsMessage, legacyProposalId, type LegacyProposalAsk } from './proposalCards.js'
 import { defaultBuddy } from './buddies.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
-import { isRetiredCommand, retiredAnswer } from './retired.js'
+import { isRetiredCommand, opensRetiredStep, REFUSED_TO_PEOPLE, RETIRED_STEP, retiredAnswer } from './retired.js'
 import { metrics } from '../lib/metrics.js'
 import { writeReplyActivity } from './activity.js'
 import type { ReactionTarget } from './reactions.js'
@@ -1437,9 +1437,13 @@ export class SuperTabStore {
     // A command v4 no longer has is ignored before anything is read, written or checked: the answer is one constant, as
     // `updateRequired`'s is, and names nothing of the Swarm (retired.ts). It is counted by type and kind of client, which says
     // when the last older client has stopped sending it.
-    // A person's reaction is gone too (reactions.ts), though an agent's still acknowledges: ignored the same way.
-    if (isRetiredCommand(input.command?.type) || (input.command?.type === 'message.react' && !asAgentId)) {
-      metrics.retiredCommand(input.command.type, client?.kind ?? 'other')
+    // A person's reaction is gone too (reactions.ts), though an agent's still acknowledges: ignored the same way. So is a step an
+    // older agent opens (retired.ts opensRetiredStep), counted under a type of its own.
+    const type = opensRetiredStep(input.command) ? RETIRED_STEP : input.command?.type
+    if (isRetiredCommand(type) || type === RETIRED_STEP || (type === 'message.react' && !asAgentId)) {
+      metrics.retiredCommand(type, client?.kind ?? 'other')
+      const refused = isRetiredCommand(type) && !asAgentId ? REFUSED_TO_PEOPLE[type] : undefined
+      if (refused) fail(refused.code, refused.message, refused.status)
       return retiredAnswer()
     }
     try {
@@ -1913,15 +1917,25 @@ export class SuperTabStore {
         // A task cancelled with no assignment archives (commands.ts work.cancel).
         || command.type === 'work.cancel' && !original.conversations.find(c => c.id === command.conversationId)?.archived
           && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
-      // One plain match on the conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
+      // A task's finished steps from before Swarm v4 archive with it (steps.ts endSteps): their deliveries end too (final review,
+      // finding 2).
+      const archivedSteps = unreadable && command.type !== 'conversation.agent' ? effects.state.conversations.filter(c => c.reviewOf === command.conversationId
+        && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
+      // One plain match per conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
       if (unreadable) {
-        const conversationId = command.conversationId
+        const conversationIds = [command.conversationId, ...archivedSteps]
         await this.endDeliveries(tx, tabId, {
           ...(command.type === 'conversation.agent' ? { where: { agentId: command.agentId } } : {}),
-          matches: row => row.conversationId === conversationId,
-        }, () => tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] },
-          ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
-          data: { status: 'cancelled', holdReason: null, holdSince: null } }))
+          matches: row => conversationIds.includes(row.conversationId),
+        }, async () => {
+          let count = 0
+          for (const conversationId of conversationIds) {
+            count += (await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] },
+              ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
+              data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
+          }
+          return { count }
+        })
       }
       const removedGroups = original.conversations.filter(c => !effects.state.conversations.some(n => n.id === c.id))
       if (removedGroups.length) {

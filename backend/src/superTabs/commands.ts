@@ -25,7 +25,7 @@ import {
   type Actor, type AgentConfiguration, type AgentStart, type AgentStartRequest, type BuddySessionEntry, type WorkTask, type Agent, type Author, type Check, type CommandEffects, type Conversation, type Person, type SuperTabState,
 } from './model.js'
 import { jobKindOf } from './evidence/jobKind.js'
-import { isStep } from './steps.js'
+import { endSteps, isStep, stepEndedRows } from './steps.js'
 import { noteWriter } from './stuck.js'
 import { routeRecordSchema, routeTitle, startedAs, type KeptCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSaveSchema } from './routingPolicy.js'
@@ -302,7 +302,7 @@ export const commandSchema = z.discriminatedUnion('type', [
     priority: z.enum(TASK_PRIORITIES).optional(),
     // Work no person asked for (a flaky test seen twice, an alarm) names nobody; this says why, in a few words (taskContract.ts).
     noRequesterReason: z.string().trim().min(1).max(200).optional(),
-    // A step of the task `reviewOf` names, as an older CLI sends it: answered as retired (case 'conversation.create').
+    // A step of the task `reviewOf` names, as an older CLI sends it: the store answers it as retired (retired.ts opensRetiredStep).
     step: z.string().min(1).max(40).optional(), checks: z.array(check).max(40),
     audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
     // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
@@ -1320,6 +1320,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const SYSTEM_ROW = { kind: 'system' }
   /** A cancel, with its status as a status row has it, so a task's timeline shows it closed. */
   const CANCEL_ROW = { ...SYSTEM_ROW, status: 'cancelled' }
+  /** A task ended: its open steps from before Swarm v4 are cancelled and their agents told why, in each step (task steps design);
+   *  with [archive], its finished steps archive with it. */
+  const endStepsOf = (task: Conversation, reason: string, archive: boolean) => {
+    // A row of its own in each step, as the command's own row may be in the task: one id per row.
+    effects.messages.push(...stepEndedRows(state, endSteps(state, task, reason, archive), reason, sender, step => stableId(operationId, 'step-ended', step.id)))
+  }
   /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat, which carries only what
    *  people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
   const bookkeeping = (conversationId: string, source: Record<string, unknown>) =>
@@ -2753,12 +2759,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       ignored()
       break
     case 'conversation.create': {
-      // A step or a linked task (`reviewOf`) is gone with Swarm v4 (2026-11-10): an older CLI's agent is told nothing was done.
-      // Delete reviewOf and step from its schema with the retired commands (retired.ts), not before 2026-12-09.
-      if (command.reviewOf || command.step) {
-        Object.assign(result, retiredAnswer().result)
-        break
-      }
       const written = command.task ? renderWorkTask(command.task) : command.brief ?? ''
       const project = readProject(state, actor, command.projectId ??
         (actor.kind === 'agent' ? agentProjectId(state, agent(state, actor.agentId)) : 'lead'))
@@ -2974,6 +2974,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       const tags = command.archived && !group.archived ? cancelledTags(state, group, actor) : []
       if (tags.length) message(group.id, `Archived without shipping: the task was cancelled${cancelReason(group) ? ` (${cancelReason(group)})` : ''}.`, [], null, SYSTEM_ROW, undefined, tags)
       group.archived = command.archived
+      if (command.archived) endStepsOf(group, `${group.title} was archived.`, true)
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive). No report is waited for: the server writes
       // the status card (task #3593).
       if (command.archived) group.dormant = true
@@ -4722,6 +4723,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         if (goesOn.length) group.foldedInto = goesOn
         // Its line is a report the coordinator acknowledges first, so the sweep puts it to sleep later (sweeps.ts), as for any archive.
         group.archived = true
+        endStepsOf(group, `${group.title} was archived.`, true)
         break
       }
       if (!assignment || assignment.id !== command.assignmentId) fail('STALE_ASSIGNMENT', 'This is no longer the active assignment.')
@@ -4743,6 +4745,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       assignment.result = command.reason
       if (goesOn.length) group.foldedInto = goesOn
       if (!lost && !stopped) finishWorker(state, assignment.agentId)
+      // Its steps' work ends with it; finished ones stay until it archives (task steps design; final review, finding 2).
+      endStepsOf(group, `${group.title} was cancelled.`, false)
       message(group.id, `${who} cancelled this task: ${command.reason.replace(/[.\s]+$/, '')}.${gone ? '' : ' Stop working on it.'}`,
         // Telling its agent to stop is the agent's alone; people read the cancel and its reason on the task itself.
         gone ? [] : [assignment.agentId], null, gone ? CANCEL_ROW : forRecipients(CANCEL_ROW))
@@ -4779,10 +4783,9 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     : 'startId' in command ? state.starts?.find(s => s.id === command.startId)?.request.conversationId : undefined
   const task = typeof touched === 'string' ? state.conversations.find(c => c.id === touched) : undefined
   if (task) recordTaskState(state, task, context.now)
-  // A retired conversation.create (a step) opens nothing, so it has nothing to compare.
-  const opened = command.type === 'conversation.create' ? result.conversationId as string | undefined
-    : command.type === 'work.define' || command.type === 'work.assign' ? command.conversationId : undefined
-  if (opened) alertOverlaps(conversation(state, opened))
+  if (command.type === 'conversation.create' || command.type === 'work.define' || command.type === 'work.assign') {
+    alertOverlaps(conversation(state, command.type === 'conversation.create' ? result.conversationId as string : command.conversationId))
+  }
   for (const target of original.agents.filter(a => a.workDecision === 'stop')) {
     const acknowledged = command.type === 'swarm.delete' || command.type === 'agent.remove' && command.agentId === target.id &&
       (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))

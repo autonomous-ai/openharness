@@ -58,14 +58,23 @@ export const envelope = <T>(part: Pick<Part, 'key' | 'version' | 'changedAt'>, d
 /** A group as readers get it: its message counter, a dormant flag only when dormant, never the store's bookkeeping or the
  *  leaderboard's (the leaderboard read sums it), except when it shipped. The `releasing` list of the release watch Swarm v4
  *  removed is still stored on old tasks and never sent: nothing would ever clear it, so an older app would show them waiting. */
+/** What a group stored before Swarm v4 that nothing writes now (2026-11-10): its pull requests' heads, events and check states as
+ *  the PR watch read them, and its steps' listings. Left stored and never sent, so no reader shows a state frozen at the release. */
+type Unwritten = { releasing?: unknown; pullRequestHeads?: unknown; pullRequestEvents?: unknown; pullRequestChecks?: unknown; stepIds?: unknown
+  waitingLinuxStep?: unknown; waitingWindowsStep?: unknown; openedBy?: unknown }
+
 export function groupView(group: Conversation, seenMachines: ReadonlySet<string>): GroupView {
-  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, releasing: _releasing, dormant, audience, ...rest }: Conversation & { releasing?: unknown } = withSeenRequirement(group, seenMachines)
+  const { messageSeq, reportSeq: _report, lastActivityAt: _activity, ledger, proposals: _proposals, owed: _owed, answered: _answered, chatLimits: _chatLimits, talkedAt: _talkedAt, pulse: _pulse, statusLine: _statusLine, releasing: _releasing,
+    pullRequestHeads: _heads, pullRequestEvents: _events, pullRequestChecks: _checks, stepIds: _steps, waitingLinuxStep: _linux, waitingWindowsStep: _windows, openedBy: _opened,
+    dormant, audience, ...rest }: Conversation & Unwritten = withSeenRequirement(group, seenMachines)
   // A Buddy chat names its owner instead of an audience: an app from before Buddies takes a private chat of the reader
   // alone for their Chat with PM, and would send what they write for the PM to their Buddy instead (buddies.ts).
   const readers = isBuddyChat(group) ? { buddyOwnerId: audience!.people[0]!.id } : audience ? { audience } : {}
   const shippedAt = ledger?.shippedAt
   const held = heldView(group)
-  const view: GroupView = { ...rest, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
+  // A check's verdicts, from before Swarm v4, which records none: its stored evidence and who passed it say what a reader shows.
+  const checks = rest.checks.map(({ verdicts: _verdicts, ...check }: Conversation['checks'][number] & { verdicts?: unknown }) => check)
+  const view: GroupView = { ...rest, checks, messageSeq: messageSeq ?? 0, ...(dormant ? { dormant: true as const } : {}), ...(shippedAt === undefined ? {} : { shippedAt }),
     ...(held ? { held } : {}), ...readers }
   // A task's hand-out lane (dispatch.ts stampLane) is stored with it; only a task stored before that is worked out here.
   if (group.handOutLane === undefined && group.task && !group.reviewOf && !group.kind && !audience) view.handOutLane = laneOf(group, DISPATCH_RULES.lanes)
