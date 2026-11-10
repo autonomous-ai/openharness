@@ -1304,8 +1304,9 @@ export interface SwarmLaunch {
   args(engine: string): string[]
 }
 
-/** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
- *  to launch, or null when the launch is no longer this one's. Absent while the Swarm is off. */
+/** Give an agent its person attached (Desktop's Attach, started outside the Swarm) its Swarm role at its first restart or
+ *  resume (superTabs/inCore/adoption.ts): the row to launch, or null when the launch is no longer this one's. Absent while
+ *  the Swarm is off. */
 export type AdoptSwarmSkill = ((session: RegisteredSession, current: () => boolean) => Promise<RegisteredSession | null>) & {
   /** One role read, for a relaunch that cannot wait (boot restore, a model switch, a host move): the row to launch with
    *  its role, written to the registry only by `commit`; `unavailable` when the role could not be read, which the caller
