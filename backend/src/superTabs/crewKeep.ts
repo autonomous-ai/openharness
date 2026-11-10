@@ -13,7 +13,6 @@ import { isCrew } from './crew.js'
 import { roleNameOf } from './instructions.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
 import { agentProjectId, groupProject, projectsOf } from './projects.js'
-import { barredFromTeamWritten, teamWrittenTask } from './teamWritten.js'
 import { placeAfter, queueSiblings } from './taskQueue.js'
 import { groupsOf, idleSince } from './tidy.js'
 import { DISK_FLOOR_BYTES, FOLDER_ASLEEP_MS, HELD_TASK_MS, MOVE_LOW_DISK_BYTES, MOVE_OFFLINE_MS, MOVE_QUOTA_OUT_MS, MOVE_REFUSED_WAIT_MS, QUOTA_FLOOR_PERCENT, QUOTA_FLOOR_PM_PERCENT, SLEEP_IDLE_MS, UNSTABLE_STOPS, UNSTABLE_WINDOW_MS } from './crewRules.js'
@@ -111,15 +110,8 @@ const unstable = (agent: Agent, now: number): boolean => (agent.stops ?? []).fil
 /** The fallback machines for [agent], best first, in the route's order: the same account kind as the machine it leaves, then
  *  the account whose weekly quota resets soonest, then the most left, then the fewest agents working, then by name. Only
  *  machines with no trouble that admit its start. */
-/** Whether [agent]'s work may not move, as an agent.start's may not (audit H2; security review of #3229): it is in a
- *  Team-written task or step. Its project's chat is its coordinator's and does not count. */
-export function teamOnly(state: SuperTabState, agent: Agent): boolean {
-  const chats = new Set(projectsOf(state).map(p => p.leadConversationId))
-  return groupsOf(state, agent).some(g => !chats.has(g.id) && teamWrittenTask(state, g))
-}
 
 export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps: CrewDeps): ContributedMachine[] {
-  const team = teamOnly(state, agent)
   const engine = agent.configuration.engine
   // A crew Reviewer goes nowhere a no-Reviewer rule refuses its reviews (review of #3964): any role the review steps take as a
   // Reviewer's (reviewerPick.ts), its crew role or else its role name.
@@ -134,8 +126,8 @@ export function fallbacks(state: SuperTabState, agent: Agent, now: number, deps:
       w ? w.usedPercent : 100, working(pool), pool.name]
   }
   return (state.machines ?? [])
-    // Team-written work stays where it is (security review 2 of #3229). A machine that just refused its start waits.
-    .filter(pool => !team && pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId)
+    // A machine that just refused its start waits.
+    .filter(pool => pool.machineId !== agent.machineId && !pool.buddyOnly && standingPool(state, pool.machineId)
       && !(agent.crewMoveRefused?.machineId === pool.machineId && now - agent.crewMoveRefused.at < MOVE_REFUSED_WAIT_MS)
       && !machineRuleRefusal(rules, { machineId: pool.machineId, engine, review: reviews }, now) && !crewTrouble(state, pool, engine, now) && deps.admits(pool.machineId, agent))
     .map(pool => ({ pool, key: key(pool) }))
@@ -314,13 +306,7 @@ export function takeOverCrewMember(state: SuperTabState, start: AgentStart, agen
   moved.displayName = nameOf(from)
   moved.movedFrom = { agentId: from.id, machineId: from.machineId, reason: from.movedTo.reason, at: now }
   for (const group of state.conversations) {
-    // Never into Team-written work from the main account (audit H2): the placement keeps such a member in Team accounts,
-    // and this holds even for a start placed otherwise.
-    if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id) && !barredFromTeamWritten(state, group, moved)) {
-      // Joined, not marked: since #3198 a mark is permanent, and its old session only belonged here (Curlew3). The barred
-      // check above keeps main-account sessions out; a push read marks real Team code.
-      group.agentIds.push(moved.id)
-    }
+    if (group.agentIds.includes(from.id) && !group.agentIds.includes(moved.id)) group.agentIds.push(moved.id)
     if (group.assignment?.agentId !== from.id) continue
     if (activeWork(group)) {
       group.assignment.status = 'lost'

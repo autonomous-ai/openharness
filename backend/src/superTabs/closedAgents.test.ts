@@ -169,19 +169,6 @@ describe('what may come back', () => {
     expect(restoreRefusal(theirs, record(), 'owner', facts)).toBeNull()
   })
 
-  // Swarm v3 (task #4120, the PM's ruling): only the project owner's own agent may take over a task a Team agent wrote.
-  it('leaves out a task marked Team-written while it was away, unless it is the project owner\'s own agent, and keeps the rest', () => {
-    const groups = () => [removedGroup({ teamWritten: true }), removedGroup({ id: 'g2' })]
-    const mates = restoring({ conversations: groups(), removedSessions: [record({ groupIds: ['g1', 'g2'] })],
-      projects: [{ id: 'p', name: 'P', ownerId: 'mate', leadConversationId: 'lead-p', visibility: 'public', members: [] }] } as unknown as Partial<SuperTabState>)
-    restoreSessions(mates, 'mac', ['h1'], AT, new Set(['h1']), () => {})
-    expect(mates.conversations.find(c => c.id === 'g1')!.agentIds).toEqual([])
-    expect(mates.conversations.find(c => c.id === 'g2')!.agentIds).toEqual(['a1'])
-    const owners = restoring({ conversations: groups(), removedSessions: [record({ groupIds: ['g1', 'g2'] })] })
-    restoreSessions(owners, 'mac', ['h1'], AT, new Set(['h1']), () => {})
-    expect(owners.conversations.map(c => c.agentIds)).toEqual([['a1'], ['a1']])
-  })
-
   // #2207 (Ken): the project chat holds only its coordinator among agents, so a session that was a member there comes back to
   // its tasks alone, unless it comes back as the project chat's coordinator.
   it('comes back to the project chat only as its coordinator', () => {

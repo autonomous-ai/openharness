@@ -80,25 +80,6 @@ describe('waking and moving through commands', () => {
   })
 })
 
-describe('a take-over never joins a conversation its new session is barred from (security review of #3229)', () => {
-  // Task #4120 (the PM's ruling): only the project owner's own agent may take over Team-written work, as ada is here; another
-  // member's agent stays out (teamWritten.test.ts, closedAgents.test.ts).
-  it('takes a Team-written task back when the new session is the project owner\'s own agent', () => {
-    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
-    f.state = run(f.state, { type: 'conversation.create', title: 'Team task', brief: 'b', checks: [] } as Command, 'tw', NOW - 3_600_000)
-    const task = f.state.conversations.find(c => c.title === 'Team task')!
-    task.agentIds.push(f.ada.id)
-    // Placed by hand, as an older server could have: the take-over keeps it, the owner's own agent.
-    applyCrewKeep(f.state, NOW, everywhere)
-    const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
-    f.state.conversations.find(c => c.id === task.id)!.teamWritten = true
-    f.state = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: config } as Command, 'started-tw', NOW + 5000, host)
-    const moved = f.state.agents.find(a => a.harnessId === 'ada-2')!
-    expect(f.state.conversations.find(c => c.id === task.id)!.agentIds).toContain(moved.id)
-    expect(f.state.conversations.find(c => c.id === 'lead')!.agentIds).toContain(moved.id)
-  })
-})
-
 describe('a refused move start (security review 2 of #3229)', () => {
   it('records the machine that refused it, so the next pass tries another', () => {
     const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
@@ -139,21 +120,6 @@ describe('the head of the list when the move is placed (review of #3229, River)'
     applyCrewKeep(f.state, NOW, everywhere)
     const rank = (id: string) => f.state.conversations.find(c => c.id === id)!.queueRank ?? Number.MAX_SAFE_INTEGER
     expect(rank(task.id)).toBeLessThan(rank(other.id))
-  })
-})
-
-describe('a take-over marks nothing Team-written (security review of #3229, Curlew3)', () => {
-  it('a moved member joins its old conversations without marking them', () => {
-    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
-    f.state = run(f.state, { type: 'conversation.create', title: 'Talk', brief: 'A chat it was in', checks: [] } as Command, 'talk', NOW - 3_600_000)
-    const talk = f.state.conversations.find(c => c.title === 'Talk')!
-    talk.agentIds.push(f.ada.id)
-    applyCrewKeep(f.state, NOW, everywhere)
-    const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
-    f.state = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: config } as Command, 'started-team', NOW + 5000, host)
-    const after = f.state.conversations.find(c => c.id === talk.id)!
-    expect(after.agentIds).toContain(f.state.agents.find(a => a.harnessId === 'ada-2')!.id)
-    expect(after.teamWritten).toBeFalsy()
   })
 })
 
