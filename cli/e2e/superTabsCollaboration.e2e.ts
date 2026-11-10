@@ -81,6 +81,8 @@ it('coordinates an owner-contributed agent while keeping guest machine access se
       if (method === 'GET') return { data: delivery[2] ? value : value && value.status !== 'delivered' ? [value] : [] }
       expect(body.claimId).toBe(value!.claimId ?? body.claimId)
       if (body.type === 'claim') { value!.claimId = body.claimId; return { data: { message: value!.message } } }
+      // The notice a delivery held 30 s posts (host.ts reportWithheld) is no acknowledgement.
+      if (body.type === 'hold') return { data: {} }
       value!.status = body.uncertain ? 'uncertain' : 'delivered'
       return { data: {} }
     }

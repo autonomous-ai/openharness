@@ -1536,7 +1536,9 @@ export class SuperTabHost {
     const answers = fromPerson && object(message.source).kind !== 'agent-only'
       && !!object(message.author).id && (await this.core.account.identity().catch(() => null))?.accountId === String(object(message.author).id)
     const writtenAt = typeof message.createdAt === 'string' ? Date.parse(message.createdAt) : NaN
-    this.core.turns.deliver(entry.harnessId, text, id, ...(answers ? [{ answersQuestion: true as const, ...(Number.isFinite(writtenAt) ? { writtenAt } : {}) }] : []))
+    // Their own words in their agent's own chat are their input, which the short-turn guard never holds (core/input.ts readTeamHold).
+    this.core.turns.deliver(entry.harnessId, text, id, ...(answers ? [{ answersQuestion: true as const, ...(Number.isFinite(writtenAt) ? { writtenAt } : {}),
+      ...(plain ? { personsOwn: true as const } : {}) }] : []))
     return false
   }
 
