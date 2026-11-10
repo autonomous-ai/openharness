@@ -1,9 +1,9 @@
 /**
- * A person's Activity in one Swarm (Desktop's Activity view, as Slack's): replies to their messages and reactions to them.
+ * A person's Activity in one Swarm (Desktop's Activity view, as Slack's): replies to their messages.
  * Tags and decisions have their own rows (mentions.ts, decisions.ts); Desktop merges the three.
  *
  * A row is written when it happens, in the command's own transaction (store.ts): a thread reply, for everyone in its thread but
- * its author (writeReplyActivity), and a reaction to a person's message by anyone else. Removing the reaction removes its row. Rows live in
+ * its author (writeReplyActivity). Reactions are gone (reactions.ts): the rows they left are listed to nobody and expire with the rest. Rows live in
  * SuperTabActivity, never in the tab state, so writing one wakes no other reader and an older backend reads and writes a tab
  * that has them.
  *
@@ -37,7 +37,7 @@ export const ACTIVITY_DIGEST_ROWS = 200
 export const ACTIVITY_SWEEP = 20_000
 const SWEEP_BATCH = 1_000
 
-export type ActivityKind = 'reply' | 'reaction'
+export type ActivityKind = 'reply'
 /** Mongo omits unset fields, so `readAt: null` alone would miss a row written without it. */
 const unread: Prisma.SuperTabActivityWhereInput = { OR: [{ readAt: null }, { readAt: { isSet: false } }] }
 const own = (author: { kind?: string; id?: string } | undefined, personId: string) => author?.kind === 'person' && author.id === personId
@@ -163,27 +163,13 @@ async function rangThreads(tx: Tx, tabId: string, rows: Array<{ personId: string
   return new Set(rang.map(threadKey))
 }
 
-/** The row of the reaction `reactionId`, for the person who wrote the message, unless they reacted themselves: written when the
- *  reaction is added, removed when it is. */
-export async function writeReactionActivity(tx: Tx, write: { tabId: string; reactionId: string; conversationId: string; messageId: string
-  actor: { kind: 'person' | 'agent'; id: string }; emoji: string; on: boolean; now: number }): Promise<void> {
-  const id = stableId(write.tabId, 'reaction', write.reactionId)
-  if (!write.on) return void await tx.superTabActivity.deleteMany({ where: { id } })
-  const message = await tx.superTabMessage.findFirst({ where: { id: write.messageId, tabId: write.tabId }, select: { author: true, thread: true } })
-  const by = message?.author as { kind?: string; id?: string } | undefined
-  if (by?.kind !== 'person' || !by.id || (write.actor.kind === 'person' && write.actor.id === by.id)) return
-  await tx.superTabActivity.upsert({ where: { id }, update: {}, create: { id, tabId: write.tabId, personId: by.id, kind: 'reaction',
-    conversationId: write.conversationId, messageId: write.messageId, threadId: message?.thread ?? null, actorKind: write.actor.kind,
-    actorId: write.actor.id, emoji: write.emoji, createdAt: new Date(write.now), readAt: null } })
-}
-
 /** A digest of which of the person's rows are unread, moving when one is written, read or removed: a client reads its list
  *  again when it moves, never on a timer. It carries no count and no chat: only that something changed. */
 export async function activityDigest(tx: Tx, tabId: string, personId: string, now: number): Promise<string> {
   // A plain `$match` through the unread index: `readAt: null` matches a row with no readAt too. Prisma's read sent an `$expr`
   // the index could bound only by person, and examined every row of theirs of 30 days (task #3146).
   const rows = await readBy(tx, 'SuperTabActivity', 'unread', [
-    { $match: { tabId, personId, readAt: null, createdAt: { $gt: { $date: new Date(now - ACTIVITY_EXPIRY_MS).toISOString() } } } },
+    { $match: { tabId, personId, readAt: null, kind: 'reply', createdAt: { $gt: { $date: new Date(now - ACTIVITY_EXPIRY_MS).toISOString() } } } },
     { $sort: { createdAt: -1 } }, { $limit: ACTIVITY_DIGEST_ROWS }, { $project: { _id: 1 } }])
   return createHash('sha256').update(rows.map(r => r._id as string).sort().join('\n')).digest('base64url').slice(0, 16)
 }
@@ -194,7 +180,7 @@ export interface ActivityItem {
   conversationId: string
   conversationTitle: string
   projectName: string
-  /** The reply, or the message reacted to. */
+  /** The reply. */
   messageId: string
   /** Where the message is in its chat. */
   messageSequence: number
@@ -202,7 +188,7 @@ export interface ActivityItem {
   threadId: string | null
   actor: { kind: 'person' | 'agent'; id: string; name: string }
   emoji: string | null
-  /** The reply's text, or the reacted message's, cut by the database. */
+  /** The reply's text, cut by the database. */
   text: string
   createdAt: string
   read: boolean
@@ -213,23 +199,21 @@ export interface ActivityItem {
 /** The person's own unexpired rows, newest first, those they can read now (see the file's comment). */
 export async function listActivity(db: PrismaClient, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number):
   Promise<{ items: ActivityItem[]; more: boolean }> {
-  const rows = await db.superTabActivity.findMany({ where: { tabId, personId: actor.userId, createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) } },
+  // Replies only: a reaction's row, the last written 2026-11-09, is listed to nobody (reactions.ts) and expires by 2026-12-09.
+  const rows = await db.superTabActivity.findMany({ where: { tabId, personId: actor.userId, kind: 'reply', createdAt: { gt: new Date(now - ACTIVITY_EXPIRY_MS) } },
     orderBy: { createdAt: 'desc' }, take: ACTIVITY_LIST + 1 })
   const more = rows.length > ACTIVITY_LIST
-  const present = (kind: string, id: string) => kind === 'person' ? state.people.some(p => p.id === id) : state.agents.some(a => a.id === id)
-  // A reaction by someone no longer here drops out, as its count does (reactions.ts reactionCounts).
-  const kept = rows.slice(0, ACTIVITY_LIST).filter(r => r.kind !== 'reaction' || present(r.actorKind, r.actorId))
+  const kept = rows.slice(0, ACTIVITY_LIST)
   if (!kept.length) return { items: [], more }
   const shown = await readableMessages(db, tabId, state, actor, kept)
   const items = kept.flatMap(r => {
     const seen = shown(r)
-    // A reaction's message must still be theirs.
-    if (!seen || (r.kind === 'reaction' && !own(seen.message.author, actor.userId))) return []
+    if (!seen) return []
     const { group, message } = seen
     return [{ id: r.id, kind: r.kind as ActivityKind, conversationId: r.conversationId, conversationTitle: group.title,
       projectName: projectOf(state, group.projectId ?? 'lead').name, messageId: r.messageId, messageSequence: message.sequence,
       threadId: threadOf(message), actor: { kind: r.actorKind as 'person' | 'agent', id: r.actorId,
-        name: actorName(state, r.actorKind, r.actorId, r.kind === 'reply' ? message.author : undefined) },
+        name: actorName(state, r.actorKind, r.actorId, message.author) },
       emoji: r.emoji ?? null, text: message.text, createdAt: r.createdAt.toISOString(), read: !!r.readAt, rings: !!r.rings }]
   })
   return { items, more }

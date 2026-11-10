@@ -3,7 +3,6 @@ import { agentDisplayName } from './agentNames.js'
 import { isBuddyChat } from './buddies.js'
 import { activeWork, isLeads, stableId, type Assignment, type Author, type CommandEffects, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { groupProject, projectsOf } from './projects.js'
-import type { Reaction } from './reactions.js'
 import { isStep } from './steps.js'
 import { WINDOWS_OWED } from './osSteps.js'
 import { usernameOf } from './usernames.js'
@@ -166,15 +165,6 @@ function inThread(state: SuperTabState, effects: CommandEffects, group: Conversa
   } else if (previous.brief !== group.brief && group.brief) reply(stableId(operationId, 'task-details', group.id), group.brief)
   const text = progress(state, effects, group, previous, pm)
   if (text) reply(stableId(operationId, 'task-progress', group.id), text)
-  // In place of the On it / Shipped label (Dee, 11-04, 'bot messages'): its agent reacts on the ask as a teammate would, 👀 when
-  // the task's work first starts and ✅ at its first merge. The store writes each as that agent's own reaction, once by its id.
-  const agentId = group.assignment?.agentId
-  const react = (emoji: Reaction) => {
-    (effects.reactions ??= []).push({ conversationId: chat.id, messageId: group.cards!.line!.messageId, agentId: agentId!, emoji })
-    chat.reactionSeq = (chat.reactionSeq ?? 0) + 1
-  }
-  if (agentId && !previous?.assignment && group.assignment!.status !== 'lost') react('eyes')
-  if (agentId && group.ledger?.mergedAt != null && previous?.ledger?.mergedAt == null) react('check')
 }
 
 /** The thread reply of a task that ended outside any command, which syncTaskLines never sees (Diego, 2026-11-04, task #2693):

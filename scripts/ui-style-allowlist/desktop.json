@@ -48,11 +48,6 @@
     "edge-insets": 12,
     "border-radius": 2
   },
-  "desktop/lib/super_tabs/reactions.dart": {
-    "font-size": 2,
-    "edge-insets": 3,
-    "border-radius": 1
-  },
   "desktop/lib/super_tabs/roster.dart": {
     "edge-insets": 1
   },
