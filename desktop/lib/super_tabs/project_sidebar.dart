@@ -636,7 +636,13 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading, {
     required Widget? switcher,
   }) {
-    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
+    // What Projects can list: its empty state shows when there is none.
+    final unlisted = superTabUnlistedProjects(controller, app: app);
+    final projects = [
+      for (final project
+          in snapshot?.listedProjects ?? const <SuperTabProject>[])
+        if (!unlisted.contains(project.id)) project,
+    ];
     return [
       ?switcher,
       const SizedBox(height: grid.AppDesktop.groupGap),
@@ -1035,6 +1041,7 @@ class ProjectSidebar extends StatelessWidget {
     _SidebarReading reading,
   ) {
     final hidden = superTabHiddenProjects(controller, app: app);
+    final unlisted = superTabUnlistedProjects(controller, app: app);
     return [
       for (final project in ([
         ...?snapshot?.listedProjects,
@@ -1042,6 +1049,7 @@ class ProjectSidebar extends StatelessWidget {
         if (reading.of(project) case final read
             when read.lead != null &&
                 (!controller.unreadOnly || _hasUnread(read)) &&
+                !unlisted.contains(project.id) &&
                 !_paneless(project, read.lead!, hidden))
           read,
     ];
@@ -1063,7 +1071,13 @@ class ProjectSidebar extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
-    final projects = snapshot?.listedProjects ?? const <SuperTabProject>[];
+    // What Projects can list: its empty state shows when there is none.
+    final unlisted = superTabUnlistedProjects(controller, app: app);
+    final projects = [
+      for (final project
+          in snapshot?.listedProjects ?? const <SuperTabProject>[])
+        if (!unlisted.contains(project.id)) project,
+    ];
     final reading = _SidebarReading(controller, attention, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
@@ -1359,6 +1373,7 @@ List<String> superTabSidebarOrder(
   if (snapshot == null) return const [];
   final projects = [...snapshot.listedProjects]..sort(_compareProjects);
   final hidden = superTabHiddenProjects(controller, app: app);
+  final unlisted = superTabUnlistedProjects(controller, app: app);
   return [
     if (controller.oneBuddy)
       if (controller.buddyChat(SuperTabController.kSwarmBuddyKey)
@@ -1366,6 +1381,7 @@ List<String> superTabSidebarOrder(
         chat.id,
     for (final project in projects)
       if (snapshot.conversation(project.leadConversationId) != null &&
+          !unlisted.contains(project.id) &&
           (controller.selectedId == project.leadConversationId ||
               !hidden.contains(project.id)))
         project.leadConversationId,
@@ -1381,6 +1397,13 @@ Set<String> superTabHiddenProjects(
   SuperTabController controller, {
   AppNotifier? app,
 }) => app == null ? const {} : PersonalProjects.of(app).hiddenIn(controller);
+
+/// The projects the list never shows, even while open: in the person's Personal Swarm, v3's tab projects and the Swarm's
+/// first project while it names no repository (personal_projects.dart). None without the app.
+Set<String> superTabUnlistedProjects(
+  SuperTabController controller, {
+  AppNotifier? app,
+}) => app == null ? const {} : PersonalProjects.of(app).unlistedIn(controller);
 
 /// An agent's one quiet detail in the Desktop's My agents (task #4466): "offline", else the project a Lead [leads].
 String? superTabAgentDetail(HarnessActivity? activity, {String? leads}) =>

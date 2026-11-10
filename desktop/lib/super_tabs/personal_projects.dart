@@ -97,6 +97,9 @@ String _hash(String text) => const DartSha256()
     .join()
     .substring(0, 24);
 
+/// The id of a Swarm's own first project, made with it (backend projects.ts `projectsOf`).
+const kFirstProjectId = 'lead';
+
 /// The request id a repo's project is created with: the same on every computer of the person's, so the server answers
 /// each with the one project (backend commands.ts `project.create`: the project's id comes from it). The URL is not in it.
 String personalProjectOperation(String repo) => 'personal-repo-${_hash(repo)}';
@@ -268,21 +271,31 @@ class PersonalProjects extends ChangeNotifier {
   /// empty for it.
   Set<String> hiddenIn(SuperTabController c) {
     if (!eligible(c)) return const {};
-    // v3's tab projects leave the list now, whether or not their close is through ([_closeTabs]).
-    final closing = _tabs[c.accountId]?[c.tabId]?.values ?? const <String>[];
     final known = _known[c.accountId]?[c.tabId];
     if (known == null || known.isEmpty || _unresolvedPanes(app)) {
-      return {...closing};
+      return const {};
     }
     final shown = {for (final repo in _repos(c)) ?known[repo]};
     final snapshot = c.snapshot!;
     return {
-      ...closing,
       for (final id in known.values)
         if (id != null &&
             !shown.contains(id) &&
             snapshot.projectById(id) != null)
           id,
+    };
+  }
+
+  /// The projects of [c] the list never shows, even while open: v3's tab projects, whether or not their close is through
+  /// ([_closeTabs]), and the Swarm's own first project while it names no repository (anh Dee via the lead, 2026-11-10:
+  /// projects are repos only). Nothing of them is deleted here, and the first project is listed once it has one.
+  Set<String> unlistedIn(SuperTabController c) {
+    if (!eligible(c)) return const {};
+    return {
+      ...?_tabs[c.accountId]?[c.tabId]?.values,
+      if (c.snapshot!.projectById(kFirstProjectId) case final first?
+          when first.repository == null)
+        first.id,
     };
   }
 

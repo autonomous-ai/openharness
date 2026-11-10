@@ -47,7 +47,6 @@ import 'machine_status.dart';
 import 'model.dart';
 import 'join_machine.dart'
     show superTabOldJoinSuggestion, superTabSuggestedAgentSlots;
-import 'personal_machine_rows.dart';
 import 'section_heading.dart';
 import '../widgets/laid_out_list.dart';
 
@@ -2676,8 +2675,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             mainAxisSize: MainAxisSize.min,
             children: _machines(),
           ),
-        if (widget.app case final app?)
-          PersonalMachineRows(controller: c, app: app),
       ],
     ];
     return widget.embedded
