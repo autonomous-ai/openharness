@@ -475,6 +475,45 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    // Claude Code's and Codex's readers run in a process of their own, started on demand: Claude Code's took 26 s on a Mac at load
+    // 40 (2026-11-10). A message sent within a second of the agent's start waited the lease's 15 s for a screen nobody could read,
+    // and was lost with an error. Now it waits for the reader, bounded, says so once, and is typed once.
+    it.each([[undefined, 'a person\'s message'], ['team:service:superTabs:A', 'a delivery']] as const)(
+      'waits for its engine\'s reader to start, says so once, and types it once it is up (%s, %s)', async (deliveryId) => {
+        let up = false
+        let started: (ok: boolean) => void = () => {}
+        const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }
+        const onError = vi.fn(), onSubmitted = vi.fn(), onWaiting = vi.fn()
+        const engineStarting = vi.fn(() => up ? null : new Promise<boolean>(resolve => { started = resolve }))
+        const inject = vi.fn(async (): Promise<TerminalActionResult> => up ? { state: 'succeeded', dispatch: 'executed' } : held('screen_unreadable'))
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+          validateRuntime: async () => true, inject, injectTeam: inject, beforeTeamWrite: async () => null, sendKey: async () => true, onError, onSubmitted,
+          onWaiting, engineStarting, now: time.now, sleep: time.sleep })
+        controller.submit('s1', 'sent within a second of its start', deliveryId)
+        await vi.waitFor(() => expect(onWaiting).toHaveBeenCalledWith('s1', 'engine_starting'))
+        expect(inject).not.toHaveBeenCalled()
+        // 26 s later, as measured: the reader is up.
+        time.at += 26_000
+        up = true
+        started(true)
+        await vi.waitFor(() => expect(inject).toHaveBeenCalledTimes(1))
+        if (!deliveryId) await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalledWith('s1', 'sent within a second of its start'))
+        expect(onError).not.toHaveBeenCalled()
+        expect(onWaiting).toHaveBeenCalledTimes(1)
+        controller.forget('s1')
+      })
+
+    it('says nothing of a wait when its engine\'s reader is up', async () => {
+      const onWaiting = vi.fn(), onSubmitted = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission, getSession: () => session('claude'),
+        validateRuntime: async () => true, inject: async () => ({ state: 'succeeded', dispatch: 'executed' }), sendKey: async () => true, onError: vi.fn(), onSubmitted,
+        onWaiting, engineStarting: () => null })
+      controller.submit('s1', 'typed at once')
+      await vi.waitFor(() => expect(onSubmitted).toHaveBeenCalled())
+      expect(onWaiting).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
     it('refuses with the reason once the wait is over and the composer never came', async () => {
       const time = { at: 0, now: () => time.at, sleep: vi.fn(async (ms: number) => { time.at += ms }) }
       const onError = vi.fn()

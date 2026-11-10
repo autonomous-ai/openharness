@@ -167,6 +167,46 @@ describe('service links', () => {
     expect(lost).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
   })
 
+  // A screen read waits a second; Claude Code's reader, on demand, took 26 s to start on a Mac at load 40 (2026-11-10), and every
+  // read after the first was refused at once as if it could not start, so a person's first message was lost.
+  it('keeps waiting for one on demand while it starts, however short the requests that run out meanwhile, and says when it is up', async () => {
+    const want = vi.fn()
+    const links = make({ owned: { 'engine-claude': ['screen_read'] }, onDemand: new Set(['engine-claude']), want, startWaitMs: 60_000 })
+    const up = vi.fn()
+    void links.whenUp('engine-claude', 60_000).then(up)
+    for (let second = 0; second < 30; second++) {
+      const read = vi.fn()
+      void links.call('engine-claude', 'screen_read', {}, 1_000).then(read)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(read).toHaveBeenCalledWith({ error: 'SERVICE_UNAVAILABLE', service: 'engine-claude', retryable: true })
+    }
+    expect(up).not.toHaveBeenCalled()
+    // Still within its start wait: a read waits for it, and goes once it connects.
+    const late = vi.fn()
+    void links.call('engine-claude', 'screen_read', { capture: 'x' }, 1_000).then(late)
+    const engine = sink()
+    links.accept('engine-claude', TOKEN, engine, vi.fn())
+    await vi.advanceTimersByTimeAsync(0)
+    expect(up).toHaveBeenCalledWith(true)
+    expect(engine.sent).toEqual([{ type: 'screen_read', payload: { capture: 'x', requestId: 'route-31' }, asker: { local: true, owner: true } }])
+    // Up: at once.
+    expect(await links.whenUp('engine-claude', 1)).toBe(true)
+  })
+
+  it('says one on demand is not up when it does not connect in the wait, and when it could not start at all', async () => {
+    const links = make({ owned: { 'engine-claude': ['screen_read'], search: ['session_search'] }, onDemand: new Set(['engine-claude']), want: vi.fn(), startWaitMs: 60_000 })
+    const up = vi.fn()
+    void links.whenUp('engine-claude', 45_000).then(up)
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(up).toHaveBeenCalledWith(false)
+    // Past its start wait it counts as not starting: asked again, it says so at once.
+    void links.call('engine-claude', 'screen_read', {}, 30_000)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await links.whenUp('engine-claude', 60_000)).toBe(false)
+    // One not on demand is never waited for.
+    expect(await links.whenUp('search', 60_000)).toBe(false)
+  })
+
   it('answers SERVICE_UNAVAILABLE for one on demand that does not come in time, then at once until it comes, or will not take the request', () => {
     const want = vi.fn()
     const links = make({ owned: { orchestrator: ['orchestrator'], devices: ['harness_devices_list'], search: ['session_search'] }, onDemand: new Set(['orchestrator', 'devices']), want })
