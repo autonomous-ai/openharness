@@ -14,28 +14,14 @@ extension SuperTabProfileActions on SuperTabController {
     return canWrite &&
         group != null &&
         !group.archived &&
-        !isEarlierBuddyChat(group) &&
         message.author['kind'] == 'person' &&
         message.authorId == accountId &&
         message.source.isEmpty &&
         !message.deleted;
   }
 
-  /// Deletion also permits the reader's own Buddy proposal. Both its
-  /// attribution and source owner must agree; the server authorizes again.
-  bool canDelete(SuperTabMessage message) {
-    final group = snapshot?.conversation(message.conversationId);
-    return canWrite &&
-        group != null &&
-        !group.archived &&
-        !isEarlierBuddyChat(group) &&
-        message.author['kind'] == 'person' &&
-        message.authorId == accountId &&
-        (message.source.isEmpty ||
-            (message.source['kind'] == 'buddy-proposal' &&
-                message.source['personId'] == accountId)) &&
-        !message.deleted;
-  }
+  /// Whether the reader may delete [message]: as [canChange].
+  bool canDelete(SuperTabMessage message) => canChange(message);
 
   /// Replaces [message]'s text with [text], trimmed. The same text sends
   /// nothing; empty text only goes for a message with files.

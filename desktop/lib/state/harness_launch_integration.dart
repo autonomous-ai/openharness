@@ -46,16 +46,9 @@ class HarnessLaunchIntegration {
     this.checkRepositoryAgain,
     this.agentKind,
     this.ownMachinesOnly = false,
-    this.startBuddy,
-    this.stopBuddy,
-    this.heading,
-    this.intro,
   });
   final String creationId, actionLabel;
 
-  /// What the form is for and one sentence on it, above its pickers, where
-  /// the form alone doesn't say: Join's Bring agent (#4442). Null shows none.
-  final String? heading, intro;
   String? swarmRole;
   String? swarmSkillMode;
 
@@ -85,15 +78,6 @@ class HarnessLaunchIntegration {
   /// Only the person's own computers, never a shared, guest or Team one: an
   /// agent they start runs in their own account.
   final bool ownMachinesOnly;
-
-  /// Join's Buddy (task #4196): the Swarm starts it on [machineId] with
-  /// [engine], as before; the form only chooses them. Set, the form shows no
-  /// project and takes no first message.
-  final Future<void> Function(String machineId, String engine)? startBuddy;
-
-  /// Stops [startBuddy] while it only waits for the computer, so the form
-  /// closes at once; false once the start is sent (#4442).
-  final bool Function()? stopBuddy;
 
   /// A new project in a Swarm: the Swarm's machines its Product Manager may
   /// start on, best first. The form then shows only the task, repo and

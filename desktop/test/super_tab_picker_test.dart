@@ -291,57 +291,6 @@ void main() {
   );
 
   testWidgets(
-    'Add agent lists no Buddy: not a teammate\'s, and not the reader\'s own running here',
-    (tester) async {
-      Map<String, dynamic> buddy(String id, String person, String machine) => {
-        'id': id,
-        'name': 'Buddy $id',
-        'machineId': machine,
-        'harnessId': 'session-$id',
-        'contributorId': person,
-        'buddyOf': {'personId': person, 'generation': 'fixture'},
-        'configuration': {'engine': 'claude'},
-      };
-      final f = await open(
-        tester,
-        extraSharedAgents: [
-          buddy('theirs', 'teammate', 'teammate-machine'),
-          buddy('mine', 'owner', 'm'),
-        ],
-        extraLocalAgents: const [
-          Agent(
-            id: 'session-mine',
-            name: 'Buddy mine',
-            engine: 'claude',
-            terminalAvailable: true,
-          ),
-        ],
-      );
-      final search = tester
-          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
-          .search;
-      final ids = search.rows.map((row) => row.agentId).toSet();
-      expect(ids, containsAll(['teammate-session', 'local-agent']));
-      expect(ids, isNot(contains('session-theirs')));
-      expect(ids, isNot(contains('session-mine')));
-      await tester.enterText(input, 'Buddy');
-      await tester.pumpAndSettle();
-      // The sidebar lists the reader's own Buddy; the picker must not.
-      final results = find.byType(SwarmSearchResults);
-      for (final name in ['Buddy theirs', 'Buddy mine']) {
-        expect(
-          find.descendant(of: results, matching: find.textContaining(name)),
-          findsNothing,
-          reason: name,
-        );
-      }
-      await tester.pumpWidget(const SizedBox());
-      await f.app.superTabs.peek(tabId)!.flush();
-      f.app.superTabs.dispose();
-    },
-  );
-
-  testWidgets(
     'Add agent disables running engines outside Claude Code and Codex',
     (tester) async {
       final f = await open(

@@ -324,27 +324,8 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   String get _alsoSendHint => '$_alsoSendLabel as well as this thread';
 
-  // An older Buddy chat is kept to read: no thread reply there either (security review 1 of #2437).
   bool get _writable =>
-      c.canWrite &&
-      c.selected?.archived == false &&
-      !c.hasPendingAction &&
-      !_keptToRead;
-
-  /// A Buddy session answers this thread (one started before Desktop dropped
-  /// New session): only it hears a reply, which stays in the thread (backend
-  /// routeBuddySession).
-  bool get _inSession =>
-      c.selected?.buddySessions.any((s) => s.thread == widget.root) ?? false;
-
-  /// A thread whose Buddy session ended: the server takes a reply there only
-  /// as a new session, which Desktop no longer starts.
-  bool get _sessionEnded =>
-      !_inSession && c.threadMessages(widget.root).any((m) => m.buddySession);
-
-  /// The box takes no reply: an earlier Buddy chat, or an ended session's
-  /// thread.
-  bool get _keptToRead => c.isEarlierBuddyChat(c.selected) || _sessionEnded;
+      c.canWrite && c.selected?.archived == false && !c.hasPendingAction;
 
   /// The files waiting to go with this thread's next reply.
   HarnessAttachments get _files =>
@@ -381,7 +362,6 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       at.query,
       machineName: widget.machineName ?? (_) => '',
       choose: _chooseTag,
-      agents: !_inSession,
     );
   }
 
@@ -680,7 +660,7 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                             order: SuperTabReplyBox.fieldOrder,
                             child: _composerBox(),
                           ),
-                          ?_underBox(),
+                          _underBox(),
                         ],
                       ),
                     ),
@@ -696,15 +676,11 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     text: _composer,
     focus: _focus,
     files: _files,
-    enabled: c.canWrite && c.selected?.archived == false && !_keptToRead,
+    enabled: c.canWrite && c.selected?.archived == false,
     writable: _writable,
     busy: _busy,
     error: c.threadComposerError(c.selectedId, widget.root),
-    hint: c.isEarlierBuddyChat(c.selected)
-        ? 'This is an earlier chat, kept to read.'
-        : _sessionEnded
-        ? "This thread's session ended."
-        : 'Reply',
+    hint: 'Reply',
     onEdited: _edited,
     onSend: () => unawaited(_send()),
     onMic: switch (widget.voice) {
@@ -760,19 +736,17 @@ class SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   /// What sits under the box: Also send, a small checkbox on its own line as
   /// in Slack (Huy and Scholes, 11-04), its square under the row's first
   /// button: the box's inset.
-  Widget? _underBox() => _inSession
-      ? null
-      : Padding(
-          key: const ValueKey('super-thread-also-line'),
-          padding: const EdgeInsets.only(
-            top: grid.AppDesktop.controlGap,
-            left: grid.AppDesktop.groupGap,
-          ),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: _alsoSendChoice(_writable),
-          ),
-        );
+  Widget _underBox() => Padding(
+    key: const ValueKey('super-thread-also-line'),
+    padding: const EdgeInsets.only(
+      top: grid.AppDesktop.controlGap,
+      left: grid.AppDesktop.groupGap,
+    ),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: _alsoSendChoice(_writable),
+    ),
+  );
 
   /// Also send, on its own line under the box: after send in the Tab order.
   Widget _alsoSendChoice(bool writable) => FocusTraversalOrder(

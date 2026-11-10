@@ -676,7 +676,7 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   agent's words read nearly the column's width, as Codex's answers do (anh
   Dee, 2026-11-10; `SwarmBubble`, `super_tabs/chat/bubble.dart`,
   `SuperTabMessageRow.shareOf`). Between
-  you and a chat's own agent (a Buddy chat, an agent chat) there are no names
+  you and a chat's own agent (an agent's own chat) there are no names
   or faces; in a group chat a speaker's name sits over their first bubble in
   plain secondary ink at the text's size, and their round 28 face by their
   last. No engine mark: colour is the face's. **One size with the terminal**
