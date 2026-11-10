@@ -268,13 +268,15 @@ export class GitHubAssign {
       for (const c of comments) {
         const found = ownAsk(c, ASKED)
         if (!found) continue
-        written.set(found[1]!.toLowerCase(), found[1]!)
-        if (head.startsWith(found[2]!)) onThisHead.set(found[1]!.toLowerCase(), (onThisHead.get(found[1]!.toLowerCase()) ?? 0) + 1)
-        const heads = asked.get(found[1]!.toLowerCase()) ?? new Map<string, number>()
+        // Keyed as the readers are (verdicts): the one asked as "Kai Lee" is the one that answered as "kai-lee".
+        const name = sameKey(found[1]!) || found[1]!.toLowerCase()
+        written.set(name, found[1]!)
+        if (head.startsWith(found[2]!)) onThisHead.set(name, (onThisHead.get(name) ?? 0) + 1)
+        const heads = asked.get(name) ?? new Map<string, number>()
         // GitHub dates every comment; one it did not is taken as asked now, as before.
         const at = Date.parse(String(c.created_at ?? ''))
         heads.set(found[2]!, Math.max(heads.get(found[2]!) ?? 0, Number.isFinite(at) ? at : now))
-        asked.set(found[1]!.toLowerCase(), heads)
+        asked.set(name, heads)
       }
       // A reader asked [READ_WAIT_MS] ago with no verdict since is no longer counted on: another is asked too, and the first
       // READ-OK on the head counts, whoever's. Agents read within minutes of the ask that wakes them, so one that has not is
@@ -285,8 +287,7 @@ export class GitHubAssign {
       // Its writers' own verdicts count for nothing, however the names are written, nor an unsigned READ-OK from the login that
       // opened it (verdicts); a reader who signs two ways counts once, as the merger counts it.
       const own = (name: string) => isWriter(people.writers, name)
-      const ok = [...new Set([...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
-        .map(([reader]) => sameKey(reader)))]
+      const ok = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
       const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
@@ -302,7 +303,7 @@ export class GitHubAssign {
         // A team of one builder still has its PM, who read for it before Harness asked readers (the swarm-sandbox, where
         // Juno, its PM, read every pull request of Pip's).
         const builder = readerFor(read, author, skip)
-        const pm = project.pm.toLowerCase()
+        const pm = sameKey(project.pm) || project.pm.toLowerCase()
         const reader = builder ?? (!own(pm) && !skip.has(pm) ? { id: pm, name: project.pm } : null)
         if (!reader) {
           // Nobody new can read it: the reader asked longest ago, with no verdict on this head, is asked again, at most twice
@@ -316,7 +317,7 @@ export class GitHubAssign {
           break
         }
         skip.add(reader.id)
-        skip.add(reader.name.toLowerCase())
+        skip.add(sameKey(reader.name))
         await this.ask(repo, number, head, reader.name, 'please read this pull request')
       }
     }

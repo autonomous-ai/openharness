@@ -17,7 +17,7 @@
  * One that cannot, being behind or in conflict, or whose checks failed, is told so on itself, to its author by name, once for
  * each head, so the GitHub news brings it to its author (githubMentions.ts).
  */
-import { labelOf, teamOf, type Crew } from './assign/crew.js'
+import { labelOf, sameKey, teamOf, type Crew } from './assign/crew.js'
 import type { GitHubGet, GitHubSend } from './githubRest.js'
 import { GitHubReads, GitHubStop, PAGE } from './githubRest.js'
 import { repositorySlug, TEAM } from './githubMentions.js'
@@ -69,7 +69,7 @@ export interface PullPeople { writers: readonly string[]; opener: string; team: 
 /** A verdict's own words where a signature would be ("READ-OK f6edb44: looks good"): no one's name. */
 const VERDICT_FIRST = /^(?:READ-OK|HOLD)\b/
 
-/** What one pull request's comments say: each reader's last verdict, by its name in lowercase, with the name as it signs,
+/** What one pull request's comments say: each reader's last verdict, by its name as `sameKey` reads it, with the name as it signs,
  *  and whether it asks for two reads. A comment signed by one of its writers (`signedAs`) is that writer's, by the name the
  *  pull request gives it: the signature pattern reads one or two plain words, and a name it cannot read (three words, another
  *  script, an apostrophe, an emoji) fell back to the GitHub login every agent of a person shares, so the author read as a reader.
@@ -93,17 +93,17 @@ export function verdicts(comments: Json[], body: string, people: PullPeople):
     const reader = signature ?? login
     if (!reader || reader === SELF) continue
     const at = String(comment.created_at ?? '')
-    const key = reader.toLowerCase()
+    // One reader however it writes its name (a HOLD as "Kai Lee" is lifted by its READ-OK as "kai-lee"); a name of no letters
+    // or digits, as written.
+    const key = sameKey(reader) || reader.toLowerCase()
     const last = readers.get(key)
     if (!last || at >= last.at) readers.set(key, { verdict: found[1] as 'READ-OK' | 'HOLD', sha: found[2]!, name: reader, ownLogin: !signature && fromOpener, at })
   }
   return { readers: new Map([...readers].map(([k, v]) => [k, { verdict: v.verdict, sha: v.sha, name: v.name, ownLogin: v.ownLogin }])), twoReads }
 }
 
-/** One name however it is written: as an agent signs it ("Pip Two"), as its builder label has it (`pip-two`), or cased
- *  otherwise. Without it, "pip two" and "pip-two" were two people, so an agent with a two-word name read its own pull request
- *  and the merger merged it (found by the other session's Q3 tester, 2026-11-09; #3665 reads names more fully). */
-export const sameKey = (name: string): string => name.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+/** One name however it is written (assign/crew.ts), for the assigner too. */
+export { sameKey }
 
 /** Whether [name] is one of a pull request's [writers] (writersOf), however either is written. */
 export const isWriter = (writers: readonly string[], name: string): boolean => writers.some(writer => sameKey(writer) === sameKey(name))
@@ -243,7 +243,7 @@ export class GitHubMerge {
       if ([...readers.values()].some(r => r.verdict === 'HOLD')) continue
       // Its writers' own READ-OKs and its login's unsigned ones count for nothing, and a reader who signs two ways is one.
       const onHead = [...readers].filter(([reader, r]) => r.verdict === 'READ-OK' && head.startsWith(r.sha) && !isWriter(people.writers, reader))
-      const reads = new Map(onHead.filter(([, r]) => !r.ownLogin).map(([reader, r]) => [sameKey(reader), r]))
+      const reads = new Map(onHead.filter(([, r]) => !r.ownLogin))
       if (reads.size < (twoReads ? 2 : 1)) {
         // Said on the pull request, once for its head, so the reader signs it: the readers' count asks another meanwhile.
         const unsigned = onHead.find(([, r]) => r.ownLogin)?.[1]
