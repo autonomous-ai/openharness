@@ -370,8 +370,6 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
       delete target.downSince
       delete target.downNamed
     } else {
-      // A stop is counted once, when a reading first shows the session gone; the last hour's, at most five (task #3662).
-      if (!target.downSince) target.stops = [...(target.stops ?? []).filter(at => now - at < 3_600_000), now].slice(-5)
       target.downSince = downSince(state, target, now) ?? new Date(now).toISOString()
     }
   }

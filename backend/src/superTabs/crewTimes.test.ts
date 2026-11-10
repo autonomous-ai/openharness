@@ -1,29 +1,26 @@
-// Task #3462: each crew wake and move is recorded when it finishes, from its start to the moment the agent runs again,
-// with its reason (docs/plans/2026-11-06-crew-wake-move-times-plan.md).
+// Task #3462: each wake is recorded when it finishes, from its start to the moment the agent runs again, with its reason
+// (docs/plans/2026-11-06-crew-wake-move-times-plan.md).
 import { describe, expect, it } from 'vitest'
 import { agentOnly, type Agent, type SuperTabState } from './model.js'
-import { crewTimingOf, finishedWakes, moveTimingRow, startWake } from './crewTimes.js'
-import { applyCommand, type Command } from './commands.js'
-import { applyCrewKeep } from './crewKeep.js'
-import { config as crewConfig, fixture, machine, NOW, person } from './crewKeep.test-support.js'
+import { crewTimingOf, finishedWakes, startWake } from './crewTimes.js'
 
 const SECOND = 1000
 const T = Date.UTC(2026, 10, 6, 3)
 const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const member = (over: Partial<Agent> = {}): Agent => ({ id: 'ada', machineId: 'mac', harnessId: 'h-ada', machineOwnerId: 'o', contributorId: 'p',
-  membershipGeneration: 'g', name: 'Ada', configuration: config, crew: { role: 'Engineer', at: 1, by: 'p' }, ...over }) as Agent
+  membershipGeneration: 'g', name: 'Ada', configuration: config, ...over }) as Agent
 /** A Swarm whose project chat `chat` is led by `pm`, with [agents], and machine `mac`'s last reading when given. */
 const swarm = (agents: Agent[], reading?: { receivedAt: number; running: string[] }) => ({
   id: 't', ownerId: 'p', name: 'S', environment: 'prod', paused: false,
   people: [{ id: 'p', email: 'p@example.com', role: 'owner', generation: 'g' }],
-  agents: [member({ id: 'pm', harnessId: 'h-pm', name: 'River', crew: undefined }), ...agents],
+  agents: [member({ id: 'pm', harnessId: 'h-pm', name: 'River' }), ...agents],
   projects: [{ id: 'lead', name: 'App', ownerId: 'p', leadConversationId: 'chat', visibility: 'public', members: [] }],
   machines: reading ? [{ machineId: 'mac', name: 'Studio', observation: { runningHarnessIds: reading.running, stoppedHarnessIds: [], receivedAt: reading.receivedAt } }] : [],
   conversations: [{ id: 'chat', title: 'App', leadId: 'pm', agentIds: ['pm', 'ada'], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 },
     { id: 'task7', number: 7, title: 'Fix login', leadId: null, agentIds: ['ada'], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }],
 } as unknown as SuperTabState)
 
-describe('a crew wake is timed from the work that woke it to its session running again (#3462)', () => {
+describe('a wake is timed from the work that woke it to its session running again (#3462)', () => {
   it('finishes at the first reading that lists the session running, with the task as its reason', () => {
     const ada = member()
     startWake(ada, 'task7', T)
@@ -70,44 +67,11 @@ describe('a crew wake is timed from the work that woke it to its session running
   })
 })
 
-describe('a crew move is timed from the keeper picking a machine to the new session taking over (#3462)', () => {
-  it('writes one row with the move start, the takeover and the trouble that moved it', () => {
-    const moved = member({ id: 'ada2', harnessId: 'h-ada2', machineId: 'mini' })
-    const state = swarm([moved])
-    const row = moveTimingRow(state, moved.id, T, 'offline', T + 140 * SECOND)
-    expect(row).toMatchObject({ conversationId: 'chat', recipients: [] })
-    expect(crewTimingOf(row!.source)).toEqual({ what: 'move', agentId: 'ada2', startedAt: T, runningAt: T + 140 * SECOND, reason: 'offline' })
-    // Retried with the same times: the same row, so it is written once.
-    expect(moveTimingRow(state, moved.id, T, 'offline', T + 140 * SECOND)!.id).toBe(row!.id)
-  })
-
+describe('a timing row', () => {
   it('reads nothing but its own rows', () => {
     expect(crewTimingOf({ kind: 'system', status: 'done' })).toBeNull()
     expect(crewTimingOf({ kind: 'crew-timing', what: 'nap', agentId: 'a', startedAt: 1, runningAt: 2, reason: 'x' })).toBeNull()
     expect(crewTimingOf({ kind: 'crew-timing', what: 'wake', agentId: 'a', startedAt: 5, runningAt: 2, reason: 'x' })).toBeNull()
     expect(crewTimingOf(null)).toBeNull()
-  })
-})
-
-// The crew keeper's hook (#3229 on main): agent.started's takeover finishes a move.
-describe('the crew keeper times its own wakes and moves (#3462)', () => {
-  const host = { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }
-  const run = (state: SuperTabState, command: Command, operationId: string, now: number, extra: Record<string, unknown> = {}) =>
-    applyCommand(state, person, command, { now, operationId, ...extra })
-
-  it('a move\'s new session taking over writes one timing row, from the keeper\'s pick to the takeover', () => {
-    const f = fixture([machine('mac', { signedIn: false }), machine('mini')])
-    applyCrewKeep(f.state, NOW, { admits: () => true })
-    const start = f.state.starts!.find(s => s.request.crewMoveOf === f.ada.id)!
-    const effects = run(f.state, { type: 'agent.started', startId: start.id, harnessId: 'ada-2', configuration: crewConfig } as Command, 'started-1', NOW + 95_000, host)
-    const moved = effects.state.agents.find(a => a.harnessId === 'ada-2')!
-    const timings = effects.messages.flatMap(m => crewTimingOf(m.source) ? [{ row: m, timing: crewTimingOf(m.source)! }] : [])
-    expect(timings).toHaveLength(1)
-    expect(timings[0]!.timing).toEqual({ what: 'move', agentId: moved.id, startedAt: NOW, runningAt: NOW + 95_000, reason: 'signed-out' })
-    expect(timings[0]!.row.conversationId).toBe('lead')
-  })
-
-  it('the crew keeper reads crew membership through crew.ts isCrew, with no copy of its own', async () => {
-    expect(Object.keys(await import('./crewKeep.js'))).not.toContain('isCrewMember')
   })
 })
