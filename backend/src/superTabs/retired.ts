@@ -23,6 +23,8 @@ export const RETIRED_COMMANDS = [
   // Task records and the crew dispatch (2026-11-10): a task is the project's GitHub issue, and an agent works on what its person asks.
   'work.assign', 'work.status', 'work.cancel', 'work.define', 'work.queue', 'work.priority', 'work.pause', 'work.resume', 'work.lane',
   'member.start', 'member.helper',
+  // The Team-written mark (2026-11-10): Harness Team accounts are gone, so no task's code is a Team agent's any more.
+  'work.teamWritten',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 

@@ -70,7 +70,7 @@ export function createProposalCard(state: SuperTabState, project: SwarmProject, 
   state.groupCounter = number
   const card: Conversation = { id, number, projectId: project.id, title: input.title, leadId, agentIds: leadId ? [leadId] : [],
     archived: false, brief: input.text, checks: [], assignment: null, lastMessageSequence: 0, lastActivityAt: new Date(now).toISOString(),
-    requesterId: member.id, priority, codePullRequestUrls: [],
+    requesterId: member.id, priority,
     proposal: { version: 1, text: parsed.text, goal: parsed.goal, why: parsed.why, doneWhen: parsed.doneWhen,
       evidence: parsed.evidence, priority, createdAt: now, senders: [sender], questions: [] } }
   stageTaskApproval(state, card, now)

@@ -112,6 +112,6 @@ describe('with Team accounts removed', () => {
       execution: { machineId: 'mate-team', harnessId: 'harness-mates-team', machineOwnerId: 'mate' } } as never
     f.run({ type: 'machine.teamGone', machineId: 'mate-team' } as Command, owner, { teamMachineGone: true })
     expect(f.state.agents.map(a => a.id)).not.toContain(team)
-    expect(byId(f.task).teamWritten).toBeUndefined()
+    expect(byId(f.task)).not.toHaveProperty('teamWritten')
   })
 })

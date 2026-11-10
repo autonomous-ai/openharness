@@ -214,8 +214,6 @@ export interface AgentStartRequest {
   cwd: string
   worktree: boolean
   branchRef?: string
-  /** Stamped by the server for Team-written code (teamWritten.ts): the agent reads no project settings and its folder gets no trust. */
-  projectSettings?: 'off'
   permissionMode?: string
   codexHome?: string
   gridModel?: string
@@ -416,13 +414,6 @@ export interface Conversation {
   process?: import('./process.js').ProjectProcess
   /** A review group names the group whose work it reviews; only a Reviewer is assigned it, and a Reviewer nothing else. */
   reviewOf?: string
-  /** A Harness Team agent was assigned to build this task, or GitHub shows the app's bot pushed to its branch: its code runs
-   *  only in a Team account (teamWritten.ts, audit H2). */
-  teamWritten?: true
-  /** What set [teamWritten] (#3304): `assigned` (a Team agent given the task) and `branch` (a bot's push on a branch a start
-   *  named) are never cleared; `pushed` names the pull requests GitHub showed a bot's push among, and only a clean read of all
-   *  of them clears it. Absent on a mark from before #3304, which a join may have set. */
-  teamWrittenBy?: { kind: 'assigned' | 'branch' } | { kind: 'pushed'; pulls: string[] }
   /** A step of the task `reviewOf` names (task steps design, 2026-11-02): its name as the instructions give it, in any
    *  language. Readers show it inside its task, never as a task of its own. Absent on a linked group opened before steps. */
   step?: string
@@ -443,10 +434,6 @@ export interface Conversation {
   talkedAt?: Record<string, { person: number; answer?: number }>
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
-  /** The pull requests its own code is in, which GitHub's push read covers for its Team-written mark (teamWritten.ts, task
-   *  #3554): those its brief, title, assignment's result, checks' evidence and merge record name, never links in posts. [] from
-   *  its creation; absent on a conversation from before, which reads what it recorded instead (codePullRequests). */
-  codePullRequestUrls?: string[]
   /** Pull requests the PM or the task's Engineer unlinked from it, newest last, at most UNLINKS_KEPT: the task's history of
    *  them, and what keeps a later post's link from linking one again (commands.ts conversation.unlink, task #3953). */
   unlinkedPullRequests?: Array<{ url: string; by: string; reason: string; at: number }>
@@ -582,19 +569,6 @@ export function projectPullRequestUrl(url: string, repositoryUrl: string | null 
 export const pullRequestLinks = (text: string, repositoryUrl?: string | null): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
   .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).flatMap(match => projectPullRequestUrl(match[0], repositoryUrl) ?? []))]
 
-/** The pull requests [group]'s own code is in (codePullRequestUrls). A conversation from before the list reads every link it
- *  recorded, posts' included: an access rule loses no protection it had (task #3554). */
-export const codePullRequests = (group: Pick<Conversation, 'codePullRequestUrls' | 'pullRequestUrls'>): string[] =>
-  group.codePullRequestUrls ?? group.pullRequestUrls ?? []
-
-/** Adds the pull request links of [texts], its own code's sources, to [group]'s code list, and corrects the ones it holds. A
- *  conversation from before the list gets none: it keeps reading what it recorded (codePullRequests). */
-export function appendCodePullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>, repositoryUrl?: string | null): void {
-  if (group.codePullRequestUrls === undefined) return
-  const urls = new Set(group.codePullRequestUrls.flatMap(url => projectPullRequestUrl(url, repositoryUrl) ?? []))
-  for (const text of texts) if (text) for (const url of pullRequestLinks(text, repositoryUrl)) if (!unlinked(group, url)) urls.add(url)
-  group.codePullRequestUrls = [...urls]
-}
 
 /** The most unlinked pull requests a task remembers. */
 export const UNLINKS_KEPT = 50
