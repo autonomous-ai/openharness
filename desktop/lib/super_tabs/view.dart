@@ -3992,16 +3992,6 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
-  Future<void> _react(
-    SuperTabMessage message,
-    SuperTabReactionEmoji emoji,
-  ) async {
-    final failure = await c.react(message, emoji);
-    if (failure == null || !mounted) return;
-    ScaffoldMessenger.maybeOf(context)
-        ?.showSnackBar(SnackBar(content: Text(failure)));
-  }
-
   /// More ▸ Edit message, saved: a refusal says why, and the row keeps the
   /// text it had.
   Future<void> _editMessage(SuperTabMessage message, String text) async {
@@ -4329,19 +4319,6 @@ class _SuperTabViewState extends State<SuperTabView>
           : null,
       onReturnToComposer: _focus.requestFocus,
       readerId: c.accountId,
-      reactorName: (kind, id) => kind == 'agent'
-          ? c.snapshot?.agentName(id) ?? 'Agent'
-          : switch (_people[id]) {
-              final person? => person.shownName,
-              null => 'Someone',
-            },
-      // An older Buddy chat is kept to read: no reaction there (security review 1 of #2437).
-      onReact:
-          c.canWrite &&
-              c.selected?.archived == false &&
-              !c.isEarlierBuddyChat(c.selected)
-          ? (emoji) => unawaited(_react(message, emoji))
-          : null,
       receipts: [
         if (message.source['truncated'] == true ||
             message.source['interrupted'] == true)

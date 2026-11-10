@@ -41,15 +41,6 @@ Map<String, dynamic> _root(String kind, {bool legacy = false}) => {
     } else
       'personId': 'requester',
   },
-  'reactions': [
-    {
-      'emoji': 'heart',
-      'count': 1,
-      'by': [
-        {'kind': 'agent', 'id': 'buddy'},
-      ],
-    },
-  ],
 };
 
 ConversationServer _server(String kind, {bool legacy = false}) {
@@ -122,24 +113,6 @@ void main() {
       );
       expect(
         find.descendant(of: row, matching: find.byTooltip('Reply')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: row, matching: find.byTooltip('Add reaction')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const ValueKey('super-reaction-root-heart')));
-      await tester.pumpAndSettle();
-      final sent =
-          server.posts.lastWhere(
-                (p) => (p['command'] as Map?)?['type'] == 'message.react',
-              )['command']
-              as Map;
-      expect(sent['messageId'], 'root');
-      expect(sent['emoji'], 'heart');
-      expect(sent['on'], isTrue);
-      expect(
-        find.descendant(of: row, matching: find.text('2')),
         findsOneWidget,
       );
     });
@@ -240,9 +213,7 @@ void main() {
       for (final text in ["Let's build: Offline drafts", 'Offline drafts']) {
         testWidgets('$kind "$text" shows the title alone', (tester) async {
           final server = _server(kind);
-          server.messages.first
-            ..['text'] = text
-            ..['reactions'] = <dynamic>[];
+          server.messages.first['text'] = text;
           await showView(tester, server);
           expect(
             find.descendant(
@@ -437,7 +408,6 @@ void main() {
   ) async {
     await loadPreviewFonts();
     final server = _server('buddy-proposal');
-    server.messages.first['reactions'] = <dynamic>[];
     final c = await showView(tester, server, brightness: Brightness.light);
     await shot(tester, 'desktop-plain-chat');
     c.openThread('root');

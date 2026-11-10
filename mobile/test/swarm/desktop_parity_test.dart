@@ -9,12 +9,12 @@ import 'package:flutter_test/flutter_test.dart';
 /// ⚠️ A fix made to one side only fails nowhere else: a field the backend adds
 /// would parse on a computer and be dropped on the phone. Here a drift fails
 /// until the change is carried across — or, if the two are meant to differ now,
-/// until the file leaves this list on purpose.
+/// until the file leaves this list on purpose. `profile_model.dart` has: Desktop
+/// no longer has reactions, which the phone still reads and draws.
 const _copies = {
   'lib/swarm/parts.dart': 'lib/super_tabs/parts.dart',
   'lib/swarm/tasks/personal_tasks.dart':
       'lib/super_tabs/tasks/personal_tasks.dart',
-  'lib/swarm/profile_model.dart': 'lib/super_tabs/profile_model.dart',
   // Live cards (Slack parity, #2212): which messages are cards, and the
   // linked tasks a card shows. The phone reads no GitHub yet (Lead, 10-29:
   // that request is a security change of its own), so Desktop's PR facts

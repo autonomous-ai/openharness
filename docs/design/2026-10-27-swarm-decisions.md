@@ -23,8 +23,8 @@ question in chat. A decision now has one shape and one place:
 - **Answering:**
   - The person asked taps one option (`decision.answer`), once. A viewer may answer what was asked of them.
   - The asking agent and the project's Lead get a notice in the conversation the question came from. Only they read
-    it, and it carries none of the answer; it points them to `harness super-tab decisions --answered`, which checks who
-    reads it. Other readers of the conversation see nothing: no message, no unread mark, no link (review of #1753).
+    it, and it carries none of the answer; the decisions read (`GET /decisions`) has it and checks who reads it. Since
+    Swarm v4 the CLI has no `decisions` verb, so the notice names no command. Other readers of the conversation see nothing: no message, no unread mark, no link (review of #1753).
   - The person must still be in the Swarm and still read that conversation, when answering and when an answer is
     retried. An answer in a quiet or archived conversation works like any other.
   - An exact repeat of an open ask is the same decision, not a second one: the same asker, task, question, options,
@@ -34,7 +34,7 @@ question in chat. A decision now has one shape and one place:
   The Lead and Builder skills say so.
 - **Who reads a decision:**
   - The person asked: Desktop/web lists it in Notifications, and in their Chat with PM for that project.
-  - The asking agent: `harness super-tab decisions [--answered]`.
+  - The asking agent: through `GET /decisions` only; the CLI's `decisions` verb went with Swarm v4.
   - The project's Lead.
   - Nobody else, the Swarm's owner included.
 
@@ -43,7 +43,7 @@ question in chat. A decision now has one shape and one place:
 A decision is about the work, and it is seen where the work is seen:
 - The question a worker writes is in its own terminal.
 - A needs-human question still shows in its work group.
-- The answer is read through `harness super-tab decisions --answered`, in the asking agent's terminal.
+- The answer is read through the decisions read (`GET /decisions`); no CLI verb reads it since Swarm v4.
 
 Anything private goes through the person's Chat with PM. A decision asked there stays inside that private
 conversation.
