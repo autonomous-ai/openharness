@@ -59,7 +59,7 @@ const applied = (s: BrowserSettings, timeZone: string) => settingsHash({ ...s, t
 
 describe('Containers', () => {
   it('create args', async () => {
-    expect(await containers.start('a1', IMAGE, base, 'Asia/Ho_Chi_Minh')).toEqual({ limitsDropped: [] })
+    expect(await containers.start('a1', IMAGE, base, 'Asia/Ho_Chi_Minh', '')).toEqual({ limitsDropped: [] })
     const labels = ['--label', 'harness.agent=a1', '--label', 'harness.daemon=d1']
     expect(argvs().slice(0, 2)).toEqual([
       ['network', 'create', '--ignore', ...labels, 'harness-browser-a1'],
@@ -85,14 +85,14 @@ describe('Containers', () => {
 
   // Measured in the spike: without the mode the tmpfs is root's alone, and Chromium crashes at start.
   it('the HOME tmpfs has mode=1777', async () => {
-    await containers.start('a1', IMAGE, base, 'Asia/Ho_Chi_Minh')
+    await containers.start('a1', IMAGE, base, 'Asia/Ho_Chi_Minh', '')
     expect(pairs(createArgv()).filter(pair => pair.startsWith('--tmpfs /home/'))).toEqual(['--tmpfs /home/browser:rw,size=256m,mode=1777'])
   })
 
   it('with a proxy', async () => {
     // Removed, then made: Podman 4.6 has no `secret create --replace` (added in 4.7).
     fake.reply('secret rm', { code: 1, stderr: 'Error: harness-proxy-a1: no such secret' })
-    await containers.start('a1', IMAGE, { ...base, proxy }, 'Europe/Berlin')
+    await containers.start('a1', IMAGE, { ...base, proxy }, 'Europe/Berlin', 'id-1')
     const secret = named('secret')
     expect(secret.map(call => call.args)).toEqual([['secret', 'rm', 'harness-proxy-a1'], ['secret', 'create', 'harness-proxy-a1', '-']])
     expect(JSON.parse(secret[1]!.stdin)).toEqual(proxy)
@@ -102,26 +102,50 @@ describe('Containers', () => {
     expect(logged.join('\n')).not.toContain(proxy.password)
   })
 
+  it('the settings label holds a random id in place of the password, so it says nothing about the password', async () => {
+    const labelOf = async (password: string, secretId: string) => {
+      await containers.start('a1', IMAGE, { ...base, proxy: { ...proxy, password } }, 'UTC', secretId)
+      return pairs(named('create').at(-1)!.args).find(pair => pair.startsWith('--label harness.settings='))!
+    }
+    const first = await labelOf(proxy.password, 'id-1')
+    expect(await labelOf('another-pass', 'id-1')).toBe(first)
+    // A new password comes with a new id, and the container is created again.
+    expect(await labelOf(proxy.password, 'id-2')).not.toBe(first)
+    expect(first).not.toContain(applied({ ...base, proxy }, 'UTC'))
+  })
+
+  it('a start that fails removes what it made: its container, network and secret', async () => {
+    fake.reply('create', { code: 125, stderr: 'Error: harness-browser:abc123-2026w46: image not known' })
+    await expect(containers.start('a1', IMAGE, { ...base, proxy }, 'UTC', 'id-1')).rejects.toMatchObject({ state: 'podman_failed' })
+    expect(argvs().slice(-3)).toEqual([
+      ['rm', '--force', '--time', '10', 'harness-browser-a1'], ['network', 'rm', 'harness-browser-a1'], ['secret', 'rm', 'harness-proxy-a1'],
+    ])
+    // A clean-up that fails too is logged, and the start's own failure is the one returned.
+    fake.reply('network rm', { code: 1, stderr: 'Error: network is being used' })
+    await expect(containers.start('a1', IMAGE, base, 'UTC', '')).rejects.toThrow('image not known')
+    expect(logged.at(-1)).toContain('network is being used')
+  })
+
   it('without a proxy, the secret an earlier proxy left is removed', async () => {
     fake.reply('secret rm', { code: 1, stderr: 'Error: harness-proxy-a1: no such secret' })
-    await containers.start('a1', IMAGE, base, 'UTC')
+    await containers.start('a1', IMAGE, base, 'UTC', '')
     expect(named('secret').map(call => call.args)).toEqual([['secret', 'rm', 'harness-proxy-a1']])
     expect(named('start')).toHaveLength(1)
   })
 
   it('with a device', async () => {
     const device = { gpuVendor: 'Intel Inc.', gpuRenderer: 'Intel Iris', cpuCores: 8, memoryGb: 16 }
-    await containers.start('a1', IMAGE, { ...base, device }, 'UTC')
+    await containers.start('a1', IMAGE, { ...base, device }, 'UTC', '')
     expect(pairs(createArgv())).toContain(`-e DEVICE=${JSON.stringify(device)}`)
   })
 
   it('start is idempotent', async () => {
     listed(entry('a1', 'd1', { Labels: { 'harness.agent': 'a1', 'harness.daemon': 'd1', 'harness.settings': applied(base, 'UTC') } }))
-    expect(await containers.start('a1', IMAGE, base, 'UTC')).toEqual({ limitsDropped: [] })
+    expect(await containers.start('a1', IMAGE, base, 'UTC', '')).toEqual({ limitsDropped: [] })
     expect(argvs().map(args => args[0])).toEqual(['network', 'volume', 'ps'])
     // One that exited is started again as it is.
     listed(entry('a1', 'd1', { State: 'exited', ExitCode: 137, Labels: { 'harness.agent': 'a1', 'harness.daemon': 'd1', 'harness.settings': applied(base, 'UTC') } }))
-    await containers.start('a1', IMAGE, base, 'UTC')
+    await containers.start('a1', IMAGE, base, 'UTC', '')
     expect(argvs().slice(3).map(args => args[0])).toEqual(['network', 'volume', 'ps', 'start'])
     expect(named('create')).toEqual([])
   })
@@ -132,7 +156,7 @@ describe('Containers', () => {
     ['a different settings label', { Labels: { ...labels, 'harness.settings': 'other' } }],
   ])('a container on %s is created again and keeps its volume', async (_, old) => {
     listed(entry('a1', 'd1', old))
-    await containers.start('a1', IMAGE, base, 'UTC')
+    await containers.start('a1', IMAGE, base, 'UTC', '')
     expect(argvs()).toContainEqual(['rm', '--force', '--time', '10', 'harness-browser-a1'])
     expect(named('create')).toHaveLength(1)
     expect(named('volume').map(call => call.args[1])).toEqual(['create'])
@@ -141,7 +165,7 @@ describe('Containers', () => {
   it('refused limit is dropped and logged', async () => {
     // crun's refusal on a rootless machine without the memory controller (the prior art's pattern; not seen on macOS).
     fake.reply('create --memory 2g', { code: 125, stderr: 'Error: OCI runtime error: crun: the requested cgroup controller `memory` is not available' })
-    expect(await containers.start('a1', IMAGE, base, 'UTC')).toEqual({ limitsDropped: ['memory'] })
+    expect(await containers.start('a1', IMAGE, base, 'UTC', '')).toEqual({ limitsDropped: ['memory'] })
     const creates = named('create').map(call => call.args)
     expect(creates).toHaveLength(2)
     expect(creates[1]).not.toContain('--memory')
@@ -151,17 +175,20 @@ describe('Containers', () => {
 
   it('a refusal that names no limit fails, and an agent id that reads like one drops nothing', async () => {
     fake.reply('create', { code: 125, stderr: 'Error: creating container storage: the container name "harness-browser-cpu-bot" is already in use' })
-    await expect(containers.start('cpu-bot', IMAGE, base, 'UTC')).rejects.toMatchObject({ state: 'podman_failed' })
+    await expect(containers.start('cpu-bot', IMAGE, base, 'UTC', '')).rejects.toMatchObject({ state: 'podman_failed' })
     expect(named('create')).toHaveLength(1)
   })
 
-  it('stop keeps the volume and removes the network, start creates the network again', async () => {
+  it('stop keeps the volume and removes the network and the secret, start creates the network again', async () => {
     await containers.stop('a1')
     // A network still used by a container, even a stopped one, cannot be removed, so the container goes too.
-    expect(argvs()).toEqual([['rm', '--force', '--time', '10', 'harness-browser-a1'], ['network', 'rm', 'harness-browser-a1']])
-    await containers.start('a1', IMAGE, base, 'UTC')
-    expect(argvs()[2]![0]).toBe('network')
-    expect(argvs()[2]![1]).toBe('create')
+    // The proxy secret goes too: the password is in Podman only while its container is.
+    expect(argvs()).toEqual([
+      ['rm', '--force', '--time', '10', 'harness-browser-a1'], ['network', 'rm', 'harness-browser-a1'], ['secret', 'rm', 'harness-proxy-a1'],
+    ])
+    await containers.start('a1', IMAGE, base, 'UTC', '')
+    expect(argvs()[3]![0]).toBe('network')
+    expect(argvs()[3]![1]).toBe('create')
   })
 
   it('remove deletes container, volume, network and secret, and what is already gone is not an error', async () => {
@@ -171,8 +198,8 @@ describe('Containers', () => {
     expect(argvs()).toEqual([
       ['rm', '--force', '--time', '10', 'harness-browser-a1'],
       ['network', 'rm', 'harness-browser-a1'],
-      ['volume', 'rm', 'harness-browser-a1'],
       ['secret', 'rm', 'harness-proxy-a1'],
+      ['volume', 'rm', 'harness-browser-a1'],
     ])
     fake.reply('volume rm', { code: 2, stderr: 'Error: volume is being used' })
     await expect(containers.remove('a1')).rejects.toMatchObject({ state: 'podman_failed' })
@@ -182,7 +209,9 @@ describe('Containers', () => {
     listed(entry('a1', 'd1'), entry('a9', 'd1', { State: 'exited' }), entry('a5', 'd2'))
     expect(await containers.sweep(new Set(['a1']))).toBe(1)
     expect(argvs()[0]).toEqual(['ps', '-a', '--filter', 'label=harness.daemon=d1', '--format', 'json'])
-    expect(argvs().slice(1)).toEqual([['rm', '--force', '--time', '10', 'harness-browser-a9'], ['network', 'rm', 'harness-browser-a9']])
+    expect(argvs().slice(1)).toEqual([
+      ['rm', '--force', '--time', '10', 'harness-browser-a9'], ['network', 'rm', 'harness-browser-a9'], ['secret', 'rm', 'harness-proxy-a9'],
+    ])
   })
 
   it('running, ready, exitCode and execArgs', async () => {

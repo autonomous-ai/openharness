@@ -51,15 +51,44 @@ export class Containers {
   constructor(private readonly podman: Podman, private readonly daemonId: string, private readonly log: (line: string) => void) {}
 
   /**
-   * The label holds the settings as applied, the resolved zone included, so an Auto zone that moved with the proxy's
-   * exit address creates the container again too.
+   * `secretId` is the proxy's random id, which changes with its password ('' without a proxy). A start that fails removes what it made, so
+   * nothing it left runs, holds a network or keeps the password in Podman.
    */
-  async start(agentId: string, image: string, settings: BrowserSettings, timeZone: string): Promise<{ limitsDropped: string[] }> {
-    const name = nameOf(agentId)
+  async start(agentId: string, image: string, settings: BrowserSettings, timeZone: string, secretId: string): Promise<{ limitsDropped: string[] }> {
     const labels = ['--label', `harness.agent=${agentId}`, '--label', `harness.daemon=${this.daemonId}`]
-    await this.podman.run(['network', 'create', '--ignore', ...labels, name])
+    await this.podman.run(['network', 'create', '--ignore', ...labels, nameOf(agentId)])
+    try {
+      return await this.create(agentId, image, settings, timeZone, secretId, labels)
+    } catch (error) {
+      await this.stop(agentId).catch((cleanup: unknown) => {
+        this.log(`agent browser ${agentId}: a failed start was not cleaned up: ${(cleanup as Error).message}`)
+      })
+      throw error
+    }
+  }
+
+  /** The container goes with its network: Podman will not remove a network any container, even a stopped one, uses. */
+  async stop(agentId: string): Promise<void> {
+    await this.removeContainer(nameOf(agentId))
+    await unlessGone(this.podman.run(['network', 'rm', nameOf(agentId)]))
+    // Every start makes the secret again, so the password is in Podman only while its container is.
+    await unlessGone(this.podman.run(['secret', 'rm', secretOf(agentId)]))
+  }
+
+  async remove(agentId: string): Promise<void> {
+    await this.stop(agentId)
+    await unlessGone(this.podman.run(['volume', 'rm', nameOf(agentId)]))
+  }
+
+  /**
+   * The label holds the settings as applied, the resolved zone included, so an Auto zone that moved with the proxy's
+   * exit address creates the container again too. The proxy's random id stands in for its password: a hash of the
+   * password on argv and a label could be tried against guesses (review, 2026-11-10).
+   */
+  private async create(agentId: string, image: string, settings: BrowserSettings, timeZone: string, secretId: string, labels: string[]): Promise<{ limitsDropped: string[] }> {
+    const name = nameOf(agentId)
     await this.podman.run(['volume', 'create', '--ignore', ...labels, name])
-    const hash = settingsHash({ ...settings, timeZone })
+    const hash = settingsHash({ ...settings, timeZone, proxy: settings.proxy && { ...settings.proxy, password: secretId } })
     const existing = await this.find(agentId)
     // A locally built image is listed under Podman's `localhost/` prefix.
     if (existing && [image, `localhost/${image}`].includes(existing.Image) && existing.Labels?.['harness.settings'] === hash) {
@@ -109,18 +138,6 @@ export class Containers {
         this.log(`agent browser ${agentId}: Podman refused the ${limit.label} limit; the browser runs without it`)
       }
     }
-  }
-
-  /** The container goes with its network: Podman will not remove a network any container, even a stopped one, uses. */
-  async stop(agentId: string): Promise<void> {
-    await this.removeContainer(nameOf(agentId))
-    await unlessGone(this.podman.run(['network', 'rm', nameOf(agentId)]))
-  }
-
-  async remove(agentId: string): Promise<void> {
-    await this.stop(agentId)
-    await unlessGone(this.podman.run(['volume', 'rm', nameOf(agentId)]))
-    await unlessGone(this.podman.run(['secret', 'rm', secretOf(agentId)]))
   }
 
   /** Volumes are never swept: an unlisted one may still hold a person's login. */

@@ -641,8 +641,10 @@ Saving a change that needs it restarts the browser; the login stays.
 - **Applying them:**
   - Human input applies to the next tool call.
   - Every other change creates the container again. The volume stays, so the login stays.
-  - The container's `harness.settings` label holds a hash of everything except human input. A start compares it and
-    creates the container again when it differs.
+  - The container's `harness.settings` label holds a hash of everything except human input and the proxy password. In
+    the password's place it hashes a random per-agent id kept beside the password and replaced when the password
+    changes, so the label tells nothing about the password. A start compares it and creates the container again when
+    it differs.
 - **Requests** *(call)*: `agent_browser_settings {agentId}` reads them, `agent_browser_settings_save {agentId,
   settings}` writes them, and `agent_browser_proxy_test {agentId, proxy}` tests a proxy. All three are refused unless
   the caller may open the browser.
@@ -674,8 +676,8 @@ Saving a change that needs it restarts the browser; the login stays.
 - **The password** reaches the container as a Podman secret, never as an environment variable or an argument.
   - The secret is named `harness-proxy-<agentId>`, created from stdin, and mounted with
     `--secret harness-proxy-<agentId>,target=harness-proxy`, so the relay always reads `/run/secrets/harness-proxy`.
-  - A changed password replaces the secret (`podman secret create --replace`).
-  - The secret is removed with the container.
+  - A changed password replaces the secret: it is removed, then created again (Podman before 4.7 has no `--replace`).
+  - The secret lives only while its container does: a stop, a sweep and a delete all remove it.
 - **Test** runs from the agent's machine: it asks an address-lookup service through the proxy for the exit address
   and its time zone, with a 15 s timeout.
   - The service is the prior art's, with the address added to what it returns:

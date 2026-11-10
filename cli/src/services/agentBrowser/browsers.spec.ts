@@ -48,7 +48,7 @@ function rig() {
     memoryBytes: vi.fn(async () => 17 * GiB),
   }
   const containers = {
-    start: vi.fn(async (agentId: string, _image: string, _settings: BrowserSettings, _zone: string) => {
+    start: vi.fn(async (agentId: string, _image: string, _settings: BrowserSettings, _zone: string, _secretId: string) => {
       running.add(agentId)
       return { limitsDropped: [] as string[] }
     }),
@@ -66,6 +66,7 @@ function rig() {
   const measured: string[] = []
   const logged: string[] = []
   const closed: string[] = []
+  const podmanAnswered = vi.fn()
   const state = new StateFile(path)
   const browsers: Browsers = new Browsers({
     podman: podman as unknown as Podman,
@@ -79,6 +80,7 @@ function rig() {
     closeViewers: agentId => closed.push(agentId),
     measure: name => measured.push(name),
     log: line => logged.push(line),
+    podmanAnswered,
   })
   /** The container exits, and nothing has told Browsers yet. */
   const vanish = (agentId: string, code: number) => {
@@ -89,7 +91,7 @@ function rig() {
     vanish(agentId, code)
     browsers.exited(agentId)
   }
-  return { browsers, podman, containers, setup, image, exitZone, state, availability, connection, running, seen, measured, logged, closed, vanish, crash }
+  return { browsers, podman, containers, setup, image, exitZone, state, availability, connection, running, seen, measured, logged, closed, podmanAnswered, vanish, crash }
 }
 
 const shown = (r: ReturnType<typeof rig>, agentId: string) => label(r.browsers.state(agentId))
@@ -332,6 +334,81 @@ describe('Browsers', () => {
     await r.browsers.stop('a1')
     await r.browsers.retry('a2')
     expect(shown(r, 'a2')).toBe('ready')
+  })
+
+  it('starts at the same moment over the limit start exactly the limit, and a failed start gives its slot back', async () => {
+    const r = rig()
+    // A 4 GB Podman machine: one browser.
+    r.podman.memoryBytes.mockResolvedValue(4 * GiB)
+    const agents = ['a1', 'a2', 'a3']
+    await Promise.all(agents.map(agentId => r.browsers.start(agentId)))
+    expect(agents.map(agentId => shown(r, agentId)).sort()).toEqual(['failed/browser_limit', 'failed/browser_limit', 'ready'])
+    expect(r.containers.start).toHaveBeenCalledOnce()
+    for (const agentId of agents) await r.browsers.stop(agentId)
+    r.containers.start.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman create failed: image not known'))
+    await r.browsers.start('a4')
+    expect(shown(r, 'a4')).toBe('failed/podman_down')
+    await r.browsers.start('a5')
+    expect(shown(r, 'a5')).toBe('ready')
+  })
+
+  it('a browser not ready within 60 s is removed, so it holds no slot', async () => {
+    const r = rig()
+    r.podman.memoryBytes.mockResolvedValue(4 * GiB)
+    r.containers.ready.mockResolvedValue(false)
+    const never = r.browsers.start('a1')
+    await vi.advanceTimersByTimeAsync(120_000)
+    await never
+    expect(shown(r, 'a1')).toBe('failed/browser_stopped')
+    expect(r.containers.stop).toHaveBeenCalledWith('a1')
+    expect(r.running.has('a1')).toBe(false)
+    // A removal that fails is logged, and the browser still shows why it stopped.
+    r.containers.stop.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman rm timed out after 30000 ms'))
+    const again = r.browsers.start('a2')
+    await vi.advanceTimersByTimeAsync(120_000)
+    await again
+    expect(shown(r, 'a2')).toBe('failed/browser_stopped')
+    expect(r.logged.join('\n')).toContain('podman rm timed out')
+  })
+
+  it('a start whose listing Podman answered says so, for the event stream to try again', async () => {
+    const r = rig()
+    await r.browsers.start('a1')
+    expect(r.podmanAnswered).toHaveBeenCalledOnce()
+    const down = rig()
+    down.containers.running.mockRejectedValue(new PodmanError('podman_failed', 'podman ps failed: machine is not running'))
+    await down.browsers.start('a1')
+    expect(down.podmanAnswered).not.toHaveBeenCalled()
+  })
+
+  it("the proxy's secret id changes with its password alone, outlives a restart and is never handed out", async () => {
+    const r = rig()
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    const lastId = (of = r) => of.containers.start.mock.calls.at(-1)![4]
+    const withProxy = { ...defaultSettings(host), proxy }
+    await r.browsers.saveSettings('a1', withProxy)
+    await r.browsers.start('a1')
+    const first = lastId()
+    expect(first).toMatch(uuid)
+    expect(r.containers.start.mock.calls.at(-1)![2]).toEqual(withProxy)
+    expect(r.browsers.settings('a1')).toEqual(withProxy)
+    // Kept beside the password, in the person's own 0600 file.
+    expect(r.state.read().browsers.a1!.proxy).toMatchObject({ password: proxy.password, secretId: first })
+    await r.browsers.saveSettings('a1', { ...withProxy, screen: '1366x768' })
+    await settle()
+    expect(r.containers.start).toHaveBeenCalledTimes(2)
+    expect(lastId()).toBe(first)
+    const restarted = rig()
+    await restarted.browsers.start('a1')
+    expect(lastId(restarted)).toBe(first)
+    await r.browsers.saveSettings('a1', { ...withProxy, proxy: { ...proxy, password: 'n3w-pass' } })
+    await settle()
+    expect(r.containers.start).toHaveBeenCalledTimes(3)
+    expect(lastId()).toMatch(uuid)
+    expect(lastId()).not.toBe(first)
+    await r.browsers.saveSettings('a1', defaultSettings(host))
+    await settle()
+    expect(lastId()).toBe('')
   })
 
   it('exit restarts at most 3 times in a row with backoff 1 s, 2 s, 4 s; a fourth gives browser_stopped', async () => {
@@ -587,5 +664,16 @@ describe('Browsers', () => {
     r.containers.running.mockRejectedValueOnce(new PodmanError('podman_failed', 'podman ps timed out after 30000 ms'))
     await r.browsers.reconcile()
     expect(r.logged.at(-1)).toContain('timed out')
+  })
+
+  it('a listing that keeps failing is logged once, until one works again', async () => {
+    const r = rig()
+    r.containers.running.mockRejectedValue(new PodmanError('podman_failed', 'podman ps failed: machine is not running'))
+    for (let i = 0; i < 3; i++) await r.browsers.reconcile()
+    expect(r.logged).toEqual([expect.stringContaining('machine is not running')])
+    r.containers.running.mockResolvedValueOnce([])
+    await r.browsers.reconcile()
+    await r.browsers.reconcile()
+    expect(r.logged).toHaveLength(2)
   })
 })

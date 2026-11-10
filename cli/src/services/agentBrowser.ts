@@ -123,6 +123,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     },
     closeViewers: agentId => { for (const listener of viewerListeners) listener(agentId) },
     measure: count,
+    podmanAnswered: () => events?.wake(),
   })
 
   /** The agents attached since this service started: attached is said on every look at an agent. */
@@ -135,7 +136,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
 
   let begun = false
   let stopped = false
-  let events: { close(): void } | null = null
+  let events: { close(): void; wake(): void } | null = null
   /** The first use: one event stream for this daemon's exits, and the clean-up after whatever happened while it was down. */
   const begin = () => {
     if (begun) return
@@ -143,7 +144,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
     // Once looked for: a stream started before Podman's path is known fails and waits its backoff.
     void podman.path().catch(() => null).then(() => {
       if (stopped) return
-      events = watchEvents(podman, daemonId, { exited: agentId => browsers.exited(agentId), reconnected: () => void browsers.reconcile() })
+      events = watchEvents(podman, daemonId, { exited: agentId => browsers.exited(agentId), reconnected: () => void browsers.reconcile(), log })
     })
     void (async () => {
       // Only an answer deletes: none, or a failed one, must never cost a person a login.

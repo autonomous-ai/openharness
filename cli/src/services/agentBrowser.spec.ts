@@ -149,10 +149,13 @@ describe('the agent browser service', () => {
     expect(asked()).toContain('rm --force --time 10 harness-browser-a1')
     expect(asked()).not.toContain('volume rm harness-browser-a1')
     expect(port.frameContext('a1')).toBeUndefined()
+    // The proxy secret lives only while its container does.
+    const secretRemoves = () => asked().filter(line => line === 'secret rm harness-proxy-a1').length
+    await eventually(() => expect(secretRemoves()).toBe(2))
     // A stopped agent is still listed: its purge deletes its browser and its profile.
     port.deleted('a1')
     await eventually(() => expect(asked()).toContain('volume rm harness-browser-a1'))
-    await eventually(() => expect(asked().filter(line => line === 'secret rm harness-proxy-a1')).toHaveLength(2))
+    await eventually(() => expect(secretRemoves()).toBe(3))
     // An agent without a browser costs Podman nothing: a stop or a delete closes its viewers at once, before any
     // Podman call, and none was asked for.
     const before = asked().length

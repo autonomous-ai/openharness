@@ -11,15 +11,18 @@ type FakeChild = EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill
 function stream() {
   const children: FakeChild[] = []
   const spawned: string[][] = []
+  /** Set while Podman's machine is stopped: every `podman events` ends as soon as it starts. */
+  const down = { value: false }
   const podman = {
     spawn: vi.fn((args: string[]) => {
       spawned.push(args)
       const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() }) as FakeChild
       children.push(child)
+      if (down.value) queueMicrotask(() => child.emit('close', 125))
       return child as unknown as ChildProcess
     }),
   } as unknown as Podman
-  return { podman, children, spawned }
+  return { podman, children, spawned, down }
 }
 
 // The spike's own lines (Podman 5.8.1), trimmed: exec and exec_died come hundreds a minute while a viewer is open.
@@ -40,7 +43,7 @@ describe('watchEvents', () => {
   it('streams container exits of this daemon only', async () => {
     const { podman, children, spawned } = stream()
     const exited = vi.fn()
-    const watch = watchEvents(podman, 'd1', { exited, reconnected: vi.fn() })
+    const watch = watchEvents(podman, 'd1', { exited, reconnected: vi.fn(), log: vi.fn() })
     expect(spawned).toEqual([['events', '--format', 'json', '--filter', 'event=died', '--filter', 'label=harness.daemon=d1']])
     await lines(children[0]!,
       event('exec', 'a1'), event('exec_died', 'a1'), event('died', 'a1'), event('died', 'a5', 'd2'),
@@ -53,7 +56,7 @@ describe('watchEvents', () => {
   it('a dropped stream restarts with backoff (1 s, doubling, capped at 30 s) and calls reconnected', async () => {
     const { podman, children } = stream()
     const reconnected = vi.fn()
-    const watch = watchEvents(podman, 'd1', { exited: vi.fn(), reconnected })
+    const watch = watchEvents(podman, 'd1', { exited: vi.fn(), reconnected, log: vi.fn() })
     const waits: number[] = []
     for (let drop = 0; drop < 7; drop++) {
       children.at(-1)!.emit('close', 1)
@@ -76,11 +79,40 @@ describe('watchEvents', () => {
     watch.close()
   })
 
+  it('with Podman down it gives up after 8 tries in a row, says so once, and wake() starts it again', async () => {
+    const { podman, children, down } = stream()
+    down.value = true
+    const log = vi.fn()
+    const reconnected = vi.fn()
+    const watch = watchEvents(podman, 'd1', { exited: vi.fn(), reconnected, log })
+    // An idle daemon an hour on: the first stream and 8 more, then nothing.
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(children).toHaveLength(9)
+    expect(reconnected).toHaveBeenCalledTimes(8)
+    expect(log.mock.calls).toEqual([[expect.stringContaining('dropped')], [expect.stringContaining('8 times')]])
+    // Podman answered a browser start: one stream at once, and the backoff from the start.
+    down.value = false
+    watch.wake()
+    expect(children).toHaveLength(10)
+    expect(reconnected).toHaveBeenCalledTimes(9)
+    // A stream that runs is left as it is.
+    watch.wake()
+    expect(children).toHaveLength(10)
+    // Waiting out a backoff, it reconnects at once.
+    children.at(-1)!.emit('close', 1)
+    watch.wake()
+    expect(children).toHaveLength(11)
+    expect(log).toHaveBeenCalledTimes(3)
+    watch.close()
+    watch.wake()
+    expect(children).toHaveLength(11)
+  })
+
   it('a spawn that throws is retried the same way', async () => {
     const { podman, children } = stream()
     vi.mocked(podman.spawn).mockImplementationOnce(() => { throw new Error('Podman is not installed') })
     const reconnected = vi.fn()
-    const watch = watchEvents(podman, 'd1', { exited: vi.fn(), reconnected })
+    const watch = watchEvents(podman, 'd1', { exited: vi.fn(), reconnected, log: vi.fn() })
     expect(children).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(1_000)
     expect(children).toHaveLength(1)
@@ -90,7 +122,7 @@ describe('watchEvents', () => {
 
   it('close() kills the child and nothing restarts', async () => {
     const { podman, children } = stream()
-    const watch = watchEvents(podman, 'd1', { exited: vi.fn(), reconnected: vi.fn() })
+    const watch = watchEvents(podman, 'd1', { exited: vi.fn(), reconnected: vi.fn(), log: vi.fn() })
     watch.close()
     expect(children[0]!.kill).toHaveBeenCalledOnce()
     children[0]!.emit('close', null)
@@ -98,7 +130,7 @@ describe('watchEvents', () => {
     expect(children).toHaveLength(1)
     // Closed while waiting to restart: the restart never comes.
     const again = stream()
-    const second = watchEvents(again.podman, 'd1', { exited: vi.fn(), reconnected: vi.fn() })
+    const second = watchEvents(again.podman, 'd1', { exited: vi.fn(), reconnected: vi.fn(), log: vi.fn() })
     again.children[0]!.emit('close', 1)
     second.close()
     await vi.advanceTimersByTimeAsync(60_000)

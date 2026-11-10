@@ -3,6 +3,7 @@
  * exit, and the daemon start that cleans up after whatever happened while the service was down (spec § Lifecycle).
  * Work for one agent runs in order; different agents run side by side.
  */
+import { randomUUID } from 'node:crypto'
 import { browserLimit, type Containers } from './containers.js'
 import { PodmanError, type Podman } from './podman.js'
 import { defaultSettings, settingsHash, type BrowserHost, type BrowserSettings } from './settings.js'
@@ -42,6 +43,18 @@ function failedState(error: unknown): string {
 
 const sleep = (ms: number) => new Promise<void>(done => setTimeout(done, ms))
 
+/**
+ * The proxy as the state file keeps it: beside its password, a random id that a new password replaces. The container's
+ * settings label carries the id, never anything made from the password.
+ */
+type SavedProxy = NonNullable<BrowserSettings['proxy']> & { secretId?: string }
+
+function withoutSecretId(saved: BrowserSettings): BrowserSettings {
+  if (!saved.proxy) return saved
+  const { secretId: _secretId, ...proxy } = saved.proxy as SavedProxy
+  return { ...saved, proxy }
+}
+
 export class Browsers {
   private readonly states = new Map<string, BrowserState>()
   private readonly queues = new Map<string, Promise<void>>()
@@ -52,6 +65,14 @@ export class Browsers {
   /** Agents an exit was heard for, checked against Podman before anything acts on it. */
   private readonly died = new Set<string>()
   private readonly restarts = new Map<string, { count: number; readyAt: number | null; timer?: NodeJS.Timeout }>()
+  /**
+   * Agents between passing the browser limit and being ready, counted with what Podman lists as running. Claimed in
+   * the same turn as the check: three browsers attached at daemon start each saw none running, and all started on a
+   * machine with room for one (review, 2026-11-10).
+   */
+  private readonly starting = new Set<string>()
+  /** Whether the last look at what runs failed, so a Podman that stays down is logged once. */
+  private listingFailed = false
   /** What a browser waiting on setup shows: its current step, or how it failed. */
   private setupShown: BrowserState | null = null
   private setupRun: Promise<void> | null = null
@@ -69,6 +90,8 @@ export class Browsers {
     closeViewers: (agentId: string) => void
     measure: (name: string) => void
     log: (line: string) => void
+    /** Podman listed what runs for a start: the event stream, if it gave up, connects again. */
+    podmanAnswered: () => void
     now?: () => number
   }) {
     this.now = deps.now ?? Date.now
@@ -130,13 +153,25 @@ export class Browsers {
   }
 
   settings(agentId: string): BrowserSettings {
-    return this.deps.state.read().browsers[agentId] ?? defaultSettings(this.deps.host)
+    const saved = this.deps.state.read().browsers[agentId]
+    return saved ? withoutSecretId(saved) : defaultSettings(this.deps.host)
   }
 
-  /** Human input applies to the next tool call; anything else creates the container again, and the volume stays. */
+  /**
+   * Human input applies to the next tool call; anything else creates the container again, and the volume stays. A new
+   * password drops the proxy's id, so the next start makes another and the label changes.
+   */
   async saveSettings(agentId: string, next: BrowserSettings): Promise<void> {
     const before = this.settings(agentId)
-    this.deps.state.update(s => { s.browsers[agentId] = next })
+    this.deps.state.update(s => {
+      const kept = (s.browsers[agentId]?.proxy as SavedProxy | null | undefined)?.secretId
+      if (!kept || !next.proxy || next.proxy.password !== before.proxy?.password) {
+        s.browsers[agentId] = next
+        return
+      }
+      const proxy: SavedProxy = { ...next.proxy, secretId: kept }
+      s.browsers[agentId] = { ...next, proxy }
+    })
     const shown = this.states.get(agentId)
     if (shown && shown.state !== 'setup' && settingsHash(before) !== settingsHash(next)) void this.start(agentId)
   }
@@ -156,9 +191,11 @@ export class Browsers {
     try {
       running = new Set(await this.deps.containers.running())
     } catch (error) {
-      this.deps.log(`agent browser: could not list running browsers: ${(error as Error).message}`)
+      if (!this.listingFailed) this.deps.log(`agent browser: could not list running browsers: ${(error as Error).message}`)
+      this.listingFailed = true
       return
     }
+    this.listingFailed = false
     for (const [agentId, shown] of this.states) if (shown.state === 'ready' && !running.has(agentId)) this.exited(agentId)
   }
 
@@ -222,24 +259,37 @@ export class Browsers {
     const current = () => this.generation(agentId) === generation
     if (!current()) return
     if (this.states.get(agentId)?.state !== 'setup') this.set(agentId, STARTING)
+    let claimed = false
     try {
       let settings = defaultSettings(this.deps.host)
-      this.deps.state.update(s => { settings = s.browsers[agentId] ??= settings })
+      let secretId = ''
+      this.deps.state.update(s => {
+        const saved = s.browsers[agentId] ??= settings
+        // Made here, the one place a proxy is applied, after a save with a new password dropped the last one.
+        if (saved.proxy) secretId = (saved.proxy as SavedProxy).secretId ??= randomUUID()
+        settings = withoutSecretId(saved)
+      })
       if (!afterSetup) {
         if (this.setupRun) return this.needsSetup(agentId)
         await this.podmanUp()
       }
       const running = await this.deps.containers.running()
-      if (!running.includes(agentId) && running.length >= browserLimit(await this.deps.podman.memoryBytes())) {
-        throw new PodmanError('browser_limit', `${running.length} browsers already run on this machine`)
+      this.deps.podmanAnswered()
+      const limit = browserLimit(await this.deps.podman.memoryBytes())
+      // No await between the count and the claim.
+      const taken = new Set([...running, ...this.starting])
+      if (!running.includes(agentId) && taken.size >= limit) {
+        throw new PodmanError('browser_limit', `${taken.size} browsers already run on this machine`)
       }
+      this.starting.add(agentId)
+      claimed = true
       const slow = setTimeout(() => { if (current()) this.set(agentId, BUILDING) }, IMAGE_LOOKUP_MS)
       const image = await this.deps.image().finally(() => clearTimeout(slow))
       if (!current()) return
       this.set(agentId, STARTING)
       const timeZone = await this.timeZone(agentId, settings)
       this.died.delete(agentId)
-      const { limitsDropped } = await this.deps.containers.start(agentId, image, settings, timeZone)
+      const { limitsDropped } = await this.deps.containers.start(agentId, image, settings, timeZone, secretId)
       if (limitsDropped.length > 0) this.deps.measure('agent_browser_limit_dropped')
       for (let tries = 0; tries < READY_TRIES; tries++) {
         if (tries > 0) await sleep(READY_EVERY_MS)
@@ -252,6 +302,10 @@ export class Browsers {
           return
         }
       }
+      // Left up, it would run unseen and count against the limit.
+      await this.deps.containers.stop(agentId).catch((error: unknown) => {
+        this.deps.log(`agent browser ${agentId}: the browser that was not ready was not removed: ${(error as Error).message}`)
+      })
       throw new PodmanError('browser_stopped', `the browser was not ready within ${READY_TRIES} s`)
     } catch (error) {
       if (!current()) return
@@ -259,6 +313,9 @@ export class Browsers {
       const state = failedState(error)
       if (state === 'needs_setup') return this.needsSetup(agentId)
       this.fail(agentId, state, (error as Error).message)
+    } finally {
+      // Ready, it runs and Podman lists it; anything else, it holds no slot.
+      if (claimed) this.starting.delete(agentId)
     }
   }
 
