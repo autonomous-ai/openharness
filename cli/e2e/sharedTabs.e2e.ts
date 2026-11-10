@@ -16,11 +16,10 @@
  */
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
-import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
 import { b64d, fingerprint } from '../src/lib/e2ee/core.js'
 import { parseRoster, type Roster } from '../src/messages/roster.js'
 import { LocalClient } from './harness/client.js'
@@ -249,7 +248,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
 
     // 1. Bob's second computer takes the pin from his first (A2), and adds a harness of its own.
     let t = Date.now()
-    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' }, withoutGh)
+    const two = await signIn(backend, bob1b, { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', VITEST: '' }, signedOutGh)
     const B2: Side = { who: bob1b, d: two.daemon, machineId: two.machineId, client: two.client }
     sides.push(B2)
     const held = await rosterOf(A, sharedTabId)
@@ -323,7 +322,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
     expect(prompts(B, api).filter((p) => p.includes(`[${waiting.id} from `)), 'delivered exactly once').toHaveLength(1)
     expect((await am(B, { action: 'history' })).messages.filter((m: { id: string }) => m.id === waiting.id)).toHaveLength(1)
 
-    // 7. The tab's tasks with a stub gh first on Alice's PATH; with no gh at all on the second computer's.
+    // 7. The tab's tasks with a stub gh first on Alice's PATH; with a gh not signed in on the second computer's.
     const calls = join(A.d.root, 'gh-calls.log')
     writeFileSync(join(A.d.root, 'bin', 'gh'), cannedGh(sharedTabId, calls), { mode: 0o755 })
     const tasks = await am(A, { action: 'share_tasks', sharedTabId })
@@ -336,7 +335,7 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('shared tabs across accou
       `search issues harness-tab:${sharedTabId} --match body --limit 100 --json number,title,state,url,repository,body,updatedAt`,
       `search prs harness-tab:${sharedTabId} --match body --limit 100 --json number,state,url,repository,body,isDraft`,
     ])
-    expect(await am(B2, { action: 'share_tasks', sharedTabId })).toMatchObject({ error: 'GH_MISSING' })
+    expect(await am(B2, { action: 'share_tasks', sharedTabId })).toMatchObject({ error: 'GH_SIGNED_OUT' })
 
     // 5. Observation: Alice's harness is shared read-only with Bob; Bob's terminal stream from it, and no input.
     t = Date.now()
@@ -646,21 +645,12 @@ async function holdThenNotInTab(A: Side, id: string, removed: number, label: str
 }
 
 /**
- * A daemon with no `gh` at all: the forbidding stub removed, and a PATH of the test's own bin folder, a folder holding
- * only tmux, and the system's folders. Homebrew's folder, where tmux and the developer's gh both live, is not on it, so
- * the daemon finds tmux there and never adopts that folder (lib/tmuxOnPath.ts prepends tmux's folder to PATH when tmux
- * is missing).
+ * A daemon whose `gh` is not signed in, as gh says it (lib/github.ts reads that as GH_SIGNED_OUT). Not "no gh at all": the
+ * daemon also looks in Homebrew's folders and the login shell's PATH (lib/github.ts GH_DIRS), where a developer's Mac or a CI
+ * runner has a real one, so a missing gh cannot be made here, and a real gh would read whatever login that computer has.
  */
-async function withoutGh(d: IsolatedDaemon): Promise<void> {
-  const tmux = resolveBinaryOnPath('tmux', d.env)
-  if (!tmux) throw new Error('tmux is required')
-  const tools = join(d.root, 'tools')
-  mkdirSync(tools, { recursive: true })
-  symlinkSync(tmux, join(tools, 'tmux'))
-  rmSync(join(d.root, 'bin', 'gh'))
-  d.env.PATH = [join(d.root, 'bin'), tools, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':')
-  const found = d.env.PATH.split(':').filter((dir) => existsSync(join(dir, 'gh')))
-  if (found.length) throw new Error(`a gh is on the PATH meant to have none: ${found.join(', ')}`)
+async function signedOutGh(d: IsolatedDaemon): Promise<void> {
+  writeFileSync(join(d.root, 'bin', 'gh'), '#!/bin/sh\necho \'You are not logged into any GitHub hosts. To log in, run: gh auth login\' >&2\nexit 4\n', { mode: 0o755 })
 }
 
 /** A `gh` with canned answers for the three calls a shared tab's tasks make (messages/tasks.ts), each noted in [log];
