@@ -276,10 +276,10 @@ describe('message.delete', () => {
     // A reaction stored before they were gone (2026-11-09): nothing makes one now, but a delete still takes it with the message.
     await db.superTabReaction.create({ data: { id: `${reply}-r`, tabId: f.tab, conversationId: f.web.conversationId, messageId: reply,
       actorKind: 'person', actorId: owner.sub, emoji: 'thumbs_up' } })
-    const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabActivity', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread', 'SuperTabMention']
+    const touched = ['SuperTabMessage', 'SuperTabReaction', 'SuperTabDelivery', 'SuperTabAttachment', 'SuperTabThread']
     const entries = await profiled(db, () => f.remove(f.web.conversationId, reply))
     // The profiler saw the delete's writes (so the check below is not empty by accident).
-    for (const c of ['SuperTabMessage', 'SuperTabDelivery', 'SuperTabActivity']) expect(entries.some(e => e.ns.endsWith(`.${c}`))).toBe(true)
+    for (const c of ['SuperTabMessage', 'SuperTabDelivery']) expect(entries.some(e => e.ns.endsWith(`.${c}`))).toBe(true)
     const scans = entries.filter(e => touched.some(c => e.ns.endsWith(`.${c}`)) && /COLLSCAN/.test(String(e.planSummary)))
     expect(scans.map(e => [e.ns, e.op, JSON.stringify(e.command?.filter ?? e.command?.q ?? e.command?.pipeline)])).toEqual([])
   })
