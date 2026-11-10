@@ -77,6 +77,19 @@ jobs:
           fi
           zsh -fc 'autoload -U compaudit && compaudit'
       - run: npm ci --no-audit --no-fund
+      # The specs that run against the real backend (e2e/harness/realBackend.ts: Attach and chat, a Lead
+      # reading a terminal, shared tabs) need it and its in-memory Mongo and Redis. Without them they
+      # skip, and they did here until 2026-11-10: Desktop's Swarm then broke twice in production
+      # behind tests whose fake backend still answered the old way.
+      - name: Set up the real backend and its in-memory Mongo and Redis
+        run: |
+          sudo apt-get install -y -q --no-install-recommends redis-server
+          (cd ../backend && npm ci --no-audit --no-fund)
+          mkdir -p "$RUNNER_TEMP/test-services" && cd "$RUNNER_TEMP/test-services"
+          echo '{"name":"test-services","private":true}' > package.json
+          REDISMS_DISABLE_POSTINSTALL=1 npm install --no-audit --no-fund mongodb-memory-server@10 redis-memory-server@0.12
+          echo "HARNESS_E2E_SERVICES_DIR=$RUNNER_TEMP/test-services" >> "$GITHUB_ENV"
+          echo "HARNESS_E2E_REDIS_SERVER=$(command -v redis-server)" >> "$GITHUB_ENV"
       # The complete file list, before sharding: the summary requires each file exactly once.
       - name: Discover the complete end-to-end inventory
         run: npx vitest list --config vitest.e2e.ci.config.ts --filesOnly --json="$RUNNER_TEMP/inventory-${{ matrix.shard }}.json"
