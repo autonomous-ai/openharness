@@ -60,10 +60,6 @@ export function fakeGitHub(options: { publicKey: KeyObject; appId: string; now?:
       const id = owners.get(match[1]!.toLowerCase())
       return id === undefined ? json(404, { message: 'Not Found' }) : json(200, { id })
     }
-    if (method === 'GET' && url.pathname === '/app') {
-      if (!jwtValid(auth)) return json(401, { message: 'Bad credentials' })
-      return json(200, { slug: 'harness-fixture' })
-    }
     if (method === 'GET' && (match = /^\/users\/([^/]+)$/.exec(url.pathname))) {
       const login = decodeURIComponent(match[1]!)
       return control.botId && login.endsWith('[bot]') ? json(200, { login, id: control.botId }) : json(404, { message: 'Not Found' })
