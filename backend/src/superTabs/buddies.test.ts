@@ -491,7 +491,7 @@ describe('adding a Buddy', () => {
 })
 
 describe('a Buddy\'s start on its machine', () => {
-  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [] }
   const user = { sub: 'peer', email: peer.email, role: 'user', autonomousEnv: 'test' } as never
 
   // A Swarm-wide Buddy works in its own folder, in no project: no project's folder is prepared for it, and its chat is no
@@ -1723,7 +1723,7 @@ describe('several Buddies: where a person\'s lines go', () => {
 // session and moves a model switch in the right one; an older host, which names the main chat, still ends the right session.
 describe('several Buddies on their machine', () => {
   const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
-  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [] }
   const user = { sub: 'peer', email: peer.email, role: 'user', autonomousEnv: 'test' } as never
   function withSession() {
     const f = fresh()
