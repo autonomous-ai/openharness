@@ -2429,10 +2429,7 @@ export class SuperTabHost {
       ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, message.replyTo, buddy)}\n\n`
       : '')
     const source = object(message.source)
-    // A Buddy's proposal is its owner's own message (anh Dee, task #2926): its goal, scope and priority ride in its source, for the PM.
-    const details = source.kind === 'buddy-proposal' && typeof source.goal === 'string' && typeof source.scope === 'string'
-      ? `\n\nProposal details from their Buddy, for the PM:\nGoal: ${source.goal}\nScope: ${source.scope}\nPriority: ${String(source.priority)}` : ''
-    const body = `${String(message.text)}${details}${files ? `${message.text ? '\n\n' : ''}${files}` : ''}`
+    const body = `${String(message.text)}${files ? `${message.text ? '\n\n' : ''}${files}` : ''}`
     // Swarm v4 (anh Dee 2026-11-08): one plain message, the way lampOS's agents wrote to each other: who, then the text.
     const said = (otherAccount ? OTHER_ACCOUNT : '') + (othersWords ? BUDDY_OTHERS : '')
       + `@${shownName(message.author, 'someone')}, to you:\n${othersWords ? setOff(body) : body}`
