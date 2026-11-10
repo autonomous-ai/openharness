@@ -14,6 +14,9 @@ function fixture() {
   const first = state.people[0]!
   state.people.push(...['dee', 'ken-a', 'ken-b', 'stranger'].map(id => ({ ...first, id, email: `${id}@example.com`, username: id, role: 'collaborator' as const })))
   const project = projectsOf(state)[0]!
+  // dee's 1:1 chat with an agent of theirs: in no project.
+  state.conversations.push({ id: 'own-chat', kind: 'agent-chat', title: 'Ada', leadId: null, agentIds: [], archived: false, brief: '', checks: [],
+    assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'dee', generation: first.generation }] } })
   const check = (approvals = [row()], named = ['yes'], config: typeof authority | null = authority, sender = { kind: 'agent' as Author['kind'], id: 'pm' }, text = after) =>
     allowedDrops(state, project, before, text, sender, named, approvals, 500, {}, config)
   return { state, project, check }
@@ -58,6 +61,7 @@ describe('configured instruction approval authority', () => {
     ['relayed', row('yes', 'dee', { source: true })],
     ['old', row('yes', 'dee', { createdAt: 499 })],
     ['another project', row('yes', 'dee', { conversationId: 'elsewhere' })],
+    ['private 1:1 chat', row('yes', 'dee', { conversationId: 'own-chat' })],
   ])('rejects a %s approval even when it carries the decider ID', (_name, approval) => {
     expect(() => fixture().check([approval])).toThrow(/rules people gave/)
   })

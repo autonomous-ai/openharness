@@ -72,7 +72,7 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub
       && state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
       && !state.machines?.some(m => m.machineId === machineId) && !state.removedMachines?.some(r => r.machineId === machineId)
-      && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub)),
+      && !machineLimitReached(state, user.sub),
     skillMode: home ? skillModeOf(home) : 'orchestration',
     // What the host installs as the agent's instructions, read again when the revision moves (project instructions, phase 3).
     roleName: roleNameOf(state, target),

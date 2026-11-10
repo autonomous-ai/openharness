@@ -8,7 +8,7 @@
 import { attributedRules, budgetParts, droppedRules, INSTRUCTIONS_BUDGET, ITEM_CHARS, keptIn, MAX_REPEATS, personKey, removedItems, repeatedRules,
   type DroppedRule, type InstructionsBudget, type RulePlace } from './instructionsDiff.js'
 import { fail, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadProject, projectRules, type SwarmProject } from './projects.js'
+import { canReadProject, isAgentChat, projectRules, type SwarmProject } from './projects.js'
 import type { ProjectRules } from './policy.js'
 import { agentWrittenNameOf } from './personNames.js'
 import { swarmUsernames } from './usernames.js'
@@ -108,9 +108,9 @@ export function allowedDrops(state: SuperTabState, project: SwarmProject, before
   if (!dropped.length) return { rules: [] }
   const saver = sender.kind === 'person' ? sender.id : undefined
   // Written after the revision this save replaces, in a conversation of this project: an old "thanks" approves nothing (review
-  // of #3112).
+  // of #3112). A person's 1:1 chat with an agent belongs to no project.
   const here = (conversationId: string) => conversationId === project.leadConversationId || state.conversations.some(c => c.id === conversationId
-    && (c.projectId ?? 'lead') === project.id)
+    && !isAgentChat(c) && (c.projectId ?? 'lead') === project.id)
   const eligible = (id: string) => state.people.some(p => p.id === id && canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const approvers = new Set(approvals.filter(a => named.includes(a.id) && a.author.kind === 'person' && !a.source && a.createdAt >= since
     && here(a.conversationId)).map(a => a.author.id)
