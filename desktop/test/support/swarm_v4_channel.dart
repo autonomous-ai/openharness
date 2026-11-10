@@ -105,6 +105,7 @@ void swarmV4Talk(ConversationServer server) {
 /// [github] answers the project's issues, as `gh` does, and [instructions] an agent's file, as its computer does; [machines]
 /// are the computers the app knows; [onNewAgent] and [onNewProject] are what the two + buttons do. [app] is the app model the
 /// view is given when the test needs to tell it things (the app goes to the background); without it, a fresh one.
+/// [onOpenGroupTerminals] is what the chat bar's Terminal does where the workspace would show the chat's terminals.
 Future<SuperTabController> openSwarmV4(
   WidgetTester tester,
   ConversationServer server, {
@@ -117,6 +118,7 @@ Future<SuperTabController> openSwarmV4(
   VoidCallback? onNewAgent,
   VoidCallback? onNewProject,
   AppNotifier? app,
+  void Function(SuperTabController c)? onOpenGroupTerminals,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -161,6 +163,9 @@ Future<SuperTabController> openSwarmV4(
           onOpenTerminal: (_) {},
           onNewAgent: onNewAgent ?? () {},
           onNewProject: onNewProject ?? () {},
+          onOpenGroupTerminals: onOpenGroupTerminals == null
+              ? null
+              : () => onOpenGroupTerminals(c),
           machineName: (id) =>
               shown.machines.firstWhere((m) => m.machineId == id).displayName,
           github: github,

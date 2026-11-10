@@ -799,31 +799,18 @@ void main() {
     });
   });
 
-  // Desktop's reactions (backend reactions.ts): the person's own emoji counts
-  // at once, the backend confirms it, and a change made anywhere reads the
-  // page shown again so the counts match Desktop.
-  group('reactions', () {
-    const commands = '/api/super-tabs/$tab/commands';
-
-    Map<String, dynamic> reacted(
-      Map<String, dynamic> row,
-      Map<String, List<(String, String)>> by,
-    ) => {
+  // An edit or a delete made anywhere (backend messageEdits.ts) moves the
+  // chat's counter (`reactionSeq`, named for the reactions it first counted),
+  // and the page shown is read again so it matches Desktop.
+  group('an edit made elsewhere', () {
+    Map<String, dynamic> edited(Map<String, dynamic> row) => {
       ...row,
-      'reactions': [
-        for (final MapEntry(key: emoji, value: who) in by.entries)
-          {
-            'emoji': emoji,
-            'count': who.length,
-            'by': [
-              for (final (kind, id) in who) {'kind': kind, 'id': id},
-            ],
-          },
-      ],
+      'text': 'Edited',
+      'editedAt': '2026-10-27T02:00:00.000Z',
     };
 
-    /// g1 at [sequence] with its reaction counter at [reactionSeq], as a
-    /// change read brings it.
+    /// g1 at [sequence] with its counter at [reactionSeq], as a change read
+    /// brings it.
     Map<String, dynamic> moved(int version, int reactionSeq) => changes(
       cursor: 'c$version',
       groups: [
@@ -839,117 +826,10 @@ void main() {
       ],
     );
 
-    String counts(SwarmConversation c, String id) => [
-      for (final r in c.reactionsOf(c.messages.firstWhere((m) => m.id == id)))
-        '${r.emoji.key}:${[for (final who in r.by) who.id].join('+')}',
-    ].join(' ');
+    String textOf(SwarmConversation c, String id) =>
+        c.messages.firstWhere((m) => m.id == id).text;
 
-    test('reacting counts the emoji at once, sends it, and reads the page '
-        'shown back', () async {
-      final r = rig();
-      var page = [message('m2', 2), message('m1', 1)];
-      r.swarm.routes[messages] = (_) => {
-        'messages': page,
-        'next': null,
-        'reactionSeq': 0,
-      };
-      final sent = Completer<Object?>();
-      r.swarm.routes[commands] = (_) => sent.future;
-      final c = await open(r.reader);
-
-      final reacting = c.react(c.messages.first, SuperTabReactionEmoji.tada);
-
-      expect(counts(c, 'm1'), 'tada:$me');
-      expect(r.swarm.commands.single, {
-        'type': 'message.react',
-        'conversationId': 'g1',
-        'messageId': 'm1',
-        'emoji': 'tada',
-        'on': true,
-      });
-      page = [
-        message('m2', 2),
-        reacted(message('m1', 1), {
-          'tada': [('agent', 'agent-lead'), ('person', me)],
-        }),
-      ];
-      r.swarm.routes['$messages?before=3'] = (_) => {
-        'messages': page,
-        'next': null,
-        'reactionSeq': 2,
-      };
-      sent.complete({'result': <String, dynamic>{}});
-
-      expect(await reacting, isTrue);
-      expect(counts(c, 'm1'), 'tada:agent-lead+$me');
-      expect(c.messages.first.reactions.single.count, 2);
-    });
-
-    test('reacting with your own emoji again takes it back', () async {
-      final r = rig();
-      r.swarm.routes[messages] = (_) => {
-        'messages': [
-          reacted(message('m1', 1), {
-            'heart': [('person', me), ('agent', 'agent-lead')],
-          }),
-        ],
-        'next': null,
-        'reactionSeq': 4,
-      };
-      final sent = Completer<Object?>();
-      r.swarm.routes[commands] = (_) => sent.future;
-      final c = await open(r.reader);
-
-      final reacting = c.react(c.messages.single, SuperTabReactionEmoji.heart);
-
-      expect(counts(c, 'm1'), 'heart:agent-lead');
-      expect(r.swarm.commands.single['on'], isFalse);
-      sent.complete({'result': <String, dynamic>{}});
-      await reacting;
-    });
-
-    test('a refused reaction goes back and says why', () async {
-      final r = rig();
-      r.swarm.routes[messages] = (_) => {
-        'messages': [message('m1', 1)],
-        'next': null,
-        'reactionSeq': 0,
-      };
-      r.swarm.routes[commands] = (_) => throw SuperTabFailure(
-        'NOT_FOUND',
-        'This message is unavailable.',
-        statusCode: 404,
-      );
-      final c = await open(r.reader);
-      var told = 0;
-      c.addListener(() => told++);
-
-      expect(
-        await c.react(c.messages.single, SuperTabReactionEmoji.eyes),
-        isFalse,
-      );
-
-      expect(counts(c, 'm1'), '');
-      expect(c.error, 'This message is unavailable.');
-      expect(told, greaterThan(0));
-    });
-
-    test('a person who cannot post cannot react', () async {
-      final r = rig(role: 'viewer');
-      r.swarm.routes[messages] = (_) => {
-        'messages': [message('m1', 1)],
-        'next': null,
-      };
-      final c = await open(r.reader);
-
-      expect(
-        await c.react(c.messages.single, SuperTabReactionEmoji.eyes),
-        isFalse,
-      );
-      expect(r.swarm.commands, isEmpty);
-    });
-
-    test('a reaction made elsewhere reads the page shown again; a Swarm read '
+    test('an edit made elsewhere reads the page shown again; a Swarm read '
         'that moved no counter reads nothing', () async {
       final r = rig();
       r.swarm.routes[messages] = (_) => {
@@ -965,9 +845,7 @@ void main() {
       r.swarm.routes['$messages?before=3'] = (_) => {
         'messages': [
           message('m2', 2),
-          reacted(message('m1', 1), {
-            'rocket': [('person', 'person-ann')],
-          }),
+          edited(message('m1', 1)),
         ],
         'next': null,
         'reactionSeq': 1,
@@ -976,7 +854,7 @@ void main() {
       await r.reader.refresh();
       await settle();
 
-      expect(counts(c, 'm1'), 'rocket:person-ann');
+      expect(textOf(c, 'm1'), 'Edited');
       await r.reader.refresh();
       await settle();
       expect(
@@ -1003,9 +881,7 @@ void main() {
       r.swarm.routes['$messages?before=4'] = (_) => {
         'messages': [
           message('m3', 3),
-          reacted(message('m2', 2), {
-            'laugh': [('agent', 'agent-lead')],
-          }),
+          edited(message('m2', 2)),
           message('m1', 1),
         ],
         'next': null,
@@ -1015,10 +891,10 @@ void main() {
       await c.load();
 
       expect([for (final m in c.messages) m.id], ['m1', 'm2', 'm3']);
-      expect(counts(c, 'm2'), 'laugh:agent-lead');
+      expect(textOf(c, 'm2'), 'Edited');
     });
 
-    test('a chat opened again reads its page again only when a reaction '
+    test('a chat opened again reads its page again only when a message '
         'changed while it was closed', () async {
       final r = rig();
       r.swarm.routes[messages] = (_) => {
@@ -1047,9 +923,7 @@ void main() {
       r.swarm.routes['$messages?before=3'] = (_) => {
         'messages': [
           message('m2', 2),
-          reacted(message('m1', 1), {
-            'thumbs_up': [('person', 'person-ann')],
-          }),
+          edited(message('m1', 1)),
         ],
         'next': null,
         'reactionSeq': 5,
@@ -1059,7 +933,7 @@ void main() {
       await c.load();
       await settle();
 
-      expect(counts(c, 'm1'), 'thumbs_up:person-ann');
+      expect(textOf(c, 'm1'), 'Edited');
     });
   });
 

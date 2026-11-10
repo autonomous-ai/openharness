@@ -136,12 +136,12 @@ void main() {
     expect(find.text('In another project'), findsNothing);
   });
 
-  testWidgets('a reaction names its emoji', (tester) async {
+  testWidgets('a reaction an older server lists shows nowhere', (tester) async {
     await pump(tester, [
       activityRow('x1', kind: 'reaction', emoji: 'thumbs_up', minute: 2),
     ]);
-    await filter(tester, 'reactions');
-    expect(find.text('River reacted 👍 to your message'), findsOneWidget);
+    expect(find.textContaining('reacted'), findsNothing);
+    expect(find.text('👍'), findsNothing);
   });
 
   testWidgets('who it is from is named as this Swarm lists them: an agent by '
@@ -173,11 +173,10 @@ void main() {
   });
 
   testWidgets('Activity left (another tab) marks what it had open read on '
-      'every device; a list never opened stays unread', (tester) async {
+      'every device', (tester) async {
     final hidden = ValueNotifier(false);
     addTearDown(hidden.dispose);
-    // The tab asked to open on Replies, as a tile asks it: All, which has
-    // the reaction too, is never open.
+    // The tab asked to open on Replies, as a tile asks it.
     final asks = ValueNotifier<SwarmActivityAsk?>((
       filter: SwarmActivityFilter.threads,
       n: 1,
@@ -185,10 +184,7 @@ void main() {
     addTearDown(asks.dispose);
     final fake = await pump(
       tester,
-      [
-        activityRow('r2', minute: 9),
-        activityRow('x1', kind: 'reaction', emoji: 'check', minute: 12),
-      ],
+      [activityRow('r2', minute: 9)],
       home: Scaffold(
         body: SwarmActivityAsks(
           asks: asks,
@@ -221,13 +217,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(marks(fake), [
       {'through': DateTime.utc(2026, 11, 1, 7, 9).toIso8601String()},
-    ], reason: 'the reaction behind Reactions was never open: it stays unread');
+    ]);
 
     hidden.value = false;
     await tester.pumpAndSettle();
     expect(weight(tester, 'River replied to your message'), AppFont.regular);
-    final pill = key('swarm-activity-filter-reactions');
-    expect(find.descendant(of: pill, matching: find.text('1')), findsOneWidget);
   });
 
   testWidgets('All, the tab\'s first, has every row: left, all it showed is '
@@ -236,10 +230,7 @@ void main() {
     addTearDown(hidden.dispose);
     final fake = await pump(
       tester,
-      [
-        activityRow('r2', minute: 9),
-        activityRow('x1', kind: 'reaction', emoji: 'check', minute: 12),
-      ],
+      [activityRow('r2', minute: 9)],
       home: Scaffold(
         body: ValueListenableBuilder(
           valueListenable: hidden,
@@ -255,17 +246,12 @@ void main() {
       isTrue,
     );
     expect(find.text('River replied to your message'), findsOneWidget);
-    expect(
-      key('swarm-activity-row-activity:$tab:x1'),
-      findsOneWidget,
-      reason: 'the reaction too',
-    );
 
     hidden.value = true;
     await tester.pumpAndSettle();
 
     expect(marks(fake), [
-      {'through': DateTime.utc(2026, 11, 1, 7, 12).toIso8601String()},
+      {'through': DateTime.utc(2026, 11, 1, 7, 9).toIso8601String()},
     ]);
   });
 
