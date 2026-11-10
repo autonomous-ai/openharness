@@ -4607,6 +4607,8 @@ class NewHarnessController extends ChangeNotifier {
     bool quiet = false,
     bool? resendAttachments,
   }) {
+    // Refused while one runs: a second press must not take the place of the start a form handed on.
+    if (busy || linkingProfile) return Future.value(NewHarnessOutcome.failed);
     // Kept before the start runs: it may hand itself on ([HarnessLaunchIntegration.onStarted]) before its first wait.
     final done = Completer<NewHarnessOutcome>();
     _running = done.future;
@@ -4618,9 +4620,6 @@ class NewHarnessController extends ChangeNotifier {
     required bool quiet,
     bool? resendAttachments,
   }) async {
-    if (busy || linkingProfile) {
-      return NewHarnessOutcome.failed;
-    }
     final resume =
         resendAttachments != null && integration?.resolveAttachments != null
         ? () => integration!.resolveAttachments!(resendAttachments)

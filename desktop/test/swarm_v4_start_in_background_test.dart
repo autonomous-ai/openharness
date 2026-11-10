@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/repository_clone.dart';
+import 'package:harness/state/new_harness.dart';
+import 'package:harness/super_tabs/new_agent.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
@@ -159,6 +161,29 @@ void main() {
       await end(tester, f);
     },
   );
+
+  test('a second press while it still checks keeps the start that goes on without its form', () async {
+    final f = SuperTabLaunchFixture()..connection.journaled = false;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    // Its project's Git is read slowly: the first press waits there, busy.
+    final git = Completer<Map<String, dynamic>>();
+    f.app.gitProjectReaderForTest = (_, _) => git.future;
+    final box = NewHarnessController(
+      f.app,
+      machineId: 'm',
+      engine: 'claude',
+      folder: '/work/project',
+      task: 'Tidy the docs.',
+      integration: swarmNewAgent(f.app, f.app.activeSwarm, wait: (_) async {}),
+    );
+    addTearDown(box.dispose);
+    final first = box.create();
+    expect(box.busy, isTrue);
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(box.running, same(first));
+    git.complete({'isGit': false, 'refreshed': true});
+    expect(await first, NewHarnessOutcome.created, reason: box.error);
+  });
 
   testWidgets(
     'a start that fails says so on its row, in red, and a click on it opens its form again with why',

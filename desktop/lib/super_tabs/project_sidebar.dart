@@ -938,8 +938,6 @@ Set<String> superTabHiddenProjects(
   AppNotifier? app,
 }) => app == null ? const {} : PersonalProjects.of(app).hiddenIn(controller);
 
-/// Under Your Team's first rows (`teamShown`): "N more", which opens every row, and once they are open "Show fewer", which
-/// folds them again. Bold while a row it folds has something new.
 /// A project reads as a channel; a private one keeps its lock in this mark slot.
 Widget _channelMark({required bool isPrivate, required bool compact}) =>
     isPrivate
@@ -990,6 +988,8 @@ class SwarmStartRow extends StatelessWidget {
   );
 }
 
+/// Under Your Team's first rows (`teamShown`): "N more", which opens every row, and once they are open "Show fewer", which
+/// folds them again. Bold while a row it folds has something new.
 class SuperTabFoldRow extends StatelessWidget {
   const SuperTabFoldRow({
     super.key = const ValueKey('super-team-more'),
