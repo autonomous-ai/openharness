@@ -13,7 +13,7 @@ const pull = (extra: Json = {}): Json => ({ number: 4, draft: false, base: { ref
 
 /** One repository as GitHub's REST API answers for it, with ETags, and what was sent to it. */
 function fakeGitHub() {
-  const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]), reviews: new Map<number, Json[]>(), commits: new Map<number, Json[]>(),
+  const repo = { pulls: [pull()], comments: new Map<number, Json[]>([[4, [comment('Juno, 14:20, to **Pip**: READ-OK f6edb44')]]]), reviews: new Map<number, Json[]>(), commits: new Map<number, Json[]>(), compare: new Map<string, Json>(),
     runs: new Map<string, Json[]>([[HEAD, [{ name: 'test', status: 'completed', conclusion: 'success' }]]]), statuses: new Map<string, Json[]>(),
     state: 'clean', mergeAnswer: 200, signedOut: false, down: false, status: 0, sendFails: 0 }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
@@ -30,6 +30,7 @@ function fakeGitHub() {
       : /\/issues\/\d+\/comments$/.test(p) ? repo.comments.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/reviews$/.test(p) ? repo.reviews.get(Number(p.split('/').at(-2))) ?? []
       : /\/pulls\/\d+\/commits$/.test(p) ? repo.commits.get(Number(p.split('/').at(-2))) ?? [{ sha: HEAD }]
+      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? repo.compare.get(p.split('...').at(-1)!) ?? null
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: repo.runs.get(p.split('/').at(-2)!) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: repo.statuses.get(p.split('/').at(-2)!) ?? [] }
       : /\/pulls\/\d+$/.test(p) ? { mergeable_state: repo.state }
@@ -121,6 +122,36 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     f.clock.now += 30_000
     await f.merger.tick()
     expect(f.merges()).toHaveLength(1)
+  })
+
+  // lampOS lib.sh patch_of and train-bot.sh: a READ-OK counts for the head, "or a head whose diff from its merge base is the same
+  // patch, i.e. a plain rebase" (git diff -U0 | git patch-id). Updated from main with nothing of its own changed, a pull request
+  // waited on a reader who had read it all.
+  const changed = (lines: string[], at = 4) => ({ files: [{ filename: 'sandbox/quotes.py', status: 'modified', changes: lines.length,
+    patch: [`@@ -${at},3 +${at},${2 + lines.length} @@ def quote():`, '     today = date.today()', ...lines, '     return pick(today)'].join('\n') }] })
+  it('counts a READ-OK on an earlier head whose change is the same as the head\'s, as lampOS\'s patch_of reads it', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    // Main moved under it: the same lines, now further down, in other context.
+    f.github.repo.compare.set('a1b2c3d', changed(['+    days = int(n)', '-    days = 1']))
+    f.github.repo.compare.set(HEAD, { files: [{ ...changed(['+    days = int(n)', '-    days = 1'], 9).files[0], patch: changed(['+    days = int(n)', '-    days = 1'], 9).files[0]!.patch.replace('today = date.today()', 'today = clock.today()') }] })
+    await settle(f)
+    expect(f.merges()).toHaveLength(1)
+  })
+
+  it.each([
+    ['its change differs', changed(['+    days = int(n) + 1', '-    days = 1'])],
+    ['GitHub gives no patch for a file', { files: [{ filename: 'logo.png', status: 'modified', changes: 1 }] }],
+    ['GitHub gives no answer for it', null],
+  ])('takes no READ-OK on an earlier head when %s', async (_case, earlier) => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Juno, 14:20, to **Pip**: READ-OK a1b2c3d')])
+    if (earlier) f.github.repo.compare.set('a1b2c3d', earlier as Json)
+    f.github.repo.compare.set(HEAD, changed(['+    days = int(n)', '-    days = 1']))
+    await settle(f)
+    expect(f.merges()).toEqual([])
+    // An earlier head GitHub does not know is no failure of the repository.
+    expect(f.log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('stopped'))).toEqual([])
   })
 
   it('never merges on its author\'s own READ-OK, however its two-word name is written', async () => {
