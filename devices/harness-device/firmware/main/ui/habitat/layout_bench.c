@@ -121,6 +121,7 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
         esp_task_wdt_reset(); vTaskDelay(pdMS_TO_TICKS(100));
     }
     vTaskDelay(pdMS_TO_TICKS(200));
+    // "straight" and "curved" once drew different title curves; the face has one title now, so they measure the same face.
     static const char *layouts[] = {"straight", "curved", "reading"};
     static const char *events[] = {"name", "activity", "chat", "engine", "recap"};
     static const char *names[] = {"Deploy latest firmware", "Mobile app build and deploy"};
@@ -144,9 +145,8 @@ void ht_layout_benchmark(uint16_t *scratch, ht_scene_t *a, ht_scene_t *b,
                 int layout = pass ? 2 - order : order;
                 for (int event = 0; event < 5; event++) {
                     ht_character_face_t f = {.recipient=names[0], .status="Inbox 2 / Working",
-                        .hint="", .tab="Deploy", .engine="claude", .activity="Coalescing", .detail="", .chat="Chat with PM", .clock_ms=0,
-                        .mood=HT_CHARACTER_WORKING, .straight_title=layout==0, .focus=true,
-                        .foreground=0xffff, .dim=ht_rgb(0x909990), .ink=ht_rgb(0xb9ed80)};
+                        .engine="claude", .activity="Coalescing", .chat="Chat with PM", .clock_ms=0,
+                        .mood=HT_CHARACTER_WORKING, .foreground=0xffff};
                     ht_scene_clear(a, ht_rgb(0x080c08));
                     make_scene(a, &f, 0, ht_rgb(0xc8a9f0), layout==2 ? summary : NULL);
                     ht_damage_t damage; find_damage(NULL, a, &damage);

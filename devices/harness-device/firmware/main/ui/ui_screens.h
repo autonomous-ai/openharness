@@ -221,6 +221,8 @@ typedef struct {
     uint8_t brightness;   // 0..100, the number a person reads, not the 0..255 stored
     uint8_t character;    // always UI_CHARACTER_FOCUS_WIRE: Focus is the only face
     uint16_t face;        // the glass, in pixels across — named so a support line can read it
+    // straight_title and focus_face are INERT: the glass always draws Focus straight across, and nothing
+    // reads these two. They stay on the wire (straightTitle, focusFace) because an older app still sends them.
     bool muted, quiet, straight_title, focus_face, scroll_reversed, round;
     char voicelang[CFG_VLANG_MAX];
 } ui_settings_t;

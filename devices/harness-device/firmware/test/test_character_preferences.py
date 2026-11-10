@@ -43,7 +43,6 @@ static int nvs_get_u8(nvs_handle_t h, const char *key, uint8_t *value) {
 }
 static void nvs_close(nvs_handle_t h) { assert(h == 123); }
 static ht_character_t character;
-static ht_character_caption_t home_caption;
 '''
 code += function('config_load_brightness', config) + '\n'
 code += 'static void boot(void) {\n' + load + '}\n'
@@ -53,9 +52,9 @@ int main(void) {
     bright_present = false; assert(config_load_brightness() == 204 && (204 * 100 + 127) / 255 == 80);
     bright_present = true; bright_stored = 102; assert(config_load_brightness() == 102);
     bright_present = false;
-    home_caption.initialized = true;
+    character.motion.frame = 3;   // boot starts from a cleared character
     unsigned before = reads;
-    boot(); assert(character.id == HT_CHARACTER_FOCUS && !home_caption.initialized && reads == before);
+    boot(); assert(character.id == HT_CHARACTER_FOCUS && !character.motion.frame && reads == before);
     puts("Boot preferences: brightness default and saved value, Focus without reading a saved character PASS");
 }
 '''

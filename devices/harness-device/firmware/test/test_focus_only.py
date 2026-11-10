@@ -37,7 +37,6 @@ _Static_assert(HT_CHARACTER_FOCUS == 0, "Focus is id 0");
 // What an older firmware may have saved: Tim, Tux, an illustrated companion. Nothing may read it back as anything else.
 __attribute__((unused)) static uint8_t config_load_habitat_character(uint8_t fallback) { (void)fallback; return 7; }
 static ht_character_t character;
-static ht_character_caption_t home_caption;
 static void boot(void) {
 ''' + load + r'''}
 int main(void) {

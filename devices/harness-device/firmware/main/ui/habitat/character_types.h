@@ -1,7 +1,7 @@
 #pragma once
 #include "terminal.h"
 
-// Application state, shared by every character. Artwork never owns actions.
+// Application state. Artwork never owns actions.
 typedef enum {
     HT_CHARACTER_IDLE, HT_CHARACTER_WORKING, HT_CHARACTER_ATTENTION, HT_CHARACTER_DONE,
     HT_CHARACTER_OFFLINE, HT_CHARACTER_ASLEEP, HT_CHARACTER_BOOPED, HT_CHARACTER_LISTENING,
@@ -9,7 +9,7 @@ typedef enum {
 } ht_character_mood_t;
 typedef struct {
     int8_t look;
-    uint8_t hands, level, mail; // 0: no letter, 1: holding, 2: briefly lifting it.
+    uint8_t hands, level;
     bool blink, pressed;
 } ht_character_pose_t;
 typedef struct {
@@ -20,50 +20,43 @@ typedef struct {
     bool initialized, was_down;
 } ht_character_reaction_t;
 typedef struct {
-    const char *recipient, *status, *hint, *detail;
+    const char *recipient, *status;
     /*
-     * Three facts a creature has no use for, and the Focus skin is built out of.
-     *
-     * `tab` is the pane this agent belongs to — it stands in for the repo name the old firmware drew,
-     * which does not exist anywhere in the cable vocabulary. `engine` is on the wire and stored
-     * (agent_t.engine) and until now was drawn nowhere. `elapsed` is SECONDS SINCE THIS DIAL HEARD
+     * `engine` is on the wire and stored (agent_t.engine). `elapsed` is SECONDS SINCE THIS DIAL HEARD
      * ABOUT THE TURN, not since the turn began: `turn.started` carries no timestamp, so the device
      * stamps its own clock. A turn that predates the attach reads from zero. 0 = unknown, do not draw it (formatted by
      * fmt_elapsed, main/elapsed.h: "0:34", "1h 5m", ...).
      *
      * `activity` is what the daemon scraped off the engine's spinner footer — a gerund like
-     * "Coalescing", never a tool call. The creature skins fold it into `recipient` on a rotation,
-     * because they have one text seat; a skin with two reads it here instead.
+     * "Coalescing", never a tool call. The face has a row for it beside the name.
      */
-    const char *tab, *engine, *activity;
-    // Focus only: a Swarm face's chat under its project (Chat with PM's "PM", a group's name), on the inner arc. NULL or
-    // "" for the Lead chat and every other face, which then draw exactly as before.
+    const char *engine, *activity;
+    // A Swarm face's chat under its project (Chat with PM's "PM", a group's name), on the inner arc. NULL or
+    // "" for the Lead chat and every other face.
     const char *chat;
     uint32_t elapsed;
     ht_character_mood_t mood;
     ht_character_pose_t pose;
-    bool focus, carrying, footer_action, straight_title, unread, primary_title, roomy_reading, single_label;
+    bool footer_action;
     /*
-     * This face is the VOICE screen, not the home one. The creature skins do not need to be told —
-     * they draw the same companion on both and let its mood carry the difference — but a skin whose
-     * voice screen is a waveform and nothing else cannot read that off `mood` alone: HT_CHARACTER_
-     * WORKING means "an agent is busy" at home and "your words are on their way" here.
+     * This face is the VOICE screen, not the home one. Its waveform cannot read that off `mood` alone:
+     * HT_CHARACTER_WORKING means "an agent is busy" at home and "your words are on their way" here.
      */
     bool voice;
     /*
-     * Focus only, for the engine pets: this agent has an open question, and the clock its loop reads.
+     * For the engine pets: this agent has an open question, and the clock its loop reads.
      * clock_ms 0 holds the pet still (quiet motion, asleep display); ui_habitat.c never sends 0 otherwise.
      */
     bool asking;
     uint32_t clock_ms;
-    // Focus only: the clock_ms at which the newest unread notice arrived (0 = none), and how many are unread. While the
+    // The clock_ms at which the newest unread notice arrived (0 = none), and how many are unread. While the
     // working scene shows, the pet's alert bubble rings from then and stays, the count in it, until they are read.
     uint32_t notice_ms;
     uint16_t notices;
-    // Focus only: the working face plays the pet's second working scene (ht_pet_t.working_alt, Claude's builder) when
+    // The working face plays the pet's second working scene (ht_pet_t.working_alt, Claude's builder) when
     // it has one. Drawn by ht_focus_pick_working as the scene starts showing, and kept while it shows.
     bool working_alt;
-    uint16_t ink, foreground, dim;
+    uint16_t foreground;
 } ht_character_face_t;
 
 typedef struct {

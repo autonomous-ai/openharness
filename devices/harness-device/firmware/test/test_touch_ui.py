@@ -84,12 +84,10 @@ static struct {
     char model_agent[64];
     question_t q;
     agent_t agents[MAX_PROJECTS]; hit_t hits[24];
-    ht_rect_t caption_arc;
     ht_rect_t recap_card;
 } s;
 static ht_gesture_t gesture;
 static ht_character_t character;
-static ht_character_caption_t home_caption;
 static ht_character_id_t test_character;
 static unsigned notice_reads_sent; static action_t notice_read_queued;
 static ht_scroll_t scroll;
@@ -141,8 +139,8 @@ static char target[64];
 #include "theme.h"
 static uint16_t color(unsigned rgb);
 static unsigned preview_brightness = 100;
-// Kept in step with ui_habitat.c by hand: the Focus skin stands on its own black ground.
-#define BG color(character.id == HT_CHARACTER_FOCUS ? HT_THEME_FOCUS_CANVAS : HT_THEME_CANVAS)
+// Kept in step with ui_habitat.c by hand: Focus stands on its own black ground.
+#define BG color(HT_THEME_FOCUS_CANVAS)
 #define FG color(HT_THEME_TEXT)
 #define DIM color(HT_THEME_SECONDARY)
 #define ACCENT color(HT_THEME_ACCENT)
@@ -219,15 +217,15 @@ code += 'static void notice_expire(uint32_t now);\n'
 swarm_core = source[source.index('/*\n * THE SWARMS'):source.index('static void tabs_open(void)')]
 swarm_parts = {
     'swarm_core': swarm_core,
-    'render_swarm_face': 'static void render_focus_panes(ht_scene_t *f);\n' + function('render_swarm_face'),
+    'render_swarm_face': 'static void render_agents(ht_scene_t *f);\n' + function('render_swarm_face'),
     # with the last `swarms` list it keeps beside it
     'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
 }
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'face_hold', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'pick_icon', 'pick_row', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'face_hold', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'companion_box', 'notice_badge', 'pill2', 'swarm_pair', 'pick_icon', 'pick_row', 'render_swarm_pick', 'face_buddy_avatar', 'render_buddy_empty', 'thread_line', 'thread_rest', 'face_thread', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
+code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt',
              'utf8_trim', 'swarm_notice', 'swarm_notice_mark', 'swarm_notice_raise', 'swarm_notice_drop', 'swarm_events',
              'swarm_tabs_changed', 'swarm_regain', 'ui_supertabs_ids', 'ui_supertab', 'ui_supertab_recap', 'ui_supertab_focus',
@@ -337,7 +335,7 @@ static void reset(void) {
     memset(&selection,0,sizeof(selection)); selections=0;
     memset(&carry,0,sizeof(carry)); carry_prepares=carry_drops=0; voice_context[0]=0;
     ht_draft_reset(&draft); draft_actions=reviews=0; ht_form_reset(&form); form_actions=0;
-    memset(&home_caption,0,sizeof home_caption); memset(&character,0,sizeof character); ht_character_select(&character,test_character); memset(&s, 0, sizeof(s)); memset(&gesture, 0, sizeof(gesture)); memset(&scroll, 0, sizeof(scroll));
+    memset(&character,0,sizeof character); ht_character_select(&character,test_character); memset(&s, 0, sizeof(s)); memset(&gesture, 0, sizeof(gesture)); memset(&scroll, 0, sizeof(scroll));
     s.ready = s.connected = true; s.count = 2; s.active = 0; s.view = HOME; s.pressed = -1;
     s.brightness = preview_brightness;
     strcpy(s.agents[0].id, "a"); strcpy(s.agents[1].id, "b");
@@ -382,18 +380,11 @@ static bool status_is(const char *text) {
     if (!strncmp(text, HT_BELL " ", strlen(HT_BELL) + 1)) return blue_count_is(text + strlen(HT_BELL) + 1);
     if (!text[0] && blue_bell_drawn()) return false;
     if (!text[0]) {
-        for(int i=0;i<scene.count;i++) if(scene.runs[i].arc==2 || scene.runs[i].y==385 || scene.runs[i].y==HT_NOTIFICATION_Y) return false;
+        for(int i=0;i<scene.count;i++) if(scene.runs[i].arc==2 || scene.runs[i].y==385) return false;
         return true;
     }
-    char footer[32]="";
-    for (int i=0;i<scene.count;i++) if(scene.runs[i].y==HT_NOTIFICATION_Y) {
-        if(footer[0]) strcat(footer," ");
-        assert(strlen(footer)+strlen(scene.runs[i].text)<sizeof footer);
-        strcat(footer,scene.runs[i].text);
-    }
-    if(footer[0] && !strcmp(footer,text)) return true;
     for (int i=0;i<scene.count;i++)
-        if ((scene.runs[i].arc==2 || scene.runs[i].y==385 || scene.runs[i].y==HT_NOTIFICATION_Y) &&
+        if ((scene.runs[i].arc==2 || scene.runs[i].y==385) &&
             !strcmp(scene.runs[i].text,text)) return true;
     return false;
 }
@@ -784,9 +775,7 @@ static void notice_checks(const char *dir) {
         scene_take();
         for(int j=0;j<scene.count;j++) {
             const ht_run_t *r=&scene.runs[j];
-            assert(r->font!=&ht_nav_32 && r->font!=&ht_open_20);
-            if(r->font->height<=6 && strlen(r->text)>=32)
-                assert(r->font->height==4 && r->y+r->font->height<=HT_CHARACTER_READING_TEXT_Y);
+            assert(r->font!=&ht_open_20);
         }
         if(i==6) portrait(dir,"photo-summary-dials");
         if(i==7) portrait(dir,"photo-summary-board");
@@ -1005,15 +994,13 @@ static void pane_memory_checks(const char *dir) {
     strcpy(active()->tool,"Messages to be submitted after");
     scene_take(); portrait(dir,"photo-long-status");
     strcpy(active()->tool,"Working");
-    home_caption.initialized=false; fake_ms=0; scene_take();
+    fake_ms=0; scene_take();
     for (int frame=0;frame<32;frame++) {
         fake_ms=3240+frame*64; surface_tick(fake_ms); scene_take();
-        int shimmer=0;
-        for(int i=0;i<scene.count;i++) if(scene.runs[i].shimmer) {
-            shimmer++;
-        }
-        assert(shimmer==1);
-        char label[40]; snprintf(label,sizeof label,"working-shimmer-%02d",frame); portrait(dir,label);
+        // The home face never shimmers (the old caption rotation that drove it went with the other characters; only the
+        // voice screen's lower arc sweeps, see the voice checks).
+        for(int i=0;i<scene.count;i++) assert(!scene.runs[i].shimmer);
+        char label[40]; snprintf(label,sizeof label,"working-steady-%02d",frame); portrait(dir,label);
     }
     s.quiet=true; surface_tick(fake_ms); scene_take();
     for(int i=0;i<scene.count;i++) assert(!scene.runs[i].shimmer);
@@ -1090,7 +1077,6 @@ static void notification_read_checks(const char *dir) {
     assert(!notice_unread(NULL) && s.notice_count==2 && s.view==INBOX);
     portrait(dir,"inbox-read-stays");
     dispatch((action_t){.kind=A_HOME}); scene_take(); assert(s.view==HOME && status_is("") && !action_enabled(A_INBOX));
-    for(int i=0;i<scene.count;i++) assert(scene.runs[i].font!=&ht_bell_footer);
     portrait(dir,"bell-all-read");
     ui_notif_replace(NULL,0); ui_notif_replace(rows,2); scene_take();
     assert(!notice_unread(NULL) && status_is("")); // Late/reconnect snapshot stays read.
@@ -2691,7 +2677,7 @@ static void swarm_pair_checks(const char *dir) {
     assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "", "Flashed.", 1792560001u));
     scene_take();
     assert(scene_says("PM \xc2\xb7 2 replies") && bell_at(346) && !badge_rect(NULL));   // a thread has no pet: the pill
-    for (int i = 0; i < scene.count; i++) { const ht_run_t *r = &scene.runs[i]; if (r->text[0] && r->y < 388 && ht_run_bounds(r).y + ht_run_bounds(r).h > 340 && r->y > 100 && r->font != &ht_bell_footer && r->box.h != 32 && r->x < 150) { fprintf(stderr, "card run y=%d \"%s\"\n", r->y, r->text); assert(false); } }
+    for (int i = 0; i < scene.count; i++) { const ht_run_t *r = &scene.runs[i]; if (r->text[0] && r->y < 388 && ht_run_bounds(r).y + ht_run_bounds(r).h > 340 && r->y > 100 && r->box.h != 32 && r->x < 150) { fprintf(stderr, "card run y=%d \"%s\"\n", r->y, r->text); assert(false); } }
     { bool dots = false; for (int i = 0; i < scene.count; i++) if (strstr(scene.runs[i].text, "\xe2\x80\xa6")) dots = true; assert(dots); }
     // A thumb's press on a half switches the side and never starts voice: drifting 16 px, held half a second, or landing
     // just off the drawn pill (below it, or beside it).
@@ -2919,15 +2905,6 @@ int main(int argc, char **argv) {
         assert(s.view==AGENTS && !tab_switches && !starts);
     }
     workspace_setup(); s.notice_count=1; scene_take(); portrait(dir,"clear-notification");
-    // Long top labels curve below y=66. Their visible end letters must
-    // remain caption targets, even where the old rectangle reached the portrait.
-    for(int length=11;length<=HT_ARC_COLS;length++) for(int side=-1;side<=1;side+=2) for(int dy=-6;dy<=6;dy+=6) {
-        workspace_setup();s.notice_count=1;active()->busy=true;
-        memset(active()->name,'x',(size_t)length);active()->name[length]=0;scene_take();
-        int x=233+side*(205*arc_trig[length-1][0]>>14);
-        int y=233-(205*arc_trig[length-1][1]>>14)+dy;
-        tap(1000,x,y);assert(s.view==AGENTS&&!starts&&!tab_switches&&!moves);
-    }
     workspace_setup();s.notice_count=1;active()->busy=true;
     strcpy(active()->tool,"Recontextualizing");scene_take();portrait(dir,"long-curved-notification");
     tap(1000,233,220);assert(starts==1&&s.view==VOICE); // the central companion still speaks
@@ -2954,7 +2931,7 @@ int main(int argc, char **argv) {
     fake_ms=30010; surface_tick(fake_ms); scene_take(); portrait(dir,"notification-glance-right");
     assert(character.motion.reaction.pose.look==2);
     fake_ms=30170; surface_tick(fake_ms); scene_take(); portrait(dir,"mail-lift");
-    assert(!character.delivery.moving && !character.delivery.lift && status_is(HT_BELL " 1"));
+    assert(status_is(HT_BELL " 1"));
     fake_ms=30400; surface_tick(fake_ms); scene_take(); portrait(dir,"notification-glance-left");
     assert(character.motion.reaction.pose.look==-2);
     surface_tick(30860); assert(character.motion.reaction.pose.blink);
@@ -3262,9 +3239,9 @@ int main(int argc, char **argv) {
         assert(!strstr(scene.runs[j].text,"Listening") && !strstr(scene.runs[j].text,"Sending"));
     }
     s.voice_return=FORM; fake_ms=16384; surface_tick(fake_ms); scene_take();
-    s.view=HOME; active()->busy=true; fake_ms=15000; surface_tick(fake_ms); fake_ms=18432; surface_tick(fake_ms); scene_take(); assert(s.status_phase==1);
-    fake_ms+=32; surface_tick(fake_ms); assert(s.status_phase==1);
-    fake_ms+=32; surface_tick(fake_ms); assert(s.status_phase==2);
+    // The home face has no status shimmer, busy or not: only the voice screen's lower arc sweeps.
+    s.view=HOME; active()->busy=true; fake_ms=15000; surface_tick(fake_ms); fake_ms=18432; surface_tick(fake_ms); scene_take(); assert(!s.status_phase && !status_animated());
+    fake_ms+=32; surface_tick(fake_ms); assert(!s.status_phase);
 
     reset(); habitat_touch(true,233,220,1000); s.active=1; input_cancel();
     habitat_touch(false,233,220,1075); assert(!starts);

@@ -16,7 +16,7 @@ static uint16_t pixels[HT_WIDTH * HT_HEIGHT];
 #ifndef HT_UPDATE_ARC_GOLDEN
 static void arc_title_is_mono(void)
 {
-    // ht_arc_title is exactly the GeistMono face (the non-Focus skins' curved title).
+    // ht_arc_title is exactly the GeistMono face (the mono curved title).
     ht_scene_t x,y; ht_scene_clear(&x,ht_rgb(0x183c25)); ht_scene_clear(&y,ht_rgb(0x183c25));
     ht_arc_title(&x,ht_rgb(0xc8a9f0),"harness-pro");
     ht_arc_title_face(&y,ht_rgb(0xc8a9f0),"harness-pro",&ht_arc_geist);
