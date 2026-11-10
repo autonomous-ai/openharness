@@ -1317,6 +1317,30 @@ describe('runMaster', { timeout: 60_000 }, () => {
       } finally { log.mockRestore() }
     })
 
+    it('names a Node outside a versioned folder by its path when a failed probation puts the daemon back on it', async () => {
+      const runtime = join(dir, 'runtime')
+      const system = join(runtime, 'system-node', 'bin', 'node')
+      const other = join(runtime, 'other-node', 'bin', 'node')
+      for (const node of [system, other]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node, [join(dirname(dirname(node)), 'libexec', 'harnessd')]) }
+      const script = bundle('process.exit(3)')
+      const lines: string[] = []
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+      try {
+        const master = start(script, {
+          nodePath: other, runtimeDir: runtime, unjudgedUpdate: () => '2.0.0',
+          restoreUpdate: () => {
+            writeFileSync(script, readFileSync(script, 'utf8') + '\n// the build before\n')
+            return system
+          },
+        })
+        await until('the master to re-execute on the build before', () => master.execs.length > 0)
+        expect(lines.filter((line) => line.includes('[harnessd] the core did not come up on Node'))).toEqual([
+          expect.stringContaining(`on Node ${other}; back on ${system}`),
+        ])
+        await master.stop()
+      } finally { log.mockRestore() }
+    })
+
     it('asks whether the bundle on disk after a recovery is unjudged, not the bundle it started from', async () => {
       // A re-execution that never came up is rolled back at start; with no room to remember the build,
       // its pending note stays and names the bundle this master started from. That is not the bundle its
