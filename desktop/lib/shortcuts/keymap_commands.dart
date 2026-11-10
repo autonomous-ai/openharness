@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 
 import '../logging/debug_surface.dart';
-import '../super_tabs/buddy_chat.dart' show kBuddyChat;
 import 'app_shortcuts.dart';
 import 'keymap.dart';
 import 'keymap_keyboard.dart';
@@ -256,17 +255,6 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     context: KeymapContext.swarmChat,
     keywords: ['find', 'search', 'chat', 'Swarm'],
-  ),
-  // The current project's Buddy chat, in a Swarm tab, where the PM's private
-  // lines land since Buddies replaced Chat with PM: the id stays, so a key a
-  // person bound to it keeps working. K for "talk": free on every platform
-  // (Alt+Shift+K on Linux, the web and Windows).
-  const HarnessCommand(
-    'swarm.chat_with_pm',
-    kBuddyChat,
-    ShortcutGroup.navigate,
-    extraKeys: ['cmd+shift+k'],
-    keywords: ['Buddy', 'product manager', 'PM', 'Swarm'],
   ),
   for (var i = 1; i <= 9; i++)
     HarnessCommand(

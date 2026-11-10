@@ -170,7 +170,6 @@ void main() {
               body: SuperTabView(
                 controller: c,
                 app: app,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Mac Studio',

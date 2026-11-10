@@ -29,7 +29,7 @@ class SelectionTests(unittest.TestCase):
         # mobile/test/swarm/desktop_parity_test.dart compares the phone's Swarm models with these; a desktop-only PR that
         # changed one passed its own CI and failed two batches later (River, 2026-11-03).
         for path in ["desktop/lib/super_tabs/model.dart", "desktop/lib/super_tabs/controller.dart",
-                     "desktop/lib/super_tabs/buddies.dart", "desktop/lib/super_tabs/parts.dart",
+                     "desktop/lib/super_tabs/parts.dart",
                      "desktop/lib/super_tabs/live_card.dart", "desktop/lib/widgets/engine_identity.dart",
                      "desktop/test/support/real_fonts.dart"]:
             with self.subTest(path=path):
@@ -37,9 +37,9 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["desktop/lib/super_tabs/view.dart"])[0], {"desktop"})
 
     def test_a_desktop_change_on_main_keeps_backends_result_only_when_backend_reads_none_of_it(self):
-        # Task #4511: no backend test reads buddies.dart since #3013 (11-04); declaring it reran backend after every
-        # Update branch that brought a Buddy change.
-        for path in ["desktop/lib/super_tabs/buddies.dart", "desktop/lib/super_tabs/view.dart"]:
+        # Task #4511: no backend test reads the Swarm view's files since #3013 (11-04); declaring them reran backend
+        # after every Update branch that brought a Buddy change.
+        for path in ["desktop/lib/super_tabs/thread_panel.dart", "desktop/lib/super_tabs/view.dart"]:
             with self.subTest(path=path):
                 self.assertFalse(planner.reads("backend", path))
         for path in ["desktop/lib/super_tabs/attachment_upload.dart", "desktop/lib/measurement/setup_transport.dart",

@@ -114,7 +114,6 @@ void main() {
         home: Scaffold(
           body: SuperTabView(
             controller: controller,
-            onInvite: () {},
             onAddAgent: (_) {},
             onOpenTerminal: (_) {},
             machineName: (_) => 'Test Mac',

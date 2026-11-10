@@ -3,48 +3,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 
-import 'super_tab_roster_test.dart' show RosterFixture;
+/// A hover that says [text].
+Finder saying(String text) => find.byWidgetPredicate(
+  (w) => w is Tooltip && (w.message ?? '').contains(text),
+);
 
 void main() {
-  testWidgets('the roster shows each person’s avatar, each agent its face', (
-    tester,
-  ) async {
-    final f = RosterFixture();
-    addTearDown(f.dispose);
-    await f.initialize();
-    final people = f.server.state['people'] as List;
-    people[0] = <String, dynamic>{
-      ...people[0] as Map,
-      'avatar': {'kind': 'preset', 'key': 'fox'},
-      // An older server still sends the status its people once set: not drawn.
-      'status': {'text': 'Coffee break', 'emoji': '☕'},
-    };
-    f.server.state['agents'] = [
-      for (final agent in f.server.state['agents'] as List)
-        if ((agent as Map)['id'] == 'agent-1')
-          {
-            ...agent,
-            'avatar': {'kind': 'preset', 'key': 'owl'},
-          }
-        else
-          agent,
-    ];
-    await f.controller.refresh();
-    await f.show(tester);
-    final person = find.byKey(const ValueKey('super-person-owner'));
-    expect(
-      find.descendant(of: person, matching: find.text('🦊')),
-      findsOneWidget,
-    );
-    expect(find.descendant(of: person, matching: find.text('☕')), findsNothing);
-    expect(f.inRow(1, find.text('🦉')), findsOneWidget);
-    expect(
-      f.inRow(3, find.byKey(const ValueKey('super-agent-face'))),
-      findsOneWidget,
-    );
-    await f.close(tester);
-  });
-
   testWidgets('a message shows its author’s avatar', (tester) async {
     final person = SuperTabPerson.fromJson({
       'id': 'owner',

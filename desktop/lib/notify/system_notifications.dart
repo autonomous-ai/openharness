@@ -543,9 +543,7 @@ class LinuxSystemNotifier implements SystemNotifier {
     required String agentId,
   }) async {
     final opens =
-        (machineId == SystemNotifications.mentionNoticeMachine ||
-            machineId == SystemNotifications.chatNoticeMachine ||
-            machineId == SystemNotifications.messageNoticeMachine) &&
+        machineId == SystemNotifications.chatNoticeMachine &&
         agentId.isNotEmpty;
     if (opens && _canAct) {
       if (_waits.length >= _maxWaiting) _waits.removeAt(0).kill();
@@ -748,30 +746,28 @@ class SystemNotifications {
   /// in the Swift code; [postNotice] puts the device's key in the `agentId` slot.
   static const deviceNoticeMachine = '@device';
 
-  /// What a Swarm tag's notice puts in the `machineId` slot; the `agentId` slot holds
-  /// `<swarm tab id>/<tag id>` ([mention]), which the click opens (swarm_screen.dart).
+  /// What a Swarm tag's notice put in the `machineId` slot before Swarm v4: a click on one still in the
+  /// notification centre only brings the window forward (swarm_screen.dart). Can go 2026-12-10.
   static const mentionNoticeMachine = '@mention';
 
   /// What a Swarm chat's New messages notice puts in the `machineId` slot; the `agentId` slot holds
   /// `<swarm tab id>/<conversation id>` ([chat]), which the click opens (swarm_screen.dart).
   static const chatNoticeMachine = '@chat';
 
-  /// What a reply's notice puts in the `machineId` slot; the `agentId` slot holds the reply's message
-  /// link (`harness://swarm/…`, [messageLink]), which the click opens as a message link (swarm_screen.dart).
+  /// What a thread reply's notice put in the `machineId` slot before Swarm v4, its message link in the
+  /// `agentId` slot: a click on one still in the notification centre opens that link (swarm_screen.dart).
+  /// Can go 2026-12-10.
   static const messageNoticeMachine = '@message';
 
-  /// News about the ACCOUNT rather than an agent — a device joined it, a person was tagged, a chat
-  /// has new messages, a thread has a reply. The same switch and the same rules as [post]; a click on
-  /// it opens that device ([devicePub]), that tag in its Swarm ([mention]), that chat in its Swarm
-  /// ([chat]) or that message ([messageLink]) when given, else nothing.
+  /// News about the ACCOUNT rather than an agent — a device joined it, a chat has new messages. The
+  /// same switch and the same rules as [post]; a click on it opens that device ([devicePub]), that
+  /// chat in its Swarm ([chat]) when given, else nothing.
   void postNotice({
     required String id,
     required String title,
     required String body,
     String? devicePub,
-    ({String tabId, String mentionId})? mention,
     ({String tabId, String conversationId})? chat,
-    String? messageLink,
   }) {
     if (!store.value || !supported) return;
     if (permission.value == NotificationPermission.unavailable) return;
@@ -782,20 +778,14 @@ class SystemNotifications {
             id: id,
             title: title,
             body: body,
-            machineId: mention != null
-                ? mentionNoticeMachine
-                : chat != null
+            machineId: chat != null
                 ? chatNoticeMachine
-                : messageLink != null
-                ? messageNoticeMachine
                 : devicePub == null
                 ? ''
                 : deviceNoticeMachine,
-            agentId: mention != null
-                ? '${mention.tabId}/${mention.mentionId}'
-                : chat != null
+            agentId: chat != null
                 ? '${chat.tabId}/${chat.conversationId}'
-                : messageLink ?? devicePub ?? '',
+                : devicePub ?? '',
           )
           .then((answer) {
             if (answer != NotificationPermission.unknown) {
