@@ -102,6 +102,8 @@ export const NAMED_INDEX = {
   },
   /** A page's thread summaries, by root id (pageReads.ts pageThreads). */
   SuperTabThread: { id: { _id: 1 } },
+  /** Which agent wrote a GitHub comment, by its id (githubComments.ts commentAuthors). */
+  SuperTabGithubComment: { id: { _id: 1 } },
   /** `age`: chat settings back at the default, untouched for a week (chatSettings.ts sweepChatSettings). */
   SuperTabChatSetting: { age: { updatedAt: 1 } },
 } as const
