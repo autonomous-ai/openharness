@@ -2,9 +2,6 @@
  * Engines as clean computers have them (fresh macOS 26 and Ubuntu 24.04 VMs, signed out, 2026-10-11), started from a
  * terminal with `harness new`:
  *
- * `harness new` with no --mode starts an engine in its owner's own mode, with no permission flag to confirm (#3466); each
- * case here that is about that confirmation asks for auto mode, as a person who types --mode auto does.
- *
  *  - OpenCode 1.19.0 prints its help to standard error. Read from standard output alone, its permission flag was never
  *    confirmed and every launch of it held for good.
  *  - Codex installed by Harness with its own Node is a `#!/usr/bin/env node` script, and such a computer has no `node`
@@ -93,7 +90,7 @@ console.log('fixture-opencode-ready');
 setInterval(() => {}, 1000);
 `, { mode: 0o755 })
   })
-  const started = await harness(d, ['new', 'opencode', project(d, 'stderr-help'), '--name', 'helpful', '--mode', 'auto', '--', 'hello'])
+  const started = await harness(d, ['new', 'opencode', project(d, 'stderr-help'), '--name', 'helpful', '--', 'hello'])
   expect(started.code, started.out + started.err).toBe(0)
   expect(started.out).toContain('Created helpful on this computer')
   const launch = await until('OpenCode to start', () => {
@@ -139,7 +136,7 @@ console.error("node:internal/modules/cjs/loader:1228\\n  throw err;\\n\\nError: 
 process.exit(1);
 `, { mode: 0o755 })
   })
-  const refused = await harness(d, ['new', 'codex', project(d, 'broken'), '--mode', 'auto', '--', 'hello'])
+  const refused = await harness(d, ['new', 'codex', project(d, 'broken'), '--', 'hello'])
   expect(refused.code, refused.out + refused.err).toBe(1)
   expect(refused.err.trim()).toBe('Codex is installed but cannot run: Error: Cannot find module \'@openai/codex-linux-x64\'')
   // Refused, not held for a minute and then called unconfirmed.
@@ -160,7 +157,7 @@ it('says what a launch still held after a minute waits for, and cancels it so it
       `if (process.argv.includes('--help') && !require('node:fs').existsSync(${JSON.stringify(fixed)})) setInterval(() => {}, 1000)`,
       `else ${wrapper.slice(1).join('\n')}`].join('\n'), { mode: 0o755 })
   })
-  const held = await harness(d, ['new', 'codex', project(d, 'held'), '--name', 'later', '--mode', 'auto', '--', 'hello'])
+  const held = await harness(d, ['new', 'codex', project(d, 'held'), '--name', 'later', '--', 'hello'])
   expect(held.code, held.out + held.err).toBe(1)
   expect(held.err).toContain('Waiting to confirm the selected executable’s permission flags.')
   expect(held.err.trim().split('\n').at(-1)).toBe('Harness did not start the harness within a minute: '
@@ -264,7 +261,7 @@ it('waits for the Desktop\'s own download of Codex, rather than installing it be
   'harness-download'], { stdio: 'ignore' })
   try {
     writeFileSync(marker, String(download.pid))
-    const started = await harness(d, ['new', 'codex', 'scratch1', '--name', 'cx', '--mode', 'auto', '--', 'Reply with pong'],
+    const started = await harness(d, ['new', 'codex', 'scratch1', '--name', 'cx', '--', 'Reply with pong'],
       (err) => { if (err.includes('Downloading Codex.')) writeFileSync(release, '') })
     expect(started.code, started.out + started.err).toBe(0)
     // Said first, as the hold it is; the download's last write may leave the next look a moment to settle.

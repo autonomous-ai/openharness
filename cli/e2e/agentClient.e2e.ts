@@ -621,6 +621,7 @@ describe('Harness for agents, end to end', () => {
     const kidCommand = await commandsIn(d, String(kid.tmuxPane))
     expect(kidCommand).toContain(HARNESS_INSTRUCTIONS)
     expect(kidCommand).not.toContain('"attribution"')
+    expect(kidCommand).not.toContain('When you create or update a pull request')
 
     // Codex receives delegation instructions, without an instruction to mark PRs.
     expect((await run('new', 'codex', 'kidx', '--name', 'kidx', '--', 'hello kidx')).code).toBe(0)
