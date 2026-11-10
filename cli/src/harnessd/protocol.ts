@@ -70,8 +70,10 @@ export type CoreMessage =
   /** Start-up is done and requests are being served (protocol 2) — or, with `safeMode`, start-up gave
    *  way to safe mode: the updater alone runs, waiting for a fix. */
   | { type: 'harnessd:ready'; safeMode?: string }
-  /** Sent every few seconds; a core that stops sending is hung. `loopDelayMs`: the longest the event
-   *  loop was held since the last one (protocol 2). */
+  /** Sent every few seconds; a core that stops sending is hung. `loopDelayMs`, the longest the event loop
+   *  was held since the last one (protocol 2), is no longer sent: no master read it, and the monitor behind
+   *  it woke every process every 20 ms, 0.075% of a core each at rest (2026-11-11). Still accepted, from a
+   *  core or service of an older build under this master. */
   | { type: 'harnessd:heartbeat'; rssBytes: number; heapUsedBytes: number; loopDelayMs?: number }
   /** Start the process that runs this service (harnessd/services.ts `onDemand`): an experiment that is on now
    *  (protocol 3), the devices, models or the gateway, now that they are needed (protocol 4, and before
