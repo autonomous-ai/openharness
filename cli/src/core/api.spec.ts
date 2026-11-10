@@ -294,7 +294,11 @@ describe('the core API services stand on', () => {
   })
 
   it('tells the agent browser nothing while it is off, and its frames carry no browser', () => {
-    expect(AGENT_BROWSER_FALLBACKS).toEqual({ attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, stop: undefined })
+    // Asserted member by member, not as one object, so a member added later still has to answer one of these.
+    const { streamCommand, ...notices } = AGENT_BROWSER_FALLBACKS
+    // No stream to open: the same answer the core gives when the service never started (core/main.ts).
+    expect(streamCommand).toEqual({ error: 'NO_BROWSER' })
+    for (const [member, fallback] of Object.entries(notices)) expect(fallback, member).toBeUndefined()
   })
 
   it('tells the agent cleanup nothing while it is off: every harness is left open, as before it', () => {

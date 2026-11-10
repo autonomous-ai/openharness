@@ -1087,7 +1087,7 @@ export interface AgentBrowserPort {
 /** What the core gets when the agent browser fails: nothing told, frames without a browser, and no stream to open. A
  *  purge it misses is finished when it next starts, which deletes the browser of every agent that is gone. */
 export const AGENT_BROWSER_FALLBACKS: PortFallbacks<AgentBrowserPort> = {
-  attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, streamCommand: { error: 'NOT_READY' }, onCloseViewers: undefined, stop: undefined,
+  attached: undefined, stopped: undefined, deleted: undefined, frameContext: undefined, streamCommand: { error: 'NO_BROWSER' }, onCloseViewers: undefined, stop: undefined,
 }
 
 /** The core's calls into the DSH viewers: each harness agent's viewer server and verdict watch. */
