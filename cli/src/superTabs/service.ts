@@ -162,6 +162,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   // GitHub as this computer's own gh login, for the news to its person's v4 agents and the merges of their PM's projects:
   // read and merged while the host runs (no host, no Swarm agents here to read or merge for).
   const github = (options.github ?? githubRest)()
+  // This computer's GitHub login, asked once: a verdict made by command looks for its own earlier comment by it (githubVerdict.ts).
+  let githubLogin: Promise<string> | null = null
+  const loginOf = () => githubLogin ??= github.get('/user', null).then(reply => {
+    const login = object(reply.body).login
+    if (reply.status !== 200 || typeof login !== 'string' || !login) throw new Error(`GitHub answered ${reply.status} for this computer's login.`)
+    return login
+  }).catch(error => { githubLogin = null; throw error })
   // GitHub for this computer's person's v4 agents (githubMentions.ts).
   const mentions = (options.githubMentions ?? ((api, held) => new GitHubMentions({
     watched: async () => watchedAgents({ me: (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
@@ -432,10 +439,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'read') {
           const asked = verdictAsked(payload)
           if (!asked) return { error: 'INVALID_REQUEST' }
+          // This computer's gh login is its person's: only that person's own agent here posts with it, as GitHub news and the
+          // merger read with it only for such an agent (githubMentions.ts watchedAgents, githubMerge.ts ledProjects).
+          const me = (await core.account.identity().catch(() => null))?.accountId ?? null
+          if (!me || agent.contributorId !== me || agent.machineOwnerId !== me) {
+            return { error: 'AGENT_UNAVAILABLE', detail: 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.' }
+          }
           const repositories = new Set(list((await swarm()).state.projects).map(project => repositorySlug(object(project.repository).repositoryUrl)).filter(slug => slug !== null))
-          return { ok: true, value: await postVerdict({ get: github.get, send: github.send,
+          const name = [agent.displayName, agent.name].find((given): given is string => typeof given === 'string' && !!given.trim()) ?? ''
+          return { ok: true, value: await postVerdict({ get: github.get, send: github.send, login: loginOf,
             record: async (repository, commentId) => { await backend(core, 'POST', `${path}/github-comments?${identity}`, { repository, kind: 'issue', commentId }) } },
-            { name: String(agent.displayName ?? agent.name ?? ''), repositories }, asked) }
+            { name, repositories }, asked) }
         }
         // A Lead's terminal read or typing (`screen`, `type`): the backend answers only the agent that asked.
         if (payload.action === 'terminalResult') {

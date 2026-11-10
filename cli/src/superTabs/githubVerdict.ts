@@ -9,7 +9,9 @@
  * one form the merger reads, and tells the backend which agent wrote it (backend superTabs/githubComments.ts), from the
  * session that ran the command (service.ts: a harness speaks as its own agent alone).
  *
- * The comment keeps lampOS's form, so the merger as it is counts it, and a person reads it on the pull request.
+ * The comment keeps lampOS's form, for a person to read on the pull request. The merger as it is reads the reader from that
+ * form only for a name of one or two plain words (githubMerge.ts SIGNATURE); it counts the recorded agent, whatever its
+ * name, once it reads the record.
  */
 import { REPLY_TEXT_MAX } from './agentReplies.js'
 import { isWriter, writersOf } from './githubMerge.js'
@@ -23,11 +25,14 @@ export interface VerdictDeps {
   send: GitHubSend
   /** Tells the backend that the reader wrote the GitHub comment [commentId] on [repository]. The same record again costs nothing. */
   record: (repository: string, commentId: string) => Promise<void>
+  /** This computer's GitHub login, which wrote any comment the command made before. */
+  login: () => Promise<string>
   now?: () => number
 }
 
-/** How far back an earlier comment is looked for, so that a command that arrives twice posts once. */
-const TWICE_MS = 60 * 60_000
+/** How far back an earlier comment is looked for, so that a command that arrives twice posts once, and how many pages of
+ *  that hour are read: past them the reader's own comment is not looked for, and the command posts. */
+const TWICE_MS = 60 * 60_000, TWICE_PAGES = 3, PAGE = 100
 
 /** The verdict a `read` request asks for, or null: a repository as `owner/name`, a pull request's number, the head the
  *  reader was asked to read (7 to 40 hex digits, as GitHub shortens it), and the reader's words, which a HOLD must have. */
@@ -72,7 +77,7 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
   const pull = object(read.body), head = String(object(pull.head).sha ?? '')
   if (pull.state !== 'open') throw new SuperTabHostError('PULL_CLOSED', `${at} is closed: there is nothing to read.`, 409)
   if (!/^[0-9a-f]{40}$/.test(head) || !head.startsWith(asked.sha)) {
-    throw new SuperTabHostError('HEAD_MOVED', `${at} is now at ${head.slice(0, 7)}, not ${asked.sha.slice(0, 7)}. Read that head, then run the command with it.`, 409)
+    throw new SuperTabHostError('HEAD_MOVED', `${at} is now at ${head.slice(0, asked.sha.length)}, not ${asked.sha}. Read that head, then run the command with it.`, 409)
   }
   if (isWriter(writersOf(pull), reader.name)) throw new SuperTabHostError('OWN_PULL_REQUEST', `${at} is your own pull request. Another agent reads it.`, 403)
 
@@ -80,12 +85,25 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
   const words = asked.text.trim()
   const line = (time: string) => `${reader.name.trim()}, ${time}: ${asked.verdict} ${head}`
   const body = `${line(hhmm(now))}${words ? `\n\n${words}` : ''}`
-  // The same verdict in the same words on the same head, said in the last hour, is this command arriving twice: a reader
-  // whose first try timed out, or one whose record failed (below). The time in the line is the only part that may differ.
-  const said = await github(() => deps.get(`/repos/${repository}/issues/${asked.number}/comments?since=${new Date(now - TWICE_MS).toISOString()}&per_page=100`, null))
-  if (said.status !== 200) throw refused(said.status)
-  const same = (comment: Record<string, unknown>) => String(comment.body ?? '').replace(/^(.*?), \d\d:\d\d: /, '$1, 00:00: ') === body.replace(hhmm(now), '00:00')
-  let comment = (Array.isArray(said.body) ? said.body.map(object) : []).find(same)
+  // The same verdict in the same words on the same head, as the newest thing this reader said of the head in the last hour,
+  // is this command arriving twice: a reader whose first try timed out, or one whose record failed (below). Only the time
+  // in the line may differ. Anything it said of the head since makes it a new verdict (a HOLD said again after a READ-OK
+  // took the first HOLD for it, and the merger read READ-OK), and so does another login's comment that reads the same.
+  const login = (await github(async () => ({ status: 200, etag: null, resetAt: null, body: await deps.login() }))).body
+  const own: Array<Record<string, unknown>> = []
+  for (let page = 1; page <= TWICE_PAGES; page++) {
+    const said = await github(() => deps.get(`/repos/${repository}/issues/${asked.number}/comments?since=${new Date(now - TWICE_MS).toISOString()}&per_page=${PAGE}&page=${page}`, null))
+    if (said.status !== 200 || !Array.isArray(said.body)) throw refused(said.status)
+    const mine = (line: string) => /^(.*?), \d\d:\d\d: (?:READ-OK|HOLD) ([0-9a-f]{40})$/.exec(line)
+    for (const comment of said.body.map(object)) {
+      const first = mine(String(comment.body ?? '').split('\n')[0] ?? '')
+      if (first && first[1] === reader.name.trim() && first[2] === head && String(object(comment.user).login ?? '').toLowerCase() === String(login).toLowerCase()) own.push(comment)
+    }
+    if (said.body.length < PAGE) break
+  }
+  const timeless = (text: string) => text.replace(/^(.*?), \d\d:\d\d: /, '$1, 00:00: ')
+  const newest = own.at(-1)
+  let comment = newest && timeless(String(newest.body ?? '')) === timeless(body) ? newest : undefined
   const posted = !comment
   if (!comment) {
     const made = await github(() => deps.send('POST', `/repos/${repository}/issues/${asked.number}/comments`, { body }))
@@ -94,7 +112,13 @@ export async function postVerdict(deps: VerdictDeps, reader: { name: string; rep
   }
   const url = String(comment.html_url ?? '')
   try { await deps.record(repository, String(comment.id)) } catch (error) {
-    throw new SuperTabHostError('NOT_RECORDED', `Posted (${url}), but Harness could not record it as yours: ${error instanceof Error ? error.message : 'the server did not answer.'} `
+    const said = error instanceof Error ? error.message : 'the server did not answer.'
+    // What the server refuses for good (another agent's comment, a repository of no project) the same command would be
+    // refused again: said as the server said it. A busy or unreachable server is worth the command again.
+    if (error instanceof SuperTabHostError && error.status >= 400 && error.status < 500 && error.status !== 429) {
+      throw new SuperTabHostError('NOT_RECORDED', `Posted (${url}), but it is not recorded as yours: ${said} (${error.code})`, error.status)
+    }
+    throw new SuperTabHostError('NOT_RECORDED', `Posted (${url}), but Harness could not record it as yours: ${said} `
       + 'Run the same command again: it will not post twice.', 503)
   }
   return { url, head, posted }

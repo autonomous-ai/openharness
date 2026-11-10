@@ -97,8 +97,16 @@ export function readStdin(stream: NodeJS.ReadableStream & { destroy(): void }, i
   })
 }
 /** Why `-` read nothing usable from a stdin left open, and how to end it. */
-const idleRefusal = () => `post - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed, so nothing was posted. `
-  + `Close stdin after the message, as a heredoc does: ${POST_STDIN}, or pass it as TEXT.`
+const idleRefusal = (verb: 'post' | 'read') => `${verb} - read stdin until nothing more came for ${STDIN_IDLE_MS / 1000} s, but stdin was never closed, so nothing was posted. `
+  + `Close stdin after the message, as a heredoc does: ${verb === 'post' ? POST_STDIN : READ_STDIN}, or pass it as TEXT.`
+/** The command's action: the first word that is no flag of where to send it, nor a flag's value (parseSuperTabArgs). */
+const actionOf = (argv: readonly string[]): string | undefined => {
+  for (let i = 0; i < argv.length; i++) {
+    if (['--tab', '--agent', '--port', '--machine'].includes(argv[i]!)) i++
+    else return argv[i]
+  }
+  return undefined
+}
 /** Stands in for stdin while the arguments are parsed the first time: stdin is read only for a command that wants it. */
 class WantsStdin {}
 
@@ -221,6 +229,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where, stdin: 
     // A reader's verdict on a pull request, on the head it was asked to read (githubVerdict.ts): `ok` may go without
     // words, `hold` says the file, the line and the fix. The daemon reads the head and refuses one that moved.
     const text = positional[4] === '-' ? postStdin(stdin, terminal, 'read') : positional[4] ?? ''
+    // Said with its length before anything is sent, as a post's is (POST_MAX_CHARS).
+    if (text.length > POST_MAX_CHARS) {
+      throw new Error(`These words are ${counted(text.length)} characters, and a verdict takes at most ${counted(POST_MAX_CHARS)}: nothing was posted. `
+        + 'Say it shorter, or put the rest in a comment of its own on the pull request.')
+    }
     const asked = verdictAsked({ repository: second?.slice(0, second.lastIndexOf('#')), number: Number(/#([1-9][0-9]{0,8})$/.exec(second ?? '')?.[1]),
       verdict: first === 'ok' ? 'READ-OK' : 'HOLD', sha: third, text })
     if (!asked) throw usageError()
@@ -238,7 +251,7 @@ async function parse(argv: readonly string[], local: Where, stdin: () => string 
   } catch (error) {
     if (!(error instanceof WantsStdin)) throw error
     const text = await Promise.resolve().then(stdin).catch(failure => {
-      throw failure instanceof StdinIdle ? new Error(idleRefusal()) : failure
+      throw failure instanceof StdinIdle ? new Error(idleRefusal(actionOf(argv) === 'read' ? 'read' : 'post')) : failure
     })
     return parseSuperTabArgs(argv, local, () => text, terminal)
   }

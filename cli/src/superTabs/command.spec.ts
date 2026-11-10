@@ -581,6 +581,11 @@ describe('stdin for -', () => {
     expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("post - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
       + "Close stdin after the message, as a heredoc does: post GROUP - OPERATION_ID <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
     expect(request).not.toHaveBeenCalled()
+    // A verdict's words on stdin are told the verdict's own form, whatever the words would have been.
+    expect(await superTabCommand([...prefix, 'read', 'hold', 'acme/app#27', 'f6edb44', '-'], deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe("read - read stdin until nothing more came for 30 s, but stdin was never closed, so nothing was posted. "
+      + "Close stdin after the message, as a heredoc does: read ok|hold OWNER/REPO#N SHA - <<'MSG' (the message on the next lines, then MSG alone on a line), or pass it as TEXT.")
+    expect(request).not.toHaveBeenCalled()
     // What arrives in time is used as before, read once.
     const stdin = vi.fn(async () => 'Ready\n')
     expect(await superTabCommand([...prefix, 'post', 'lead', '-', 'op-3'], { ...deps, stdin })).toBe(0)
@@ -619,6 +624,9 @@ it('reads a verdict on a pull request: ok or hold, the repository and number, th
     .toThrow("read - read no message from stdin, so nothing was posted. Send the message on stdin: read ok|hold OWNER/REPO#N SHA - <<'MSG'")
   expect(() => parseSuperTabArgs(['read', 'ok', 'acme/app#27', 'f6edb44', '-'], where, () => 'x', () => true))
     .toThrow('read - reads the message from stdin, but stdin is a terminal, so nothing was posted.')
+  // Words the daemon would refuse are said too long here, with their length, as a post's are.
+  expect(() => parseSuperTabArgs(['read', 'hold', 'acme/app#27', 'f6edb44', 'x'.repeat(32_001)], where))
+    .toThrow('These words are 32,001 characters, and a verdict takes at most 32,000: nothing was posted.')
   for (const argv of [['read'], ['read', 'ok'], ['read', 'ok', 'acme/app#27'], ['read', 'yes', 'acme/app#27', 'f6edb44'], ['read', 'ok', '27', 'f6edb44'],
     ['read', 'ok', 'acme/app#0', 'f6edb44'], ['read', 'ok', 'acme/../app#27', 'f6edb44'], ['read', 'ok', 'acme/app#27', 'f6edb4'], ['read', 'ok', 'acme/app#27', 'HEAD'],
     ['read', 'hold', 'acme/app#27', 'f6edb44'], ['read', 'hold', 'acme/app#27', 'f6edb44', '  '], ['read', 'ok', 'acme/app#27', 'f6edb44', 'fine', 'extra']]) {
