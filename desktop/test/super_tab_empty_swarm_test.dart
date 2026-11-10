@@ -6,7 +6,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'swarm_state_test.dart' show createApp;
 
 /// Audit finding 20 (task #4445): a Swarm with no projects says one sentence for both ways to start, under two

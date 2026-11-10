@@ -5,7 +5,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
@@ -207,10 +206,6 @@ Future<(SuperTabController, GlobalKey)> _show(
     initial: {'tabId': 'tab', 'accountId': 'owner', 'selectedId': selected},
   );
   await c.refresh();
-  final attention = SuperTabAttention.of(c);
-  await attention.mentions.load();
-  await attention.decisions.load();
-  await attention.load();
   await c.select(selected);
   final picture = GlobalKey();
   await tester.pumpWidget(
@@ -333,14 +328,11 @@ void main() {
   });
 
   for (final brightness in Brightness.values) {
-    for (final scene in ['sidebar', 'activity', 'filter', 'menu', 'toast']) {
+    for (final scene in ['sidebar', 'filter', 'menu', 'toast']) {
       testWidgets('wave 2: $scene in ${brightness.name}', (tester) async {
         if (!shotsOn) return;
         final (c, picture) = await _show(tester, brightness);
         switch (scene) {
-          case 'activity':
-            await tester.tap(find.byKey(const ValueKey('super-decisions')));
-            await tester.pumpAndSettle();
           case 'filter':
             await tester.tap(find.byKey(const ValueKey('super-unread-only')));
             await tester.pumpAndSettle();

@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'super_tab_tasks_view_test.dart' show taskFixture;
 import 'support/capture.dart';
 import 'support/memory_key_value_store.dart';

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/capture.dart';
@@ -46,9 +45,6 @@ void main() {
         initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
       );
       await controller.refresh();
-      server.tag('sidebar-shot-mention', conversationId: 'lead');
-      await controller.refresh();
-      await SuperTabAttention.of(controller).mentions.load();
       // Unread, so the project's dot shows beside its chevron.
       server.append('New work', conversationId: 'g11');
       await controller.refresh();

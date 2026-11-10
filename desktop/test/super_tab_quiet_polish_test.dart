@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness/shared/theme/app_icons.dart';
-import 'package:harness/super_tabs/count_badge.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm, wait;
+import 'support/super_tab_swarm.dart' show swarm, wait;
 import 'super_tab_mentions_test.dart' show showView;
 
 /// Quiet Swarm's polish pass: what a walk of the screens found drifting from
@@ -49,36 +47,6 @@ void main() {
       // Its task is in the Tasks view, not listed under it (task #2569).
       expect(find.text('?'), findsNothing);
       await tester.pump(const Duration(milliseconds: 300));
-    });
-
-    testWidgets("a project's red number stays while Decisions shows none", (
-      tester,
-    ) async {
-      // What was asked of the reader is a decision: the project row counts it
-      // with the tag, and the Decisions row carries no number (task #3128).
-      final server = swarm()..followedThreads = null;
-      server.tag('message-1');
-      server.ask(['Ship it?'], conversationId: 'lead');
-      await showView(tester, server);
-      final activity = find.descendant(
-        of: _key('super-decisions'),
-        matching: find.byType(SuperTabCountBadge),
-      );
-      expect(activity, findsNothing);
-      expect(_key('super-mentions-lead'), findsOneWidget);
-    });
-
-    testWidgets('a private project keeps its leading lock and mention number '
-        'one line, and its row its height', (tester) async {
-      final server = swarm()..followedThreads = null;
-      (server.state['projects'] as List).first['visibility'] = 'private';
-      server.tag('message-1');
-      await showView(tester, server);
-      final number = tester.getCenter(_key('super-mentions-lead'));
-      final lock = tester.getCenter(find.byIcon(AppIcons.lock).first);
-      expect((number.dy - lock.dy).abs(), lessThan(2));
-      expect(lock.dx, lessThan(number.dx));
-      expect(tester.takeException(), isNull);
     });
 
     // Project rows are 4 px taller than the rest since Huy's ask (11-03,

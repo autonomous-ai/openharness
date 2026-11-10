@@ -50,13 +50,10 @@ import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
 import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'composer_tags.dart';
-import 'activity.dart';
 import 'attachment_chips.dart' show superTabShowsInPlace;
 import 'attachment_image.dart';
-import 'reminders.dart';
 import 'places.dart';
 import 'agent_state.dart';
-import 'attention.dart';
 import 'controller.dart';
 import 'file_links.dart';
 import 'dialog_scope.dart';
@@ -81,7 +78,6 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'message_text.dart';
 import 'notifications.dart';
-import 'decisions.dart';
 import 'day_pill.dart';
 import 'route_row.dart';
 import 'terminal_row.dart';
@@ -814,31 +810,6 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Timer? _historyRetry;
   static const _historyRetryAfter = Duration(seconds: 5);
-
-  /// The band's [today] (the unread bar or the jump pill, or nothing), under
-  /// the row naming [id]'s unread tags in threads when it has any (#2814).
-  Widget? _withThreadTags(String id, Widget? today) {
-    final tags = SuperTabAttention.of(c).threadTagsIn(id);
-    if (tags.isEmpty) return today;
-    final bar = SuperTabThreadTagBar(
-      count: tags.length,
-      onOpen: () => _openThreadTag(tags.first),
-    );
-    if (today == null) return bar;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [bar, today],
-    );
-  }
-
-  /// Opens [tag]'s thread at its reply, lit; opening it reads it, which
-  /// clears the tag from the row and the red number.
-  void _openThreadTag(SuperTabMention tag) {
-    final root = tag.threadId;
-    if (root == null) return;
-    c.openThread(root, at: tag.messageId);
-  }
 
   /// Brings [id]'s New messages line into view near the top, and stops
   /// following the end there: what came since the reader's mark is below.
@@ -1930,7 +1901,6 @@ class _SuperTabViewState extends State<SuperTabView>
     onOpenPane: _openPane,
     onNewSwarm: widget.onNewSwarm,
     page: _pageShown,
-    attention: SuperTabAttention.of(c),
     onManage: _openManage,
     onManageMachines: () {
       // Set before Manage opens, so a last page of Devices is not opened here only to be left at once.
@@ -1972,39 +1942,18 @@ class _SuperTabViewState extends State<SuperTabView>
     return c.openBuddyChat(projectId);
   }
 
-  /// What the menu bar asked to open ([SuperTabController.openNotice]): a tag
-  /// or a due reminder at its message, an agent waiting in its chat with its
-  /// terminal beside it, anything else in its chat.
+  /// What the menu bar asked to open ([SuperTabController.openNotice]): the chat of an agent that asks the reader.
   void _takeNotice() {
     final request = c.noticeRequest;
     if (request == null || c.snapshot == null) return;
     c.noticeRequest = null;
     widget.onCloseTerminal?.call();
-    final notice = SuperTabActivity.of(c).notices
-        .where((n) => n.kind.name == request.kind && n.id == request.id)
-        .firstOrNull;
     setState(() {
       _page = null;
       _showManage = false;
       _showPullRequests = false;
     });
-    switch (notice) {
-      case SuperTabNotice(:final mention?):
-        unawaited(_openMention(mention));
-      case SuperTabNotice(:final reminder?):
-        unawaited(_openReminder(reminder));
-      case SuperTabNotice(kind: SuperTabNoticeKind.agent, :final need?):
-        if (_openConversation(need.conversationId) && need.agentId != null) {
-          c.openAgentTerminal(
-            need.agentId!,
-            conversationId: need.conversationId,
-          );
-        }
-      case SuperTabNotice(:final need?):
-        _openConversation(need.conversationId);
-      case _:
-        break;
-    }
+    if (request.kind == 'chat') _openConversation(request.id);
   }
 
   /// Shows [page] in the main pane, as its sidebar row does.
@@ -2270,102 +2219,6 @@ class _SuperTabViewState extends State<SuperTabView>
         )?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
       }),
     );
-  }
-
-  /// Opens the conversation a tag is in, at its message, replying to it. What
-  /// is held is looked in first, then what arrived after it, then older pages,
-  /// until the message is among them; one that is not found says so, and the
-  /// list stays.
-  Future<void> _openMention(SuperTabMention mention) =>
-      _openAtMessage(mention.conversationId, mention.messageId, answer: true);
-
-  /// More ▸ Remind me: the message comes back in the menu bar at [when].
-  Future<void> _remind(SuperTabMessage message, SuperTabRemindIn when) async {
-    final at = when.from(clock.now());
-    final kept = await SuperTabReminders.of(c).set(message, at);
-    if (!mounted) return;
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(
-        content: Text(
-          kept
-              ? 'Reminder set for ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(at))}'
-              : "Couldn't set the reminder",
-        ),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
-
-  /// A due reminder opened from the menu bar: its message, which clears it.
-  Future<void> _openReminder(SuperTabReminder reminder) async {
-    unawaited(SuperTabReminders.of(c).open(reminder));
-    await _openAtMessage(
-      reminder.conversationId,
-      reminder.messageId,
-      answer: false,
-    );
-  }
-
-  /// Opens conversation [id] at message [messageId], from the menu bar;
-  /// [answer] replies to it (a tag).
-  Future<void> _openAtMessage(
-    String id,
-    String messageId, {
-    required bool answer,
-  }) async {
-    final request = ++_jumpRequest;
-    // A closed or quiet conversation is asked for by id, as a message link does: the tag of a task with no worker is in one,
-    // and a row that did nothing left the reader not knowing why it was there.
-    final readable =
-        c.snapshot?.conversation(id) != null || await c.loadGroup(id);
-    if (!mounted || request != _jumpRequest || c.accessRevoked) return;
-    if (!readable || c.snapshot?.conversation(id) == null) {
-      ScaffoldMessenger.maybeOf(context)
-          ?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
-      return;
-    }
-    final message = await _findMessage(id, messageId);
-    if (!mounted || request != _jumpRequest) return;
-    if (message == null) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(
-            c.hasOlder(id)
-                ? 'This message is too far back to open.'
-                : 'This message is no longer in the conversation.',
-          ),
-        ),
-      );
-      return;
-    }
-    _page = null;
-    c.select(id);
-    // A tag in a thread reply opens the thread; one shown only there is not in
-    // the chat to scroll to. A top-level message is its own thread's root, but
-    // it has no thread to open: it is in the chat.
-    if (message.threadReply) {
-      c.openThread(
-        message.thread!,
-        at: message.inMainStream ? null : message.id,
-      );
-      if (!message.inMainStream) return;
-    }
-    setState(() {
-      if (answer &&
-          c.canWrite &&
-          c.selected?.archived == false &&
-          message.thread == null) {
-        _replies[id] = message;
-      }
-      _target = message.id;
-      _openedAtMessage = id;
-      // Stop following the end: the tagged message is what to see.
-      _scrollRequest++;
-      _jumpingToEnd = false;
-      _follow(id, false);
-    });
-    _revealTarget(id, 0);
-    _focus.requestFocus();
   }
 
   /// The list is lazy: jump near the target until its row is built, then
@@ -2645,20 +2498,13 @@ class _SuperTabViewState extends State<SuperTabView>
           .toList() ??
       const [];
 
-  /// The open decisions of the reader that [group]'s work asked.
-  List<SuperTabDecision> _decisionsOf(SuperTabConversation group) => [
-    for (final d in SuperTabDecisions.of(c).open)
-      if (d.conversationId == group.id) d,
-  ];
-
-  /// Whether [group]'s work, done by [agent], waits on the reader's answer: a
-  /// decision asked of them, or `needs_human` asked of them by name, else of
+  /// Whether [group]'s work, done by [agent], waits on the reader's answer:
+  /// `needs_human` asked of them by name, else of
   /// whom the server says it waits on, else (a backend that names nobody)
   /// of whoever reads. `blocked` is never a question.
   bool _asksReader(SuperTabConversation group, SuperTabAgent agent) {
     final work = group.assignment;
     if (work == null || work['agentId'] != agent.id) return false;
-    if (_decisionsOf(group).isNotEmpty) return true;
     if (work['status'] != 'needs_human') return false;
     final liveness = group.liveness;
     final waited = liveness != null && liveness['why'] == 'person';
@@ -2668,7 +2514,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The bar's click: the question where it is, so it visibly does something
-  /// (Leo, #3017). A decision opens where decisions are answered; a question
+  /// (Leo, #3017). A question
   /// in the chat comes into view, lit; a prompt in the terminal opens it, or
   /// says it is already open.
   void _openQuestion(SuperTabConversation group, SuperTabAgent agent) {
@@ -3312,31 +3158,6 @@ class _SuperTabViewState extends State<SuperTabView>
       details: SuperTabMessageText(message.text),
     );
   }
-
-  /// A decision asked of a person, or the one made, as a card (anh Dee's
-  /// mockup, 11-07, #4529): Decision or Decided, its question, and View for
-  /// the rest; null for any other message.
-  Widget? _decisionCard(SuperTabMessage message) {
-    final kind = message.source['kind'];
-    if (!_decisionKinds.contains(kind)) return null;
-    final first = message.text.trim().split('\n').first;
-    // "River asks dee (#12): Ship it?" reads as its question.
-    final asks = kind == 'decision-asked' ? first.indexOf(': ') : -1;
-    return SwarmChatCard(
-      icon: AppIcons.flag,
-      label: kind == 'decision-delegated' ? 'Decided' : 'Decision',
-      title: asks < 0 ? first : first.substring(asks + 2),
-      action: 'View',
-      details: SuperTabMessageText(message.text),
-    );
-  }
-
-  /// The backend's decision lines (superTabs/decisions.ts).
-  static const _decisionKinds = {
-    'decision-asked',
-    'decision-delegated',
-    'decision-must-agree',
-  };
 
   /// Whether [message] is said between the two parties of a one-on-one chat
   /// (a Buddy chat, an agent chat): the reader and that chat's own agent. Its
@@ -4222,9 +4043,7 @@ class _SuperTabViewState extends State<SuperTabView>
       message: message,
       joinsBelow: joinsBelow,
       oneOnOne: _oneOnOne(message),
-      brief: card?.task == true
-          ? _briefCard(group!, message)
-          : _decisionCard(message),
+      brief: card?.task == true ? _briefCard(group!, message) : null,
       card: card == null
           ? null
           : SuperTabLiveCard(
@@ -4287,7 +4106,6 @@ class _SuperTabViewState extends State<SuperTabView>
       onMarkUnread: inThread || !message.inMainStream
           ? null
           : () => unawaited(_markUnread(message)),
-      onRemind: (when) => unawaited(_remind(message, when)),
       // Only the author's own plain message (the server decides).
       onEdit: c.canChange(message)
           ? (text) => _editMessage(message, text)
@@ -4307,12 +4125,6 @@ class _SuperTabViewState extends State<SuperTabView>
             },
       thread: thread,
       threadUnread: thread != null && c.threadUnread(thread),
-      threadTagged:
-          thread != null &&
-          SuperTabAttention.of(c).hasUnreadTagInThread(c.selectedId, thread.id),
-      threadFresh: thread == null
-          ? 0
-          : SuperTabAttention.of(c).newRepliesIn(c.selectedId, thread.id),
       onOpenThread:
           !inThread && root != null && (thread != null || message.threadReply)
           ? () => c.openThread(root)
@@ -4895,33 +4707,29 @@ class _SuperTabViewState extends State<SuperTabView>
                     SuperTabUnreadBand(
                       key: ValueKey('super-unread-band-${c.selectedId}'),
                       scroll: _scroll[c.selectedId],
-                      child: _withThreadTags(
-                        c.selectedId,
-                        _showsBar(c.selectedId)
-                            ? SuperTabUnreadBar(
-                                count: _newFromLine(c.selectedId),
-                                more: c.hasNewer(c.selectedId),
-                                onPressed: () =>
-                                    _jumpToUnreadLine(c.selectedId),
-                                onMarkRead: _markReadFromBar,
-                              )
-                            : _unread.offersDown(c.selectedId)
-                            ? Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  grid.AppDesktop.panelPadding,
-                                  grid.AppDesktop.controlGap,
-                                  grid.AppDesktop.panelPadding,
-                                  0,
+                      child: _showsBar(c.selectedId)
+                          ? SuperTabUnreadBar(
+                              count: _newFromLine(c.selectedId),
+                              more: c.hasNewer(c.selectedId),
+                              onPressed: () => _jumpToUnreadLine(c.selectedId),
+                              onMarkRead: _markReadFromBar,
+                            )
+                          : _unread.offersDown(c.selectedId)
+                          ? Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                grid.AppDesktop.panelPadding,
+                                grid.AppDesktop.controlGap,
+                                grid.AppDesktop.panelPadding,
+                                0,
+                              ),
+                              child: Center(
+                                child: SuperTabJumpToUnread(
+                                  onPressed: () =>
+                                      _jumpToUnreadLine(c.selectedId),
                                 ),
-                                child: Center(
-                                  child: SuperTabJumpToUnread(
-                                    onPressed: () =>
-                                        _jumpToUnreadLine(c.selectedId),
-                                  ),
-                                ),
-                              )
-                            : null,
-                      ),
+                              ),
+                            )
+                          : null,
                     ),
                     Expanded(
                       child: Stack(
@@ -5180,38 +4988,31 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         if (group != null)
-          ListenableBuilder(
-            listenable: SuperTabDecisions.of(c),
-            builder: (context, _) => Column(
-              children: [
-                for (final agent in _needsHuman(group))
-                  _inColumn(
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
-                      child: ListTile(
-                        key: ValueKey('super-needs-human-${agent.id}'),
-                        dense: true,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        tileColor: grid.AppPalette.warn.withValues(alpha: .08),
-                        leading: Icon(
-                          AppIcons.messageCircleQuestionMark,
-                          color: grid.AppPalette.warn,
-                          size: 18,
-                        ),
-                        title: Text(
-                          '${_agentName(agent)} needs you',
-                          style: DesktopChrome.control(medium: true),
-                        ),
-                        trailing: const Icon(AppIcons.arrowRight, size: 16),
-                        onTap: () => _openQuestion(group, agent),
-                      ),
-                    ),
+          for (final agent in _needsHuman(group))
+            _inColumn(
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
+                child: ListTile(
+                  key: ValueKey('super-needs-human-${agent.id}'),
+                  dense: true,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
-              ],
+                  tileColor: grid.AppPalette.warn.withValues(alpha: .08),
+                  leading: Icon(
+                    AppIcons.messageCircleQuestionMark,
+                    color: grid.AppPalette.warn,
+                    size: 18,
+                  ),
+                  title: Text(
+                    '${_agentName(agent)} needs you',
+                    style: DesktopChrome.control(medium: true),
+                  ),
+                  trailing: const Icon(AppIcons.arrowRight, size: 16),
+                  onTap: () => _openQuestion(group, agent),
+                ),
+              ),
             ),
-          ),
         ListenableBuilder(
           listenable: completing,
           builder: (context, _) {

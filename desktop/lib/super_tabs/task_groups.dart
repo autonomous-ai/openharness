@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:collection/collection.dart';
 
-import 'attention.dart';
 import 'backlog.dart';
 import 'controller.dart';
 import 'identity.dart';
@@ -437,9 +436,7 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
   SuperTabProject project, {
   required DateTime now,
   int Function(SuperTabConversation task)? needsHuman,
-  SuperTabAttention? attention,
 }) {
-  final tags = attention ?? SuperTabAttention.of(c);
   final people = {
     for (final person in c.snapshot?.people ?? const <SuperTabPerson>[])
       person.id: superTabPersonName(person.email),
@@ -457,7 +454,6 @@ Map<SuperTabTaskColumn, List<SuperTabTaskEntry>> superTabProjectBoard(
     boardMode: project.boardMode,
     readerId: c.accountId,
     now: now,
-    mentions: (task) => tags.mentionsIn(task.id),
     needsHuman: needsHuman,
     personName: (id) => people[id],
     releaseTimes: c.snapshot?.releaseTimesOf(project.id) ?? const {},

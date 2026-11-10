@@ -8,7 +8,6 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/manage_page.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -69,7 +68,6 @@ Future<void> pumpSidebar(
           builder: (context, _) => ProjectSidebar(
             controller: controller,
             app: app,
-            attention: SuperTabAttention.of(controller),
             onSelect: controller.select,
             onNewProject: onNewProject ?? () {},
             onPage: onPage ?? (_) {},
@@ -155,17 +153,13 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 
 void main() {
   testWidgets(
-    'private projects use a leading lock and keep notifications at the right',
+    'private projects use a leading lock and keep the muted mark at the right',
     (tester) async {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final app = createApp(connected: true);
       addTearDown(app.dispose);
       final server = ConversationServer();
       final controller = await projectSidebar(server);
-      server.tag('message-1', conversationId: 'lead');
-      await controller.refresh();
-      final attention = SuperTabAttention.of(controller);
-      await attention.mentions.load();
       await controller.setNotify('empty-lead', SuperTabNotify.muted);
       await pumpSidebar(tester, controller, app);
 
@@ -179,10 +173,6 @@ void main() {
         find.text('sample-project'),
       );
       final publicName = inRow('super-group-lead', find.text('web-project'));
-      final badge = inRow(
-        'super-group-lead',
-        find.byKey(const ValueKey('super-mentions-lead')),
-      );
       final muted = inRow(
         'super-group-empty-lead',
         find.byKey(const ValueKey('super-muted-empty-lead')),
@@ -196,16 +186,12 @@ void main() {
       );
       expect(inRow('super-group-empty-lead', find.text('#')), findsNothing);
       expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
-      expect(badge, findsOneWidget);
       expect(muted, findsOneWidget);
       expect(
         tester.getCenter(privateLock).dx,
         lessThan(tester.getCenter(privateName).dx),
       );
-      expect(
-        tester.getCenter(badge).dx,
-        greaterThan(tester.getCenter(publicName).dx),
-      );
+      expect(publicName, findsOneWidget);
       expect(
         tester.getCenter(muted).dx,
         greaterThan(tester.getCenter(privateName).dx),

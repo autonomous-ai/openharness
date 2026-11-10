@@ -7,7 +7,6 @@ import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'agent_state.dart';
-import 'attention.dart';
 import 'controller.dart';
 import 'delete_agent.dart';
 import 'model.dart';
@@ -15,7 +14,6 @@ import 'places.dart' show SwarmPage;
 import 'my_agents.dart';
 import 'personal_agents.dart';
 import 'personal_projects.dart' show PersonalProjects;
-import 'count_badge.dart';
 import 'quiet_rows.dart';
 import 'identity.dart';
 import 'leaderboard/reader.dart';
@@ -44,7 +42,6 @@ class ProjectSidebar extends StatelessWidget {
     this.devicesSelected = false,
     this.onPage,
     this.page,
-    this.attention,
     this.compact = false,
     this.onNewAgent,
     this.onAttachAgent,
@@ -112,12 +109,6 @@ class ProjectSidebar extends StatelessWidget {
   /// The page holding the main pane, if one does.
   final SwarmPage? page;
 
-  /// What needs the reader, as Slack shows it: each row's red number counts
-  /// only tags of them (decisions asked of them among them), and Threads is
-  /// bold while a thread they follow has replies they have not read. Without
-  /// it rows carry no number.
-  final SuperTabAttention? attention;
-
   /// Whether a row other than a conversation (Manage, devices, a page) holds
   /// the main pane.
   bool get _paneCovered => manageSelected || devicesSelected || page != null;
@@ -158,25 +149,13 @@ class ProjectSidebar extends StatelessWidget {
     final project = reading.project;
     final selected = _chatLit(group);
     // A project's row is bold for its own chat (Huy, 11-04, task #2638): a
-    // person's message or a tag of the reader there, never agents' progress
-    // alone (#2427). A task's unread is on its card and in Activity.
+    // person's message there, never agents' progress alone (#2427).
     final unread = reading.unread.contains(group.id);
-    // Only the reader's tags in its chat, which opening it clears (Dee,
-    // Slack's channel badge, task #2927). Tags in its tasks and threads,
-    // decisions and tasks that need the reader are in Activity.
-    final badge = attention?.chatTagsIn(group.id) ?? 0;
-    final badgeTooltip = badge == 0
-        ? null
-        : badge == 1
-        ? '1 tag'
-        : '$badge tags';
     return _drawRow(
       group,
       project: project,
       selected: selected,
       unread: unread,
-      badge: badge,
-      badgeTooltip: badgeTooltip,
       buddyChat: reading.buddyChat,
       selectedProjectId: reading.sidebar.selectedProjectId,
     );
@@ -187,8 +166,6 @@ class ProjectSidebar extends StatelessWidget {
     required SuperTabProject project,
     required bool selected,
     required bool unread,
-    int badge = 0,
-    String? badgeTooltip,
     SuperTabConversation? buddyChat,
     String? selectedProjectId,
   }) {
@@ -274,24 +251,6 @@ class ProjectSidebar extends StatelessWidget {
                                       style: style,
                                     ),
                                   ),
-                                  if (badge > 0) ...[
-                                    const SizedBox(width: 8),
-                                    Semantics(
-                                      label:
-                                          badgeTooltip ??
-                                          (badge == 1
-                                              ? '1 mention'
-                                              : '$badge mentions'),
-                                      excludeSemantics: true,
-                                      child: SuperTabCountBadge(
-                                        badge,
-                                        key: ValueKey(
-                                          'super-mentions-${group.id}',
-                                        ),
-                                        tooltip: badgeTooltip,
-                                      ),
-                                    ),
-                                  ],
                                   if (muted) ...[
                                     const SizedBox(width: 8),
                                     Tooltip(
@@ -315,7 +274,7 @@ class ProjectSidebar extends StatelessWidget {
                     ),
                     SizedBox(
                       // A project's row keeps no column for a mark it does
-                      // not have: its red number ends where Activity's does.
+                      // not have: its name ends where the other rows' details do.
                       width: _rowEnd,
                       // Unread is drawn as a bold name; a screen reader
                       // hears it said, as it heard the dot it replaces.
@@ -654,7 +613,7 @@ class ProjectSidebar extends StatelessWidget {
   // shared rows drawn in it.
   @override
   Widget build(BuildContext context) => grid.SidebarInk.scope(
-    child: switch ([?attention, ?leaderboard, ?agentStates]) {
+    child: switch ([?leaderboard, ?agentStates]) {
       final List<Listenable> sources when sources.isNotEmpty =>
         ListenableBuilder(
           listenable: Listenable.merge(sources),
@@ -666,7 +625,7 @@ class ProjectSidebar extends StatelessWidget {
 
   Widget _build(BuildContext context) {
     final snapshot = controller.snapshot;
-    final reading = _SidebarReading(controller, attention, app);
+    final reading = _SidebarReading(controller, app);
     final switcher = switch ((app, onNewSwarm)) {
       (final app?, final onNewSwarm?) => SwarmSwitcher(
         app: app,
@@ -786,9 +745,8 @@ Offset _besideTheRow(TooltipPositionContext context) {
 /// thousands of conversations were scanned again on every rebuild (Diego,
 /// 10-29).
 class _SidebarReading {
-  _SidebarReading(this.controller, this.attention, this.app);
+  _SidebarReading(this.controller, this.app);
   final SuperTabController controller;
-  final SuperTabAttention? attention;
   final AppNotifier? app;
   final _projects = <String, _ProjectReading>{};
 
@@ -839,8 +797,7 @@ class _ProjectReading {
       if (!g.closed &&
           !g.isBuddyChat &&
           g.audience == null &&
-          (sidebar.controller.unreadForPeople(g) ||
-              (sidebar.attention?.chatTagsIn(g.id) ?? 0) > 0))
+          sidebar.controller.unreadForPeople(g))
         g.id,
   };
 }

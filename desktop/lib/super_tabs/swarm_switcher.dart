@@ -340,7 +340,7 @@ List<SwarmChoice> swarmChoices(AppNotifier app) {
         (
           id: id,
           name: name.trim().isEmpty ? 'Swarm' : name,
-          waiting: app.superTabs.waitingTags(id),
+          waiting: app.superTabs.agentsAsking(id),
         ),
   ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 }
@@ -439,7 +439,7 @@ class _SwarmSwitcherState extends State<SwarmSwitcher> {
       final choices = swarmChoices(app);
       final personalWaiting = personalId == null || isPersonal
           ? 0
-          : app.superTabs.waitingTags(personalId);
+          : app.superTabs.agentsAsking(personalId);
       Widget? badge(int count) => count > 0 ? SuperTabCountBadge(count) : null;
       return LayoutBuilder(
         builder: (context, box) {

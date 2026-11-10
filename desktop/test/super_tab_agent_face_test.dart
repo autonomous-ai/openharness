@@ -7,7 +7,7 @@ import 'package:harness/super_tabs/profile_model.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/engine_identity.dart';
 
-import 'super_tab_activity_lists_test.dart' show swarm;
+import 'support/super_tab_swarm.dart' show swarm;
 import 'support/super_tab_fixture.dart';
 
 Map<String, dynamic> _agent(String id, String name) => {

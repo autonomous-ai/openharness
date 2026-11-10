@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/my_agents.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -219,6 +220,55 @@ void main() {
         reason: 'no message of a person reaches the channel or a task chat',
       );
       expect(sent.single['text'], 'The arm64 one');
+      // The read marks' save is on its way: let it land.
+      await tester.pump(const Duration(seconds: 1));
+    },
+  );
+
+  testWidgets(
+    'an agent that wrote to its person is what asks them, from read marks: '
+    'nothing of v3 tags, decisions, reminders or Activity is read',
+    (tester) async {
+      final (server, c, _) = await open(tester);
+      List<String> asking() => [for (final g in superTabAgentsAsking(c)) g.id];
+      Future<void> tap(String k) async {
+        await tester.tap(key(k));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 1));
+      }
+
+      // Its chat read, the person is in the channel.
+      await tap('super-agent-second');
+      await tap('super-group-lead');
+      expect(asking(), isNot(contains('agent-chat-second')));
+      // The agent writes in its own chat: its row is bold, and the Swarm counts it.
+      server.append(
+        'Which build?',
+        conversationId: 'agent-chat-second',
+        agent: true,
+      );
+      server.messages.last['author'] = {
+        'kind': 'agent',
+        'id': 'second',
+        'name': 'second',
+      };
+      await tester.runAsync(c.refresh);
+      await tester.pumpAndSettle();
+      expect(asking(), contains('agent-chat-second'));
+      // Its chat opened and read (Esc, as its unread bar says): nothing asks any more.
+      await tap('super-agent-second');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(asking(), isNot(contains('agent-chat-second')));
+      final v3 = RegExp(
+        r'/api/super-tabs/[^/]+/'
+        r'(mentions|decisions|reminders|activity|threads|inbox)(/read)?(\?.*)?$',
+      );
+      expect(server.requested.where(v3.hasMatch), isEmpty);
+      expect(tester.takeException(), isNull);
       // The read marks' save is on its way: let it land.
       await tester.pump(const Duration(seconds: 1));
     },

@@ -89,7 +89,6 @@ import '../super_tabs/message_link.dart' show swarmMessageLinkInbox;
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
 import '../super_tabs/controller.dart' show SuperTabController, SuperTabFailure;
-import '../super_tabs/notifications.dart' show SuperTabMentions;
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
 import '../state/device_finder.dart';
@@ -766,17 +765,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.systemNotifications.onTap = (machineId, agentId) async {
       await revealWindow();
       if (!mounted) return;
-      // A tag's notice carries its Swarm tab and tag: the click opens it as the menu bar's row
-      // does, once the tag is still the person's to read.
-      if (machineId == SystemNotifications.mentionNoticeMachine) {
-        final slash = agentId.indexOf('/');
-        if (slash <= 0) return;
-        await _openTagNotice(
-          agentId.substring(0, slash),
-          agentId.substring(slash + 1),
-        );
-        return;
-      }
+      // A tag's notice from before Swarm v4 names no agent: the window came forward, and that is all.
+      if (machineId == SystemNotifications.mentionNoticeMachine) return;
       // A chat's New messages notice carries its Swarm tab and chat: the click opens that chat.
       if (machineId == SystemNotifications.chatNoticeMachine) {
         final slash = agentId.indexOf('/');
@@ -787,7 +777,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         );
         return;
       }
-      // A reply's notice carries its message link: the click opens it as the link does, in its thread.
+      // A thread reply's notice from before Swarm v4 carries its message link: the click opens it as the link does.
       if (machineId == SystemNotifications.messageNoticeMachine) {
         unawaited(swarmMessageLinkInbox.accept(agentId));
         return;
@@ -2319,7 +2309,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           app.questionFor(p.machineId, p.agentId!) != null,
                     )
                     .length +
-                tabMentionsWaiting(app, swarm),
+                tabAgentsAsking(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
                 activity,
@@ -7429,40 +7419,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     }
   }
 
-  /// A click on a tag's system notice: the Swarm it is in, open here or not
-  /// (not loaded yet, its tab closed), opens at the tag. The account must
-  /// still be in that Swarm, and the server must list the tag as the person's
-  /// to answer now, in a read that succeeded; otherwise nothing opens, and a
-  /// Swarm loaded only to check is let go again.
-  Future<void> _openTagNotice(String tabId, String mentionId) async {
-    final name = app.superTabName(tabId);
-    if (name == null) return;
-    final loadedHere = app.superTabs.peek(tabId) == null;
-    // Unless the person went to that Swarm meanwhile: its view holds it now.
-    void letGo() {
-      if (loadedHere && app.activeSwarm.superTabId != tabId) {
-        app.superTabs.release(tabId);
-      }
-    }
-
-    final SuperTabController controller;
-    try {
-      controller = await app.superTabs.open(tabId);
-    } catch (_) {
-      return;
-    }
-    // One read decides and supplies the tag the view opens at.
-    final waiting = await SuperTabMentions.of(controller).waitingNow(mentionId);
-    if (!mounted || !waiting || controller.accessRevoked) return letGo();
-    if (_newHarness?.requestDismiss() == false) return letGo();
-    _closeNewHarness(restoreFocus: false);
-    _closeSearch(restoreFocus: false);
-    app.openSuperTab(tabId, name);
-    controller.openNotice('mention', mentionId);
-  }
-
   /// A chat's New messages notice: its Swarm tab comes forward on that chat,
-  /// once the person can still read it, as a tag's notice opens its tag.
+  /// once the person can still read it.
   Future<void> _openChatNotice(String tabId, String conversationId) async {
     final name = app.superTabName(tabId);
     if (name == null) return;
@@ -7492,8 +7450,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   /// A row of the menu bar's Swarm section: its Swarm tab comes forward and
-  /// opens the tag or decision there; View all (`all`) opens the Swarm's
-  /// Notifications page. One no longer listed opens nothing.
+  /// opens the agent's chat there; View all (`all`) brings the Swarm forward.
+  /// One no longer listed opens nothing.
   Future<void> _openSwarmNotice(Map receipt) async {
     final tabId = receipt['swarmTabId'], kind = receipt['kind'];
     final id = receipt['id'];
@@ -9323,7 +9281,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           final swarm = shown[index];
                           final selected = app.activeSwarmId == swarm.id;
                           final activity = activities[index];
-                          final tags = tabMentionsWaiting(app, swarm);
+                          final asking = tabAgentsAsking(app, swarm);
                           // A status cell animates only while its tab is in view.
                           Widget tabStatus(
                             Widget Function(bool visible) mark,
@@ -9448,7 +9406,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                             app.requestCloseSwarm(swarm.id),
                                           )
                                         : null,
-                                    attention: tags > 0,
+                                    attention: asking > 0,
                                     // A Swarm's tab is its name alone (Quiet Swarm, screen 0).
                                     activity:
                                         swarm.isSuperTab ||

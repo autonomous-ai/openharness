@@ -7,14 +7,11 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/theme/color_palette.dart';
-import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
 
-import 'super_tab_activity_lists_test.dart' show load, swarm, unreadThread;
 import 'support/super_tab_fixture.dart';
-import 'swarm_state_test.dart' show createApp;
 
 double _contrast(Color a, Color b) {
   final x = a.computeLuminance() + .05;
@@ -244,53 +241,5 @@ void main() {
     );
     final ground = HarnessPalette.cloud.sidebar;
     _expectReadable(_inks(tester, sidebar, ground), 'Cloud\'s sidebar');
-  });
-
-  testWidgets('on Plum, Threads, Mentions and Decisions read too, arrows '
-      'included', (tester) async {
-    _wear(HarnessPalette.plum);
-    final server = swarm()..state['swarmBuddy'] = true;
-    server.ask(['Ship it?']);
-    server.tag('message-1');
-    server.followedThreads = {
-      'unread': [unreadThread('message-1')],
-      'read': [],
-      'more': false,
-    };
-    final activity = (await tester.runAsync(() => load(server)))!;
-    final c = activity.controller;
-    final AppNotifier app = createApp();
-    addTearDown(app.dispose);
-    await tester.binding.setSurfaceSize(const Size(280, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.light),
-        home: Scaffold(
-          body: ProjectSidebar(
-            controller: c,
-            app: app,
-            onSelect: c.select,
-            onNewSwarm: () {},
-            onNewProject: () {},
-            onPage: (_) {},
-            attention: activity.attention,
-            onManage: () {},
-          ),
-        ),
-      ),
-    );
-    await tester.pump();
-    addTearDown(() => tester.pumpWidget(const SizedBox()));
-    final threads = find.byKey(const ValueKey('super-threads'));
-    // No number on a page row (task #3128): it is bold instead.
-    expect(
-      find.descendant(of: threads, matching: find.text('1')),
-      findsNothing,
-    );
-    _expectReadable(
-      _inks(tester, find.byType(ProjectSidebar), HarnessPalette.plum.sidebar),
-      'the plum sidebar with Threads, Mentions and Decisions',
-    );
   });
 }

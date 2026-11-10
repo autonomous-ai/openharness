@@ -13,7 +13,7 @@ import 'package:harness/super_tabs/places.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 
-import 'super_tab_activity_lists_test.dart' show load, swarm;
+import 'support/super_tab_swarm.dart' show load, swarm;
 import 'support/super_tab_fixture.dart';
 import 'swarm_state_test.dart' show createApp;
 
@@ -70,8 +70,7 @@ void main() {
     final server = swarm();
     if (agents != null) server.state['agents'] = agents;
     setup?.call(server);
-    final activity = (await tester.runAsync(() => load(server)))!;
-    final c = activity.controller;
+    final c = (await tester.runAsync(() => load(server)))!;
     final app = withApp ?? createApp();
     if (withApp == null) addTearDown(app.dispose);
     // The design tokens follow the app's brightness, which main.dart sets from the theme.
@@ -103,7 +102,6 @@ void main() {
               page: page,
               boardProjectId: boardProjectId,
               leaderboard: leaderboard,
-              attention: activity.attention,
               onManage: () {},
             ),
           ),

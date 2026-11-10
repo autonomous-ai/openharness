@@ -10,7 +10,6 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/laid_out_list.dart';
-import 'attention.dart';
 import 'backlog.dart';
 import 'controller.dart';
 import 'machine_status.dart';
@@ -190,11 +189,7 @@ class _SuperTabTasksViewState extends State<SuperTabTasksView> {
   Widget build(BuildContext context) {
     final c = widget.controller;
     return ListenableBuilder(
-      listenable: Listenable.merge([
-        c,
-        c.closedShippedChanged,
-        SuperTabAttention.of(c),
-      ]),
+      listenable: Listenable.merge([c, c.closedShippedChanged]),
       builder: (context, _) => _build(context),
     );
   }

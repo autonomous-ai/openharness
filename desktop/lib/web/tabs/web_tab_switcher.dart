@@ -37,15 +37,15 @@ class WebTabSwitcher extends StatelessWidget {
     final index = app.swarms.indexWhere((tab) => tab.id == app.activeSwarmId);
     final name = workspaceTabNames(app)[app.activeSwarmId] ?? '';
     final activity = tabActivity(app, app.activeSwarm);
-    final tags = tabMentionsWaiting(app, app.activeSwarm);
+    final asking = tabAgentsAsking(app, app.activeSwarm);
     final panes = app.panes;
     final shown = panes.indexWhere((pane) => pane.id == soloPaneId(app));
     final label = [
       '${index + 1}:$name',
       // Which of the tab's harnesses is on screen: a phone draws one.
       if (panes.length > 1) '· ${shown + 1}/${panes.length}',
-      if (tags > 0)
-        countText(tags)
+      if (asking > 0)
+        countText(asking)
       else if (activity?.mark.isNotEmpty == true)
         activity!.mark,
     ].join(' ');

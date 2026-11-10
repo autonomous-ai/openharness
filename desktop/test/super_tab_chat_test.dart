@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
-import 'package:harness/super_tabs/activity.dart';
+import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/message_text.dart';

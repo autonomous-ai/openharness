@@ -152,7 +152,7 @@ Future<List<SuperTabController>> _show(
         child: _Gallery(
           brightness,
           faces: faces,
-          // The decision cards read their answers' state from a reader's Decisions.
+          // The task board reads its project from a Swarm.
           swarm: c,
         ),
       ),

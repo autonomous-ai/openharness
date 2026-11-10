@@ -1502,28 +1502,6 @@ class SuperTabController extends ChangeNotifier {
     _saveSoon();
   }
 
-  /// [root]'s thread in [conversationId] was read through [sequence] outside
-  /// the thread pane (the Threads view): kept here and sent to the server,
-  /// so it reads as read on every device. Nothing once access is gone.
-  void markThreadRead(String conversationId, String root, int sequence) {
-    if (_disposed ||
-        accessRevoked ||
-        sequence <= 0 ||
-        snapshot?.conversation(conversationId) == null) {
-      return;
-    }
-    _serverThreadMarks.mark(
-      (conversationId, root),
-      sequence,
-      kept: snapshot?.threadMarks[conversationId]?[root] ?? 0,
-    );
-    if ((_threadSeen[root] ?? 0) >= sequence) return;
-    _threadSeen.remove(root);
-    _threadSeen[root] = sequence;
-    _saveSoon();
-    _changed();
-  }
-
   /// The root and replies of [root]'s thread in the selected conversation,
   /// oldest first: what its own read brought, and replies polled since.
   List<SuperTabMessage> threadMessages(String root) {
@@ -3111,13 +3089,12 @@ class SuperTabController extends ChangeNotifier {
         (held.first.sequence <= readMark(group.id) || !hasOlder(group.id));
   }
 
-  /// A tag or decision the menu bar asked to open ([openNotice]), until the
-  /// Swarm view on screen takes it.
+  /// What the menu bar asked to open ([openNotice]), until the Swarm view on
+  /// screen takes it.
   ({String kind, String id})? noticeRequest;
 
-  /// Opens the reader's tag (`mention`) at its message, or shows their
-  /// decisions (`decision`) where they are answered, in the view on screen,
-  /// or the one shown next.
+  /// Opens the chat of an agent that asks the reader (`chat`) in the view on
+  /// screen, or the one shown next; `all` only brings the Swarm forward.
   void openNotice(String kind, String id) {
     noticeRequest = (kind: kind, id: id);
     notifyListeners();
@@ -3279,8 +3256,8 @@ class SuperTabController extends ChangeNotifier {
       notifyOf(group.id) != SuperTabNotify.muted && unread(group);
 
   /// A person wrote in [group]'s main stream since the reader's mark, and it
-  /// is not muted: what makes a project's or a task's sidebar row bold, with
-  /// a tag of the reader or a wait on a person (Huy, 11-03, #2427). Agents'
+  /// is not muted: what makes a project's or a task's sidebar row bold
+  /// (Huy, 11-03, #2427). Agents'
   /// progress messages and system rows leave it, so a busy Swarm's sidebar
   /// does not read all bold.
   bool unreadForPeople(SuperTabConversation group) =>
@@ -3414,28 +3391,6 @@ class SuperTabController extends ChangeNotifier {
       if (_listed(m) || m.sequence > loaded) break;
       last = m.sequence;
     }
-    _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
-    if ((_readAt[id] ?? 0) >= last) return;
-    _readAt[id] = last;
-    _saveSoon();
-    _changed();
-  }
-
-  /// [id] was read through [sequence] outside its chat (Activity's Mark read
-  /// on a tag): kept here and sent to the server, as [markThreadRead] does for
-  /// a thread. Unlike [markRead] it does not stop at the loaded messages, as
-  /// the chat may not be open; it stops at the chat's newest message.
-  void markReadThrough(String id, int sequence) {
-    final group = snapshot?.conversation(id);
-    if (_disposed || accessRevoked || group == null || sequence <= 0) return;
-    final last = min(
-      sequence,
-      max(
-        group.lastMainSequence ?? group.lastMessageSequence,
-        _loadedMessageSequence(id),
-      ),
-    );
-    _unreadHeld.remove(id);
     _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;

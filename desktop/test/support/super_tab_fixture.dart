@@ -764,6 +764,9 @@ class ConversationServer {
   /// The read marks this device sent, in order: {conversationId, sequence}.
   final readMarkPosts = <Map<String, dynamic>>[];
 
+  /// Every request's path, in order.
+  final requested = <String>[];
+
   /// Every fresh file-link read (backend fileLinks.ts), by path. [fileLink]
   /// answers one, by attachment id: an attachment row, or a throw; unset, it
   /// answers as a server that no longer shows the reader that message.
@@ -1159,6 +1162,7 @@ class ConversationServer {
     String path, {
     Map<String, dynamic>? body,
   }) async {
+    requested.add(path);
     final reader = Zone.current[_reader] as String?;
     final read = method == 'POST'
         ? RegExp(r'/conversations/([^/]+)/read$').firstMatch(path)

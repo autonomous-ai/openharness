@@ -370,14 +370,16 @@ leaderboard) share four rules.
 
 - **Unread.** Goal: see what changed without a second signal to decode. An
   unread project or group shows its name in bold, with no dot beside it.
-- **Mentions.** Goal: tell "something changed" apart from "someone needs
-  you". A conversation that mentions you is bold and adds an `@N` count of
-  those mentions at its trailing edge, just before the status column.
+- **Asks you.** Goal: tell "something changed" apart from "someone needs
+  you". In Swarm v4 an agent reaches its person only in its own chat: an
+  agent with something new there asks you. Its Your Team row is bold, and the
+  Swarm's tab, the Swarm list, the Dock and the menu bar count those agents
+  (`superTabAgentsAsking`, from read marks). No row carries an `@N`.
 - **Status column.** Goal: compare status down the list at a glance. Status
   marks use the shared activity vocabulary (see the
   [icon design system](icon-design-system.md#deliberate-exceptions)) and sit
   in a fixed trailing column, last on rows that show status (agents,
-  conversations); a mention's `@N` sits just before it. Ranking rows have no
+  conversations). Ranking rows have no
   status mark and keep the points number last. Names and marks keep their
   positions as status changes.
 - **Names.** Goal: recognize teammates the way they know each other. People

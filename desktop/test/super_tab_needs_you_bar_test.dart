@@ -170,14 +170,6 @@ void main() {
       await show(tester, server());
       expect(find.text('Builder needs you'), findsOneWidget);
     });
-
-    testWidgets('a decision asked of the reader shows it while the agent '
-        'keeps working', (tester) async {
-      final s = server(status: 'working');
-      s.ask(['Ship how?'], conversationId: 'offline');
-      await show(tester, s);
-      expect(find.text('Builder needs you'), findsOneWidget);
-    });
   });
 
   group('the click', () {
