@@ -3243,38 +3243,30 @@ describe('an engine that cannot run on a contributed machine', () => {
     }
   })
 
-  it.each(['owner', 'lead'])('admits starts after the %s resumes a machine cooldown with the owner\'s authority', (who) => {
+  // Swarm v4: an agent runs only on its own person's computers, under their login, so its word on its person's machine is theirs:
+  // a PM passes on what its person said in their 1:1 chat. Another person's agent, or another person, is refused.
+  it.each(['owner', 'own agent'])('admits starts after the %s resumes a machine cooldown', (who) => {
     const { f, lead, begin } = setup()
     for (const startId of ['s1', 's2']) f.run({ type: 'agent.startFailed', startId,
       error: 'Mac did not start it within 3 minutes' }, owner)
     const resume = { type: 'machine.engineResume', machineId: 'mac', engine: 'codex' } as Command
-    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const elsewhere: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
     f.invite()
     expect(() => f.run(resume, peer)).toThrow('Only the machine\'s owner')
-    expect(() => f.run(resume, leadActor)).toThrow('Only the machine\'s owner')
+    expect(() => f.run(resume, elsewhere)).toThrow('Only the machine\'s owner')
     expect(() => begin()).toThrow('This machine is suspended')
     if (who === 'owner') f.run(resume, owner)
-    else f.run({ ...resume, askedIn: { conversationId: 'lead', messageId: 'm-owner' } } as Command, leadActor,
-      { askedIn: { author: { kind: 'person', id: 'owner' } as never, source: false, createdAt: 1000 } })
+    else {
+      const mine = f.run({ type: 'agent.add', conversationId: f.group(), machineId: 'mac', harnessId: 'mine', name: 'Mine', configuration: config, lead: false } as Command,
+        owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+      f.run(resume, { kind: 'agent', agentId: mine, machineOwnerId: 'owner' })
+    }
     expect(begin().result.startId).toBeTruthy()
   })
 
-  it('is resumed by the machine owner, or by a Lead passing on the owner\'s message, and by nobody else', () => {
-    const { f, lead, fail } = setup()
-    fail('s1'); fail('s2')
-    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
-    const resume = { type: 'machine.engineResume', machineId: 'mac', engine: 'codex' } as Command
-    f.invite()
-    expect(() => f.run(resume, peer)).toThrow('Only the machine\'s owner')
-    expect(() => f.run(resume, leadActor)).toThrow('Only the machine\'s owner')
-    const askedIn = { conversationId: 'lead', messageId: 'm-owner' }
-    expect(() => f.run({ ...resume, askedIn } as Command, leadActor, { askedIn: { author: { kind: 'person', id: 'peer' } as never, source: false, createdAt: 1000 } }))
-      .toThrow('Only the machine\'s owner')
-    f.run({ ...resume, askedIn } as Command, leadActor, { askedIn: { author: { kind: 'person', id: 'owner' } as never, source: false, createdAt: 1000 } })
-    expect(f.state.machines![0]!.engineSuspensions).toEqual({})
-    fail('s3'); fail('s4')
-    f.run(resume, owner)
-    expect(f.state.machines![0]!.engineSuspensions).toEqual({})
+  it('takes no quoted chat message: the word is the owner\'s or their own agent\'s', () => {
+    const resume = { type: 'machine.engineResume', machineId: 'mac', engine: 'codex' }
+    expect(commandSchema.safeParse({ ...resume, askedIn: { conversationId: 'lead', messageId: 'm-owner' } }).success).toBe(false)
     expect(commandSchema.safeParse({ ...resume, engine: 'Not An Engine' }).success).toBe(false)
   })
 })

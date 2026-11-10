@@ -37,10 +37,6 @@ import { ACK_ONLY_HINT, isAcknowledgement } from './acknowledgements.js'
 import { COORDINATOR_NAME } from './roleNames.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
-/** The chat message a Lead passes on as its machine owner's word (machine.engineResume). */
-const askedInSchema = z.object({ conversationId: id, messageId: id }).strict()
-/** How long a machine owner's message can back what the Lead passes on. */
-const OWNER_MESSAGE_MS = 24 * 3_600_000
 /** How long a Swarm invitation stays open; its sent time is its expiry minus this (store.ts invite.accept). */
 export const SWARM_INVITATION_MS = 7 * 86_400_000
 
@@ -108,7 +104,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // The store's alone (context.teamMachineGone): a Harness Team account's machine leaves (migration/teamMachinesJob.ts; goes
   // with that job, on or after 2026-12-10).
   z.object({ type: z.literal('machine.teamGone'), machineId: id }).strict(),
-  z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
+  z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/) }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -310,8 +306,6 @@ export interface CommandContext {
   /** For a person's top-level `message.send` in a project chat: the last top-level message there before it, read by the store,
    *  so a line right below an agent's reaches that agent (#2924). */
   above?: { author: Author }
-  /** The message a Lead quotes as its machine owner's word (machine.engineResume), loaded from this tab by the store. */
-  askedIn?: { author: Author; source: boolean; createdAt: number }
   /** The newest messages of this conversation before the one being sent, newest first, loaded by the store for `message.send`. */
   recent?: { author: Author; recipients: string[]; createdAt?: number; source?: unknown }[]
   /** An uncertain receipt and its original message, read transactionally. */
@@ -432,7 +426,6 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId && command.type !== 'project.delete') readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if (command.type === 'machine.engineResume' && command.askedIn) readConversation(state, actor, command.askedIn.conversationId)
   if ('startId' in command) {
     const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
     readConversation(state, actor, start.request.conversationId)
@@ -646,14 +639,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   const sender = author(state, actor, !leaving)
   authorizeCommandAccess(state, actor, command, context)
-  /** A machine's owner said so: they sent the command, or the Lead of the chat [askedIn] names passes on a message they wrote
-   *  there in the last day (machine.engineResume). */
-  const machineOwnerWord = (pool: ContributedMachine, askedIn: { conversationId: string } | undefined) => {
-    if (actor.kind === 'person') return actor.userId === pool.contributorId
-    const asked = askedIn && context.askedIn
-    return !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
-      && context.now - asked.createdAt <= OWNER_MESSAGE_MS && state.conversations.find(c => c.id === askedIn.conversationId)?.leadId === actor.agentId
-  }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
     attachments?: Attachment[], mentions?: string[], id = operationId) => {
     effects.messages.push({ id, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
@@ -1144,11 +1129,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       break
     }
     case 'machine.engineResume': {
-      // A suspended engine (engineHealth.ts) is offered again at its owner's word: theirs, or a Lead's passing on a chat
-      // message they wrote in the last day, as routing rules are. No new button: the only visible change is the struck name.
+      // A suspended engine (engineHealth.ts) is offered again at its owner's word. Swarm v4: an agent runs only on its own person's
+      // computers, under their login, so its word on its person's machine is theirs (a PM passes on what they said in their 1:1
+      // chat). No new button: the only visible change is the struck name.
       const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
-      if (!machineOwnerWord(pool, command.askedIn)) {
-        fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, resumes an engine there.", 403)
+      if ((actor.kind === 'person' ? actor.userId : actor.machineOwnerId) !== pool.contributorId) {
+        fail('OWNER_REQUIRED', "Only the machine's owner, or their own agent, resumes an engine there.", 403)
       }
       resumeEngine(pool, command.engine)
       break

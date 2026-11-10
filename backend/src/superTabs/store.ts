@@ -140,8 +140,8 @@ function registeredBy(state: SuperTabState, command: Command): Array<{ machineId
 function namedFor(command: Command): Named {
   const has = (key: string) => key in command
   const field = (key: string) => (command as Record<string, unknown>)[key] as string | undefined
-  const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined,
-    'askedIn' in command ? command.askedIn?.conversationId : undefined].filter((id): id is string => !!id)
+  const groupIds = [field('conversationId'), command.type === 'agent.start' ? command.request.conversationId : undefined]
+    .filter((id): id is string => !!id)
   // Deleting a project or changing who reads it reaches every one of its groups, dormant ones too.
   return { groupIds, startIds: has('startId') ? [field('startId')!] : [],
     projectIds: command.type === 'project.delete' || command.type === 'project.sharing' || command.type === 'project.closeTab' ? [command.projectId] : [] }
@@ -1169,10 +1169,6 @@ export class SuperTabStore {
           orderBy: [{ sequence: 'desc' }, { id: 'desc' }], take: ABOVE_ROWS, select: { id: true, author: true, source: true, recipientIds: true, thread: true } })
         const above = newest.find(m => (!m.thread || m.thread === m.id) && !agentOnly(m.source, m.recipientIds))
         if (above) context.above = { author: above.author as unknown as Author }
-      }
-      if (command.type === 'machine.engineResume' && command.askedIn) {
-        const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
-        if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
