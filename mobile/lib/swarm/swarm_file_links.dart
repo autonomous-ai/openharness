@@ -122,8 +122,9 @@ class SwarmFileRef {
   }
 
   /// The picture's thumbnail link while it opens for more than
-  /// [swarmLinkMargin], else null: the chat then draws the original. Only ever
-  /// a signed link, and never for a file the backend could not link.
+  /// [swarmLinkMargin], else null: the chat then asks a fresh one ([link]),
+  /// which brings the thumbnail's with the original's. Only ever a signed
+  /// link, and never for a file the backend could not link.
   Uri? get currentThumb {
     final thumb = _latest.thumb;
     if (thumb == null || thumb.unlinked || _latest.unlinked) return null;
