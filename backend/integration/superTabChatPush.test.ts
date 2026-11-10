@@ -11,6 +11,8 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { writeChatSetting } from '../src/superTabs/chatSettings.js'
 import { dropMuted } from '../src/push/muted.js'
+import { quietUnread } from '../src/push/unread.js'
+import { writeReadMark } from '../src/superTabs/readMarks.js'
 import type { PhoneNotice } from '../src/push/sender.js'
 
 // Swarm v4 (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat, so what it writes there rings that person's
@@ -61,9 +63,21 @@ describe('an agent\'s words in its 1:1 chat ring its person', () => {
     await new Promise(resolve => setImmediate(resolve))
     expect(phones).toEqual([])
 
-    // Muted, it is dropped as it is sent, as a muted chat's tags are.
+    // Its answer to its person sounds; its next words before they read the chat are quiet: it sounds once until they read it.
+    // Read, it sounds again.
+    phones.length = 0
+    await say('On it.', agentId)
+    await new Promise(resolve => setImmediate(resolve))
+    expect((await quietUnread(db, phones)).map(n => n.quiet === true)).toEqual([false])
+    phones.length = 0
     await say('One more thing.', agentId)
     await new Promise(resolve => setImmediate(resolve))
+    expect((await quietUnread(db, phones)).map(n => n.quiet === true)).toEqual([true])
+    const top = (await store.read(owner, tab)).state.conversations.find(c => c.id === chat)!.lastMessageSequence
+    await writeReadMark(db, { tabId: tab, personId: owner.sub, conversationId: chat, sequence: top - 1, now: Date.now() })
+    expect((await quietUnread(db, phones)).map(n => n.quiet === true)).toEqual([false])
+
+    // Muted, it is dropped as it is sent, as a muted chat's tags are.
     expect(await dropMuted(db, phones)).toHaveLength(1)
     await writeChatSetting(db, { tabId: tab, personId: owner.sub, conversationId: chat, notify: 'muted', now: Date.now() })
     expect(await dropMuted(db, phones)).toEqual([])

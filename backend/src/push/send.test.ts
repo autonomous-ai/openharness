@@ -37,7 +37,9 @@ describe('sendPhoneNotices (task #2905)', () => {
     expect(m.devicesOf).toHaveBeenCalledWith(db, ['a', 'b'])
     expect(ios.sent.sort()).toEqual([['a1', 'mention:t1'], ['a1', 'reply:tab:a'], ['b1', 'reply:tab:b']])
     expect(android.sent.sort()).toEqual([['a2', 'mention:t1'], ['a2', 'reply:tab:a']])
-    expect(m.count).toHaveBeenCalledWith('ios', 'sent')
+    // Counted by kind, the key's first word, so each kind's pushes read apart (a chat push's flood shows on its own).
+    expect(m.count).toHaveBeenCalledWith('ios', 'sent', 'reply')
+    expect(m.count).toHaveBeenCalledWith('ios', 'sent', 'mention')
   })
 
   it('forgets a dead token, sends a sandbox one there from now on, and logs a failure without the token', async () => {
@@ -46,7 +48,7 @@ describe('sendPhoneNotices (task #2905)', () => {
     await sendPhoneNotices(db, { ios: ios.sender, android: null }, [notice('a')])
     expect(m.forget).toHaveBeenCalledWith(db, 'dead')
     expect(m.sandbox).toHaveBeenCalledWith(db, 'dev')
-    expect(m.count.mock.calls.sort()).toEqual([['ios', 'failed'], ['ios', 'gone'], ['ios', 'sandbox']])
+    expect(m.count.mock.calls.sort()).toEqual([['ios', 'failed', 'reply'], ['ios', 'gone', 'reply'], ['ios', 'sandbox', 'reply']])
     expect(m.warn).toHaveBeenCalledWith('phone push failed', expect.objectContaining({ platform: 'ios', reason: 'InternalServerError' }))
     expect(JSON.stringify([m.warn.mock.calls, m.info.mock.calls])).not.toContain('secret-token')
   })
@@ -56,7 +58,7 @@ describe('sendPhoneNotices (task #2905)', () => {
     const ios = answering({ dev: { outcome: 'unconfigured', reason: 'no APNs sandbox key' } })
     await sendPhoneNotices(db, { ios: ios.sender, android: null }, [notice('a')])
     expect(m.forget).not.toHaveBeenCalled()
-    expect(m.count).toHaveBeenCalledWith('ios', 'unconfigured')
+    expect(m.count).toHaveBeenCalledWith('ios', 'unconfigured', 'reply')
     expect(m.warn).toHaveBeenCalledWith('phone push skipped', { platform: 'ios', reason: 'no APNs sandbox key' })
     expect(JSON.stringify(m.warn.mock.calls)).not.toContain('secret-token')
   })
@@ -64,7 +66,7 @@ describe('sendPhoneNotices (task #2905)', () => {
   it('counts and logs a push it cannot send for want of the platform\'s keys', async () => {
     m.devicesOf.mockResolvedValue([phone('a2', 'a', 'android')])
     await sendPhoneNotices(db, { ios: null, android: null }, [notice('a')])
-    expect(m.count).toHaveBeenCalledWith('android', 'unconfigured')
+    expect(m.count).toHaveBeenCalledWith('android', 'unconfigured', 'reply')
     expect(m.warn).toHaveBeenCalledWith('phone push off: no keys for this platform', expect.objectContaining({ platform: 'android', skipped: 1 }))
   })
 
