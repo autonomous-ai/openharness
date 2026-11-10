@@ -3597,8 +3597,9 @@ class _SuperTabViewState extends State<SuperTabView>
       onMarkUnread: inThread || !message.inMainStream
           ? null
           : () => unawaited(_markUnread(message)),
-      // Only the author's own plain message (the server decides).
-      onEdit: c.canChange(message)
+      // Only the author's own plain message (the server decides), and not where only agents post: the server refuses a
+      // person's edit there, while their delete still goes.
+      onEdit: c.canChange(message) && !_agentsOnlyId(message.conversationId)
           ? (text) => _editMessage(message, text)
           : null,
       onDelete: c.canChange(message)

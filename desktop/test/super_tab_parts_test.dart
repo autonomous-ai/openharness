@@ -56,6 +56,41 @@ void main() {
     expect(after['downSince'], isNull);
   });
 
+  // Backend S18 stops sending a role's id and name and the avatars' signed links: an agent then goes by its kind, and an
+  // uploaded picture with no link draws its pattern.
+  test('a read with no role ids, role names or avatar links falls back', () {
+    final load = recorded('first_load');
+    final derived = Map<String, dynamic>.from(load['derived'] as Map)
+      ..remove('avatars');
+    derived['agents'] = {
+      for (final MapEntry(:key, :value) in (derived['agents'] as Map).entries)
+        key: Map<String, dynamic>.from(value as Map)
+          ..remove('roleId')
+          ..remove('roleName'),
+    };
+    final agents = [
+      for (final part in (load['agents'] as List).cast<Map>())
+        {
+          ...part,
+          'data': {
+            ...(part['data'] as Map),
+            'avatar': {'kind': 'upload', 'id': 'a1'},
+          },
+        },
+    ];
+    final snapshot = SuperTabSnapshot.fromJson(
+      SuperTabParts.firstLoad({...load, 'agents': agents, 'derived': derived})
+          .state,
+    );
+    final river = snapshot.agent('0fcb')!, hugo = snapshot.agent('0540')!;
+    expect(river.roleId, isNull);
+    expect(river.roleName, isNull);
+    expect(snapshot.roleOf('0fcb'), (name: 'Product Manager', badge: 'PM'));
+    expect(snapshot.roleOf('0540'), (name: 'Engineer', badge: 'Dev'));
+    expect(river.avatar, isNull);
+    expect(hugo.avatar, isNull);
+  });
+
   test('a first load of another format is refused', () {
     expect(
       () => SuperTabParts.firstLoad({...recorded('first_load'), 'format': 1}),
