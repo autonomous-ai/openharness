@@ -62,16 +62,7 @@ void main() {
 
   // The rows view.dart draws for themselves, with no header to join (Diego,
   // #2547).
-  const routeLine = <String, Object?>{
-    'kind': 'route',
-    'decisionId': 'decision-1',
-    'via': 'order',
-    'why': 'Desktop chat grouping fix',
-    'pick': {'id': 'c0', 'title': 'New agent · Claude opus high · Mac Studio'},
-    'alternatives': <Object?>[],
-  };
   const ownRows = <String, Map<String, Object?>>{
-    'route': routeLine,
     'terminal input': {'kind': 'terminal-input'},
     'terminal alert': {
       'kind': 'terminal-alert',
@@ -247,7 +238,7 @@ void main() {
     });
 
     test('a plain message that only looks like a line still groups', () {
-      // A route source the row cannot read draws as a plain message.
+      // A routing line from before Swarm v4 draws as a plain message.
       expect(
         SuperTabMessageRow.groupsWith(
           message(2, start.add(const Duration(seconds: 10))),
@@ -260,112 +251,6 @@ void main() {
         isTrue,
       );
     });
-  });
-
-  group('after a routing line', () {
-    /// Diego's case: a person asks, then the PM's routing line and its plan.
-    Future<void> show(
-      WidgetTester tester, {
-      Brightness brightness = Brightness.light,
-      Key? picture,
-    }) async {
-      grid.AppTheme.brightness.value = brightness;
-      addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
-      await tester.binding.setSurfaceSize(const Size(1400, 900));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = ConversationServer()..threads = true;
-      (server.state['agents'] as List).add({
-        'id': 'pm',
-        'projectId': 'lead',
-        'name': 'Lead',
-        'displayName': 'River',
-        'machineId': 'studio',
-        'harnessId': 'h-pm',
-        'contributorId': 'owner',
-        'configuration': {'engine': 'claude', 'model': 'opus'},
-      });
-      (server.state['people'] as List).add({
-        'id': 'ken',
-        'email': 'ken@example.com',
-        'role': 'collaborator',
-      });
-      void say(
-        String text,
-        Map<String, Object> author,
-        Duration after, {
-        Map<String, Object?>? source,
-      }) {
-        server.append(text);
-        server.messages.last
-          ..['author'] = author
-          ..['createdAt'] = start.add(after).toUtc().toIso8601String();
-        if (source != null) server.messages.last['source'] = source;
-      }
-
-      say('Please fix the chat header.', ken, Duration.zero);
-      say(
-        'Routed to New agent · Claude opus high · Mac Studio',
-        buddy,
-        const Duration(seconds: 20),
-        source: routeLine,
-      );
-      say(
-        'The plan: test first, then the fix.',
-        buddy,
-        const Duration(seconds: 30),
-      );
-      say('A second line of the plan.', buddy, const Duration(seconds: 40));
-      ((server.state['conversations'] as List)[0] as Map)['leadId'] = 'pm';
-      final c = server.controller();
-      await c.refresh();
-      addTearDown(c.dispose);
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: grid.buildAppTheme(brightness: brightness),
-          builder: (context, child) =>
-              RepaintBoundary(key: picture, child: child),
-          home: Scaffold(
-            body: SuperTabView(
-              controller: c,
-              onAddAgent: (_) {},
-              onOpenTerminal: (_) {},
-              machineName: (_) => 'Mac Studio',
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-    }
-
-    testWidgets("the PM's name is inside its plan's row", (tester) async {
-      await show(tester);
-      Finder name(String id) => find.descendant(
-        of: find.byKey(ValueKey('super-message-$id')),
-        matching: find.text('River'),
-      );
-      expect(name('message-3'), findsOneWidget);
-      // The next plain message still joins the plan's header.
-      expect(name('message-4'), findsNothing);
-      // The view saves its read mark 200 ms after the change: let it land.
-      await tester.pump(const Duration(milliseconds: 250));
-    });
-
-    for (final brightness in Brightness.values) {
-      testWidgets('screenshot for review (${brightness.name})', (tester) async {
-        final picture = GlobalKey();
-        await show(tester, brightness: brightness, picture: picture);
-        final boundary =
-            picture.currentContext!.findRenderObject()!
-                as RenderRepaintBoundary;
-        await tester.runAsync(() async {
-          final image = await boundary.toImage(pixelRatio: 2);
-          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-          image.dispose();
-          File('$shots/route-then-plan-${brightness.name}.png')
-              .writeAsBytesSync(bytes!.buffer.asUint8List());
-        });
-      }, skip: shots == null);
-    }
   });
 
   group("with a step's row between", () {

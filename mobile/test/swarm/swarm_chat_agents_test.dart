@@ -768,4 +768,10 @@ void main() {
       expect(sent(), isEmpty);
     });
   });
+
+  test('the Add agent title is the desktop\'s', () {
+    final screen = File('../desktop/lib/screens/swarm_screen.dart')
+        .readAsStringSync();
+    expect(screen, contains("'Add agent to \${"));
+  });
 }

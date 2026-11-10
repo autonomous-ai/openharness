@@ -4484,8 +4484,7 @@ class _SuperTabViewState extends State<SuperTabView>
         c.canWrite &&
         group != null &&
         !group.archived &&
-        !c.isEarlierBuddyChat(group) &&
-        c.mayChatIn(group);
+        !c.isEarlierBuddyChat(group);
     final busy = c.saving || c.uploading;
     final latestOwn = c
         .messages(c.selectedId)
@@ -5047,21 +5046,6 @@ class _SuperTabViewState extends State<SuperTabView>
                   ),
                 ),
               ),
-            ),
-          )
-        else if (group != null && c.canWrite && !c.mayChatIn(group))
-          // A project on the Board: its chat is read here by everyone, written by those with Can chat (#3820).
-          Padding(
-            key: const ValueKey('super-chat-no-can-chat'),
-            padding: const EdgeInsetsDirectional.symmetric(
-              horizontal: grid.AppDesktop.groupGap,
-              vertical: grid.AppDesktop.controlGap,
-            ),
-            child: Text(
-              'Only people with Can chat write here. Talk to your Buddy, or '
-              'propose on the Board; the project owner grants Can chat in '
-              'Project settings › People.',
-              style: DesktopChrome.metadata(),
             ),
           )
         else if (group != null &&

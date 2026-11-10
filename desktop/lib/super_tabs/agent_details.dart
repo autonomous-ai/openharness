@@ -1,5 +1,4 @@
 import '../core/models.dart';
-import '../core/permission_modes.dart';
 import '../core/relative_time.dart';
 import '../core/runtime_model_name.dart';
 import '../state/app_state.dart';
@@ -10,7 +9,6 @@ import 'agent_mark.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
-import 'pull_requests.dart';
 
 /// The task [agent] holds now. A task the Swarm lost is that task's history: it names the agent's state only when the
 /// agent holds nothing else (Gray, 2026-11-06: Lamp read "Lost" on an old task while working on another).
@@ -100,41 +98,9 @@ class SuperTabAgentInfo {
         : '$mac$kTeamEntryLabel';
   }
 
-  String? get folder => _known(native?.project?.cwd);
-  DateTime? get started => native?.createdAt;
   DateTime? get lastActive => native?.lastActivityAt;
   bool get hasQuestion =>
       app?.questionFor(agent.machineId, agent.harnessId) != null;
-
-  /// The agent's machine owner, named as People names them: the name they
-  /// set, else their username.
-  String? get owner => _personName(agent.machineOwnerId);
-
-  String? _personName(Object? personId) {
-    final person = controller.snapshot?.people
-        .where((p) => p.id == personId)
-        .firstOrNull;
-    return _known(person?.shownName);
-  }
-
-  String? get questionOwner {
-    if (!hasQuestion) return null;
-    final execution = taskGroup?.assignment?['execution'];
-    final ownerId = execution is Map ? execution['machineOwnerId'] : null;
-    return _personName(ownerId) ??
-        _known(app?.stateOf(agent.machineId)?.machine.machineShare?.owner) ??
-        _known(app?.stateOf(agent.machineId)?.machine.ownerName);
-  }
-
-  String? get permission {
-    final mode = _known(native?.permissionMode);
-    if (mode == null) return null;
-    return [
-          ...permissionModesOf(agent.engine),
-          ...?kLaunchOnlyPermissionModes[agent.engine],
-        ].where((choice) => choice.id == mode).firstOrNull?.label ??
-        'Unrecognized setting';
-  }
 
   String? get status {
     if (activity
@@ -210,17 +176,6 @@ class SuperTabAgentInfo {
     if (lastActive case final value?)
       'Last active ${relativeAgo(value, DateTime.now())}',
   ].join(' · ');
-
-  Uri? get latestGroupPr {
-    final group = taskGroup;
-    if (group == null) return null;
-    final result = group.assignment?['result'];
-    if (result is String) {
-      final links = superTabPullRequestLinks(result);
-      if (links.isNotEmpty) return links.last;
-    }
-    return _agentMessagePr(controller, group.id, agent.id);
-  }
 }
 
 String? _known(String? text) =>
@@ -228,20 +183,3 @@ String? _known(String? text) =>
 
 String _compactTitle(String title) =>
     title.length <= 52 ? title : '${title.substring(0, 52).trimRight()}…';
-
-Uri? _agentMessagePr(
-  SuperTabController controller,
-  String groupId,
-  String agentId,
-) {
-  for (final message in controller.messages(groupId).reversed) {
-    if (!message.fromAgent ||
-        message.authorId != agentId ||
-        message.fromTerminal) {
-      continue;
-    }
-    final links = superTabPullRequestLinks(message.text);
-    if (links.isNotEmpty) return links.last;
-  }
-  return null;
-}

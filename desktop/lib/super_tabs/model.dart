@@ -220,22 +220,6 @@ class SuperTabAgent {
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       workDecision = row['workDecision'] as String?,
-      crewRole = switch (row['crew']) {
-        {'role': final String role} when role.isNotEmpty => role,
-        _ => null,
-      },
-      crewLane = switch (row['crew']) {
-        {'lane': final String lane} => lane,
-        _ => null,
-      },
-      crewAsleep = row['asleep'] != null,
-      crewAsleepSince = switch (row['asleep']) {
-        {'since': final num since} => DateTime.fromMillisecondsSinceEpoch(
-          since.toInt(),
-        ),
-        _ => null,
-      },
-      crewMoving = row['movedTo'] != null,
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -282,22 +266,6 @@ class SuperTabAgent {
 
   /// What its coordinator or a person chose for it once its work ended: `keep` or `stop`; `awaiting` while nobody has.
   final String? workDecision;
-
-  /// Its role in its project's crew, the agents the Swarm keeps alive (backend crew.ts, task #3397); null when not crew.
-  final String? crewRole;
-
-  /// The lane a crew member works in (backend, cli, desktop, mobile or docs); null for none.
-  final String? crewLane;
-
-  /// A crew member put to sleep on purpose (task #3398): its session is closed and nothing reopens it.
-  final bool crewAsleep;
-
-  /// Since when it sleeps (backend crewKeep.ts `asleep.since`): its idle hours on its machine's row (task #3412). Null
-  /// when awake, or when the server sent no time.
-  final DateTime? crewAsleepSince;
-
-  /// A crew member on its way to another machine (backend `movedTo`, task #3398): its new session takes over there.
-  final bool crewMoving;
 
   /// Its session is closed on its machine and someone chose to keep the agent: the backend removes every other closed
   /// agent from the list (backend closedAgents.ts), so this one is shown as closed, never as Idle.
@@ -602,29 +570,16 @@ class SuperTabProject {
         row['repositoryCreation'],
       ),
       boardMode = row['boardMode'] == true,
-      canChatIds = List.unmodifiable(
-        (row['canChat'] as List? ?? const []).whereType<String>(),
-      ),
       deciderId = row['decider'] is String ? row['decider'] as String : null;
   final String id, name, ownerId, leadConversationId;
 
   /// Whether its owner switched it to the Board way of working (#3819, spec 2026-11-06-buddy-board-final-spec):
-  /// people talk to their Buddies, work comes in as proposals, and only people with Can chat write in its chat.
+  /// people talk to their Buddies, work comes in as proposals.
   /// False when not switched and from an older backend: everything then works as today.
   final bool boardMode;
 
-  /// The people granted Can chat in it; its owner and the Swarm's owner always have it and are not listed.
-  final List<String> canChatIds;
-
   /// Its top decider (for openharness, Dee), who may set P0 and pause like its owner; null when none is set.
   final String? deciderId;
-
-  /// Whether [personId] may write in its chat: anyone who may write, while it is not on the Board.
-  bool canChat(String personId, {bool swarmOwner = false}) =>
-      !boardMode ||
-      swarmOwner ||
-      personId == ownerId ||
-      canChatIds.contains(personId);
 
   /// Whether [personId] may set P0 on any card and pause or resume any task: its owner, the Swarm's owner and its
   /// decider. The server enforces it; the app only offers what it would allow.
