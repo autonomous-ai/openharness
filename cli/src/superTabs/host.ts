@@ -1828,7 +1828,8 @@ export class SuperTabHost {
 
   /** The roster marks a Swarm whose Lead runs on this machine of its owner while the machine is not one of the Swarm's
    *  (Swarm creation never added it; on 2026-10-22 Ken's Mac ran a Lead outside its own Swarm's machines). The host
-   *  adds it as the + dialog does (desktop/lib/super_tabs/machines.dart), only if it is still missing, so a person's
+   *  adds it with the + dialog's command (desktop/lib/super_tabs/machines.dart), less the Agents setting the server no
+   *  longer reads (backend S14a), only if it is still missing, so a person's
    *  own contribution is never changed. A slow engine probe never delays deliveries. Never one its person took out of the
    *  Swarm (its `removedMachines`): only a person adds that back. The server refuses it too (`unlessRemoved`). The roster still
    *  marks a removed machine, so the host looks again only every half hour while it does, and says so each time. */
@@ -1849,7 +1850,8 @@ export class SuperTabHost {
         const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' }, { reads: this.sources.reads })
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
           type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
-          // Joining sets no limit: the server checks free memory at each start (backend S14a). `maxAgents` it still requires.
+          // Joining sets no limit: the server checks free memory at each start (backend S14a). `maxAgents` it still requires;
+          // it goes when the backend drops the field (backend commands.ts: on or after 2026-12-10).
           cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, ifMissing: true,
           unlessRemoved: true } })
         return true
