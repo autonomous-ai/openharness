@@ -3030,15 +3030,14 @@ it('releases a finished worker through its execution host, cancels deliveries an
   const reservation = hostPool.reservations.find(r => r.harnessId === native)!
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [{ harnessId: native, generation: 'old-generation' }] })
-  const stillReserved = (await store.read(owner, tab)).state
-  expect(machineSlots(stillReserved, stillReserved.machines![0]!)).toBe(2)
+  // A machine's room is its free memory since saved counts went (2026-11-10): the reservation is read where its host reads it.
+  const reserved = async () => (await poolRows(store, host, 'test-host')).find(p => p.tabId === tab)!.reservations.some(r => r.harnessId === native)
+  expect(await reserved()).toBe(true)
   await store.observeMachine(host, tab, 'test-host', { ...oldObservation, runningHarnessIds: [], stoppedHarnessIds: [native],
     stoppedReservations: [reservation] })
-  const physicallyStopped = (await store.read(owner, tab)).state
-  expect(machineSlots(physicallyStopped, physicallyStopped.machines![0]!)).toBe(1)
+  expect(await reserved()).toBe(false)
   await store.observeMachine(host, tab, 'test-host', oldObservation)
-  const delayedAgain = (await store.read(owner, tab)).state
-  expect(machineSlots(delayedAgain, delayedAgain.machines![0]!)).toBe(1)
+  expect(await reserved()).toBe(false)
 })
 
 it('fences a shared native session globally while its release is pending', async () => {
