@@ -44,7 +44,7 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'chatLimits' | 'talkedAt' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'> & {
+export type GroupView = Omit<Conversation, 'talkedAt' | 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'> & {
   /** When it shipped (ms): its first Done; absent until it has. Nothing else of its ledger is sent. */
   shippedAt?: number
   /** Why a held task is held, or `none` for a hold from before reasons; absent when it is not held (heldReason.ts heldView). */
@@ -70,8 +70,6 @@ export interface ProgressView {
 /** Values that change without a part changing (time, or several parts). Recomputed in full on every response;
  *  clients overlay it on the parts. */
 export interface Derived {
-  /** The board's pulse of each project the reader sees (pulse.ts, task #3384), by project id. Absent from an older backend. */
-  pulse?: Record<string, import('../pulse.js').Pulse>
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   /** `roleName`: the role it goes by (instructions.ts roleNameOf), its stored one or what it is. */
   /** `kind`: the reader's Buddy, a PM leading a project, or a Regular agent; `chatId`: the chat its person talks to it in, or null
@@ -146,9 +144,9 @@ interface ReadMeta {
 
 /** GET /api/super-tabs/:tabId/parts[?asAgentId=] */
 export interface FirstLoad extends ReadMeta {
-  /** Own active Tasks; absent for agent readers and older servers. */
-  personalTasks?: import('./personalTasks.js').PersonalTasks
   tabId: string
+  /** A person's Tasks feed, always empty since Swarm v4 (retired.ts NO_PERSONAL_TASKS); absent for agent readers. */
+  personalTasks?: typeof import('../retired.js').NO_PERSONAL_TASKS
   /** Sent until Swarm v4 (slice S6) when the server had the Harness GitHub App; never now. */
   githubApp?: true
   /** This backend opens a task's steps (`conversation.create` with `step`, task steps design); absent on an older one. */
@@ -180,8 +178,8 @@ export interface MachineReading { key: string; version: number; receivedAt: numb
 /** GET /api/super-tabs/:tabId/machine-readings[?asAgentId=]: every machine the reader sees, whole, for the route and the machine panel. */
 export interface MachineReadings { format: number; serverTime: number; machines: LivePart<MachineView>[] }
 export interface ChangesDelta extends ReadMeta {
-  /** Only summaries changed since this response’s existing cursor. */
-  personalTasks?: import('./personalTasks.js').PersonalTasks
+  /** As a first load's: the empty Tasks feed. */
+  personalTasks?: typeof import('../retired.js').NO_PERSONAL_TASKS
   reload: false
   head: LivePart<HeadView> | null
   members: PartChange<MemberView>[]
@@ -291,8 +289,6 @@ export interface HostAgentRow {
   /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
    *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */
   buddyChatId?: string | null
-  /** Main Buddy whose session may rest and resume in place (#3824). */
-  buddySleepManaged?: true
   joinSwarm: boolean
   skillMode: 'default' | 'orchestration'
   role?: { id: string; name: string; kind: string; version: string; projectId: string } | null
@@ -302,8 +298,7 @@ export interface HostAgentRow {
    *  `hash`): no document yet, so the built-in template. */
   instructions: { projectId: string; revision: number; hash: string | null; coordinatorName: string } | null
   lead: boolean
-  /** A PM's own row: the oldest message a person sent it that it has not answered (timeChecks.ts owedAsk), and how long it may
-   *  owe one while it hangs before its host restarts it. Null on every other row, and while it owes nothing. */
+  /** v3's restart of a PM that hung on an unanswered message: null since Swarm v4, for a host from before that reads it. */
   owed: { messageId: string; since: number; restartAfterMs: number } | null
   /** New: lets the host decide what it may read without a full Swarm read. */
   leadsConversationId: string | null
@@ -337,8 +332,6 @@ export interface HostPool {
   githubApp?: true
   /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
   capabilitiesWanted?: true
-  /** Asks for positive idle Buddy activity in fresh machine readings (#3824). */
-  buddySleepWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

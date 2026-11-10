@@ -16,7 +16,7 @@ export const GROUP_INDEX = {
   key: { tabId: 1, key: 1 },
   running: { tabId: 1, executionMachineId: 1 },
   agents: { tabId: 1, agentIds: 1 },
-  /** A person's Tasks feed pages, newest activity first (read/personalTasks.ts, task #4203). */
+  /** A person's Tasks feed pages, which nothing reads since Swarm v4 retired the feed (2026-11-10): goes with its column (S19). */
   feed: { tabId: 1, feedIds: 1, lastActivityAt: 1, key: 1 },
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1, key: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },

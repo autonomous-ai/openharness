@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import type { ContributedMachine } from './machines.js'
-import { createSuperTab, SuperTabError, type Actor, type SuperTabState } from './model.js'
-import { touchesFor } from './parts/touches.js'
-import { canReadAgent } from './projects.js'
+import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
+import { BUDDY_REQUIREMENTS } from './buddies.js'
+import { createSuperTab, type Actor, type SuperTabState } from './model.js'
+import { canReadAgent, projectOf } from './projects.js'
 import * as store from './parts/index.js'
 import { readerView } from './read/views.js'
 
 // Task #4697 (anh Dee 11-07 21:20, card #4693 part A): one Member per person and project, made on their first accepted task
-// there; every asked task needs its person's Accept, and Accept all is refused for subscription accounts.
+// there. Swarm v4 retired task approval (2026-11-10), so no Member starts now; one started before still runs.
 const NOW = 50_000_000
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const kai: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'kai', email: 'kai@example.com' }
@@ -16,11 +16,6 @@ const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 type Quota = { engine: string; known: boolean; windows: Array<{ name: string; usedPercent: number; resetsAt: null }> }
 const subscription = (usedPercent = 10): Quota => ({ engine: 'claude', known: true, windows: [{ name: 'weekly', usedPercent, resetsAt: null }] })
-const api: Quota = { engine: 'claude', known: true, windows: [] }
-const unknown: Quota = { engine: 'claude', known: false, windows: [] }
-const code = (body: () => unknown): string | null => {
-  try { body(); return null } catch (error) { return error instanceof SuperTabError ? error.code : 'INVALID' }
-}
 
 function swarm(quotas: Quota[] = [subscription()]) {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
@@ -49,108 +44,31 @@ function swarm(quotas: Quota[] = [subscription()]) {
   return { run, machine, project, ask, group, get state() { return state }, set state(next: SuperTabState) { state = next } }
 }
 
-describe('Accept', () => {
-  it('stages the task of a person who asks to accept each one', () => {
-    const f = swarm()
-    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
-    const lamp = f.project('lamp')
-    expect(f.group(f.ask(lamp, 'Fix the boot logo')).taskApproval).toMatchObject({ personId: 'kai', state: 'proposal' })
-  })
-
-  it('refuses Accept all for a subscription account, or one whose kind is not known yet', () => {
-    for (const quota of [subscription(), unknown]) {
-      const f = swarm([quota])
-      expect(code(() => f.run({ type: 'member.approvalMode', mode: 'autoApprove' }, kai))).toBe('ACCEPT_ALL_SUBSCRIPTION')
-    }
-    // Ask me stays theirs to choose.
-    const f = swarm()
-    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
-    expect(f.state.people.find(p => p.id === 'kai')!.approvalMode).toBe('review')
-  })
-
-  it('allows Accept all for API accounts alone, and then does not stage their tasks', () => {
-    const f = swarm([api])
-    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
-    f.run({ type: 'member.approvalMode', mode: 'autoApprove' }, kai)
-    const lamp = f.project('lamp')
-    expect(f.group(f.ask(lamp, 'Fix the boot logo')).taskApproval).toBeUndefined()
-  })
-
-  it('still stages a task for an Accept all kept from before on a subscription account', () => {
-    const f = swarm()
-    f.state.people.find(p => p.id === 'kai')!.approvalMode = 'autoApprove'
-    const lamp = f.project('lamp')
-    expect(f.group(f.ask(lamp, 'Fix the boot logo')).taskApproval).toMatchObject({ state: 'proposal' })
-  })
-})
-
-describe('the first Accept', () => {
-  /** Kai, asking to accept each task, with a task asked in lamp and accepted. */
-  function accepted(f = swarm()) {
-    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
-    const lamp = f.project('lamp')
-    const first = f.ask(lamp, 'Fix the boot logo')
-    const approved = f.run({ type: 'task.approve', conversationId: first }, kai)
-    return { f, lamp, first, approved }
-  }
-  const memberStarts = (f: ReturnType<typeof swarm>) => (f.state.starts ?? []).filter(s => s.request.member)
-
-  it('starts the person\'s Member for that project on their own computer and account, named for it', () => {
-    const { f, lamp } = accepted()
-    const [start] = memberStarts(f)
-    expect(memberStarts(f)).toHaveLength(1)
-    expect(start).toMatchObject({ contributorId: 'kai', machineOwnerId: 'kai', hostGrant: null })
-    // In its project's folder with a worktree, as any project agent's (#4698: a helper copies from it, sleep reopens it in place).
-    expect(start!.request).toMatchObject({ machineId: 'kai-mac', regular: true, mainProjectId: lamp, member: { projectId: lamp },
-      cwd: `/swarm/${lamp}`, worktree: true })
-    expect(start!.request.name).toMatch(/^[A-Z][a-z]+ · lamp$/)
-    expect(f.group(start!.request.conversationId)).toMatchObject({ kind: 'agent-chat', title: start!.request.name })
-  })
-
-  // Two Accepts at once never take one free name or one slot: the start meets others on the head and its computer's ledger.
-  it('meets other starts on the head and on its computer\'s slots', () => {
-    const f = swarm()
-    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
-    const lamp = f.project('lamp')
-    const id = f.ask(lamp, 'Fix the boot logo')
-    const before = f.state
-    const command: Command = { type: 'task.approve', conversationId: id }
-    const effects = f.run(command, kai)
-    const touches = touchesFor(command, kai, before, effects)
-    expect(touches).toEqual(expect.arrayContaining([{ kind: 'head', key: 'head' }, { kind: 'machine', key: 'kai-mac' }]))
-  })
-
-  it('starts none for a later Accept in the same project', () => {
-    const { f, lamp } = accepted()
-    const second = f.ask(lamp, 'Fix the fan')
-    f.run({ type: 'task.approve', conversationId: second }, kai)
-    expect(memberStarts(f)).toHaveLength(1)
-  })
-
-  it('never uses another person\'s computer or a Buddy-only one, and says why when it has none', () => {
-    const f = swarm()
-    f.state.machines = [f.machine('owner-mac', 'owner'), f.machine('kai-buddy', 'kai', { buddyOnly: true })]
-    const { first } = accepted(f)
-    expect(memberStarts(f)).toHaveLength(0)
-    expect(f.group(first).taskApproval?.state).toBe('approved')
-    expect(f.state.conversations.find(c => c.id === first)).toBeTruthy()
-    const said = f.run({ type: 'task.approve', conversationId: f.ask(f.state.projects!.find(p => p.name === 'lamp')!.id, 'Again') }, kai).messages
-    expect(said.map(m => m.text)).toContainEqual(expect.stringContaining('no computer in this Swarm'))
-  })
-})
-
-/** Kai's Member in lamp, started by Kai's first accepted task there and running on Kai's computer. */
-function withMember(f = swarm()) {
-  f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
-  const lamp = f.project('lamp')
-  f.run({ type: 'task.approve', conversationId: f.ask(lamp, 'Task 0') }, kai)
-  const start = f.state.starts!.find(s => s.request.member)!
+/** Kai's Member in [projectId], as the first Accept started it before Swarm v4 retired task approval (2026-11-10): its start on
+ *  Kai's computer, in a chat of its own with Kai, then launched by Kai's host. Returns its agent id. */
+function startedMember(f: ReturnType<typeof swarm>, projectId: string, harnessId: string): string {
+  const kaiPerson = f.state.people.find(p => p.id === 'kai')!
+  const chatId = `member-chat-${projectId}`
+  f.state.conversations.push({ id: chatId, kind: 'agent-chat', title: 'Kai · member', leadId: null, agentIds: [], archived: false, brief: '', checks: [],
+    assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'kai', generation: kaiPerson.generation }] } })
+  const id = `member-${projectId}`
+  ;(f.state.starts ??= []).push({ poolGeneration: 'g1', id, creationId: `super-${id}`, actorKey: 'person:kai', contributorId: 'kai',
+    membershipGeneration: kaiPerson.generation, machineOwnerId: 'kai', hostGrant: null, harnessId: null, dispatched: false, error: null, requestedAt: NOW,
+    request: { conversationId: chatId, machineId: 'kai-mac', engine: 'claude', name: 'Kai · member', worktree: true,
+      cwd: projectFolder(f.state.machines!.find(m => m.machineId === 'kai-mac')!, projectOf(f.state, projectId)),
+      requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+      regular: true, mainProjectId: projectId, member: { projectId } } })
   const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
-  f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
-  const member = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-member',
+  f.run({ type: 'agent.startDispatch', startId: id }, kai, own)
+  const member = f.run({ type: 'agent.started', startId: id, harnessId,
     configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
-  f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
-  return { f, lamp, member }
+  f.run({ type: 'agent.startSettled', startId: id, warning: null }, kai, own)
+  return member
+}
+
+function withMember(f = swarm()) {
+  const lamp = f.project('lamp')
+  return { f, lamp, member: startedMember(f, lamp, 'h-member') }
 }
 
 describe('the Member', () => {
@@ -169,17 +87,9 @@ describe('the Member', () => {
 describe('a private project\'s Member', () => {
   it('stays its project\'s alone after its person stops reading it', () => {
     const f = swarm()
-    f.run({ type: 'member.approvalMode', mode: 'review' }, kai)
     const secret = f.run({ type: 'project.create', name: 'secret', visibility: 'private', brief: '' }).result.projectId as string
     f.run({ type: 'project.sharing', projectId: secret, visibility: 'private', memberIds: ['kai'] })
-    const id = f.ask(secret, 'Private work')
-    f.run({ type: 'task.approve', conversationId: id }, kai)
-    const start = f.state.starts!.find(s => s.request.member)!
-    const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
-    f.run({ type: 'agent.startDispatch', startId: start.id }, kai, own)
-    const member = f.run({ type: 'agent.started', startId: start.id, harnessId: 'h-secret',
-      configuration: { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null } }, kai, own).result.agentId as string
-    f.run({ type: 'agent.startSettled', startId: start.id, warning: null }, kai, own)
+    const member = startedMember(f, secret, 'h-secret')
     expect(f.state.agents.find(a => a.id === member)!.privateProjectId).toBe(secret)
     // Kai stops reading it; another project's Lead never sees the Member nor gives it work.
     f.run({ type: 'project.sharing', projectId: secret, visibility: 'private', memberIds: [] })

@@ -15,8 +15,8 @@ export interface GroupCards {
   /** Pull requests only a merge record linked as the task's code, none of its own words (commands.ts conversation.merged, #3574): the
    *  record never makes one the task's own, so recording it again closes nothing. */
   recorded?: string[]
-  /** Its one line in its project chat and what it last showed (taskLine.ts). */
-  line?: import('./taskLine.js').TaskLine
+  /** Its root in its project chat, where the task lines Swarm v4 removed (2026-11-10) replied: still stored on older tasks. */
+  line?: { messageId: string; conversationId: string }
 }
 export interface PullRequestCard { url: string; messageId: string; mergedAt?: number }
 
@@ -34,13 +34,9 @@ export function bindTaskCard(group: Conversation, brief: MessageDraft): void {
 export function bindPullRequestCards(group: Conversation, message: MessageDraft, repositoryUrl?: string | null): void {
   if (message.thread || agentOnly(message.source, message.recipients) || !cardable(message)) return
   const known = new Set(group.cards?.pullRequests?.map(card => card.url))
-  const fresh = pullRequestLinks(message.text, repositoryUrl).filter(url => !known.has(url) && !group.unlinkedPullRequests?.some(entry => entry.url === url))
+  const fresh = pullRequestLinks(message.text, repositoryUrl).filter(url => !known.has(url))
   if (fresh.length) group.cards = { ...group.cards, pullRequests: [...group.cards?.pullRequests ?? [], ...fresh.map(url => ({ url, messageId: message.id }))] }
 }
-
-/** The card of [url] in [group], if a message already is one. */
-export const pullRequestCard = (group: Conversation, url: string): PullRequestCard | undefined =>
-  group.cards?.pullRequests?.find(card => card.url === url)
 
 /** Every link [group] holds is its project's own pull request, once: a link into any other repository (another owner's
  *  included) is dropped, a spelling is made the project's, and cards that now name one pull request become one (the earliest

@@ -96,9 +96,6 @@ export function recordAsked(group: Conversation, requesterId: string | undefined
   group.ledger = { askedAt: now }
 }
 
-/** One GitHub pull request link, as a merge record names it (model.ts appendPullRequestUrls finds the same in text). */
-export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/
-
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
 export function waitedOn(state: SuperTabState, group: Conversation): string {
   const requester = group.requesterId && state.people.some(p => p.id === group.requesterId) ? group.requesterId : undefined
