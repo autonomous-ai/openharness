@@ -326,7 +326,7 @@ export function requireBuddyCommand(buddy: Agent, command: { type: string; conve
   if (command.type === 'proposal.answer') return // The card handler checks the current sender and question before receipt replay.
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
   if ('agentId' in command && command.agentId !== buddy.id) fail('BUDDY_FORBIDDEN', 'A Buddy acts only for itself.', 403)
-  if (command.type === 'message.send' || command.type === 'message.react' || command.type === 'buddy.propose' || command.type === 'decision.ask') {
+  if (command.type === 'message.send' || command.type === 'message.react' || command.type === 'buddy.propose') {
     const group = groups.find(g => g.id === command.conversationId)
     if (!group || !isBuddyChat(group) || !group.agentIds.includes(buddy.id)) {
       fail('BUDDY_FORBIDDEN', 'A Buddy posts only in its own chat. Send a proposal to reach the PM.', 403)
