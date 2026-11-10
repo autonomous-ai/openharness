@@ -77,7 +77,7 @@ export async function compactedDelivery(tx: Transaction, tabId: string, agentId:
 }
 
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
-export const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
+const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** The deliveries a cancel ends: the open ones, and those gathered for a digest (noticeDigest.ts), which hosts are not told about
  *  yet: a gathered delivery outlives its reason no more than an open one. */
 export const CANCELLABLE_DELIVERY = [...OPEN_DELIVERY, 'gathered'] as const

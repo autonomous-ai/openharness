@@ -47,7 +47,7 @@ function pullRequests(urls: readonly string[]): string {
 const PULL_REQUEST = /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/g
 
 /** What a task's reply says for its row in the chat (threads.ts): the group leaves the apps once it archives, and this stays. */
-export type TaskAsk = 'on-it' | 'shipped' | 'closed'
+type TaskAsk = 'on-it' | 'shipped' | 'closed'
 
 function taskAsk(group: Conversation): TaskAsk {
   if (group.ledger?.mergedAt != null) return 'shipped'

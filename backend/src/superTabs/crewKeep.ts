@@ -281,15 +281,6 @@ export function applyCrewKeep(state: SuperTabState, now: number, deps: CrewDeps)
   return drafts
 }
 
-/** An asleep agent woken for work: its host reopens the session in place. The reopen grace counts
- *  from now (#3397's CREW_REOPEN_GRACE_MS from downSince), so the task is not lost while it reopens. Whether it was asleep. */
-export function wakeCrewMember(agent: Agent, now: number): boolean {
-  if (!agent.asleep) return false
-  delete agent.asleep
-  agent.downSince = new Date(now).toISOString()
-  return true
-}
-
 /** A move's start failed: the member stays where it was, and the keeper may try another machine on its next pass. */
 export function crewMoveFailed(state: SuperTabState, start: AgentStart, now: number): void {
   const from = start.request.crewMoveOf ? state.agents.find(a => a.id === start.request.crewMoveOf) : undefined

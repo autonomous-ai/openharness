@@ -366,7 +366,7 @@ export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversa
 
 /** Whether [actor] reads the records of [group]: as canReadGroup, and in a closed Chat with PM still its person, at the
  *  generation they were listed with, and the project's Lead, so what was asked there before stays theirs. */
-export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return false
   if (isAgentChat(group)) return readsAgentChat(state, actor, group)
   const project = groupProject(state, group)
