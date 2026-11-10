@@ -41,4 +41,33 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'in Swarm v4 an agent chat\'s mute still holds: its menu can undo it',
+    (tester) async {
+      final server = swarmV4Channel();
+      server.state['chatSettings'] = {
+        'owner': {'channel': 'muted', 'agent-chat-juno': 'muted'},
+      };
+      final c = await openSwarmV4(tester, server, saved: 'agent-chat-pip');
+      await tester.pumpAndSettle();
+      expect(c.notifyOf('channel'), SuperTabNotify.mentions);
+      expect(c.notifyOf('agent-chat-juno'), SuperTabNotify.muted);
+    },
+  );
+
+  test(
+    'where a project\'s menu has Notifications (v3), its mute holds',
+    () async {
+      final server = swarmV4Channel();
+      server.state['chatSettings'] = {
+        'owner': {'channel': 'muted'},
+      };
+      final c = server.controller(account: 'owner');
+      addTearDown(c.dispose);
+      await c.refresh();
+      expect(c.projectMuteKept, isTrue);
+      expect(c.notifyOf('channel'), SuperTabNotify.muted);
+    },
+  );
 }

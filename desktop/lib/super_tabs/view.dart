@@ -571,7 +571,9 @@ class _SuperTabViewState extends State<SuperTabView>
       SuperTabPlaces.of(c).addListener(_takePlace);
       SuperTabChatNotices.of(c).chatShown = _chatShown;
     }
-    c.projectMuteKept = !widget.board;
+    if (oldWidget.controller != c || oldWidget.board != widget.board) {
+      c.projectMuteKept = !widget.board;
+    }
     if (oldWidget.controller != c || oldWidget.app != widget.app) {
       _dial.cancel();
       _registerDial();
