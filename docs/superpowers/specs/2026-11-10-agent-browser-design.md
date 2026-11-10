@@ -34,8 +34,9 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 - **From any of the person's Desktops.** The screen travels over the same end-to-end encrypted transport as terminals:
   on a direct link when there is one, and through the relay when there is not. The container publishes no port.
 - **The login lasts.** Restarting the container, the agent or the machine keeps the browser profile.
-- **The agent asks for a person.** When a page wants a captcha, a 2FA code or a login, the agent asks its person
-  and waits. The person opens Browser, does it by hand, and the agent goes on.
+- **The agent asks for a person in chat.** When a page wants a captcha, a 2FA code or a login, the tool's reply says
+  so, and the agent asks its person in their Swarm chat, as it asks anything else. The person opens Browser, does it
+  by hand, and answers in chat; the agent goes on.
 - **Its own network and look.** Each browser can have its own proxy, time zone, language, screen size and device,
   and it types and moves the mouse like a person.
 
@@ -120,8 +121,6 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
     (`cli/src/backendSocket.ts:1046-1053`, `guestVerdict`).
   - `guest` is a share guest's account.
   - The `Asker` for a connection is built inline at `cli/src/backendSocket.ts:1118`.
-- **Service answers** get about 30 seconds, unless the request is on `LONG_ANSWERS`
-  (`cli/src/core/api.ts:773-793`, a map of service → request → milliseconds).
 - **Webviews.** Desktop hosts pages with JavaScript channels (`web_pane_panel.dart:268` `addJavaScriptChannel`,
   `runJavaScript`), on `webview_flutter_wkwebview` (macOS), `webview_win_floating` 2.3.2 (Windows) and
   `webview_all_linux` (Linux). `webview_win_floating` has `loadRequest` and `loadHtmlString` only.
@@ -168,7 +167,9 @@ instructions: whether it reads, drafts or sends mail, and whether a person appro
 - The runtime is Podman only, because it is lighter. Harness installs it in v1, with the setup flow in Mockup 2.
 - The product word stays **Browser**.
 - Where the prior art has an answer, this design follows it as closely as it can: the settings per agent, the proxy
-  and its exit-zone lookup, human-like input, the device script, and asking a person.
+  and its exit-zone lookup, human-like input, the device script, and detecting a page that needs a person.
+- Asking a person goes through the Swarm chat, not a tool that waits (decided after the spike showed both engines cut
+  long tool calls short).
 - Desktop first. The web and the phone come after it.
 
 ## Mockups
@@ -302,23 +303,6 @@ Other lines: see the Failures table.
 Test shows "Proxy works · 203.0.113.7 · Asia/Ho_Chi_Minh" or "Proxy is not reachable".
 A saved password shows as dots and is never sent back to the app.
 Saving a change that needs it restarts the browser; the login stays.
-```
-
-**6. The agent asks for a person**
-
-```
-Agent header, panel closed:            Panel open:
-┌──────────────────────────────┐      ┌─────────────────────────────────────┐
-│ … Ken Mac · Claude [≡][>_][◉•]│      │ Browser                 [⚙] [⎘]  ✕ │
-└──────────────────────────────┘      │─────────────────────────────────────│
- • = a dot on the Browser button       │ Needs you: Google asks for a code   │
-                                       │                           ( Done )  │
-                                       │─────────────────────────────────────│
-                                       │ ┌─────────────────────────────────┐ │
-                                       │ │ (the screen)                    │ │
-                                       │ └─────────────────────────────────┘ │
-                                       └─────────────────────────────────────┘
-The banner goes away when the person presses Done, when the page no longer asks, or when the wait runs out.
 ```
 
 ## Design (builder's calls, marked)
@@ -554,7 +538,6 @@ The banner goes away when the person presses Done, when the page no longer asks,
     - `browser_screenshot`: a JPEG image
     - `browser_tabs {action: list|new|select|close, index?}`
     - `browser_wait {text? | ms ≤ 30000}`
-    - `browser_ask_person {reason, minutes?}` (see Asking a person)
   - **Refs** are role refs: they come from `ariaSnapshot()` and resolve through `getByRole(role, {name})` plus an
     index (the prior art's "role" mode). Only public `playwright-core` API is used, never `_snapshotForAI`.
   - **Timeouts:** every tool call has one (20 s default, navigation 60 s). A stale ref returns "Element not found;
@@ -582,10 +565,8 @@ The banner goes away when the person presses Done, when the page no longer asks,
   - The plan checks what a Swarm agent's default approval mode (`auto`) does for MCP tools, in Claude and in Codex.
   - If a mode would prompt, the launch adds an allow rule for the `browser` server only: Claude
     `--allowedTools=mcp__browser` as one token, and Codex's equivalent.
-- **Tool timeouts** *(call)*: asking a person can take 30 minutes, so the engine must not cut the call short.
-  - Codex gets `-c mcp_servers.browser.tool_timeout_sec=1900`; its default is far shorter.
-  - The spike measures both engines' limits for a stdio tool call of 30 minutes, and the launch sets what each
-    needs, as an argument or as an environment variable.
+- **Tool timeouts:** no tool waits longer than 60 seconds (navigation). That is inside both engines' defaults: Codex
+  cuts a tool call at 300 s, and Claude Code moves one to the background at 120 s. No timeout setting is needed.
 
 ### Human-like input *(prior art: `gateway-source/src/browser/human-input.ts`)*
 
@@ -595,43 +576,24 @@ The banner goes away when the person presses Done, when the page no longer asks,
 - The randomness goes through one injectable source, so tests are exact.
 - It lives in `human-input.mjs`, in the container. Nothing outside the tool server changes.
 
-### Asking a person *(prior art: `2026-11-01-captcha-handoff-design.md`)*
+### A page that needs a person *(prior art: `2026-11-01-captcha-handoff-design.md`)*
 
-- **The tool** *(call)*: `browser_ask_person {reason, minutes?}`. `reason` is one short line the agent writes, such
-  as "Google asks for a code". `minutes` defaults to 15 and is at most 30.
-  - It returns when one of three things happens: the person presses **Done** (`done`); a challenge that was detected
-    is gone (`cleared`); or the time runs out (`timeout`).
-  - The agent decides what to do after a timeout. It never waits past 30 minutes.
-- **Who ends the wait:**
-  - The relay asks its daemon with `agent_browser_ask {agentId, reason, minutes}`. That request is on the core's
-    long-answer list for 31 minutes, and the relay waits as long. The daemon answers `done` or `timeout`, or `ended`
-    when the relay itself ended the ask.
-  - When the last tool reply carried a challenge, the relay also asks the tool server to watch it. The tool server
-    looks every 3 seconds and answers `cleared` when it is gone.
-  - The relay returns whichever comes first, and tells the daemon the ask has ended
-    (`agent_browser_ask_end {agentId}`), so the banner goes away.
-  - If the daemon restarts while an ask is open, the relay's request fails. The tool then returns `timeout`, with the
-    line "Browser lost its connection; ask again".
+- **No waiting tool** *(decided)*. The agent asks its person in its Swarm chat, the way it asks anything, and ends its
+  turn. The person does it in Browser and answers in chat, and that answer starts the agent's next turn. Swarm
+  already carries the message to the person's Desktop and phone.
+  - The spike showed why a waiting tool does not fit: Claude Code moves a tool call to the background after 120 s and
+    aborts a silent one after 30 minutes, and Codex cuts one at 300 s.
 - **Detection** *(call)*: after `browser_navigate`, `browser_click`, `browser_type` and `browser_snapshot`, the tool
   server checks the page for a visible challenge and adds `challenge: <kind>` to the tool's reply, with the line
-  "This page asks for a person. Call browser_ask_person and do not act on the challenge."
+  "This page asks for a person. Tell your person in chat what to do in Browser, wait for their answer, and do not act
+  on the challenge yourself."
+  - That line is text, not code, because only the agent can write to its chat, and this feature must not post as the
+    agent. It is the only instruction this feature gives, and it appears only when a challenge is on the page.
   - The signs are the prior art's: a visible frame or element of reCAPTCHA, hCaptcha, Cloudflare Turnstile, DataDome,
     PerimeterX, Arkose or AWS WAF.
   - Only visible elements with a size count. The word "captcha" in a page's text does not.
   - For reCAPTCHA, only the challenge frame counts (its `bframe`). The badge of an invisible reCAPTCHA is on the page
     all the time and is not a challenge.
-- **Telling the person** *(call)*:
-  - The agent frame's `browser` field gains `asking: {reason}`. Desktop shows a dot on the Browser button, and a
-    banner with **Done** in the panel (Mockup 6).
-  - Desktop posts its usual local notice, "<agent> needs you in Browser".
-  - A person away from their Desktop hears about it through the agent's own Swarm message, which reaches the phone
-    like any other. The tool's description tells the agent to tell its person in chat when it asks. This one rule is
-    in the tool's text, not in code, because delivery and push belong to Swarm, and this feature must not post as the
-    agent.
-  - One ask per agent at a time. A second call while one is open joins it.
-- **Done** sends `agent_browser_done {agentId}`. The same people who may open the browser may press it.
-- **The reason** is the agent's own text. It is shown as plain text, at most 120 characters, and is never logged or
-  measured.
 
 ### Settings per agent *(prior art: `browser-settings.ts`)*
 
@@ -835,18 +797,17 @@ design changes first and this spec is revised.
   - no answer (older CLI): the pill is disabled, with the tooltip "Update Harness on <machine name> first".
 - **Agent header:** a **Browser** icon button after Terminal in `_agentHeader` (`swarm-browser-button`,
   `AppIcons.globe`, tooltip "Browser"). It opens a side panel with the page in the native webview. Browser, Terminal
-  and Instructions each close the others. A dot shows on it while the agent is asking.
+  and Instructions each close the others.
 - **Panel header:** a gear for Browser settings (Mockup 5), Paste, and close.
 - **Which agents:** the button shows for a browser agent on one of the person's own machines (a machine that is not
   shared with them). An older CLI never sends the `browser` field, so no button appears.
 - **Not on the web build.** `desktop/lib` is also built for the web. There the pill and the button are not drawn at
   all in v1.
-- **The agent frame** gains `browser: {state, step?, error?, asking?}`, sent only when it changes. It never carries
+- **The agent frame** gains `browser: {state, step?, error?}`, sent only when it changes. It never carries
   settings.
   - `state` is `setup`, `starting`, `ready` or `failed`.
   - `step` (during `setup`) is `installing`, `starting_podman`, `building` or `restart_needed`.
   - `error` (during `failed`) is a named state from the Failures table.
-  - `asking` is `{reason}` while the agent waits for its person.
 - **Naming.** `docs/naming-system.md` gains one line: an agent's Browser is that agent's own Chrome; a web pane shows
   one address.
 
@@ -863,11 +824,9 @@ design changes first and this spec is revised.
   pinned SHA-256 values first. Only a local asker can start setup or a restart.
 - **The proxy password** is stored in the service's 0600 state file and handed to the container as a Podman secret.
   It is write-only for the app, and it never appears in a log, a frame, an argument or a measure. Every
-  `agent_browser_*` type is left out of the frame log, because the settings requests carry the password and the ask
-  request carries the agent's reason. That covers all three places frames are logged: incoming frames
-  (`backendSocket.ts:1009`), replies (`:948`), and the local and web logs (`:616-679`), which would otherwise carry
-  the proxy's host and the reason inside the agent frame.
-- **A page cannot press Done.** Only a caller who may open the browser can end an ask.
+  `agent_browser_*` type is left out of the frame log, because the settings requests carry the password. That covers
+  all three places frames are logged: incoming frames (`backendSocket.ts:1009`), replies (`:948`), and the local and
+  web logs (`:616-679`), which would otherwise carry the proxy's host.
 - **The Gmail password** is typed by a person into noVNC. It never passes through Harness, the agent, logs or
   telemetry. Typed and pasted text travels only inside the encrypted stream and never appears in argv or logs.
 - **Mail content** the agent reads is data, not instructions (standard 7). The skill must say so.
@@ -916,7 +875,7 @@ else (a pane opening an address).
 
 - From the service: `agent_browser_enabled`; `agent_browser_setup_ok` and `_setup_failed`; `agent_browser_start_ok`
   and `_start_failed`; one `agent_browser_failed_<state>` per failed state; `agent_browser_limit_dropped`;
-  `agent_browser_ask_done`, `_ask_cleared` and `_ask_timeout`; `agent_browser_proxy_set`, `_proxy_removed`,
+  `agent_browser_challenge_seen`; `agent_browser_proxy_set`, `_proxy_removed`,
   `_proxy_test_ok` and `_proxy_test_failed`.
 - From the core: `agent_browser_stream_opened`, and one `agent_browser_stream_closed_<reason>` per close reason.
 - From Desktop, through its existing usage reports: `agent_browser_opened`.
@@ -1002,7 +961,8 @@ workload, over a direct link and over the relay:
   is an error; the password is absent from argv, environment, logs and frames.
 - **Settings:** a change creates the container again and keeps the volume; a read never returns the password; a guest
   is refused.
-- **Asking:** Done, cleared and timeout each end the wait; a second ask joins the first.
+- **Challenges:** each kind is detected on a fixture page; the word "captcha" in text is not; the badge of an
+  invisible reCAPTCHA is not.
 - **Relay:** `initialize` and `tools/list` answer without Podman; a call returns the named reason before the browser
   is ready; the exec is started again after a container restart.
 - **Stream:** `agent_browser_open` is refused for a guest, a teammate and a non-browser agent, and allowed for the
@@ -1012,7 +972,7 @@ workload, over a direct link and over the relay:
   Also a `HARNESSD_TEST_FAULTS=agentBrowser` case: the service crashes and the agent keeps working.
 - **Flutter:**
   - Click-through tests, as a person does: tick Browser, go through setup, see the progress; the Browser button opens
-    the panel; settings; the ask banner; Retry from Failed.
+    the panel; settings; Retry from Failed.
   - Bridge tests for the JavaScript channel.
   - Gallery goldens for the pill, the setup dialog, the header button, the settings page and the banner, light and
     dark, in the same PR as the design doc.
@@ -1022,7 +982,7 @@ workload, over a direct link and over the relay:
   - ask the agent to list the newest mail and draft a reply;
   - open the same browser from a second Desktop;
   - set a proxy, press Test, and confirm a "what is my IP" page shows the proxy's address and never the machine's;
-  - open a reCAPTCHA demo page, let the agent ask, solve it by hand, press nothing, and see the agent go on;
+  - open a reCAPTCHA demo page, see the agent ask in chat, solve it by hand, answer in chat, and see the agent go on;
   - turn Device on, and confirm a fingerprint test page opened by hand reports the chosen values;
   - paste Vietnamese text, and use ⌘C, ⌘V and ⌘A from a Mac.
 
@@ -1051,7 +1011,7 @@ Not in v1. What was decided for them, so the next spec starts from it:
   - **Keyboard** shows a native Flutter text field above the phone's keyboard. **Send** types the text into the remote
     as key events, one per code point, using noVNC's keysym lookup. This works with Telex, which produces no key
     events of its own.
-  - The ask banner with **Done**, and a dot on the action. No settings page.
+  - No settings page.
   - It needs `webview_flutter` in the phone app, a new runtime dependency.
 - **Access.** The web client and the phone are `web` peers that are not shared, so `accountOwner` already covers
   them.

@@ -51,11 +51,12 @@ Read it before starting any task. This plan does not repeat its reasons.
   - Setup progress lines: "Podman installed", "Starting Podman…", "Building browser", "Starting browser". Restart
     step: "Restart Windows to finish", with **Later** and **Restart**.
   - Header button: `swarm-browser-button`, `AppIcons.globe`, tooltip "Browser". Panel buttons: **Paste**, **Retry**,
-    **Install**, **Done**.
+    **Install**.
   - Settings: page title "Browser settings"; rows "Proxy", "Time zone", "Language", "Screen", "Human input",
     "Advanced", "Device"; buttons **Remove**, **Test**, **Save**; test results "Proxy works · <address> · <zone>" and
     "Proxy is not reachable".
-  - Asking: banner "Needs you: <reason>" with **Done**; notice "<agent> needs you in Browser".
+  - Challenge line in a tool reply: "This page asks for a person. Tell your person in chat what to do in Browser,
+    wait for their answer, and do not act on the challenge yourself."
 - **Failed states** (`browser.error`) and their copy, verbatim:
 
   | State | Copy | Button |
@@ -86,7 +87,7 @@ Read it before starting any task. This plan does not repeat its reasons.
   isn't available on <machine name> right now" (the service did not answer).
 - **Other copy:** starting "Starting browser…"; tool replies before ready "Browser is being set up" and "Browser is
   starting".
-- **Agent frame field:** `browser: {state: 'setup'|'starting'|'ready'|'failed', step?: 'installing'|'starting_podman'|'building'|'restart_needed', error?: <failed state>, asking?: {reason: string}}`.
+- **Agent frame field:** `browser: {state: 'setup'|'starting'|'ready'|'failed', step?: 'installing'|'starting_podman'|'building'|'restart_needed', error?: <failed state>}`.
   `step` is set only in `setup`, `error` only in `failed`. It never carries settings. It is absent for agents without
   a browser.
 - **Registry field:** `browser?: true`.
@@ -99,10 +100,9 @@ Read it before starting any task. This plan does not repeat its reasons.
   (`cli/src/agentClient/openUrl.ts:29`).
 - **Requests** (`AGENT_BROWSER_REQUESTS`), by who may send them:
   - any asker: `agent_browser_available`;
-  - local only: `agent_browser_setup`, `agent_browser_restart`, and from the relay `agent_browser_state`,
-    `agent_browser_ask`, `agent_browser_ask_end`;
+  - local only: `agent_browser_setup`, `agent_browser_restart`, and from the relay `agent_browser_state`;
   - the machine's own person (the access rule below): `agent_browser_retry`, `agent_browser_settings`,
-    `agent_browser_settings_save`, `agent_browser_proxy_test`, `agent_browser_done`.
+    `agent_browser_settings_save`, `agent_browser_proxy_test`.
 - **Access rule:** `(asker.local || asker.accountOwner === true) && !asker.guest`. `asker.owner` alone is never
   enough. The gateway already sets `accountOwner` for the person's other Desktops (`gateway.ts:202`); no task
   changes it.
@@ -123,9 +123,9 @@ Read it before starting any task. This plan does not repeat its reasons.
   - Unexpected exits: at most 3 restarts in a row; the count resets after 10 minutes Ready.
 - **Timeouts:** `podman info` 5 s, cached 60 s. Every `podman` call has a timeout: 30 s, except build at 15 min,
   machine init and start at 10 min, and `events`, which streams. Agent start never waits on Podman.
-- **Asking:** `minutes` defaults to 15, at most 30; the reason is at most 120 characters; a detected challenge is
-  re-checked every 3 s. `agent_browser_ask` is a long answer of 31 minutes. Codex gets
-  `-c mcp_servers.browser.tool_timeout_sec=1900`.
+- **A page that needs a person:** no waiting tool. The tool reply names the challenge and tells the agent to ask in
+  chat. No tool waits longer than 60 s, inside both engines' defaults (Codex 300 s, Claude Code 120 s before it moves
+  a call to the background), so no timeout setting is added.
 - **Stream numbers** (relay budget, pacing, credit window, chunk size): taken from Task 0's report. Tasks that need
   them say so. The relay budget is per machine; the daemon paces the total of its relayed browser bytes under it.
 - **Release order:** backend → CLI → Desktop. Fields, frames and the kind are only added. The Desktop release with
@@ -214,8 +214,8 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   record terminal echo p95 at windows of 32, 64, 128 and 384 KiB, over a direct link, through TURN, and over the
   relay. Record the bytes per open minute on TURN and on the relay.
 - [ ] **Step 5: The engines.**
-  - Start one stdio MCP tool call that returns after 30 minutes, in Claude Code and in Codex with
-    `tool_timeout_sec=1900`. Record whether each waits, and any setting Claude Code needs.
+  - Record each engine's default limits for a stdio MCP tool call (done in the macOS run: Codex 300 s; Claude Code
+    moves a call to the background at 120 s and aborts a silent one at 30 minutes).
   - Record whether each prompts for a `mcp__browser__…` call in a Swarm agent's default mode (Claude Code
     `--permission-mode auto`; Codex `--approve-for-me`, `engines/codex/launch.ts:3-7`), and for Codex the per-server
     key that allows it.
@@ -227,7 +227,6 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - the bridge on any platform carries less than the stream's mean scrolling rate;
   - no credit window keeps echo p95 within 50 ms while the screen stays usable (then browser bytes need their own
     channel);
-  - an engine cannot wait 30 minutes on a tool call (then asking a person needs another shape).
 
   Also report what one viewer costs the relay per open minute at the chosen budget. That number is agreed with the
   project's PM before Phase 3 starts, because backend cost per Swarm must fall as Swarms grow.
@@ -261,7 +260,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
     - `withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T>`
   - `browser-tools.mjs`: a stdio MCP server (newline-delimited JSON-RPC) for these tools: `browser_navigate`,
     `browser_back`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_press`, `browser_select`,
-    `browser_scroll`, `browser_screenshot`, `browser_tabs`, `browser_wait`. (Task 10 adds `browser_ask_person`.) It
+    `browser_scroll`, `browser_screenshot`, `browser_tabs`, `browser_wait`. It
     exits when stdin closes. It reads the CDP address from `HARNESS_BROWSER_CDP`, default `http://127.0.0.1:9222`.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -509,7 +508,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - Consumes: `Containers` and `browserLimit` (Task 6), `ensureImage` (Task 4), `Setup` (Task 3), `Podman` (Task 2),
   the settings functions (Task 5).
 - Produces:
-  - `type BrowserState = { state: 'setup' | 'starting' | 'ready' | 'failed'; step?: SetupStep | 'building'; error?: string; asking?: { reason: string } }`
+  - `type BrowserState = { state: 'setup' | 'starting' | 'ready' | 'failed'; step?: SetupStep | 'building'; error?: string }`
   - `class StateFile { constructor(path: string)`, with
     `read(): { browsers: Record<string, BrowserSettings>; deleting: string[]; setup: { step: SetupStep; bootTime?: number } | null }`
     (throws `PodmanError('state_unreadable')` for a file that exists and cannot be parsed) and
@@ -620,7 +619,6 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - Consumes: `Browsers` (Task 7), `createPodman` (Task 2), the settings functions (Task 5).
 - Produces:
   - `AGENT_BROWSER_REQUESTS = ['agent_browser_available', 'agent_browser_setup', 'agent_browser_restart', 'agent_browser_retry', 'agent_browser_state', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test'] as const`.
-    Task 10 adds the three ask requests.
   - `mayOpenBrowser(asker: Asker): boolean`: the access rule of Global Constraints. Exported from `core/api.ts`.
   - `askerFor(connId: string): Asker`
   - `interface AgentBrowserPort { attached(session: RegisteredSession): void; stopped(agentId: string): void; deleted(agentId: string): void; frameContext(agentId: string): BrowserState | undefined }`.
@@ -667,7 +665,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
     `the guest policy refuses every agent_browser type` (Review Focus 1), for each stream frame and each request in
     Global Constraints.
   - `no agent_browser frame is written to the frame log`: with `LOG_FRAMES` on, a settings save with a password, its
-    reply with the proxy's host, and an agent frame that carries `asking` leave none of the three in the log.
+    reply with the proxy's host, and a proxy test reply with the exit address leave none of the three in the log.
   - Lifecycle spec: `purge calls agentBrowser.deleted; a plain stop does not`.
   - Registry spec: `browser:true survives persist, parse and rebind; cleared on separate shell`.
   - AgentFrame spec: `browser field present only when the context has it`.
@@ -704,12 +702,9 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - Consumes: `browserTools()` from `cli/src/lib/browserToolsAsset.ts` (Task 8); the request `agent_browser_state`
   (Task 8); the pane lookup `sendPane`, as `openUrl.ts:20` uses it; the daemon request helper with a timeout per
   request (`cli/src/agentClient/daemon.ts:116-125`).
-- `env` is merged where the launch already merges environment: `create.ts:437` and `launchOverrides.ts:302`.
 - Produces:
   - `browserMcpCommand(io?: { stdin: Readable; stdout: Writable }, deps?: { ask: …; spawn: … }): Promise<number>`
-  - `browserMcpArgs(engine: 'claude' | 'codex', harnessPath: string): { args: string[]; env: Record<string, string> }`.
-    It takes no agent id. `env` carries any variable Task 0 found an engine needs to wait 30 minutes; it is empty
-    otherwise.
+  - `browserMcpArgs(engine: 'claude' | 'codex', harnessPath: string): string[]`. It takes no agent id.
   - Each forwarded `tools/call` carries `params._harness = { human: 'off'|'slow'|'normal'|'fast' }`, from the state
     reply.
 
@@ -729,10 +724,10 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - `outside a Harness pane it exits non-zero with a one-line message`.
   - `the podman exec child starts with ownProcessGroup()` (no console window on Windows).
   - `claude args`:
-    `['--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"<harness>","args":["browser-mcp"]}}}', '--allowedTools=mcp__browser']`.
-    The second token is present only if Task 0 showed a prompt. Any setting Task 0 found Claude Code needs to wait 30
-    minutes is added to `args` or `env`, and the create and relaunch paths apply both.
-  - `codex args`: `['-c', 'mcp_servers.browser.command="<harness>"', '-c', 'mcp_servers.browser.args=["browser-mcp"]', '-c', 'mcp_servers.browser.tool_timeout_sec=1900', …the key from Task 0]`.
+    `['--mcp-config={"mcpServers":{"browser":{"type":"stdio","command":"<harness>","args":["browser-mcp"]}}}']`.
+    No `--allowedTools`: the spike measured that Claude Code in `--permission-mode auto` runs MCP tools without a
+    prompt.
+  - `codex args`: `['-c', 'mcp_servers.browser.command="<harness>"', '-c', 'mcp_servers.browser.args=["browser-mcp"]', …the key from Task 0, if Codex prompts]`.
   - Create spec: `browser:true adds the args; absent adds nothing`.
   - LaunchOverrides spec: `relaunch of a browser agent keeps the args`.
 - [ ] **Step 3: Run** `npx vitest run src/agentClient/browserMcp.spec.ts src/lib/browserMcpArgs.spec.ts src/core/agents/create.spec.ts`.
@@ -742,19 +737,15 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - [ ] **Step 5: Run** the same tests plus `npm run test:core`. Expected: PASS.
 - [ ] **Step 6: Commit** `feat(cli): harness browser-mcp relay`.
 
-### Task 10: Human-like input and asking a person
+### Task 10: Human-like input and challenge detection
 
 **Files:**
 - Create: `cli/assets/browser/human-input.mjs`, `cli/assets/browser/challenge.mjs`
-- Modify: `cli/assets/browser/browser-tools.mjs`, `browser-tools.json` (add `browser_ask_person`),
-  `cli/src/services/agentBrowser/assets.ts`, `cli/build-bundle.mjs`, `cli/build.mjs`
-- Modify: `cli/src/agentClient/browserMcp.ts` (the relay handles `browser_ask_person`)
-- Modify: `cli/src/services/agentBrowser.ts` and `browsers.ts` (`asking`, and the three requests)
-- Modify: `cli/src/core/api.ts`: add `agent_browser_ask`, `agent_browser_ask_end` and `agent_browser_done` to
-  `AGENT_BROWSER_REQUESTS`; add `agentBrowser: { agent_browser_ask: 31 * 60_000 }` to `LONG_ANSWERS` (`:773`).
-- Modify: `cli/src/lib/e2ee/applicationFrames.ts`: add `agent_browser_done`.
-- Test: `cli/src/services/agentBrowser/humanInput.spec.ts`, `challenge.spec.ts`; new cases in `browserMcp.spec.ts`,
-  `agentBrowser.spec.ts` and `assets.spec.ts`
+- Modify: `cli/assets/browser/browser-tools.mjs`, `cli/src/services/agentBrowser/assets.ts`, `cli/build-bundle.mjs`,
+  `cli/build.mjs`
+- Modify: `cli/src/services/agentBrowser.ts` (count `agent_browser_challenge_seen` when the relay reports one)
+- Test: `cli/src/services/agentBrowser/humanInput.spec.ts`, `challenge.spec.ts`; new cases in `browserMcp.spec.ts`
+  and `assets.spec.ts`
 
 **Interfaces:**
 - Produces:
@@ -766,23 +757,9 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
     reCAPTCHA counts only by its challenge frame (a URL containing `/recaptcha/` and `bframe`), never by the badge
     frame.
   - Tool replies of `browser_navigate`, `browser_click`, `browser_type` and `browser_snapshot` gain
-    `challenge: <kind>` and the line "This page asks for a person. Call browser_ask_person and do not act on the
-    challenge." when one is detected.
-  - The tool server's internal method `harness/watchChallenge`: it checks every 3 s and answers `cleared` when the
-    challenge is gone.
-  - `browser_ask_person {reason, minutes?}` returns `{result: 'done' | 'cleared' | 'timeout'}`. The relay handles it:
-    - it sends `agent_browser_ask {agentId, reason, minutes}` to the daemon, with a request timeout of 31 minutes, and
-      waits for `{result: 'done' | 'timeout' | 'ended'}`. `ended` comes back when the relay's own
-      `agent_browser_ask_end` closed the ask; the relay then returns the `cleared` it already has;
-    - when the last tool reply carried a challenge, it also calls `harness/watchChallenge`;
-    - it returns whichever comes first, then sends `agent_browser_ask_end {agentId}`.
-  - `Browsers.ask(agentId, reason, minutes): Promise<'done' | 'timeout' | 'ended'>`, `Browsers.done(agentId): void`,
-    `Browsers.askEnded(agentId): void`. `state(agentId)` includes `asking`.
-  - Replies: `agent_browser_ask` and `agent_browser_ask_end` are `LOCAL_ONLY`; `agent_browser_done {agentId}` answers
-    `NOT_OWNER` unless `mayOpenBrowser(asker)`.
-  - Tool description of `browser_ask_person`: "Ask your person to do something in the browser by hand (a captcha, a
-    code, a login). Tell them in chat as well. Returns when they press Done, the challenge is gone, or time runs
-    out."
+    `challenge: <kind>` and the line "This page asks for a person. Tell your person in chat what to do in Browser,
+    wait for their answer, and do not act on the challenge yourself." when one is detected.
+  - There is no waiting tool. The tool list stays the eleven tools of Task 1.
 
 - [ ] **Step 1: Write the failing tests:**
   - `mousePath ends inside the box and is not a straight line`, `the same rng gives the same path`.
@@ -792,23 +769,14 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
     signs (`2026-11-01-captcha-handoff-design.md` §5.1).
   - `the word captcha in page text is not a challenge`, `an invisible or zero-size frame is not a challenge`,
     `the badge of an invisible reCAPTCHA is not a challenge`.
-  - `a detected challenge is added to the tool reply`.
-  - `ask returns done when Done is pressed`, `returns cleared from the tool server and tells the daemon the ask
-    ended`, `returns timeout after minutes`, `minutes above 30 is clamped to 30`.
-  - `agent_browser_ask is on the long-answer list for 31 minutes`.
-  - `a second ask while one is open joins it`.
-  - `a failed ask request returns timeout with "Browser lost its connection; ask again"` (the daemon restarted).
-  - `asking appears in the agent frame and goes away when the ask ends`.
-  - `the reason is cut to 120 characters and is absent from logs and measures`.
-  - `agent_browser_done is refused for a share guest`.
-  - `an ask counts agent_browser_ask_done, _ask_cleared or _ask_timeout`.
-  - `browser-tools.json now names twelve tools`.
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/agentBrowser src/agentClient/browserMcp.spec.ts src/services/agentBrowser.spec.ts`.
+  - `a detected challenge is added to the tool reply with the chat line`, and `a page with none adds nothing`.
+  - `a reply with a challenge counts agent_browser_challenge_seen once per page`.
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/agentBrowser src/agentClient/browserMcp.spec.ts`.
   Expected: FAIL on the new cases.
 - [ ] **Step 3: Implement.** Port the timing model from the prior art, `gateway-source/src/browser/human-input.ts`
   (log-normal draws, resampled inside the range, a session tempo).
 - [ ] **Step 4: Run** the same tests. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(cli): human-like input and asking a person in the agent browser`.
+- [ ] **Step 5: Commit** `feat(cli): human-like input and challenge detection in the agent browser`.
 
 ### Task 11: Proxy relay and device script (container)
 
@@ -1073,13 +1041,20 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   `desktop/test/browser/viewer_asset_test.dart`
 
 **Interfaces:**
-- Produces the page ⇄ host protocol: JSON messages through `window.HarnessBrowser.postMessage`.
+- Produces the page ⇄ host protocol: the page posts JSON strings through `window.HarnessBrowser.postMessage`, and the
+  host calls `window.harnessBrowserReceive(<JSON object literal>)` through `runJavaScript`.
   - **Host → page:** `{t:'config', mac: boolean}`, `{t:'open'}`, `{t:'data', b64}`, `{t:'closed', reason}`,
     `{t:'paste', text}`.
   - **Page → host:** `{t:'ready'}`, `{t:'data', b64}`, `{t:'copy', text}`, `{t:'state', connected: boolean}`.
   - The page wraps these in a channel object with `readyState`, `binaryType`, `protocol`, `send`, `close`, `onopen`,
     `onmessage`, `onclose` and `onerror`, and passes it to `new RFB(screen, channel)`.
   - It sets `scaleViewport = true`, `qualityLevel = 6` and `compressionLevel = 2`.
+  - When noVNC closes the channel itself, the page posts `{t:'state', connected: false}`, and the host closes the
+    stream.
+  - Pinned: `@novnc/novnc` 1.7.0 and `esbuild` 0.28.2. noVNC 1.7.0 has one top-level `await` (an H.264 probe in
+    `core/util/browser.js`); `build.mjs` rewrites that line to a `.then` and fails if a later noVNC changes it.
+  - CI: the Node test needs `npm ci` in `desktop/tool/browser_viewer`. The pull request adds it to the Desktop CI job,
+    since no job runs it today.
 
 - [ ] **Step 1: Write the failing tests:**
   - `the channel has every property noVNC's Websock checks, including protocol`.
@@ -1121,7 +1096,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
     `void handleFrame(String type, Map<String, dynamic> payload)`, `void handleBinary(TerminalBinaryFrame frame)` and
     `void transportError()`. `}`
   - It acks with `agent_browser_ack {streamId, bytes}` at Task 0's ack step.
-  - `class AgentBrowser { final String state; final String? step; final String? error; final String? asking; }`
+  - `class AgentBrowser { final String state; final String? step; final String? error; }`
   - `class BrowserAvailability { final String state; final bool restart; }`, with `state` one of `ready`, `stopped`,
     `needs_setup`, `podman_old`, `podman_memory`, `unsupported`, `unavailable`.
   - `class BrowserSettings` (mirrors `publicSettings`), with `toSave({String? password})`.
@@ -1129,7 +1104,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
     - `Future<BrowserAvailability> agentBrowserAvailable(String machineId)`: `unsupported` on `WsRequestFailure` code
       `UNSUPPORTED`; `unavailable` on `SERVICE_UNAVAILABLE`, `SERVICE_FAILED` or a timeout.
     - `Future<void> agentBrowserSetup(String machineId)`, `agentBrowserRestart(String machineId)`,
-      `agentBrowserRetry(String machineId, String agentId)`, `agentBrowserDone(String machineId, String agentId)`.
+      `agentBrowserRetry(String machineId, String agentId)`.
     - `Future<BrowserSettings> agentBrowserSettings(String machineId, String agentId)`,
       `agentBrowserSettingsSave(String machineId, String agentId, Map<String, Object?> settings)`.
     - `Future<ProxyTestResult> agentBrowserProxyTest(String machineId, String agentId, Map<String, Object?> proxy)`,
@@ -1148,7 +1123,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - `a transport error for one machine closes only that machine's streams`;
   - `available maps UNSUPPORTED to unsupported, and a service error or a timeout to unavailable`;
   - `Agent.fromJson keeps known browser values and drops unknown ones`;
-  - `agentsEqual sees a browser state change and an asking change`;
+  - `agentsEqual sees a browser state change`;
   - `createAgent sends browser:true only when asked`.
 - [ ] **Step 2: Run** `cd desktop && flutter test test/browser`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
@@ -1200,12 +1175,11 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
 - Create: `desktop/lib/browser/browser_panel.dart` (the states and the header),
   `desktop/lib/browser/browser_bridge.dart` (the page ⇄ `BrowserStream` bridge),
   `desktop/lib/browser/browser_view.dart` (webview with `loadHtmlString` and the `HarnessBrowser` JavaScript channel)
-- Modify: `desktop/lib/super_tabs/view.dart`: `_agentHeader` (`:3896-3955`), adding the button after Terminal with its
-  asking dot, and a `_browserOpen` flag that closes Instructions and Terminal and is closed by them; the right-pane
+- Modify: `desktop/lib/super_tabs/view.dart`: `_agentHeader` (`:3896-3955`), adding the button after Terminal, and a `_browserOpen` flag that closes Instructions and Terminal and is closed by them; the right-pane
   choice (`:6319-6380`), adding the browser branch.
 - Modify: `desktop/lib/measurement/product_measurement.dart`: report `agent_browser_opened` when a stream opens.
 - Modify: `desktop/design/desktop-design-system.md:427-433` (Top bar: Browser icon) and the gallery test and goldens
-  (the header button with and without the dot, the setup progress, a failed state, the ask banner).
+  (the header button, the setup progress, a failed state).
 - Test: `desktop/test/browser/browser_panel_test.dart`, `desktop/test/browser/browser_bridge_test.dart`, and a
   click-through case in `desktop/test/swarm_v4_journey_test.dart`
 
@@ -1241,12 +1215,9 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - `an open refused with VIEWER_LIMIT shows "Browser is open in too many places"`, and `NOT_OWNER shows "Only its
     owner can open this browser"`;
   - `a close with reason agent, and an open refused with NOT_READY, show the agent frame's browser state`;
-  - `asking shows a dot on the Browser button and the banner "Needs you: <reason>"`;
-  - `Done calls agentBrowserDone, and the banner goes away when the frame clears asking`;
-  - `a new ask posts one local notice "<agent> needs you in Browser"`, through the notice call Desktop already uses
-    when an agent needs its person (the builder names it in the PR);
   - `opening a stream reports agent_browser_opened once, with no other field`;
-  - Bridge: `page data reaches stream.write and stream bytes reach the page`, `Paste posts the clipboard's text`,
+  - Bridge: `{t:'state', connected:false} from the page closes the stream`;
+    `page data reaches stream.write and stream bytes reach the page`, `Paste posts the clipboard's text`,
     `copy from the page reaches the clipboard`.
   - Journey test, as a person: tick Browser, Start, Install, see progress, see the button, open the panel, close it.
 - [ ] **Step 2: Run** `cd desktop && flutter test test/browser test/swarm_v4_journey_test.dart`. Expected: FAIL.
@@ -1302,8 +1273,7 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - starts a local authenticated proxy, saves it as the agent's proxy, and checks a fixture "my address" page is
     reached through it; then stops the proxy and checks the page fails and no direct connection is made;
   - turns Device on, and checks a page opened without any tool call reports the chosen cores and memory;
-  - opens a fixture page with a visible challenge frame, and checks the tool reply names it and
-    `browser_ask_person` returns `cleared` when the frame is removed;
+  - opens a fixture page with a visible challenge frame, and checks the tool reply names it with the chat line;
   - kills the browser process inside the container, and checks the service restarts it;
   - deletes the agent, and checks no container, volume, network or secret with its name remains;
   - checks the daemon's loopback socket refuses a request made from inside the container.
@@ -1324,8 +1294,8 @@ Throwaway code. It is not merged. It lives in the scratch directory, and only th
   - ask the agent to list the newest mail and draft a reply;
   - open the same browser from a second Desktop;
   - set a real proxy, press Test, and confirm a "what is my IP" page shows the proxy's address;
-  - open a reCAPTCHA demo page, see the agent ask, get the notice on Desktop, solve it by hand, and see the agent go
-    on without pressing Done;
+  - open a reCAPTCHA demo page, see the agent ask in chat, solve it by hand in Browser, answer in chat, and see the
+    agent go on;
   - paste "Xin chào 👋", and use ⌘C, ⌘V and ⌘A from a Mac;
   - on Windows, record the person's session on the signed build during setup and while a browser agent runs: the UAC
     prompt is the only window that appears (`docs/windows-rules.md`).
