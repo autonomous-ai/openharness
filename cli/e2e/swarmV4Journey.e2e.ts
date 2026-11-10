@@ -190,6 +190,22 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('the Swarm v4 journey, on
     expect(new Set([agents.Pip.chat, agents.Kai.chat, channel]).size).toBe(3)
   }, 300_000)
 
+  it('its person reads a builder\'s instructions on its computer: its own agents/<name>.md, saved there, and the project\'s AGENTS.md and CLAUDE.md beside it', async context => {
+    step(context)
+    const read = () => B.client.request<Record<string, any>>('agent_instructions_read', { agentId: agents.Kai.harnessId, name: 'Kai' }, 30_000)
+    const first = await read()
+    // No file of its own yet; the repository's own files, read-only, as Desktop's Instructions shows them beside it.
+    expect(first).toMatchObject({ text: null, version: '' })
+    expect(first.shared).toEqual([{ name: 'AGENTS.md', text: '# The shop\n\nThe goal: a small shop.\n', truncated: false },
+      { name: 'CLAUDE.md', text: '@AGENTS.md\n', truncated: false }])
+    const rule = 'Review every pull request within the hour.\n'
+    const saved = await B.client.request<Record<string, any>>('agent_instructions_write', { agentId: agents.Kai.harnessId, name: 'Kai', text: rule, version: '' }, 30_000)
+    expect(saved.error, JSON.stringify(saved)).toBeUndefined()
+    expect(await read()).toMatchObject({ text: rule, version: saved.version })
+    // Its one copy is the file in its own folder on its own computer.
+    expect(readFileSync(join(agents.Kai.cwd!, 'agents', 'Kai.md'), 'utf8')).toBe(rule)
+  }, 120_000)
+
   it('a person types to a builder in its chat: the agent is typed exactly that, and its answer comes back into the chat once', async context => {
     step(context)
     const typed = 'Please say hello to the team, then wait.'
