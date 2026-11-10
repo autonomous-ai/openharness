@@ -37,15 +37,14 @@ import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } 
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
-import type { AvatarUpload } from './profile.js'
 import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery, type ThreadFacet } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
 import { closeProposal, databaseProposalReads, openProposalRows, openProposals, proposalChat, type OpenProposal } from './proposals.js'
 import { projectList, type ProjectList } from './projectList.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, peekType, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
-  type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
+import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, directUploads, errorCode, EXPIRED_UPLOAD, HOURLY_UPLOAD_BYTES, HOURLY_UPLOADS, MAX_ATTACHMENT_BYTES, MAX_FORM_ATTACHMENT_BYTES, objectKeyFor, PENDING_UPLOAD_PURPOSE, publicUrl, TOO_LARGE_MESSAGE, trimPrefix, typeFromHead, UPLOAD_LINK_MS,
+  type Attachment, type Attachments, type AvatarStore } from './attachments.js'
 import { makeThumbnail, MAX_READ_BACK_BYTES, pictureFields, THUMBNAILED_TYPES, thumbKeyOf, thumbnailsReserve, type StoredImage } from './thumbnails.js'
 import { FileLinks } from './fileLinks.js'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -1901,9 +1900,6 @@ export class SuperTabStore {
       // Only an agent's reaction does anything, and nothing of it is kept (reactions.ts): the message must be one it may see.
       if (command.type === 'message.react' && actor.kind === 'agent') context.reaction = await this.reactionTarget(tx, tabId, actor, command, original)
       if (command.type === 'message.edit' || command.type === 'message.delete') context.messageChange = await this.messageChangeTarget(tx, tabId, actor, command, original)
-      if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
-        context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
-      }
       // A start records the version of the machine it is dispatched to.
       if (command.type === 'agent.startDispatch') context.machineVersions = await this.machineVersions(tx, original)
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls, ...pushOrigin.task ? { pushOriginTask: pushOrigin.task } : {} })
@@ -2193,12 +2189,6 @@ export class SuperTabStore {
         await tx.superTabMessage.update({ where: { id: effects.messageEdit.messageId }, data: { text: effects.messageEdit.text, editedAt: new Date(context.now) } })
       }
       if (command.type === 'message.delete') await this.writeDelete(tx, tabId, command, effects.result.kept === true, effects.state.people.map(p => p.id), context.now)
-      if (context.avatarUpload) {
-        // Conflicts with a concurrent use of the same picture: only one command can take it.
-        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: context.avatarUpload.id, purpose: AVATAR_PURPOSE, ...unused },
-          data: { usedBy: receiptId } })
-        if (taken.count !== 1) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
-      }
       if (effects.closedProposal) await closeProposal(tx, tabId, effects.closedProposal, actor.kind === 'person' ? actor.userId : actor.agentId, new Date(context.now))
       // A new decision reaches its person's phones (task #3248); a repeat was already brought to them.
       if (newDecisions.length) this.tellPhones(tx, tabId, effects.state, { replies: [], tags: [], decisions: newDecisions }, [])
@@ -2576,9 +2566,8 @@ export class SuperTabStore {
     // A file's name is shown in the chat like its message, so it never keeps a credential either.
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
-    const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
-    const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
-      async () => checkedType(mime.data, file.body), file.body, MAX_FORM_ATTACHMENT_BYTES, (objectKey, bytes) => this.pictureOf(attachments, objectKey, bytes))
+    const key = await this.uploader(user, tabId, conversationId, asAgentId)
+    const row = await this.keep(attachments, tabId, key, { name: name.data, conversationId }, () => checkedType(mime.data, file.body), file.body)
     return { attachment: await this.linkedFile(tabId, { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey),
       ...pictureFields(row.image) }) }
   }
@@ -2789,42 +2778,22 @@ export class SuperTabStore {
     return facts ? { voice: facts } : fail('VOICE_TRANSCRIBING', 'This voice message is still being transcribed. Try again in a moment.', 409)
   }
 
-  /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any
-   *  member who may write uploads one; the command that sets it decides whose it becomes. */
-  async uploadAvatar(user: AuthUser, tabId: string, file: { body: Readable }, asAgentId?: string) {
-    // Off until a bucket for avatars is configured (attachmentsFromEnv); presets still work.
-    const avatars = this.attachments?.avatars ?? fail('AVATARS_UNAVAILABLE', 'Uploading pictures is not set up on this server yet. Pick one of the pictures instead.', 503)
-    const key = await this.uploader(tabId, async tx => {
-      const { state } = await this.load(tx, user, tabId, {})
-      const actor = await this.actor(tx, user, state, asAgentId)
-      author(state, actor, true)
-      return actor
-    })
-    const row = await this.keep(avatars, this.avatarPrefix, tabId, key, { name: 'avatar', conversationId: '', purpose: AVATAR_PURPOSE }, async () => {
-      const peeked = await peekType(file.body)
-      if (!peeked.type || !AVATAR_TYPES.has(peeked.type)) fail('AVATAR_TYPE', 'Use a PNG, JPEG or WebP picture.', 415)
-      return { mime: peeked.type, body: peeked.body }
-    }, file.body, MAX_AVATAR_BYTES)
-    // No link: a picture is only reached through the links member reads carry (avatarLinks.ts).
-    return { avatar: { id: row.id } }
-  }
-
-  /** The uploading actor's key, once it may upload and is under its hourly allowance: unsent files cost bucket space. */
-  private async uploader(tabId: string, allowed: (tx: Transaction) => Promise<Actor>): Promise<string> {
+  /** The uploading actor's key, once it may post in [conversationId] and is under its hourly allowance: unsent files cost bucket
+   *  space. */
+  private async uploader(user: AuthUser, tabId: string, conversationId: string, asAgentId?: string): Promise<string> {
     return transaction(this.db, async tx => {
-      const key = actorKey(await allowed(tx))
+      const key = actorKey((await this.poster(tx, user, tabId, conversationId, asAgentId)).actor)
       const recent = await tx.superTabAttachment.count({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } } })
       if (recent >= 200) fail('RATE_LIMITED', 'You attached 200 files in the last hour. Wait before attaching more.', 429)
       return key
     })
   }
 
-  /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
-  private async keep(bucket: AttachmentStore, prefix: string, tabId: string, actorKey: string, file: { name: string; conversationId: string; purpose?: string },
-    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number,
-    /** Given the stored picture's bytes, its facts and stored thumbnail (pictureOf); a picture is held in memory for it, up to `cap`. */
-    thumbnail?: (objectKey: string, bytes: Buffer) => Promise<StoredImage | null>) {
-    const objectKey = objectKeyFor(prefix, tabId, file.name)
+  /** Streams one chat file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. A
+   *  picture is held in memory, up to the form's limit, for its size and thumbnail (pictureOf). */
+  private async keep(attachments: Attachments, tabId: string, actorKey: string, file: { name: string; conversationId: string },
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable) {
+    const bucket = attachments.store, objectKey = objectKeyFor(attachments.prefix, tabId, file.name)
     let size: number, mime: string
     const held: Buffer[] = []
     // A place to hold the picture whole for its thumbnail, given back when its thumbnail is made or the upload fails.
@@ -2832,20 +2801,17 @@ export class SuperTabStore {
     try {
       const checked = await typed()
       mime = checked.mime
-      if (thumbnail && THUMBNAILED_TYPES.has(mime)) place = thumbnailsReserve()
+      if (THUMBNAILED_TYPES.has(mime)) place = thumbnailsReserve()
       const tee = place !== null
       const body = !tee ? checked.body : Readable.from((async function* () {
         for await (const chunk of checked.body) { held.push(Buffer.from(chunk)); yield chunk }
       })())
-      size = await bucket.put(objectKey, { name: file.name, mime }, body, cap)
+      size = await bucket.put(objectKey, { name: file.name, mime }, body, MAX_FORM_ATTACHMENT_BYTES)
     } catch (error) {
       place?.()
       held.length = 0
       if (error instanceof SuperTabError) throw error
-      if (error instanceof AttachmentTooLarge) {
-        if (file.purpose === AVATAR_PURPOSE) fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
-        fail('ATTACHMENT_TOO_LARGE', error.message, 413)
-      }
+      if (error instanceof AttachmentTooLarge) fail('ATTACHMENT_TOO_LARGE', error.message, 413)
       // The client's own stream breaking is the request's; anything else is the bucket's, and the person can try again.
       if (original.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
@@ -2853,13 +2819,13 @@ export class SuperTabStore {
     }
     // After the original is stored, so a picture that will not decode is just a file. Never fails the upload.
     // The chunks go as soon as they are one buffer, so a picture waiting for its thumbnail is held once.
-    const whole = thumbnail && held.length ? Buffer.concat(held) : null
+    const whole = held.length ? Buffer.concat(held) : null
     held.length = 0
     let image: StoredImage | null = null
-    try { image = whole ? await thumbnail!(objectKey, whole).catch(() => null) : null } finally { place?.() }
+    try { image = whole ? await this.pictureOf(attachments, objectKey, whole).catch(() => null) : null } finally { place?.() }
     try {
       return await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
-        actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}),
+        actorKey, name: file.name, mime, size, objectKey,
         ...image ? { image: image as unknown as Prisma.InputJsonValue } : {} } })
     } catch (error) {
       // No row will name the thumbnail, so nothing would remove it.
@@ -3048,12 +3014,6 @@ export class SuperTabStore {
     }
     await tx.superTabMessage.delete({ where: { id: row.id } })
     if (row.thread && row.thread !== row.id) await refreshThreads(tx, tabId, row.conversationId, [row.thread])
-  }
-
-  /** The avatar upload a command names, when it is this actor's, an avatar and unused; otherwise the command refuses it. */
-  private async avatarUpload(tx: Transaction, tabId: string, actor: Actor, id: string): Promise<AvatarUpload | undefined> {
-    const row = await tx.superTabAttachment.findFirst({ where: { tabId, id, actorKey: actorKey(actor), purpose: AVATAR_PURPOSE, ...unused } })
-    return row ? { id: row.id, key: row.objectKey } : undefined
   }
 
   /** Keeps the project's stored texts equal to its custom set: the roles the command wrote, nothing for roles it dropped. */

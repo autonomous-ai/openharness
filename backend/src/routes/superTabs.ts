@@ -6,7 +6,7 @@ import { prisma, prismaSecondary } from '../lib/prisma.js'
 import { env } from '../config/env.js'
 import { phoneSendersFromEnv, sendPhoneNotices } from '../push/send.js'
 import multipart from '@fastify/multipart'
-import { attachmentsFromEnv, formFileBody, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, stopUnpacking, unpackFailed } from '../superTabs/attachments.js'
+import { attachmentsFromEnv, formFileBody, FORM_TOO_LARGE_MESSAGE, MAX_FORM_ATTACHMENT_BYTES, stopUnpacking, unpackFailed } from '../superTabs/attachments.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
@@ -43,6 +43,7 @@ import { reminderWait } from '../superTabs/reminders.js'
 import { NOTIFY_LEVELS } from '../superTabs/chatSettings.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
+import { PICTURES_RETIRED } from '../superTabs/retired.js'
 import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
@@ -738,26 +739,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof voiceParams>; Querystring: z.infer<typeof voiceQuery>; Body: z.infer<typeof emptyBody> }>('/api/super-tabs/:tabId/attachments/:attachmentId/voice',
     { bodyLimit: 1024, preHandler: [validateParams(voiceParams), validateQuery(voiceQuery), validateBody(emptyBody)] },
     (req, reply) => respond(reply, () => store.readVoice(req.user!, req.params.tabId, req.params.attachmentId, req.query.lang ?? 'en', req.query.asAgentId)))
-  // An avatar picture (superTabs/profile.ts) comes the same way, alone in its form; the command that sets it names whose it is.
+  // An older app uploads a picture here before it sets it with `member.avatar` or `agent.avatar` (superTabs/retired.ts
+  // PICTURES_RETIRED). Like `updateRequired`, one answer for everyone that reads no Swarm. The form is read to its end and thrown
+  // away first, up to the 1 MB a picture was allowed and a little more: a refusal sent while the daemon still streams the upload
+  // in (cli hookServer.ts) could reach the person as a broken connection instead of these words.
   await app.register(async scope => {
-    await scope.register(multipart, { limits: { fileSize: MAX_AVATAR_BYTES + 1, files: 1, fields: 0, parts: 1 } })
-    scope.post<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/avatars',
-      { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] }, (req, reply) => respond(reply, async () => {
-        let uploaded: unknown = null, stored: unknown = null
-        try {
-          for await (const part of req.parts()) {
-            if (part.type === 'field' || uploaded) { if (part.type === 'file') part.file.resume(); fail('INVALID_AVATAR', 'Send one picture.', 400) }
-            try { uploaded = await store.uploadAvatar(req.user!, req.params.tabId, { body: part.file }, req.query.asAgentId) }
-            catch (error) { stored = error; throw error } finally { part.file.resume() }
-          }
-        } catch (error) {
-          const code = error && typeof error === 'object' && 'code' in error ? error.code : null
-          if (code === 'FST_REQ_FILE_TOO_LARGE') fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
-          if (error instanceof SuperTabError || (error === stored && !(code && String(code).startsWith('FST_')))) throw error
-          fail('INVALID_AVATAR', 'Send a multipart form with one picture.', 400)
-        }
-        return uploaded ?? fail('INVALID_AVATAR', 'Send one picture.', 400)
-      }))
+    scope.addContentTypeParser('multipart/form-data', { parseAs: 'buffer', bodyLimit: 2 * 1024 * 1024 }, (_req, _body, done) => done(null))
+    scope.post('/api/super-tabs/:tabId/avatars', (_req, reply) => sendError(reply, PICTURES_RETIRED.message, PICTURES_RETIRED.code, PICTURES_RETIRED.status))
   })
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof mentionQuery> }>('/api/super-tabs/:tabId/mentions',
     { preHandler: [validateParams(tabParams), validateQuery(mentionQuery)] },
