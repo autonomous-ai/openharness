@@ -77,9 +77,6 @@ const duration = (ms: number): string => {
 export const returnReason = (lane: string | null, rules: DispatchRules = DISPATCH_RULES): string =>
   `no progress for ${duration(rules.returnAfterMs)}: back in the ${lane ?? 'project'} lane`
 
-export const nudgeLine = (lane: string | null, rules: DispatchRules = DISPATCH_RULES): string =>
-  `No progress on this task for ${duration(rules.nudgeAfterMs)}. Post where it stands, or set it blocked with why; at ${duration(rules.returnAfterMs)} it goes back to the ${lane ?? 'project'} lane.`
-
 /** The progress clocks on [assignment] of [group], held by any project worker (liveness.ts): from its own last progress
  *  (its assignment, status, check or post: `progressAt`), only while working. `nudge` after `nudgeAfterMs`, once
  *  per spell of quiet; `return` after `returnAfterMs`. Waiting on a person, blocked or handed: no clock. */

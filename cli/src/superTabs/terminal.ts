@@ -13,8 +13,7 @@ import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { openRestrictedKeys, updateDismissKeys } from '../engines/codex/screen.js'
 import { feedbackDismissKeys } from '../engines/claude/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
-import { backend } from './host.js'
-import { identifier, object } from './wire.js'
+import { backend, identifier, object } from './wire.js'
 
 type Json = Record<string, unknown>
 interface Own { tabId: string; agentId: string; harnessId: string }
