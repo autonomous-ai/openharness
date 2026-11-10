@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { engineUnusable, machineSuspensionReason } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
-import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, occupiesAgent, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type SuperTabState } from './model.js'
 import { startFinished } from './parts/write.js'
 import { agentProjectId, isAgentChat, canReadAgent, canReadProject, groupProject, ledProject, ownsProject, projectOf, projectsOf, type SwarmProject } from './projects.js'
 import { isSwarmBuddyChat } from './buddies.js'
@@ -317,29 +317,10 @@ export function noRepositoryStart(pool: ContributedMachine | undefined, project:
   return { ...rest, worktree: false }
 }
 
-/** What a host reports (`capabilities`) when it runs a Swarm-wide Buddy in its folder of project worktrees (Dee, 10-31). */
-export const SWARM_BUDDY_CAPABILITY = 'swarmBuddy'
-/** At most this many projects' worktrees in a Swarm-wide Buddy's folder (spec: Staying within one context). */
-export const MAX_BUDDY_PROJECTS = 50
-
-/** A Swarm-wide Buddy's own folder on [pool] (spec: Folder): its host makes it, with one read-only worktree per project in it. It
- *  is no project's checkout, so nothing of one project is ever another's. */
+/** An agent's own folder on [pool] that is no project's checkout (spec: Folder), so nothing of one project is ever another's:
+ *  a Regular agent's (agent.new), as a Swarm-wide Buddy's was. */
 export function buddyHomeFolder(pool: ContributedMachine, owner: { id: string }): string {
   return `${pool.cwd.replace(/\/+$/, '')}/.buddy-${owner.id}`
-}
-
-/** The projects [owner] reads, as a Swarm-wide Buddy's folder on [pool] holds them: each project's own folder there, the oldest
- *  first, at most MAX_BUDDY_PROJECTS. Ids, names and folders only (starts are listed to the PM). */
-export function buddyProjectsOn(state: SuperTabState, pool: ContributedMachine, owner: { id: string; email: string }): Array<{ id: string; name: string; cwd: string }> {
-  const readable = projectsOf(state).filter(p => canReadProject(state, { kind: 'person', userId: owner.id, email: owner.email }, p))
-    // A machine shared for one project only has that project's folder alone (projectFolder answers its folder for any project):
-    // never list another project at it (security review 1 of #2435).
-    .filter(p => pool.scope === 'swarm' || p.id === 'lead')
-    .map(p => ({ id: p.id, name: p.name, cwd: projectFolder(pool, p) }))
-  // Only projects with a folder of their own: two that answer the same folder would show one project's code as the other's.
-  const counts = new Map<string, number>()
-  for (const p of readable) counts.set(p.cwd, (counts.get(p.cwd) ?? 0) + 1)
-  return readable.filter(p => counts.get(p.cwd) === 1).slice(0, MAX_BUDDY_PROJECTS)
 }
 
 /** Refuses with the refusal's code and sentence: 403. */
@@ -376,14 +357,8 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
   }
 }
 
-/** Why a start other than its own person's Buddy is refused on a Buddy-only machine: worded as for any machine outside the
- *  Swarm, so the refusal says nothing about whose it is or what runs there. */
-/** A host that can tell a Buddy's window from another agent's on Windows (CLI callerPane.ts `windowsRunningPane`). An older one
- *  cannot: a Buddy there refused every agent's Swarm command on that computer (security review of #2093). */
-export const WINDOWS_BUDDY_CAPABILITY = 'windowsBuddy'
-export const BUDDY_WINDOWS_REFUSAL = 'Update Harness on this Windows machine to run a Buddy on it, or pick another of your machines.'
-export const refusesWindowsBuddy = (pool: ContributedMachine): boolean => pool.observation?.resources.os === 'Windows'
-  && !pool.observation.capabilities?.includes(WINDOWS_BUDDY_CAPABILITY)
+/** Why a start is refused on a Buddy-only machine: worded as for any machine outside the Swarm, so the refusal says nothing
+ *  about whose it is or what runs there. */
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
 /** The most machines one person adds to one Swarm (#2637, Ken, 2026-11-04). The Swarm-wide 32 dated from one 16 MB
  *  document; each machine is its own part now. Review again when one Swarm passes 100 entries (plan 2026-11-04). */
@@ -580,9 +555,8 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
-  if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
-  // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
-  if (request.buddyOf && refusesWindowsBuddy(pool)) fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
+  // A Buddy-only machine takes no new start: nothing starts a Buddy now (buddyConversion.ts).
+  if (pool.buddyOnly) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')

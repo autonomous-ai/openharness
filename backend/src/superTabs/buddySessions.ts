@@ -1,114 +1,25 @@
-/** Buddy thread sessions (docs/superpowers/specs/2026-10-30-buddy-thread-sessions-design.md; Scholes, 10-30): by the person's
- *  choice, a thread in their Buddy chat gets its own Buddy session, a second Buddy agent on the same machine, so a long
- *  question there never holds a quick one in the main chat. A session hears and answers only its thread, reads the main chat
- *  only up to where it started (a short excerpt), and ends when its person ends it, when it has been idle for 30 minutes
- *  (its host says so), or with its main Buddy. The main Buddy reads none of its thread. */
+/** What Buddy thread sessions (docs/superpowers/specs/2026-10-30-buddy-thread-sessions-design.md) left in Buddy chats, read by
+ *  these rules until every Buddy is an ordinary agent (buddyConversion.ts, which ends the sessions): a session reads only its
+ *  thread and the main chat up to where it started, the main Buddy none of its thread, and nobody a lost project's rows. Nothing
+ *  starts a session now (2026-11-10). */
 import { isBuddy, isBuddyChat, isSwarmBuddyChat } from './buddies.js'
-import { canReadProject, projectsOf } from './projects.js'
-import { fail, stableId, type Agent, type AgentStart, type Author, type BuddySessionEntry, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { canReadProject, isAgentChat, projectsOf } from './projects.js'
+import type { Agent, Conversation, SuperTabState } from './model.js'
 
-/** At most this many of the person's messages wait for a session that is still starting. */
-export const MAX_SESSION_WAITING = 20
-/** What a machine's host reports (`capabilities`) when it can run thread sessions. */
-export const BUDDY_SESSION_CAPABILITY = 'buddySessions'
 /** The main-chat excerpt a session starts from: the last CONTEXT_MESSAGES before it started, each cut to CONTEXT_CHARS, at
  *  most CONTEXT_BYTES in all. */
 export const CONTEXT_MESSAGES = 10
 export const CONTEXT_CHARS = 500
 export const CONTEXT_BYTES = 6 * 1024
-/** The quiet line a session's end leaves in its thread. */
+/** The quiet line a session's end left in its thread. */
 export const SESSION_ENDED_KIND = 'buddy-session-ended'
-export type SessionEndReason = 'ended' | 'idle' | 'stopped' | 'failed' | 'removed' | 'maintenance' | 'access'
 
-export const isThreadSession = (agent: Pick<Agent, 'buddySession'> | undefined): boolean => !!agent?.buddySession
 /** The chat's main Buddy: the Buddy in it that is not a thread session. */
 export function mainBuddyOf(state: SuperTabState, chat: Conversation): Agent | undefined {
   return state.agents.find(a => chat.agentIds.includes(a.id) && isBuddy(a) && !a.buddySession)
 }
-/** The thread sessions running in [chat]. */
-export const sessionAgentsOf = (state: SuperTabState, chat: Conversation): Agent[] =>
-  state.agents.filter(a => chat.agentIds.includes(a.id) && isBuddy(a) && !!a.buddySession)
-
-/**
- * [chat]'s live and starting sessions, its record pruned of any that ended without saying (its agent gone, its start failed
- * or gone): a removal path that missed the record never holds a slot. Changes [chat] only when something is pruned.
- */
-export function liveSessions(state: SuperTabState, chat: Conversation): BuddySessionEntry[] {
-  const entries = chat.buddySessions ?? []
-  const live = entries.filter(entry => entry.agentId
-    ? state.agents.some(a => a.id === entry.agentId && chat.agentIds.includes(a.id))
-    : state.starts?.some(s => s.id === entry.startId && !s.error && !s.harnessId) === true)
-  if (live.length !== entries.length) setSessions(chat, live)
-  return live
-}
-export function setSessions(chat: Conversation, entries: BuddySessionEntry[]): void {
-  if (entries.length) chat.buddySessions = entries
-  else delete chat.buddySessions
-}
-
-/** The live or starting session of [thread] in [chat]. */
-export const sessionOf = (state: SuperTabState, chat: Conversation, thread: string | null | undefined): BuddySessionEntry | undefined =>
-  thread ? liveSessions(state, chat).find(e => e.thread === thread) : undefined
-
 /** The person whose Buddy chat [chat] is, at the membership it was opened in. */
-export const chatOwner = (chat: Conversation): { id: string; generation: string } | undefined => chat.audience?.people[0]
-
-/** Refuses anyone but [chat]'s own person, at their current membership, with words that never say whose chat it is. */
-export function requireChatOwner(state: SuperTabState, chat: Conversation, userId: string): { id: string; generation: string } {
-  const owner = chatOwner(chat)
-  const me = state.people.find(p => p.id === userId)
-  if (!isBuddyChat(chat) || !owner || !me || owner.id !== me.id || owner.generation !== me.generation) {
-    fail('BUDDY_SESSION_CHAT', 'Start or end a session in a thread of your own Buddy chat.', 403)
-  }
-  return owner
-}
-
-/** The words a session's end leaves in its thread, for its person. */
-export function endedText(reason: SessionEndReason, detail?: string): string {
-  switch (reason) {
-    case 'ended': return 'Session ended: you ended it.'
-    case 'idle': return 'Session ended: idle for 30 minutes.'
-    case 'stopped': return 'Session ended: it stopped unexpectedly.'
-    case 'failed': return `Session ended: it couldn't start${detail ? `: ${detail.slice(0, 300)}` : '.'}`
-    case 'removed': return 'Session ended: its Buddy was removed or replaced.'
-    case 'maintenance': return 'Session ended: Harness was updated. Start a new session to continue.'
-    case 'access': return 'Session ended: you no longer read its project.'
-  }
-}
-
-/**
- * The one way a session's end is recorded, for every path (commands, the start timeouts in liveness.ts): its entry leaves
- * [chat]'s record and a quiet line in its thread says why, to nobody (a reply to the thread's root, tagged as the session's,
- * so the main Buddy never reads it). Said by the session's agent when it ran, else by the chat's person. Closing the agent
- * itself is the caller's: only a command can (commands.ts removeAgent). Nothing when the entry is already gone.
- */
-export function endSessionEntry(state: SuperTabState, chat: Conversation, entry: BuddySessionEntry, reason: SessionEndReason, detail?: string): MessageDraft[] {
-  if (!(chat.buddySessions ?? []).some(e => e.startId === entry.startId)) return []
-  setSessions(chat, (chat.buddySessions ?? []).filter(e => e.startId !== entry.startId))
-  const agent = entry.agentId ? state.agents.find(a => a.id === entry.agentId) : undefined
-  const owner = chatOwner(chat), person = owner && state.people.find(p => p.id === owner.id && p.generation === owner.generation)
-  const author: Author | undefined = agent ? { kind: 'agent', id: agent.id, name: agent.name, displayName: agent.displayName ?? agent.name,
-    membershipGeneration: agent.membershipGeneration } : person ? { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation } : undefined
-  if (!author) return []
-  const project = entryProject(state, entry)
-  return [{ id: stableId(SESSION_ENDED_KIND, chat.id, entry.startId), conversationId: chat.id, author, text: endedText(reason, detail),
-    replyTo: entry.thread, recipients: [], thread: entry.thread, buddySession: true, ...(project ? { buddyProject: project } : {}),
-    source: { kind: SESSION_ENDED_KIND, reason, thread: entry.thread } }]
-}
-
-/** The project [entry]'s session works in: its agent's, or its start's while it starts; none for a plain session. */
-export function entryProject(state: SuperTabState, entry: Pick<BuddySessionEntry, 'agentId' | 'startId'>): string | undefined {
-  return (entry.agentId ? state.agents.find(a => a.id === entry.agentId)?.buddySession?.projectId : undefined)
-    ?? state.starts?.find(s => s.id === entry.startId)?.request.buddySession?.projectId
-}
-
-/** A thread session's start that failed outside a command (liveness.ts timeouts): ended through its own path, never as its
- *  main Buddy's start, so the main chat says nothing and the thread says why. */
-export function failedSessionStart(state: SuperTabState, start: AgentStart): MessageDraft[] {
-  const chat = start.request.buddySession && state.conversations.find(c => c.id === start.request.conversationId)
-  const entry = chat ? (chat.buddySessions ?? []).find(e => e.startId === start.id) : undefined
-  return chat && entry ? endSessionEntry(state, chat, entry, 'failed', start.error ?? undefined) : []
-}
+const chatOwner = (chat: Conversation): { id: string; generation: string } | undefined => chat.audience?.people[0]
 
 /** A message row as the session read check needs it: its author and source too, for a person's one Buddy chat. */
 export interface SessionRow { id: string; thread?: string | null; buddySession?: boolean | null; author?: unknown; source?: unknown; buddyProject?: string | null }
@@ -124,7 +35,8 @@ export interface SessionRow { id: string; thread?: string | null; buddySession?:
  */
 export function sessionReadsRow(reader: Pick<Agent, 'id' | 'buddyOf' | 'buddySession'> | undefined, group: Pick<Conversation, 'kind' | 'audience'>,
   state?: SuperTabState): (row: SessionRow) => boolean {
-  const lost = state && isSwarmBuddyChat(group) ? lostProjectRow(state, group) : () => false
+  // A converted one (buddyConversion.ts) keeps hiding them: its rows are as they were.
+  const lost = state && (isSwarmBuddyChat(group) || isAgentChat(group)) ? lostProjectRow(state, group) : () => false
   if (!reader?.buddyOf || !isBuddyChat(group)) return row => !lost(row)
   const own = reader.buddySession
   if (own?.projectId) {

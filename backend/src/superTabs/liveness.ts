@@ -1,7 +1,6 @@
 import { CREW_REOPEN_GRACE_MS, isCrew } from './crew.js'
 import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
-import { failedSessionStart } from './buddySessions.js'
 import { noteStartFailed } from './engineHealth.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
@@ -257,16 +256,6 @@ export function judgedMachines(before: SuperTabState, state: SuperTabState, rows
   return [...machines].filter(id => state.machines?.some(m => m.machineId === id)).map(key => ({ kind: 'machine' as const, key }))
 }
 
-/** A Buddy chat has no Lead: its owner reads why their Buddy did not start, written as theirs and sent to no one. */
-function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
-  const owner = state.people.find(p => p.id === start.request.buddyOf!.personId && p.generation === start.request.buddyOf!.generation)
-  if (!owner || !state.conversations.some(c => c.id === start.request.conversationId)) return []
-  return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
-    author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
-    // Their own Buddy on a machine of the Swarm: the reason names only that machine, so its owner reads it whole.
-    text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
-}
-
 /** A Product Manager's start that stopped trying ([text], leadStart.ts), said once as a system row of its project's
  *  conversation, written under the person who asked for it. Nothing while
  *  it still waits for a machine. */
@@ -369,24 +358,18 @@ const sameState = (a: TaskLiveness | undefined, b: TaskLiveness | undefined) => 
 
 
 
-/** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a
- *  host from before Buddies never sees one (read/hostRows.ts). */
-export const BUDDY_PICKUP_MS = 5 * 60_000
+/** A Product Manager's start its machine has not taken this long after it was asked for, while that machine reports, has
+ *  failed: a host from before PM starts never sees one (read/hostRows.ts). */
+export const PM_PICKUP_MS = 5 * 60_000
 
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
-    if ((start.request.buddyOf || start.request.leadFor) && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
-      && now - start.requestedAt > BUDDY_PICKUP_MS) {
+    if (start.request.leadFor && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
+      && now - start.requestedAt > PM_PICKUP_MS) {
       const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
-      if (start.request.leadFor) {
-        start.error = `${machineName(state, start.request.machineId)}${leadPickupSuffix(start.request.name)}`
-        return leadNotice(state, start, leadStartFailed(state, start, start.error))
-      }
-      start.error = start.request.buddySession ? `${machineName(state, start.request.machineId)} did not start this session.`
-        : `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
-      // A thread session's start ends through its own path: its thread says why, never the main chat (buddySessions.ts).
-      return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
+      start.error = `${machineName(state, start.request.machineId)}${leadPickupSuffix(start.request.name)}`
+      return leadNotice(state, start, leadStartFailed(state, start, start.error))
     }
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
     // Only its own machine's report can say it is preparing; one before preparingStartIds never does, so its starts get 3 minutes.
@@ -422,7 +405,8 @@ export function failRefusedStarts(state: SuperTabState, machineId: string, now: 
 function failedStartNotices(state: SuperTabState, start: AgentStart, now: number, suspended: string | null): MessageDraft[] {
   if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error!))
   // Never a lookup that throws: these checks run inside every machine's report.
-  if (start.request.buddyOf) return start.request.buddySession ? failedSessionStart(state, start) : buddyNotice(state, start)
+  // A Buddy's start fails with the Buddy conversion (buddyConversion.ts), which tells nobody: its person's chat becomes their agent's.
+  if (start.request.buddyOf) return []
   const group = state.conversations.find(c => c.id === start.request.conversationId)
   // Recorded in this write: once the start has ended, no later poll loads it.
   if (group) recordTaskState(state, group, now)

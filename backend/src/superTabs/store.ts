@@ -14,7 +14,6 @@ import { accountMachineName, availableSlots, expireRemovals, followAccountName, 
 import type { AccountRename } from './accountRenames.js'
 import { authorForAgent, lazyUsernames, nameFromAccount, namesPerson, rowForAgent } from './personNames.js'
 import { machineSuspensionReason, readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
-import { BUDDY_OWN_MACHINE_REFUSAL } from './buddyContract.js'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
@@ -33,7 +32,7 @@ import { DELETED_SWARM_COMMANDS, DELETION_COMMANDS, isPersonalSwarm, notThere } 
 import type { ApprovalRow, DroppedLine } from './ruleGuard.js'
 import { applyCommand, authorizeCommandAccess, IGNORED_NOTE, LOOP_NOTICE_AT, mayResumeStart, operationSchema, postable, reserveHarnessSlot, worksInProjectChat, ruleProject, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
-import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, OPEN_DELIVERY, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery } from './pageReads.js'
+import { agentGatheredCount, agentGatheredDeliveries, agentOpenDeliveries, CANCELLABLE_DELIVERY, compactedDelivery, deliveredCopies, heldPast, messagesById, messagesPast, type MessageEdge, pageDeliveries, pageThreads, refreshReplies, refreshThreads, storedMessages, type PageDelivery } from './pageReads.js'
 import { deliveriesByMessage } from './read/pageDeliveries.js'
 import { restoreDelivery } from './deliveryCompaction.js'
 import { threadSummaries } from './threads.js'
@@ -48,11 +47,11 @@ import { logger } from '../utils/logger.js'
 import { noteClaim, recordDeliveryCall } from '../lib/deliveryCalls.js'
 import { retryTransient } from './retry.js'
 import { recordReload } from './retryStats.js'
-import { buddyChatId, isSwarmBuddyChat, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
+import { buddyChatId, isSwarmBuddyChat, swarmBuddyChatId } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
 import { wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
-import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
+import { sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, refuseOthersInPrivateChat, routingRow } from './buddies.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
@@ -76,9 +75,8 @@ import { finishedWakes } from './crewTimes.js'
 import { teamMachineIds } from './migration/teamMachinesJob.js'
 import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
-import { groupsOf } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
-import { groupsBy, listingDrops, readBy, withoutHints } from './parts/indexed.js'
+import { listingDrops, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
 import type { MachineRename } from './machineRenames.js'
 import { otherAccountsOnComputer, sameComputerKey, type ComputerMove, type ComputerSignIn, type LeftMove, type MachineKeys } from './computerMoves.js'
@@ -2577,13 +2575,6 @@ export class SuperTabStore {
     if (rows.length) await tx.superTabMessage.createMany({ data: rows })
     // A reply's thread summary, in this transaction (pageReads.ts refreshThreads).
     await refreshReplies(tx, tabId, rows)
-    for (const message of messages) {
-      // Once committed, so a retried write logs once.
-      if (message.source?.kind === SESSION_ENDED_KIND && !kept.has(message.id)) {
-        const reason = message.source.reason
-        afterCommit(tx, () => logger.info('Buddy session ended', { tabId, reason }))
-      }
-    }
     if (kept.size) {
       // By the Swarm too: by message id alone it scanned every delivery, 440 ms in this transaction (Atlas slow log, 2026-11-04).
       const have = new Set((await readBy(tx, 'SuperTabDelivery', 'byMessage', [{ $match: { tabId, messageId: { $in: [...kept] } } }, { $project: { _id: 1 } }])).map(d => d._id as string))
@@ -2596,19 +2587,17 @@ export class SuperTabStore {
     for (const delivery of deliveries) if (delivery.status !== 'gathered') this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
   }
 
-  /** A Buddy thread session's first deliveries (buddySessions.ts): its person's messages sent in its thread while it started,
-   *  each written once (its id is the message's and the agent's, as writeMessages makes it), only for a stored message of
-   *  that conversation by that person in a session thread. */
+  /** A project's Lead's first deliveries (leadStart.ts leadArrived): its person's messages sent in its chat while it had none,
+   *  each written once (its id is the message's and the agent's, as writeMessages makes it), only for a stored main-chat message
+   *  of that conversation by that person. */
   private async writeLateDeliveries(tx: Transaction, tabId: string, state: SuperTabState, late: NonNullable<CommandEffects['lateDeliveries']>) {
     const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
-    // At most MAX_SESSION_WAITING, each by its primary key (hotFilters.test.ts: no `in` filter on a hot collection).
+    // A few, each by its primary key (hotFilters.test.ts: no `in` filter on a hot collection).
     for (const l of late) {
       const row = await tx.superTabMessage.findUnique({ where: { id: l.messageId }, select: { tabId: true, conversationId: true, author: true, buddySession: true } })
       const author = row?.author as unknown as Author | undefined
       const target = agent(state, l.agentId)
-      // A session hears its thread's rows; the one Buddy's session in an older project chat (commands.ts startOldChatBuddy)
-      // hears that chat's main rows, never a thread session's; so does a project's Lead that joined a chat with none (leadArrived).
-      const heard = target.buddySession ? !!row?.buddySession : (!!target.buddyNarrow || !!l.lead) && !row?.buddySession
+      const heard = !!l.lead && !row?.buddySession
       if (!row || row.tabId !== tabId || row.conversationId !== l.conversationId || !heard || author?.kind !== 'person' || author.id !== l.author.id
         || author.membershipGeneration !== l.author.generation) continue
       if (await tx.superTabDelivery.findUnique({ where: { id: stableId(l.messageId, l.agentId) }, select: { id: true } })) continue
@@ -4180,25 +4169,6 @@ export class SuperTabStore {
     this.endWork(tabId, ended)
     return done
   }
-}
-
-/** The names chosen in [state]'s Buddy chats, quiet ones included (buddies.ts chosenBuddyName). A chat's id is fixed per
- *  project and person (buddyChatId), so they are read by key, naming the unique index (parts/indexed.ts groupsBy), the name
- *  alone: a few short strings per person and project, and only for a rename or an add. `$gt: ''` keeps the non-empty strings
- *  (a `$type` match reads as a tagged value to Prisma's raw replies). */
-export async function buddyNames(tx: Transaction, tabId: string, state: SuperTabState): Promise<ChosenBuddyName[]> {
-  const keys = [...projectsOf(state).flatMap(project => state.people.map(person => buddyChatId(project.id, person))),
-    ...state.people.map(person => swarmBuddyChatId(person))]
-  if (!keys.length) return []
-  const named = (match: Record<string, unknown>) => groupsBy(tx, 'key', [
-    { $match: { tabId, deleted: false, ...match } },
-    { $project: { _id: 0, key: 1, name: '$data.buddyName', chats: '$data.buddyChats' } },
-  ]) as Promise<Array<{ key: string; name?: string; chats?: string[] }>>
-  // A main Buddy chat may list a person's other Buddies' chats (task #3818), whose ids no one derives: they are read by those keys.
-  const rows = await named({ key: { $in: keys }, $or: [{ 'data.buddyName': { $gt: '' } }, { 'data.buddyChats.0': { $exists: true } }] })
-  const listed = rows.flatMap(row => row.chats ?? [])
-  const more = listed.length ? await named({ key: { $in: listed }, 'data.buddyName': { $gt: '' } }) : []
-  return [...rows, ...more].flatMap(row => row.name ? [{ conversationId: row.key, name: row.name }] : [])
 }
 
 /** The Buddy chats listed on [state]'s loaded main Buddy chats (task #3818) that are not loaded yet. */
