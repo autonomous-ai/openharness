@@ -1083,10 +1083,10 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
     expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
   })
 
-  it('is refused as closed before anything checks what a private chat may carry: work, a review, a requester or a proposal (merge review of #2090)', () => {
+  it('is refused as closed before anything checks what a private chat may carry: work, a requester or a proposal (merge review of #2090)', () => {
     const f = setup()
     const before = f.state.conversations.length
-    const carrying = [{ brief: 'Work', checks: [{ description: 'Done', independent: false }] }, { reviewOf: f.group }, { requesterId: 'peer' },
+    const carrying = [{ brief: 'Work', checks: [{ description: 'Done', independent: false }] }, { requesterId: 'peer' },
       { proposalMessageId: 'proposal' }]
     for (const extra of carrying) {
       for (const actor of [peer, agentActor(f.pm)]) {

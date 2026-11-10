@@ -2,10 +2,9 @@
  * What the leaderboard counts, recorded as it happens on the group it happened in (docs/swarms.md, Leaderboard): when a
  * request was asked and first shipped, which item waits on a person, and who answered it. Only facts and times, never text.
  */
-import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
+import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
-import { HOUR_MS } from './rolling.js'
-import { WEEK_MS, weekStart } from './week.js'
+import { WEEK_MS } from './week.js'
 import { agentTarget } from '../rules.js'
 import type { UnblockKind } from './contract.js'
 
@@ -134,42 +133,6 @@ function shipAttempt(ledger: GroupLedger, run?: Run): void {
 /** One GitHub pull request link, as a merge record names it (model.ts appendPullRequestUrls finds the same in text). */
 export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/
 
-/** The Lead's record that a request's PR merged (Lead, 2026-10-27): the request ships at its earliest recorded merge, even
- *  when Done came first, and whatever its work does next, so work lost or cancelled after the merge still counts. */
-export function recordMerged(group: Conversation, mergedAt: number): void {
-  const ledger = group.ledger ??= {}
-  const before = ledger.shippedAt
-  ledger.mergedAt = Math.min(ledger.mergedAt ?? mergedAt, mergedAt)
-  ledger.shippedAt = ledger.mergedAt
-  // Who led it and which attempt shipped are kept from the first time it shipped. A merge that moves the ship earlier
-  // takes the attempt running then; the lead stays, as no history of leads is kept (Lead, 2026-10-29).
-  if (ledger.shippedLeadId !== undefined && before != null && ledger.shippedAt < before) shipAttempt(ledger)
-  else shipOn(group)
-}
-
-/** How long after a merge a follow-up fix still counts against it (evidence routing spec, PM call 10). */
-export const FIX_WINDOW_MS = 14 * 86_400_000
-
-/** The merged group a fix PR merged at [mergedAt] fixes: a shared group of the same project, not [fix] itself nor a review,
- *  that links [url] and merged at most FIX_WINDOW_MS before. Undefined for anything else, which its caller refuses alike, so
- *  a link names nothing outside the project. */
-export function fixedOriginal(state: SuperTabState, fix: Conversation, url: string, mergedAt: number): Conversation | undefined {
-  const project = groupProject(state, fix).id
-  return state.conversations.find(g => g.id !== fix.id && !g.reviewOf && !g.audience && !isLeads(g) && g.pullRequestUrls?.includes(url)
-    && g.ledger?.mergedAt !== undefined && mergedAt >= g.ledger.mergedAt && mergedAt - g.ledger.mergedAt <= FIX_WINDOW_MS
-    && groupProject(state, g).id === project)
-}
-
-/** Records that [fix]'s merge at [mergedAt] fixed [original]'s merged PR. Only the first fix counts against it; true when this
- *  one is that first. */
-export function recordFix(original: Conversation, fix: Conversation, mergedAt: number): boolean {
-  const ledger = original.ledger!
-  ;(fix.ledger ??= {}).fixOf = original.id
-  if (ledger.fixedAfterMergeAt !== undefined && ledger.fixedAfterMergeAt <= mergedAt) return false
-  ledger.fixedAfterMergeAt = mergedAt
-  return true
-}
-
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
 export function waitedOn(state: SuperTabState, group: Conversation): string {
   const requester = group.requesterId && state.people.some(p => p.id === group.requesterId) ? group.requesterId : undefined
@@ -275,32 +238,6 @@ export function firstAssignedAt(ledger: GroupLedger): number | undefined {
   return runs.length < MAX_RUNS ? runs[0]!.at : ledger.askedAt ?? runs[0]!.at
 }
 
-/** An agent's verdict on a check of another agent's task is one finished review by the model it runs on; the assignee's own
- *  verdicts are no review (checks are information, project instructions phase 4: `independent` is read by nothing).
- *  [first]: the checker gave no verdict on this check during this attempt before. */
-export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, checker: Agent, now: number, first: boolean): void {
-  if (checker.id === group.assignment?.agentId) return
-  const ledger = group.ledger ??= {}
-  // A check given again on the same attempt by the same checker is the same review (full review of #2097): only each
-  // checker's first verdict counts, so a Reviewer after a Tester earns its own (#2311). An attempt recorded before attempts
-  // were has no run to tell a repeat by, so it earns no model credit (review of #2128).
-  const run = ledger.runs?.find(r => r.assignmentId === group.assignment?.id)
-  if (!run || !first) return
-  const on = ranOn(state, checker, checker.configuration), week = weekStart(now)
-  // Only the weeks the board reads: one row per week and model, however many verdicts.
-  const kept = (ledger.reviews ?? []).filter(r => week - r.week < LEDGER_WEEKS * WEEK_MS)
-  const same = kept.find(r => r.week === week && r.engine === on.engine && r.model === on.model && r.effort === on.effort && r.grid === on.grid)
-  if (same) same.count++
-  else kept.push({ week, ...on, count: 1 })
-  ledger.reviews = kept
-  const hour = Math.floor(now / HOUR_MS) * HOUR_MS
-  const hours = (ledger.reviewHours ?? []).filter(r => now - r.hour < LEDGER_WEEKS * WEEK_MS)
-  const sameHour = hours.find(r => r.hour === hour && r.engine === on.engine && r.model === on.model && r.effort === on.effort && r.grid === on.grid)
-  if (sameHour) sameHour.count++
-  else hours.push({ hour, ...on, count: 1 })
-  ledger.reviewHours = hours
-}
-
 /** A group opened from a Buddy's proposal remembers it, for the Buddy's points when it ships. */
 export function recordProposal(group: Conversation, proposal: { buddyId: string; messageId: string }): void {
   (group.ledger ??= {}).proposal = proposal
@@ -320,24 +257,3 @@ function ranOn(state: SuperTabState, worker: Agent, configuration: AgentConfigur
 const namedEffort = (effort: string | null): string | undefined =>
   effort && effort !== 'auto' && effort !== 'default' ? effort : undefined
 
-/** Each checker's first verdict on a check during an attempt, by anyone but its assignee, is a first review; its later
- *  verdicts are repairs and never rewrite it (#2311: each checker's, not only the check's first). The attempt's first review
- *  fails once any first verdict failed, and passes while every one so far passed (review of #1808: one check passing first
- *  used to count as a pass while another failed). [by]: the checker's actor key; [first]: as recordVerdict's. */
-export function recordReview(group: Conversation, check: Check, by: string, passed: boolean, byAssignee: boolean, first: boolean): void {
-  const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
-  if (byAssignee || !run) return
-  const verdicts = run.firstVerdicts ??= {}
-  if (first) verdicts[check.id] = (verdicts[check.id] ?? true) && passed
-  recordRework(run, `${check.id} ${by}`, passed)
-  run.firstReview = !group.checks.some(c => verdicts[c.id] === false)
-}
-
-/** A checker's verdict on a check whose last verdict from it in this attempt failed is a rework round. */
-function recordRework(run: Run, key: string, passed: boolean): void {
-  const trail = run.reworks?.[key]
-  if (!trail && passed) return
-  const reworks = run.reworks ??= {}
-  reworks[key] = { last: passed, rounds: (trail?.rounds ?? 0) + (trail && !trail.last ? 1 : 0) }
-  run.reworkRounds = Math.max(...Object.values(reworks).map(r => r.rounds))
-}

@@ -29,8 +29,6 @@ import { wavDurationMs } from '../lib/wav.js'
 import { agentText, MAX_VOICE_BYTES, MAX_VOICE_MS, VOICE_CLAIM_MS, VOICE_READ_MS, VOICE_TYPES, voiceFacts, voiceTranscript, voiceWaveform, type StoredVoice, type VoiceFacts } from './voiceMessages.js'
 import { machineAlive } from '../lib/prisma.js'
 import { pullRequestsIn, type PushOrigin } from '../github/pushOrigin.js'
-import type { PullRequestFilesRead } from './pullRequestFiles.js'
-import type { RepositoryReach } from './repositoryReach.js'
 import { githubRepository } from '../github/repository.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
@@ -58,14 +56,12 @@ import { recordReload } from './retryStats.js'
 import { buddyChatId, isSwarmBuddyChat, shownBefore, swarmBuddyChatId, type ChosenBuddyName } from './buddies.js'
 import { cleanPullRequestLinks } from './cards.js'
 import { accountOf, wordsOf, watchersLost, buddyInstructionsProject, canReadAgent, canReadGroup, groupRepositoryUrl, canWatchAgent, confidentialSets, groupProject, ledProject, onTeamAccount, ownerAccount, ownsProject, admitPerson, projectOf, projectsOf, agentProjectId, readConversation, readProject, skillModeOf, startProject, type ProjectVisibility, sessionKey, GITHUB_SEEN, type GitHubSeen, type RepositoryCreation, repositoryCreator, type SwarmProject } from './projects.js'
-import { taskProcess } from './process.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { SESSION_ENDED_KIND, sessionContext, sessionReadsRow, type ContextRow } from './buddySessions.js'
 import { DELETED_TEXT, type MessageChangeTarget } from './messageEdits.js'
 import { isBuddy, isBuddyChat, isBuddyReader, refuseBuddyRouting, refuseOthersInPrivateChat, routingRow } from './buddies.js'
 import { TURN_END_WAIT_MS, waitsForTurnEnd, withTurnEnd } from './turnEnd.js'
 import { crewNeedOf } from './crewNeeds.js'
-import { CARRIES_KEPT } from './mergeCarry.js'
 import { swarmUsernames } from './usernames.js'
 import { crewNeedLine, gathersForInbox, inboxDue, inboxSection, owedLines, personLine, turnInboxHost, type InboxSection } from './inbox.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
@@ -83,12 +79,12 @@ import { closedAgents, nextRemovalAt, removeClosedAgents, reopened, restoreRefus
 import { sessionRows } from './memberRows.js'
 import { RefusalMemory } from './dispatchRefusals.js'
 import { tasksHoldingMoves } from './ruleGuard.js'
-import { candidatesFor, dispatchRules, freeCrew, laneCapacity, openTasks, pinBuilder, pullRequestPin, roundOf, type DispatchRules, type Skip } from './dispatch.js'
+import { candidatesFor, dispatchRules, freeCrew, laneCapacity, openTasks, roundOf, type DispatchRules, type Skip } from './dispatch.js'
 import { buddySleepCandidates, sleepBuddies } from './buddySleep.js'
 import { finishedWakes } from './crewTimes.js'
-import { failRefusedStarts, judgedMachines, recordTaskState, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
+import { failRefusedStarts, judgedMachines, sweepLiveness, SWEEP_EVERY_MS, unpurgedNotice } from './liveness.js'
 import { endedReply, taskLineChats } from './taskLine.js'
-import { groupsOf, archivable, archiveLine, archiveWaitsFor, reviewClosable, reviewCloseLine, reviewPullRequests, type SettledPullRequest } from './tidy.js'
+import { groupsOf } from './tidy.js'
 import { clock, insertParts, loadActive, loadGroups, loadGroupsByKey, loadLightGroups, loadMachineParts, loadNamed, loadObserved, reassemble, split, type GroupData, type HeadData, type MachineData, type Part, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, readBy, withoutHints } from './parts/indexed.js'
 import { autoJoinSwarms, machineSwarms, memberSwarms } from './swarmRows.js'
@@ -97,10 +93,6 @@ import { otherAccountsOnComputer, sameComputerKey, type ComputerMove, type Compu
 import { activeMachineKeysOf } from '../lib/deviceKeyLog.js'
 import { commitParts, indexesOf, machineContentChanged, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts, ms } from './parts/light.js'
-import { endSteps, ownerOf, stepEndedRows, stepsOf } from './steps.js'
-import { checksStateOf, pullRequestEvents, readPullRequestsNow, type PullRequestReader, type PullRequestWatch, type TaskHeads } from './pullRequestEvents.js'
-import { checkedPullRequest, deriveCheck, keepHead, refreshChecks, watchedLinks } from './checkVerdicts.js'
-import { reopenOnEvents } from './handed.js'
 import { guardedWrite, partId } from './parts/write.js'
 import { retryable } from './retry.js'
 import { touchesFor } from './parts/touches.js'
@@ -395,21 +387,12 @@ export interface SuperTabStoreHooks {
   workStarted?: (tabId: string, started: WorkHold[]) => void
   /** Who pushed these pull requests of a project's repository (github/pushOrigin.ts): the worst of their answers. Absent with no GitHub App. */
   pushOrigin?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PushOrigin>
-  /** The files a handed task's pull requests change and their head (pullRequestFiles.ts), read before its Engineer's Ready so
-   *  the server opens its review steps (task #3401). Null with nothing of the project's repository to read. Absent with no GitHub App. */
-  pullRequestFiles?: (repositoryUrl: string | null, pullRequestUrls: string[]) => Promise<PullRequestFilesRead | null>
   /** When GitHub says each of these pull requests merged (ms; null: not merged; absent: not known), read before an
    *  instructions save that may drop a person's rule kept in a code task (ruleMoves.ts, task #3463). Absent with no GitHub App:
    *  such a line then stays. */
   pullRequestMerges?: (autonomousEnv: string, tabId: string, projectId: string, pullRequestUrls: string[]) => Promise<Record<string, number | null>>
-  /** A reader of pull requests as the minute PR watch reads them (pullRequestEvents.ts appPullRequestWatch), for a verdict naming
-   *  a head the record does not have and for a Ready, which read the head now (task #3628). Absent with no GitHub App. */
-  pullRequestReader?: () => PullRequestReader
   /** The same for a branch a start names: its open pull request's answer, clean for the default branch, unknown with no pull request. */
   branchPushOrigin?: (repositoryUrl: string | null, branch: string) => Promise<PushOrigin>
-  /** Whether the Harness GitHub App reaches a project's GitHub repository for this Swarm (github/projectAccess.ts), read before
-   *  an agent.start or work.assign (repositoryReach.ts). Absent with no GitHub App. */
-  repositoryReach?: (autonomousEnv: string, tabId: string, projectId: string, repositoryUrl: string) => Promise<RepositoryReach | undefined>
   /** Hand free crew members their next task after the writes that may free one or open a task, and from the 30-second sweep
    *  (store.ts dispatchCrew, task #3400). Off unless a server turns it on. */
   dispatch?: boolean
@@ -1549,62 +1532,6 @@ export class SuperTabStore {
   }
 
   /**
-   * Whether the app reaches the repository of the project an agent.start or work.assign is for (repositoryReach.ts, task
-   * #3266), read outside the command's transaction as GitHub may take seconds. It can only refuse earlier than the machine
-   * would: undefined, refusing nothing, when there is nothing to read or the read fails.
-   */
-  private async repositoryReachFor(user: AuthUser, tabId: string, command: unknown): Promise<RepositoryReach | undefined> {
-    const hook = this.hooks.repositoryReach
-    const asked = command as { type?: unknown; conversationId?: unknown; request?: { conversationId?: unknown } } | null
-    // A task's Ready assigns its review steps (task #3401), so it reads the reach as an assignment does.
-    const assigns = asked?.type === 'work.assign' || (asked?.type === 'work.status' && (asked as { status?: unknown }).status === 'review')
-    const conversationId = asked?.type === 'agent.start' ? asked.request?.conversationId : assigns ? asked!.conversationId : undefined
-    if (!hook || typeof conversationId !== 'string') return undefined
-    try {
-      const project = await transaction(this.db, async tx => {
-        const { state } = await this.factsLoad(tx, user, tabId, command)
-        const group = state.conversations.find(c => c.id === conversationId)
-        return group ? groupProject(state, group) : undefined
-      })
-      const repositoryUrl = project?.repository?.repositoryUrl
-      if (!project || !repositoryUrl || !githubRepository(repositoryUrl)) return undefined
-      return await hook(user.autonomousEnv, tabId, project.id, repositoryUrl)
-    } catch (error) {
-      if (!(error instanceof SuperTabError)) logger.warn('[super-tab] repository access not read', { tabId, error: error instanceof Error ? error.message : String(error) })
-      return undefined
-    }
-  }
-
-  /**
-   * The files the pull requests of the task a Ready for review hands over change (task #3401), read outside the command's
-   * transaction as GitHub may take seconds, as pushOriginFor reads. Undefined for a step's Ready, a task naming no pull
-   * request, or no hook: no step opens then. A read that throws gives files null: the strictest steps open, never none.
-   */
-  private async pullRequestFilesFor(user: AuthUser, tabId: string, command: unknown): Promise<PullRequestFilesRead | undefined> {
-    const hook = this.hooks.pullRequestFiles
-    const asked = command as { type?: unknown; conversationId?: unknown; status?: unknown; result?: unknown } | null
-    if (!hook || asked?.type !== 'work.status' || asked.status !== 'review' || typeof asked.conversationId !== 'string') return undefined
-    let facts: { repositoryUrl: string | null; urls: string[] } | null = null
-    try {
-      facts = await transaction(this.db, async tx => {
-        const { state } = await this.factsLoad(tx, user, tabId, command)
-        const group = state.conversations.find(c => c.id === asked.conversationId)
-        if (!group || group.reviewOf || taskProcess(groupProject(state, group), group) === 'simple') return null
-        const repositoryUrl = groupProject(state, group).repository?.repositoryUrl ?? null
-        const urls = [...group.pullRequestUrls ?? [], ...[typeof asked.result === 'string' ? asked.result : '', group.brief]
-          .flatMap(text => text ? pullRequestsIn(text, repositoryUrl) : [])]
-        return { repositoryUrl, urls: [...new Set(urls)] }
-      })
-      if (!facts?.urls.length) return undefined
-      return await hook(facts.repositoryUrl, facts.urls) ?? undefined
-    } catch (error) {
-      if (error instanceof SuperTabError || !facts) return undefined
-      logger.warn('[swarm-review-steps] pull request files not read', { tabId, error: error instanceof Error ? error.message : String(error) })
-      return { urls: facts.urls, head: null, files: null }
-    }
-  }
-
-  /**
    * When GitHub says the pull requests merged that an instructions save's dropped lines may wait on (task #3463): those linked
    * to the project's code tasks whose brief carries a line the save removes, in the project's own repository (a link
    * elsewhere is not this task's merge), at most MAX_MERGE_READS. Read before the write, as GitHub may take seconds, whatever
@@ -1640,12 +1567,9 @@ export class SuperTabStore {
     only: { movedTo?: { machineId: string; ownerId: string }; asProjectPm?: string } = {}) {
     const { operationId, command } = operationSchema.parse(input)
     // Each read before the transaction is its own phase (commandTiming.ts): several call GitHub.
-    const [pushOrigin, repositoryReach, pullRequestFiles, pullRequestMerges] = await Promise.all([
+    const [pushOrigin, pullRequestMerges] = await Promise.all([
       timedPhase('read:pushOrigin', () => this.pushOriginFor(user, tabId, command)),
-      timedPhase('read:repositoryReach', () => this.repositoryReachFor(user, tabId, command)),
-      timedPhase('read:pullRequestFiles', () => this.pullRequestFilesFor(user, tabId, command)),
-      timedPhase('read:pullRequestMerges', () => this.pullRequestMergesFor(user, tabId, command)),
-      timedPhase('read:verdictHead', () => this.verdictHeadRead(user, tabId, command))])
+      timedPhase('read:pullRequestMerges', () => this.pullRequestMergesFor(user, tabId, command))])
     let ended: WorkHold[] = [], started: WorkHold[] = []
     // With only PMs and Buddies, no dispatch pass can hand out work.
     let hasWorkers = false
@@ -1914,13 +1838,6 @@ export class SuperTabStore {
       // A start records the version of the machine it is dispatched to.
       if (command.type === 'agent.startDispatch') context.machineVersions = await this.machineVersions(tx, original)
       if (pushOrigin) Object.assign(context, { pushOrigin: pushOrigin.origin, pushOriginPulls: pushOrigin.pulls, ...pushOrigin.task ? { pushOriginTask: pushOrigin.task } : {} })
-      if (repositoryReach) context.repositoryReach = repositoryReach
-      if (pullRequestFiles && command.type === 'work.status') {
-        context.pullRequestFiles = pullRequestFiles
-        // Its project's review table plans the steps: one indexed read of the newest rules revision (policyStore.ts).
-        const handed = original.conversations.find(c => c.id === command.conversationId)
-        if (handed) context.projectRules = await readRules(tx, tabId, groupProject(original, handed).id)
-      }
       if (command.type === 'agent.screen' || command.type === 'agent.input') {
         // A machine that is gone or no longer shared refuses at once instead of leaving the request to time out.
         await this.agentGrant(tx, original, agent(original, command.agentId))
@@ -1997,24 +1914,15 @@ export class SuperTabStore {
         // A task cancelled with no assignment archives (commands.ts work.cancel).
         || command.type === 'work.cancel' && !original.conversations.find(c => c.id === command.conversationId)?.archived
           && !!effects.state.conversations.find(c => c.id === command.conversationId)?.archived
-      // A task's finished steps archive with it (steps.ts endSteps): their deliveries end too (final review, finding 2).
-      const archivedSteps = unreadable && command.type !== 'conversation.agent' ? effects.state.conversations.filter(c => c.reviewOf === command.conversationId
-        && c.archived && !original.conversations.find(o => o.id === c.id)?.archived).map(c => c.id) : []
-      // One plain match per conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
+      // One plain match on the conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
       if (unreadable) {
-        const conversationIds = [command.conversationId, ...archivedSteps]
+        const conversationId = command.conversationId
         await this.endDeliveries(tx, tabId, {
           ...(command.type === 'conversation.agent' ? { where: { agentId: command.agentId } } : {}),
-          matches: row => conversationIds.includes(row.conversationId),
-        }, async () => {
-          let count = 0
-          for (const conversationId of conversationIds) {
-            count += (await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] },
-              ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
-              data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
-          }
-          return { count }
-        })
+          matches: row => row.conversationId === conversationId,
+        }, () => tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] },
+          ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
+          data: { status: 'cancelled', holdReason: null, holdSince: null } }))
       }
       const removedGroups = original.conversations.filter(c => !effects.state.conversations.some(n => n.id === c.id))
       if (removedGroups.length) {
@@ -2244,67 +2152,7 @@ export class SuperTabStore {
     this.startWork(tabId, started)
     // A write that may free a worker or open a task hands out work at once, not at the next 30-second sweep (dispatch.ts).
     if (hasWorkers && freesOrOpens(command)) this.dispatchSoon(tabId)
-    // A task's Ready records its pull request's head as GitHub has it now, for the Reviewers it hands over to (task #3628).
-    if (command.type === 'work.status' && command.status === 'review') await timedPhase('read:readyHead', () => this.readyHeadRead(user, tabId, command))
     return done
-  }
-
-  /**
-   * Before a work.check naming a head (or base) its pull request's record does not have, that pull request's head as GitHub has
-   * it now, recorded as the PR watch records it (task #3628): the verdict is then judged on it. On #3561 a Yes at the real head
-   * did not count, twice, while the minute's pass had not read the push. A head the record has, carried ones too, reads nothing:
-   * the record never moves but to the head GitHub gives, so a verdict at an older head still counts at none.
-   */
-  private async verdictHeadRead(user: AuthUser, tabId: string, command: Command): Promise<void> {
-    if (!this.hooks.pullRequestReader || command.type !== 'work.check' || !command.head) return
-    const { head, base } = command
-    await this.headsReadNow(user, tabId, command, (state) => {
-      const group = state.conversations.find(c => c.id === command.conversationId)
-      const task = group?.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : group
-      const heads = task?.pullRequestHeads
-      // The pull request the command records the verdict on (commands.ts work.check).
-      const url = task ? checkedPullRequest(task, groupProject(state, task).repository?.repositoryUrl ?? null) : undefined
-      const known = url ? heads?.[url] : undefined
-      const same = (sha: string) => sha.toLowerCase() === head.toLowerCase()
-      if (!task || !url || (known && (same(known.head) || known.carries?.some(same)) && (base === undefined || base === known.base))) return null
-      return { task, urls: [url] }
-    })
-  }
-
-  /** After a task's Ready, the heads of the pull requests it names that the task links, else its newest link (task #3628). */
-  private async readyHeadRead(user: AuthUser, tabId: string, command: Extract<Command, { type: 'work.status' }>): Promise<void> {
-    if (!this.hooks.pullRequestReader) return
-    await this.headsReadNow(user, tabId, command, (state) => {
-      const task = state.conversations.find(c => c.id === command.conversationId)
-      if (!task || task.reviewOf || !task.pullRequestUrls?.length) return null
-      const linked = watchedLinks(task.pullRequestUrls)
-      const named = typeof command.result === 'string' ? pullRequestsIn(command.result, groupProject(state, task).repository?.repositoryUrl ?? null) : []
-      const urls = linked.filter(url => named.includes(url))
-      return { task, urls: urls.length ? urls : linked.slice(-1) }
-    })
-  }
-
-  /** [pick]'s pull requests of a task read from GitHub now and recorded (pullRequestEvents.ts readPullRequestsNow), outside any
-   *  command's transaction, as GitHub may take seconds. A failure leaves the record as it was and is logged: the command is
-   *  judged on the record then, as before. */
-  private async headsReadNow(user: AuthUser, tabId: string, command: Command,
-    pick: (state: SuperTabState) => { task: Conversation; urls: string[] } | null): Promise<void> {
-    let picked: { task: TaskHeads; urls: string[] } | null = null
-    try {
-      picked = await transaction(this.db, async tx => {
-        // A step's task, dormant ones too, is loaded with it.
-        const { state } = await this.factsLoad(tx, user, tabId, command)
-        const chosen = pick(state)
-        return chosen && chosen.urls.length ? { task: { key: chosen.task.id, heads: chosen.task.pullRequestHeads ?? null,
-          steps: chosen.task.stepIds ?? null }, urls: chosen.urls } : null
-      })
-      if (!picked) return
-      const unread = await readPullRequestsNow(this.db, this, this.hooks.pullRequestReader!(), tabId, picked.task, picked.urls, this.now())
-      if (unread.length) logger.warn('[swarm-pr-head] not read', { tabId, group: picked.task.key, pulls: unread.length })
-    } catch (error) {
-      if (error instanceof SuperTabError) return
-      logger.warn('[swarm-pr-head] not read', { tabId, group: picked?.task.key, error: error instanceof Error ? error.message : String(error) })
-    }
   }
 
   /**
@@ -4855,144 +4703,6 @@ export class SuperTabStore {
   }
 
   /**
-   * What GitHub says of [watch], a pull request linked to the task [groupId] (pullRequestEvents.ts): each event its Engineer
-   * was not told yet goes to it as a message in the task, and every event is recorded there, in one write, so a retry or a
-   * second pass posts none twice. A task with no Engineer in the Swarm records them and posts nothing. A step, an archived or
-   * a finished task, or a pull request it no longer links, is left alone. The messages posted.
-   */
-  /** [patch]: the patch id the pass read for [watch]'s head when it was new to the task, or read again after GitHub could not
-   *  give it (undefined: not read, null: unreadable). [stepIds]: the task's steps (Conversation.stepIds), loaded even when
-   *  dormant, as a new head re-derives their checks. A done task records its heads and posts nothing (#3394). */
-  async pullRequestSeen(tabId: string, groupId: string, watch: PullRequestWatch, botLogin: string | null, patch?: string | null,
-    stepIds: readonly string[] = [], lookedUp = false, merged: string | null = null): Promise<number> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return 0
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...patch === undefined ? [] : stepIds] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId)
-      // A task its agent left (no assignment) records what happens, so its next Engineer hears only what is new.
-      const done = group?.assignment?.status === 'done'
-      if (!group || group.archived || group.reviewOf || !group.pullRequestUrls?.includes(watch.url) || group.assignment?.status === 'cancelled') return 0
-      const now = this.now()
-      // A new head is recorded with its patch id, or a patch read again for it, and the verdicts of the task and its steps
-      // count against it (#3394).
-      // A new base branch counts as a new head (security review of #3218, round 3): the patch id names the branch.
-      const known = group.pullRequestHeads?.[watch.url], newHead = known?.head !== watch.head || known.base !== watch.base
-      const repatched = !newHead && patch !== undefined && known!.patch === null
-      // Open again after it was read closed: it may capture the task's checks once more (task #3953).
-      const reopened = !newHead && !!known?.closed
-      if (reopened) {
-        const { closed: _closed, ...open } = known!
-        group.pullRequestHeads = { ...group.pullRequestHeads, [watch.url]: open }
-        for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-          for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, group.pullRequestHeads)
-        }
-      }
-      if (newHead || repatched) {
-        // A task from before steps were listed lists the ones its watch looked up, with its awake ones (#3394).
-        if (lookedUp && !group.stepIds) {
-          group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
-        }
-        // A head the pass gave no patch for (its read already ended) is read again at the next pass, never kept unread.
-        // A new head that is git's own merge of another head and main carries that head's verdicts, and those it carried when
-        // it was the head before, on the same base (mergeCarry.ts, #3553); a head re-read for its patch keeps what it carries.
-        const carries = !newHead ? known!.carries
-          : merged ? [merged, ...known && known.base === watch.base && known.head.toLowerCase() === merged.toLowerCase() ? known.carries ?? [] : []].slice(0, CARRIES_KEPT)
-            : undefined
-        group.pullRequestHeads = keepHead(group.pullRequestHeads, watch.url, { head: watch.head, base: watch.base, patch: patch ?? null,
-          at: patch === undefined ? 0 : now, ...carries?.length ? { carries } : {} }, group.pullRequestUrls)
-        for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-          refreshChecks(checked.checks, watch.url, newHead ? known : undefined, group.pullRequestHeads)
-        }
-      }
-      // What the board says of its checks (task #3827): recorded with the head, even for a done task, and only when it changed.
-      const checks = checksStateOf(watch), checksMoved = group.pullRequestChecks?.[watch.url] !== checks
-      // Of the links it still has: a state of a pull request the task dropped goes with the link.
-      if (checksMoved) group.pullRequestChecks = Object.fromEntries(Object.entries({ ...group.pullRequestChecks, [watch.url]: checks })
-        .filter(([url]) => group.pullRequestUrls!.includes(url)))
-      if (done) {
-        if (!newHead && !repatched && !reopened && !checksMoved) return 0
-        await this.save(tx, loaded, state, clock.next())
-        return 0
-      }
-      const seen = group.pullRequestEvents?.[watch.url] ?? []
-      const { events: seenEvents, keys } = pullRequestEvents(watch, seen, botLogin, now)
-      if (!newHead && !repatched && !reopened && !checksMoved && keys.length === seen.length && keys.every((key, i) => key === seen[i])) return 0
-      group.pullRequestEvents = { ...group.pullRequestEvents, [watch.url]: keys }
-      // CI failing or a conflict brings a handed task back to its Engineer, in the message that tells it (handed.ts, #3399).
-      const events = reopenOnEvents(group, seenEvents, now)
-      if (events !== seenEvents) {
-        recordTaskState(state, group, now)
-        // Back in its hands: the session's cross-Swarm fence covers it again if nothing does (endRuns).
-        await this.restoreRuns(tx, tabId, state, [group.assignment!.agentId])
-      }
-      // A task nobody holds whose pull request turned red or conflicts waits for its builder (dispatch.ts); a handed one the
-      // reopen above made active work is not pinned.
-      const pinned = pullRequestPin(watch)
-      if (pinned) pinBuilder(group, pinned, now)
-      const ownerId = ownerOf(state, group), owner = ownerId ? state.agents.find(a => a.id === ownerId) : undefined
-      // Written as its project's Lead, as the Swarm's own lines are (tidy.ts archiveLine); as the Engineer itself without one.
-      const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
-      const by = state.agents.find(a => a.id === leadId) ?? owner
-      const rows: MessageDraft[] = owner && by ? events.map(event => ({ id: stableId('pull-request-event', group.id, watch.url, event.key), conversationId: group.id,
-        author: { kind: 'agent', id: by.id, name: by.name, displayName: agentDisplayName(state.agents, by.id), membershipGeneration: by.membershipGeneration },
-        text: event.text, replyTo: null, recipients: [owner.id], source: { kind: 'system' } })) : []
-      const sequences = numberMessages(state, rows, now)
-      await this.save(tx, loaded, state, clock.next())
-      await this.writeMessages(tx, tabId, state, rows, sequences)
-      return rows.length
-    })
-  }
-
-  /** GitHub shows [url], a pull request the PR watch read before, closed: its head is marked, and the task's checks no longer
-   *  count at it while another linked pull request is open (checkVerdicts.ts checkedPullRequest, task #3953). Whether it wrote. */
-  async pullRequestClosed(tabId: string, groupId: string, url: string, stepIds: readonly string[] = [], lookedUp = false): Promise<boolean> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...stepIds] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId), known = group?.pullRequestHeads?.[url]
-      if (!group || group.reviewOf || !known || known.closed) return false
-      group.pullRequestHeads = { ...group.pullRequestHeads, [url]: { ...known, closed: true } }
-      if (lookedUp && !group.stepIds) {
-        group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
-      }
-      // The verdicts of the task and its steps count against the heads that are left (checkVerdicts.ts verdictCounts).
-      for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-        for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, group.pullRequestHeads)
-      }
-      await this.save(tx, loaded, state, clock.next())
-      return true
-    })
-  }
-
-  /** The task's links moved past a pull request whose head it keeps (review of #3218, round 3): the heads it no longer reads
-   *  (watchedLinks) are dropped, and the checks of the task and its steps, [stepIds] loaded even when dormant, count against
-   *  what is left: a verdict on a dropped one is unverified (checkVerdicts.ts verdictCounts), even with no head left. Whether
-   *  it wrote. */
-  async pullRequestHeadsWatched(tabId: string, groupId: string, stepIds: readonly string[] = [], lookedUp = false): Promise<boolean> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId, ...stepIds] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId)
-      if (!group?.pullRequestHeads || group.archived || group.reviewOf) return false
-      const window = new Set(watchedLinks(group.pullRequestUrls ?? []))
-      const kept = Object.fromEntries(Object.entries(group.pullRequestHeads).filter(([url]) => window.has(url)))
-      if (Object.keys(kept).length === Object.keys(group.pullRequestHeads).length) return false
-      group.pullRequestHeads = kept
-      if (lookedUp && !group.stepIds) {
-        group.stepIds = [...new Set([...state.conversations.filter(c => c.reviewOf === group.id).map(c => c.id), ...stepIds])]
-      }
-      for (const checked of [group, ...state.conversations.filter(c => c.reviewOf === group.id)]) {
-        for (const check of checked.checks) if (check.verdicts?.length) deriveCheck(check, kept)
-      }
-      await this.save(tx, loaded, state, clock.next())
-      return true
-    })
-  }
-
-  /**
    * The Swarm's time checks, run by the backend worker every 30 s (timeChecks.ts). Since Swarm v4 (anh Dee, 2026-11-09) they
    * run only v4's jobs: every agent gets its 1:1 chat, the stops v3 asked for are withdrawn once, and the PM's "owes an answer"
    * note v3 kept for its host's restart is cleared. Each run is one write, so a second run, or one racing it, finds nothing new.
@@ -5029,63 +4739,6 @@ export class SuperTabStore {
       }
       await this.save(tx, loaded, state, clock.next())
       return 0
-    })
-  }
-
-  /** Archives a finished group whose pull requests `checked` were all read merged or closed (archive.ts), only if it still
-   *  qualifies inside this write: no message and no pull request linked since the read. Its waiting deliveries end, as a
-   *  person's archive ends them. A step needs `reviewOf`, the group the pass read as its task, which this write reads again: it
-   *  stays open unless that task is done or cancelled and that task's pull requests are settled too. A review nobody is
-   *  reviewing closes the same way (tidy.ts reviewClosable). True when it archived. */
-  async archiveFinished(tabId: string, groupId: string, checked: Readonly<Record<string, SettledPullRequest>>, reviewOf?: string): Promise<boolean> {
-    return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
-      if (!row || row.deletedAt) return false
-      const loaded = await loadRow(tx, requireParts(row), { groupIds: reviewOf ? [groupId, reviewOf] : [groupId] }), state = cloneData(loaded.state)
-      const group = state.conversations.find(c => c.id === groupId)
-      const now = this.now()
-      if (!group) return false
-      // Its links, and a "PR #N" its result or check evidence names, read in its project's repository; with none to read
-      // it in it stays open (tidy.ts archiveWaitsFor). Read only once it may close, so its project is a real one.
-      const read = (urls: readonly string[]) => {
-        const waits = archiveWaitsFor(group, groupProject(state, group).repository?.repositoryUrl)
-        return !!waits && [...urls, ...waits].every(url => !!checked[url])
-      }
-      // A step's task's pull requests count too: it may yet be handed back while one is open, and need its step again.
-      const finished = archivable(state, group, now) && read(reviewPullRequests(state, group))
-      // Only the group it reviews as the pass read it: one this write did not load would hide its open pull requests.
-      const review = !finished && !!reviewOf && group.reviewOf === reviewOf && reviewClosable(state, group, now) && read(reviewPullRequests(state, group))
-      if (!finished && !review) return false
-      group.archived = true
-      // Its steps archive with it (task steps design): its work is done or cancelled and its pull requests settled, so a
-      // step still open there has nothing left to check.
-      const reason = `${group.title} was archived.`, heldBefore = new Set(stepsOf(state, group.id).filter(step => step.archived).map(step => step.id))
-      const cancelled = endSteps(state, group, reason, true)
-      const line = finished ? archiveLine(state, group, now) : reviewCloseLine(state, group, checked, now)
-      // A step this pass cancelled hears why, as when a command ends it (commands.ts endStepsOf): its later verdict is refused.
-      const rows = [...line ? [line] : [], ...stepEndedRows(state, cancelled, reason, line?.author ?? null, step => stableId('auto-archive-step', step.id, String(now)))]
-      const sequences = numberMessages(state, rows, now)
-      group.dormant = true
-      // As a person's archive does (execute): a claim of a delivery here conflicts with this write.
-      // Its finished steps archive here too (execute does the same): a cancelled one stays open, to hear why. One plain match per
-      // conversation: an `in` on this hot collection is sent as $expr, which no index bounds (hotFilters).
-      const endedIds = [groupId, ...stepsOf(state, group.id).filter(step => step.archived && !heldBefore.has(step.id)).map(step => step.id)]
-      await this.endDeliveries(tx, tabId, { matches: row => endedIds.includes(row.conversationId) }, async () => {
-        let count = 0
-        for (const conversationId of endedIds) {
-          count += (await tx.superTabDelivery.updateMany({ where: { tabId, conversationId, status: { in: [...CANCELLABLE_DELIVERY] } },
-            data: { status: 'cancelled', holdReason: null, holdSince: null } })).count
-        }
-        return { count }
-      })
-      // A review's close also writes the work it reviews (review of #2322): a Ready for review committed since the load linked
-      // a new pull request and saw this review still open, so it opened none. The touch makes one of the two writes retry,
-      // and the retry sees the other: this one declines (a pull request not read), or that one opens a new review.
-      // A finished step's too: its task handed on again since the load must not lose the step it will need.
-      await this.save(tx, loaded, state, clock.next(), group.reviewOf ? [{ kind: 'group', key: group.reviewOf }] : [])
-      await this.writeMessages(tx, tabId, state, rows, sequences)
-      this.tellPhones(tx, tabId, state, { replies: [], tags: await writeMentions(tx, tabId, state, rows, now) }, rows)
-      return true
     })
   }
 

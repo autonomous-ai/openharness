@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import type { z } from 'zod'
 import { recordingDb, type Query } from '../lib/queryRecorder.test-support.js'
-import { commandSchema } from './commands.js'
+import { applyCommand, commandSchema } from './commands.js'
+import { createSuperTab } from './model.js'
 import { RETIRED_COMMANDS, RETIRED_NOTE } from './retired.js'
 import { counted, OLD_PAYLOADS } from './retired.test-support.js'
 import { SuperTabStore } from './store.js'
@@ -37,5 +38,23 @@ describe('commands Swarm v4 no longer has', () => {
     const served = (commandSchema.options as unknown as { shape: { type: z.ZodLiteral<string> } }[]).flatMap(option => [...option.shape.type.values])
     expect(served.filter((type, i) => served.indexOf(type) !== i)).toEqual([])
     expect(served).toEqual(expect.arrayContaining([...RETIRED_COMMANDS, 'message.send']))
+  })
+})
+
+// Steps and linked tasks are gone with Swarm v4 (2026-11-10): an agent of an older CLI still opens a review or a test of its task with
+// `reviewOf`, and is told nothing was done rather than given a task nobody reads.
+describe('a step an older agent opens', () => {
+  it('answers a conversation.create naming reviewOf as ignored, and opens nothing', () => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    const owner = { kind: 'person', userId: 'owner', email: 'owner@example.com' } as const
+    const task = applyCommand(state, owner, { type: 'conversation.create', title: 'Offline editing', brief: 'Save edits offline.', checks: [] },
+      { now: 1000, operationId: 'op-1' })
+    for (const step of [{ step: 'Security review' }, {}]) {
+      const command = commandSchema.parse({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: task.result.conversationId, checks: [], ...step })
+      const effects = applyCommand(task.state, owner, command, { now: 2000, operationId: 'op-2' })
+      expect(effects.result).toEqual({ ignored: true, note: RETIRED_NOTE })
+      expect(effects.state.conversations).toHaveLength(task.state.conversations.length)
+      expect(effects.messages).toEqual([])
+    }
   })
 })

@@ -16,6 +16,8 @@ export const RETIRED_COMMANDS = [
   'member.status', 'member.timeZone', 'member.username', 'member.name',
   // Decisions (2026-11-10): an agent reaches its person in their 1:1 chat.
   'decision.ask', 'decision.answer',
+  // Review steps, check verdicts and merge records (2026-11-10): a task is the project's GitHub issue, and its pull request is GitHub's.
+  'work.check', 'conversation.merged',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 

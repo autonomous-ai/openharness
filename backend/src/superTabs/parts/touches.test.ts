@@ -87,8 +87,6 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
   // so finishing work and the next start, assignment or route no longer meet there (final review of the branch).
   it('leaves the project\'s progress part to its reports when work finishes, and when the next is defined, routed or assigned', () => {
     const f = swarm(), a = f.group('A')
-    f.run({ type: 'work.check', conversationId: a.id, assignmentId: a.assignmentId, checkId: f.state.conversations.find(c => c.id === a.id)!.checks[0]!.id,
-      passed: true, evidence: 'Shown' }, f.agentActor(f.lead))
     const done = f.run({ type: 'work.status', conversationId: a.id, assignmentId: a.assignmentId, status: 'done', result: 'Shipped' }, f.agentActor(a.worker))
     expect(has(done.touches, 'progress', 'lead')).toBe(false)
     const cancelled = f.group('B')
