@@ -269,7 +269,7 @@ describe('ensureNodeMeetsMinimum', () => {
 
   const currentNode = () => readFileSync(join(runtimeDir, 'current-node'), 'utf8').trim()
 
-  it('installs the manifest Node when the managed one is 22', async () => {
+  it('installs the manifest Node when the managed one is 22, and leaves current-node to the update that moves to it', async () => {
     const old = installedNode('v22.23.2', key)
     const { bytes, root: archiveRoot } = buildArchive('v24.22.2', key)
     stubFetch(manifestFor('node', key, 'v24.22.2', bytes, archiveRoot), bytes)
@@ -279,7 +279,9 @@ describe('ensureNodeMeetsMinimum', () => {
 
     const node = join(runtimeDir, `node-v24.22.2-${key}`, 'bin', 'node')
     expect(result).toEqual({ node, reason: null })
-    expect(currentNode()).toBe(node)
+    // Named only together with a stage, on its probation (lib/selfUpdate.ts `startSelfUpdater`): a build that is not
+    // staged must leave the next start on the Node the daemon runs on.
+    expect(currentNode()).toBe(old)
     // Engines installed with npm under 22 live in its folder, and are still found there.
     expect(existsSync(old)).toBe(true)
   })
@@ -333,7 +335,7 @@ describe('ensureNodeMeetsMinimum', () => {
     const { ensureNodeMeetsMinimum } = await load()
 
     const started = performance.now()
-    expect(await ensureNodeMeetsMinimum(() => {}, 50)).toEqual({ node: old, reason: 'manifest-unreachable' })
+    expect(await ensureNodeMeetsMinimum(() => {}, { timeoutMs: 50 })).toEqual({ node: old, reason: 'manifest-unreachable' })
     expect(performance.now() - started).toBeLessThan(1_000)
   })
 
@@ -342,8 +344,8 @@ describe('ensureNodeMeetsMinimum', () => {
     vi.stubGlobal('fetch', fetchSpy)
     const { ensureNodeMeetsMinimum } = await load()
 
-    const tooOld = Number(process.versions.node.split('.')[0]) < 24
-    expect(await ensureNodeMeetsMinimum(() => {})).toEqual({ node: null, reason: tooOld ? 'unmanaged' : null })
+    expect(await ensureNodeMeetsMinimum(() => {}, { running: '22.23.2' })).toEqual({ node: null, reason: 'unmanaged' })
+    expect(await ensureNodeMeetsMinimum(() => {}, { running: '24.22.2' })).toEqual({ node: null, reason: null })
     expect(fetchSpy).toHaveBeenCalledTimes(0)
   })
 })

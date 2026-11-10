@@ -67,6 +67,6 @@
   },
   "homepage": "https://github.com/autonomous-ai/openharness/tree/main/cli",
   "engines": {
-    "node": ">=24.16.0"
+    "node": ">=22.15.0"
   }
 }

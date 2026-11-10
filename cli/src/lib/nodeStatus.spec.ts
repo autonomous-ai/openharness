@@ -21,9 +21,14 @@ describe('nodeRow', () => {
 
   for (const [migration, copy] of Object.entries(REASONS)) {
     it(`says why it stays on 22: ${migration}`, () => {
-      expect(nodeRow({ version: 'v22.23.2', managed: true, migration: migration as keyof typeof REASONS })).toBe(`v22.23.2 (stays on 22: ${copy})`)
+      expect(nodeRow({ version: 'v22.23.2', managed: true, migration: migration as keyof typeof REASONS }, false)).toBe(`v22.23.2 (stays on 22: ${copy})`)
     })
   }
+
+  it('sends a Harness OS computer to its own update for a newer Node', () => {
+    expect(nodeRow({ version: 'v22.23.2', managed: false, migration: 'unmanaged' }, true))
+      .toBe('v22.23.2 (stays on 22: this Harness runs on the Node of Harness OS; update Harness OS)')
+  })
 })
 
 describe('nodeStatus', () => {
@@ -38,6 +43,11 @@ describe('nodeStatus', () => {
       .toEqual({ version: 'v22.23.2', managed: true, migration: 'download-failed' })
     expect(nodeStatus({ version: 'v22.23.2', execPath: '/usr/bin/node', runtimeDir: '/h/runtime', cliDir: dirWith() }))
       .toEqual({ version: 'v22.23.2', managed: false, migration: null })
+  })
+
+  it('names no reason once the daemon is on Node 24, whatever an earlier update recorded', () => {
+    expect(nodeStatus({ version: 'v24.22.2', execPath: '/h/runtime/node-v24.22.2-linux-x64/bin/node', runtimeDir: '/h/runtime', cliDir: dirWith('rolled-back') }))
+      .toEqual({ version: 'v24.22.2', managed: true, migration: null })
   })
 })
 

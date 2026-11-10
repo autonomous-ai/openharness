@@ -858,3 +858,18 @@ describe('when reports go', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 })
+
+it('counts the daemon\'s Node once a collector day: its major, and why it stays below 24', async () => {
+  await usage.stop()
+  let node: NonNullable<ProductUsageDeps['node']> extends () => infer T ? T : never = { version: 'v22.23.2', managed: true, migration: 'rolled-back' }
+  usage = createProductUsage({ file, now: () => now, request, context: CLI, node: () => node })
+  await flush()
+  now += 86_400_000
+  node = { version: 'v24.22.2', managed: true, migration: null }
+  await flush()
+  now += 86_400_000
+  node = { version: 'v20.1.0', managed: false, migration: 'unmanaged' }
+  await flush()
+  const counted = Object.fromEntries(Object.entries(totals()).filter(([metric]) => metric.startsWith('health_cli_node_')))
+  expect(counted).toEqual({ health_cli_node_22: 1, health_cli_node_held_rolled_back: 1, health_cli_node_24: 1, health_cli_node_other: 1, health_cli_node_held_unmanaged: 1 })
+})

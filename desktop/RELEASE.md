@@ -75,9 +75,9 @@ Publish to staging first, run the E2E against it, and only then publish producti
 
 The publisher downloads the official Node archives and `SHASUMS256.txt`, verifies each archive before
 uploading, then atomically merges the manifest (staging unless `METADATA_PATH` says otherwise). The app verifies the manifest's
-size and SHA-256 again before extracting an archive. A runtime manifest applies to fresh installs;
-roll out a changed runtime to existing users with a newer desktop build. Never replace an existing
-versioned archive in place.
+size and SHA-256 again before extracting an archive. Fresh installs get the manifest's Node; an existing
+install below the CLI's minimum major (Node 24) moves to it on its next CLI update, on that update's
+probation. Never replace an existing versioned archive in place.
 
 Until that managed manifest covers a platform, the desktop build falls back to its checksum-pinned
 official Node 22 archive for it. The fallback keeps first-run setup functional but is intentionally

@@ -19,8 +19,8 @@ import { execFile } from 'child_process'
 import { dirname, join, sep } from 'path'
 import { env } from '../config/env.js'
 import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
-import { managedNodePath } from './nodeRuntime.js'
-import { NODE_MIGRATION_FILE, type NodeMigration } from './nodeMigration.js'
+import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
+import { failedNode, recordNodeMigration, type NodeMigration } from './nodeMigration.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
 import { patientDeadline } from './patientExec.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
@@ -116,17 +116,6 @@ export function unjudgedUpdate(dir: string, fingerprint: string | null): string 
 export function rejectedVersions(dir: string): string[] {
   const rejected = readJson(join(dir, REJECTED))
   return Array.isArray(rejected) ? rejected.filter((version): version is string => typeof version === 'string') : []
-}
-
-/** Record why the daemon is not on the minimum Node, or, with null, that nothing holds it back. */
-export function recordNodeMigration(dir: string, reason: NodeMigration | null): void {
-  try {
-    if (reason === null) rmSync(join(dir, NODE_MIGRATION_FILE), { force: true })
-    else writeJson(join(dir, NODE_MIGRATION_FILE), { reason, at: Date.now() })
-  } catch (error) {
-    // A full disk costs `harness status` the reason, never the update.
-    console.error(`[update] could not record why the daemon's Node stays as it is (${error instanceof Error ? error.message : String(error)})`)
-  }
 }
 
 /** Strict semver-greater on the `X.Y.Z` core (ignores pre-release/build). Unparseable → false, so a
@@ -327,7 +316,9 @@ export const CANARY_KILL_GRACE_MS = 2_000
  *  Asynchronous. It ran with `spawnSync` inside the daemon's own updater, on the core's event loop: for
  *  as long as the new build took to load and answer, up to its 15 s timeout, no terminal byte, hook,
  *  heartbeat or request was handled, and the master kills a core that stops beating as hung. */
-export async function runCanary(cliBuf: Buffer, dir: string, version?: string, timeoutMs = CANARY_TIMEOUT_MS): Promise<CanaryResult> {
+export async function runCanary(
+  cliBuf: Buffer, dir: string, version?: string, timeoutMs = CANARY_TIMEOUT_MS, node: string = managedNodePath(),
+): Promise<CanaryResult> {
   const tmpDir = join(dir, `.canary-${process.pid}-${Date.now()}`)
   const tmpCli = join(tmpDir, CLI)
   try {
@@ -338,8 +329,9 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
     } catch (error) {
       return { ok: false, problem: 'unwritable', detail: error instanceof Error ? error.message : String(error) }
     }
-    // The interpreter the NEXT daemon will run on — see managedNodePath(). Canarying on this
-    // process's interpreter would assert about a Node the new build may never be started with.
+    // The interpreter the NEXT daemon will run on — managedNodePath(), or the Node an update moves it to
+    // (`startSelfUpdater`'s `node`). Canarying on this process's interpreter would assert about a Node the
+    // new build may never be started with.
     // The deadline counts only time this process's event loop ran (patientDeadline): Node's own timeout,
     // fired late after a held loop, threw a build's answer away and took it for no answer. A build that
     // outlives it is sent SIGTERM, and SIGKILL [CANARY_KILL_GRACE_MS] later: one that ignores SIGTERM held
@@ -348,7 +340,7 @@ export async function runCanary(cliBuf: Buffer, dir: string, version?: string, t
       let timedOut = false
       let grace: ReturnType<typeof setTimeout> | undefined
       let cancel = (): void => {}
-      const child = execFile(managedNodePath(), [tmpCli, 'version', '--json'], { encoding: 'utf8' }, (error, stdout) => {
+      const child = execFile(node, [tmpCli, 'version', '--json'], { encoding: 'utf8' }, (error, stdout) => {
         cancel()
         clearTimeout(grace)
         // An answer is an answer, even one that raced the kill.
@@ -523,24 +515,33 @@ export function restore(dir: string, platform: NodeJS.Platform = process.platfor
     // judges it again (`unjudgedUpdate`) and rolls it back once more.
     if (movedBack) rmSync(join(dir, PENDING), { force: true })
   } catch { /* the rollback itself is what matters */ }
-  return putNodeBack(dir, previousNode, platform)
+  return putNodeBack(dir, previousNode, 'rolled-back', platform)
+}
+
+/** `current-node` on [node], as runtimeInstall writes it: the path and the platform's line end, readable by this
+ *  account alone, whole or not at all. Throws when it cannot be written. */
+function nameNode(node: string, platform: NodeJS.Platform): void {
+  writeWhole(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${node}${platform === 'win32' ? '\r\n' : '\n'}`, 0o600)
 }
 
 /**
- * `current-node` back on [previous], the Node a rolled-back update moved the daemon off, which what starts the daemon
- * next reads (the master's re-execution onto the build put back; on Windows, harness-launch.exe). Only a Node inside
- * the managed runtime, as `managedNodePath` trusts; nothing when it is already the one named.
+ * `current-node` back on [previous], the Node the daemon ran on before it was moved to the one named now, which what
+ * starts the daemon next reads (the master's re-execution onto the build put back; on Windows, harness-launch.exe):
+ * a rolled-back update ('rolled-back'), or a master whose lean bundle did not answer on the new Node ('does-not-run',
+ * ../masterProcess.ts). The Node it moves off is recorded beside [reason], and not moved to again (`startSelfUpdater`);
+ * a null [reason] records nothing (a master that cannot re-execute at all). Only a Node inside the managed runtime, as
+ * `managedNodePath` trusts; nothing when it is already the one named. Returns [previous] once named, else null.
  */
-function putNodeBack(dir: string, previous: string | null, platform: NodeJS.Platform): string | null {
-  if (!previous || !previous.startsWith(env.ADAPTER_RUNTIME_DIR + sep) || previous === managedNodePath()) return null
+export function putNodeBack(dir: string, previous: string | null, reason: NodeMigration | null, platform: NodeJS.Platform = process.platform): string | null {
+  const moved = managedNodePath()
+  if (!previous || !previous.startsWith(env.ADAPTER_RUNTIME_DIR + sep) || previous === moved) return null
   try {
-    // As runtimeInstall writes it: the path and the platform's line end, readable by this account alone.
-    writeWhole(join(env.ADAPTER_RUNTIME_DIR, 'current-node'), `${previous}${platform === 'win32' ? '\r\n' : '\n'}`, 0o600)
+    nameNode(previous, platform)
   } catch (error) {
     console.error(`[harnessd] could not put current-node back on ${previous} (${error instanceof Error ? error.message : String(error)}) — the daemon stays on the Node it names`)
     return null
   }
-  recordNodeMigration(dir, 'rolled-back')
+  if (reason) recordNodeMigration(dir, reason, moved)
   return previous
 }
 
@@ -696,14 +697,18 @@ export function startSelfUpdater(opts: {
    *  null. A build that needs exactly that protocol goes ahead with it, as one pair. */
   readyPtyProtocol?: () => number | null
   /**
-   * The Node the next daemon runs on, made sure of once per build before its canary (lib/runtimeInstall.ts
-   * `ensureNodeMeetsMinimum`), which then runs on it. The handover after the stage starts the master on it: on macOS
-   * and Linux `startMasterFromBundle` (../masterProcess.ts) re-executes onto `current-node`, on Windows
-   * harness-launch.exe reads it. Why it stayed is recorded (`nodeMigration`), and the build is staged either way.
-   * `running`: the Node this daemon runs on, which the pending note names for a rollback to go back to (`restore`).
+   * The Node the next daemon moves to, laid down once per build before its canary (lib/runtimeInstall.ts
+   * `ensureNodeMeetsMinimum`, which leaves `current-node` alone), and the build's canary runs on it. `current-node`
+   * names it only once the build is staged, on that build's probation: the handover after the stage starts the master
+   * on it (on macOS and Linux `startMasterFromBundle`, ../masterProcess.ts, re-executes onto `current-node`; on Windows
+   * harness-launch.exe reads it), and a rollback puts it back (`restore`). A build that is not staged leaves the next
+   * start on the Node the daemon runs on. A build that runs on that Node and not on the new one is staged without the
+   * switch, which is recorded as 'does-not-run'; a Node that did not hold up here before is not moved to again
+   * (`failedNode`). Why the Node stays is recorded (`nodeMigration`), and the build is staged either way.
+   * `running`: the Node this daemon runs on, which the pending note names for a rollback to go back to.
    * Left out, the Node is left as it is.
    */
-  node?: { ensure(): Promise<{ reason: NodeMigrationReason | null }>; running: string }
+  node?: { ensure(): Promise<{ node: string | null; reason: NodeMigrationReason | null }>; running: string }
 }): Poller {
   let checking = false
   let done = false
@@ -713,7 +718,7 @@ export function startSelfUpdater(opts: {
   // they passed their canary: when the lock was busy (a `harness start` or `harness update`
   // mid-flight), or the canary could not be written, the next tick should try again from there, not
   // from the whole download.
-  let verified: { entry: string; version: string; cliBuf: Buffer; notifyBuf: Buffer; canaried: boolean; ptyProtocol: number } | null = null
+  let verified: { entry: string; version: string; cliBuf: Buffer; notifyBuf: Buffer; canaried: boolean; ptyProtocol: number; node: string | null } | null = null
   // The manifest's build, when it failed in a way it would fail again, and when it may be tried again.
   let refused: { entry: string; tries: number; until: number } | null = null
   // Said once per version: the check repeats every interval.
@@ -730,6 +735,18 @@ export function startSelfUpdater(opts: {
   const waitForHost = (version: string, needs: number, host: number): void => {
     if (toldProtocol !== version) console.log(`[update] ${version} needs pty protocol ${needs}; this machine's host speaks ${host} — waiting for its payload`)
     toldProtocol = version
+  }
+  /** The Node [version] moves the daemon to, or null to stay: one at the minimum that has not failed here before. */
+  const nodeToMoveTo = async (ensure: NonNullable<typeof opts.node>['ensure'], version: string): Promise<string | null> => {
+    const ensured = await ensure()
+    const failed = failedNode(opts.dir)
+    if (ensured.node !== null && ensured.node === failed) {
+      // The record stands, reason and all, until the manifest offers another Node.
+      console.log(`[update] ${failed} did not hold up here before — ${version} stays on the Node the daemon runs on`)
+      return null
+    }
+    recordNodeMigration(opts.dir, ensured.reason)
+    return ensured.node !== null && (nodeMajorOf(ensured.node) ?? 0) >= MINIMUM_NODE_MAJOR ? ensured.node : null
   }
 
   const now = opts.now ?? Date.now
@@ -798,14 +815,25 @@ export function startSelfUpdater(opts: {
           refuse(`does not match its manifest (${error.message})`)
           return
         }
-        verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL }
+        verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL, node: null }
       }
       if (halted) return
       if (!verified.canaried) {
-        if (opts.node) recordNodeMigration(opts.dir, (await opts.node.ensure()).reason)
+        let next = opts.node ? await nodeToMoveTo(opts.node.ensure, entry.version) : null
         if (halted) return
-        const result = await runCanary(verified.cliBuf, opts.dir, entry.version)
+        let result = await runCanary(verified.cliBuf, opts.dir, entry.version, CANARY_TIMEOUT_MS, next ?? managedNodePath())
         if (halted) return
+        if (next && !result.ok && result.problem !== 'unwritable') {
+          // The build or the new Node: asked on the Node the next start runs on without the switch.
+          const without = await runCanary(verified.cliBuf, opts.dir, entry.version)
+          if (halted) return
+          if (without.ok) {
+            console.error(`[update] ${entry.version} does not run on ${next} (${result.detail}) — it goes in on the Node the daemon runs on`)
+            recordNodeMigration(opts.dir, 'does-not-run', next)
+            next = null
+            result = without
+          }
+        }
         if (!result.ok && result.problem === 'unwritable') {
           console.error(`[update] could not write the canary for ${entry.version} (${result.detail}) — trying again next check`)
           return
@@ -813,6 +841,7 @@ export function startSelfUpdater(opts: {
         if (!result.ok) { refuse(`failed its canary (${result.detail})`); return }
         verified.canaried = true
         verified.ptyProtocol = result.ptyProtocol
+        verified.node = next
       }
       const ready = verified
       // The protocol rule: no CLI that no installed host can serve. Asked at every check, with the bytes kept, so the
@@ -846,6 +875,13 @@ export function startSelfUpdater(opts: {
         const shortNow = host ? (ready.ptyProtocol > host.protocol ? host.protocol : null) : hostShortOf(ready.ptyProtocol)
         if (shortNow !== null) { waitForHost(ready.version, ready.ptyProtocol, shortNow); return }
         stage(opts.dir, ready.cliBuf, ready.notifyBuf, ready.version, platform, opts.node?.running ?? null)
+        // Named only now, on the probation the stage began: a rollback puts it back.
+        if (ready.node) {
+          try { nameNode(ready.node, platform) } catch (error) {
+            console.error(`[update] could not name ${ready.node} in current-node (${error instanceof Error ? error.message : String(error)}) — ${ready.version} comes up on the Node the daemon runs on`)
+            recordNodeMigration(opts.dir, 'download-failed')
+          }
+        }
         done = true
         stop()
         console.log(`[update] staged ${ready.version} — restarting now`)
