@@ -4093,22 +4093,15 @@ describe('lost work (liveness.ts)', () => {
     expect(f.state.conversations.find(c => c.id === group)!.lostAttempt).toMatchObject({ agentId: worker })
   })
 
-  it('records when a task lost to a usage limit with a reset time resumes, and tells the Lead it resumes then', () => {
+  // No task resumes after a usage limit since Swarm v4 (work.resume is retired, 2026-11-10): nothing promises it.
+  it('records no resume time for a task lost to a usage limit with a reset time, and never tells the Lead it resumes', () => {
     const { f, worker, task, limit } = lostFixture()
     const lead = limit().messages.find(m => m.source?.kind === 'work-lost' && !m.recipients.includes(worker))!
-    expect(task().assignment!.lost).toEqual({ reason: expect.stringContaining('usage limit'), at: 1000, resumeAt: '1970-01-01T01:00:00.000Z' })
-    expect(f.state.agents.find(a => a.id === worker)!.lostTask).toMatchObject({ resumeAt: '1970-01-01T01:00:00.000Z' })
-    expect(lead.text).toContain('It resumes by itself when its limit resets at 01:00 UTC.')
+    expect(task().assignment!.lost).toEqual({ reason: expect.stringContaining('usage limit'), at: 1000 })
+    expect(f.state.agents.find(a => a.id === worker)!.lostTask).not.toHaveProperty('resumeAt')
+    expect(lead.text).not.toContain('resumes')
     // What happened, never the next step (project instructions, phase 4).
     expect(lead.text).not.toMatch(/Assign it|assign it there|unless you hand it on/)
-  })
-
-  it('records no resume time for a task lost to a model that keeps failing, though its alert names a reset time', () => {
-    const { f, worker, as, task } = lostFixture()
-    f.run({ type: 'agent.alert', agentId: worker, alert: 'model', active: true, resetAt: new Date(3_600_000).toISOString() }, as(worker))
-    expect(task().assignment).toMatchObject({ status: 'lost', lost: { reason: 'its model keeps failing' } })
-    expect(task().assignment!.lost).not.toHaveProperty('resumeAt')
-    expect(f.state.agents.find(a => a.id === worker)!.lostTask).not.toHaveProperty('resumeAt')
   })
 
   it('records no resume time for a usage limit whose screen gave no reset time', () => {
@@ -4182,7 +4175,8 @@ describe('archiving unfinished work', () => {
   }
   const archive = (t: ReturnType<typeof task>, actor: Actor = owner) => t.f.run({ type: 'conversation.archive', conversationId: t.group, archived: true }, actor)
   const at = (t: ReturnType<typeof task>) => t.f.state.conversations.find(c => c.id === t.group)!
-  const WHO_CANCELS_ENDED = 'Only the person who asked for this task, its project\'s owner, the Swarm owner or an agent of this project can cancel it.'
+  const WHO_CANCELS_ENDED = 'Only the person who asked for this task, its project\'s owner, the Swarm owner or an agent of this project can close it.'
+  const WHO_CANCELS_LIVE = 'Only an agent of this project or the Swarm owner can close work in progress.'
 
   // Security review 2 of #2907: a collaborator who did not ask could name themselves its requester, then cancel it. Among
   // people only an owner names who asked; agents still name the person they opened it for.
@@ -4197,16 +4191,35 @@ describe('archiving unfinished work', () => {
     expect(at(t).requesterId).toBe('peer')
   })
 
-  it('names who can cancel when it refuses to archive unfinished work', () => {
-    const t = task('lost', { asked: false })
-    expect(() => archive(t, peer)).toThrow(expect.objectContaining({ code: 'WORK_UNFINISHED',
-      message: `This task did not finish. Hand it on, or cancel it with a reason, before archiving. ${WHO_CANCELS_ENDED}` }))
+  // Swarm v4 retired work.cancel and work.status (2026-11-10): archiving is how a task stored before it closes. It says so in
+  // the task, so nothing unfinished closes silently, and its requester is tagged as for any cancelled task.
+  it.each(['lost', 'stopped'] as const)('closes a %s task it archives, saying so in the task', status => {
+    const t = task(status)
+    const effects = archive(t)
+    expect(at(t)).toMatchObject({ archived: true, assignment: { status: 'cancelled', result: 'Archived before it finished.' } })
+    expect(effects.closedAssignment).toEqual({ assignmentId: at(t).assignment!.id, outcome: 'cancelled' })
+    expect(effects.messages.map(m => m.text)).toEqual(['owner archived this task before it finished.',
+      'Archived without shipping: the task was cancelled (Archived before it finished).'])
   })
 
-  it.each(['lost', 'stopped'] as const)('refuses to archive a %s task by hand, so nothing unfinished closes silently', status => {
-    const t = task(status)
-    expect(() => archive(t)).toThrow('cancel it with a reason')
-    expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(false)
+  it('tells a task\'s working agent to stop when it is archived, and frees it', () => {
+    const t = task('working')
+    const worker = at(t).assignment!.agentId
+    const effects = archive(t)
+    expect(at(t)).toMatchObject({ archived: true, assignment: { status: 'cancelled' } })
+    expect(effects.messages[0]).toMatchObject({ text: 'owner archived this task before it finished. Stop working on it.', recipients: [worker] })
+  })
+
+  it('names who may close unfinished work when someone else archives it', () => {
+    const lost = task('lost', { asked: false })
+    expect(() => archive(lost, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', message: WHO_CANCELS_ENDED }))
+    expect(at(lost).archived).toBe(false)
+    const working = task('working')
+    expect(() => archive(working, peer)).toThrow(expect.objectContaining({ code: 'FORBIDDEN', message: WHO_CANCELS_LIVE }))
+    // Its requester closes it once it ended, as work.cancel let them.
+    const asked = task('lost')
+    archive(asked, peer)
+    expect(at(asked).archived).toBe(true)
   })
 
   it('tags the requester with the reason when a cancelled task is archived', () => {
@@ -5044,7 +5057,7 @@ describe('a task\'s priority (conversation.create)', () => {
     const created = create({}, owner)
     expect(task(created.result.conversationId as string).priority).toBe('P2')
     expect(created.result).toMatchObject({ priority: 'P2',
-      warnings: expect.arrayContaining(['No priority given: this task is P2. Set P0-P3 with work.priority.']) })
+      warnings: expect.arrayContaining(['No priority given: this task is P2. Give P0-P3 when you create a task.']) })
   })
 
   it('lets only the PM or a person create a P0, while any agent may open a P1-P3 task', () => {

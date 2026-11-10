@@ -174,7 +174,7 @@ const reopening = (worker: Agent, now: number): boolean => {
 
 /** Why [worker] cannot work now: its session stopped (unless [closedOnPurpose]: asleep, task #3398; or, for a task it
  *  [holds], a crew member its host is reopening, crew.ts), its machine offline, a usage limit, or its model failing. A task
- *  its agent holds is lost for it (lostReason); the crew dispatch hands such a member nothing new (dispatch.ts freeCrew).
+ *  its agent holds is lost for it (lostReason).
  *  Only a machine that has reported can be offline. */
 function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false, holds = false): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
@@ -212,13 +212,12 @@ function lostReason(state: SuperTabState, group: Conversation, worker: Agent, as
 
 /** Marks a worker's task lost and fences its agent. The Lead hears who, why, how long since progress and the last result;
  *  the old agent hears that its task moved. Rows are written as the Lead, or as the worker when the project has none. */
-function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reason: string, now: number, resumeAt?: string): MessageDraft[] {
+function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reason: string, now: number): MessageDraft[] {
   const assignment = group.assignment!
-  const resume = resumeAt ? { resumeAt } : {}
   assignment.status = 'lost'
-  assignment.lost = { reason, at: now, ...resume }
+  assignment.lost = { reason, at: now }
   group.lostAttempt = { id: assignment.id, agentId: worker.id, machineId: assignment.execution.machineId, engine: assignment.configuration.engine }
-  worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now, ...resume }
+  worker.lostTask = { conversationId: group.id, assignmentId: assignment.id, reason, at: now }
   const sender = writtenBy(state, leadOf(state, worker) ?? worker)
   const progress = lastProgress(state, worker, assignment)
   const since = progress === undefined ? 'unknown' : `${plural(Math.max(0, Math.floor((now - progress) / 60_000)), 'minute')} ago`
@@ -228,8 +227,7 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
   // What happened, never the next step (project instructions, phase 4): the instructions say what the coordinator does.
   const wake = `${worker.displayName ?? worker.name} lost its task "${group.title}": ${reason}. Last progress ${since}. `
     + `Last result: ${result || 'none'}.${pr && !result?.includes(pr) ? ` Pull request: ${pr}.` : ''}`
-    + (resumeAt ? ` It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC.` : '')
-  // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
+  // Named by the loss, not the task: a task resumed after a usage limit before Swarm v4 kept its id and can be lost again (2026-10-28).
   const loss = String(now)
   return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
     recipients: [], text: wake, source }).map(row => reachable(state, row))),
@@ -240,12 +238,11 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
- *  the agents of a machine that just reported. A task lost to that limit resumes at `resumeAt` when its screen said when the
- *  limit resets (the host types into the same session then, cli superTabs/limitResume.ts). */
-export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true, resumeAt?: string): MessageDraft[] {
+ *  the agents of a machine that just reported. None resumes after a usage limit since Swarm v4 (work.resume is retired). */
+export function loseTasks(state: SuperTabState, now: number, which: (worker: Agent) => boolean = () => true): MessageDraft[] {
   return workerTasks(state).filter(t => which(t.worker)).flatMap(({ group, assignment, worker }) => {
     const reason = lostReason(state, group, worker, assignment, now)
-    return reason ? loseTask(state, group, worker, reason, now, resumeAt && reason === limitReason(worker, now) ? resumeAt : undefined) : []
+    return reason ? loseTask(state, group, worker, reason, now) : []
   })
 }
 

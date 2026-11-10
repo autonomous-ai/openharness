@@ -6,7 +6,7 @@ export const TASK_PRIORITIES = ['P0', 'P1', 'P2', 'P3'] as const
 export type TaskPriority = typeof TASK_PRIORITIES[number]
 
 export const DEFAULT_PRIORITY: TaskPriority = 'P2'
-export const PRIORITY_DEFAULTED = 'No priority given: this task is P2. Set P0-P3 with work.priority.'
+export const PRIORITY_DEFAULTED = 'No priority given: this task is P2. Give P0-P3 when you create a task.'
 
 /** A Buddy proposal's low, normal or high on the same scale. A proposal never reaches P0: only the PM or a person sets that. */
 export function proposalPriority(value: unknown): TaskPriority {

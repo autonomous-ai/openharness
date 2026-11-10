@@ -936,7 +936,7 @@ export interface CommandEffects {
   lateDeliveries?: Array<{ messageId: string; conversationId: string; agentId: string; author: { kind: 'person'; id: string; generation: string }; lead?: true }>
   /** An attempt the command closed for its gone builder (commands.ts conversation.merged, task #3510): the store closes its
    *  attempt row as a builder's own done does. */
-  closedAssignment?: { assignmentId: string; outcome: 'done' }
+  closedAssignment?: { assignmentId: string; outcome: 'done' | 'cancelled' }
   /** A project's new instructions revision, written outside the tab state by the store (instructions.ts). */
   instructions?: import('./instructions.js').InstructionsWrite
   /** A project's new rules revision, written outside the tab state by the store (policyStore.ts). */

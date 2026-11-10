@@ -1441,7 +1441,7 @@ export class SuperTabStore {
   }
 
   /**
-   * Who pushed the pull requests of the task a work.assign or a Ready for review is about (github/pushOrigin.ts, audit H2).
+   * Who pushed the pull requests of the task an agent joins or a Team-written mark is about (github/pushOrigin.ts, audit H2).
    * Read outside the command's transaction, as GitHub may take seconds, so it can only ever add a mark. Undefined when there is
    * nothing to read, or this reader cannot read that task: the command then refuses as it would. `pulls` are the pull requests
    * it read (none for a branch): a clean read clears only a mark it covered (teamWritten.ts applyPushOrigin, #3304).
@@ -4574,7 +4574,7 @@ export class SuperTabStore {
           worker && author(state, { kind: 'agent', agentId: worker.id, machineOwnerId: worker.machineOwnerId })))
       }
       const sequences = numberMessages(state, notices, this.now())
-      // A confirmed stop finishes its worker, as work.status stopped does; no command reads that decision now, so it touches
+      // A confirmed stop finishes its worker; no command reads that decision now, so it touches
       // nothing more (project instructions, phase 4).
       await this.save(tx, loaded, state, clock.next())
       await recordAttempts(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
