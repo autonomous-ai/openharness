@@ -3,9 +3,6 @@ import type { Actor, CommandEffects, SuperTabState } from '../model.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
-import { buddiesHearing } from '../buddyNews.js'
-import { defaultBuddy } from '../buddies.js'
-import { mainBuddyOf } from '../buddySessions.js'
 
 /**
  * The parts a command relies on without writing them (design section 1.2, column T). A part the command also writes is
@@ -41,9 +38,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
   if ('roleId' in command && command.roleId) head()
   if (command.type === 'agent.start' && command.request.roleId) head()
 
-  // Buddy input also guards an already awake recipient, so a concurrent sleep retries against that input (#3824).
-  for (const buddy of buddiesHearing(effects.state, effects.messages)) { agent(buddy.id); member(buddy.buddyOf!.personId) }
-
   switch (command.type) {
     // Every person's write relies on the Swarm not being deleted (deletion.ts): the delete moves each person's part, so one
     // landing at the same moment retries against it and is refused (security review 2 of #2457).
@@ -56,26 +50,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
-    case 'buddy.engine': {
-      const chat = before.conversations.find(c => c.id === command.conversationId)
-      const buddy = command.conversationId ? chat && mainBuddyOf(before, chat)
-        : actor.kind === 'person' ? defaultBuddy(before, actor.userId) : undefined
-      if (buddy) machine(buddy.machineId)
-      break
-    }
-    case 'buddy.create':
-      // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
-      slots(command.machineId)
-      // Its name is claimed against every other name in the Swarm, as buddy.rename's is (below).
-      head()
-      break
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
-    // A Buddy's name is claimed against every other name in the Swarm, some of them in chats a command does not load: the
-    // head guards the claim, as agent.start and agent.add touch it, so of two claims at once one retries and is refused
-    // (review of #2094).
-    case 'buddy.rename':
     // A new agent's free name is picked against every name in the Swarm (agentRename.ts newAgentName, review of #3560).
     case 'agent.new':
       head()
@@ -117,15 +94,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       break
     case 'message.send': {
       if (command.handoff) leadCheck(projectOfGroup(command.conversationId)?.id)
-      // Every start a post makes, a thread session's or the one Buddy's in an older project chat (commands.ts
-      // startOldChatBuddy), counts its machine's slots, as buddy.create's does, and meets a concurrent removal of the Buddy it
-      // runs beside: a Remove racing it can never leave it running (security review 2 of #2435).
+      // Every start a post makes counts its machine's slots.
       const start = effects.state.starts?.find(s => !before.starts?.some(b => b.id === s.id))
       if (start) {
         slots(start.request.machineId)
         head()
-        const person = start.request.buddyOf?.personId
-        for (const main of before.agents.filter(a => person && a.buddyOf?.personId === person && !a.buddySession)) agent(main.id)
       }
       // An answer to waiting work is credited to the person it waits on (leaderboard/record.ts): a concurrent change to who
       // that is meets the answer here.

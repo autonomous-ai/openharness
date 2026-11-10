@@ -11,7 +11,7 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 const reading = { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [],
-  stoppedHarnessIds: [], capabilities: ['leadStart', 'regularAgent', 'swarmBuddy'] }
+  stoppedHarnessIds: [], capabilities: ['leadStart', 'regularAgent'] }
 const configuration = { engine: 'claude' as const, model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const own = (userId: string) => ({ contribution: { machineOwnerId: userId, contributorId: userId } })
 const code = (body: () => unknown): string | null => {
@@ -34,67 +34,13 @@ function swarm(people = 1) {
   const listed = (machineId: string, contributorId: string): ContributedMachine => ({ machineId, name: machineId, contributorId,
     membershipGeneration: state.people.find(p => p.id === contributorId)!.generation, generation: 'g1', cwd: '/swarm', scope: 'swarm',
     engines: ['claude', 'codex'], maxAgents: 4, paused: false, observation: reading })
-  /** [who]'s Bring agent on the computer they joined from, which the Swarm does not list yet (Swarm v3 join). */
-  const bring = (who: Extract<Actor, { kind: 'person' }>) => run({ type: 'buddy.create', machineId: `${who.userId}-laptop`, engine: 'claude',
-    setup: { name: `${who.userId} laptop`, cwd: '/home/swarm', engines: ['claude'] } } as Command, who, own(who.userId))
-  const startOf = (id: unknown) => state.starts!.find(s => s.id === id)!
   const chatOf = (id: unknown) => state.conversations.find(c => c.id === id)!
   const started = (startId: string, who: Actor, userId: string) => {
     run({ type: 'agent.startDispatch', startId }, who, own(userId))
     return run({ type: 'agent.started', startId, harnessId: `h-${startId}`, configuration }, who, own(userId)).result.agentId as string
   }
-  return { run, bring, listed, startOf, chatOf, started, get state() { return state }, set machines(list: ContributedMachine[]) { state.machines = list } }
+  return { run, listed, chatOf, started, get state() { return state }, set machines(list: ContributedMachine[]) { state.machines = list } }
 }
-
-describe('a Buddy brought on joining', () => {
-  it('gets a real name from the list, its chat titled so, never "<person>\'s Buddy"', () => {
-    const f = swarm(1)
-    const made = f.bring(person(0))
-    const name = f.startOf(made.result.startId).request.name
-    expect(AGENT_NAMES).toContain(name)
-    expect(f.chatOf(made.result.conversationId)).toMatchObject({ title: name, buddyName: name })
-    expect(JSON.stringify(f.state)).not.toContain("'s Buddy\"")
-  })
-
-  it('gets a name nobody else in the Swarm has', () => {
-    const f = swarm(10)
-    const names = Array.from({ length: 10 }, (_, n) => f.startOf(f.bring(person(n)).result.startId).request.name.toLowerCase())
-    expect(new Set(names).size).toBe(10)
-  })
-
-  // Security review 2 of #3560: a Buddy never comes up with a teammate's shown name or username, an agent passing as a person.
-  it('never takes a name a person in the Swarm goes by', () => {
-    const firstPick = () => { const f = swarm(2); return { f, name: f.startOf(f.bring(person(0)).result.startId).request.name } }
-    const { name } = firstPick()
-    for (const field of ['name', 'username'] as const) {
-      const f = swarm(2)
-      // Another person goes by the name this person's Buddy would be offered first.
-      Object.assign(f.state.people.find(p => p.id === 'p1')!, { [field]: name })
-      expect(f.startOf(f.bring(person(0)).result.startId).request.name.toLowerCase()).not.toBe(name.toLowerCase())
-    }
-  })
-
-  it('keeps its name when started again', () => {
-    const f = swarm(1)
-    const first = f.bring(person(0))
-    const name = f.startOf(first.result.startId).request.name
-    f.started(first.result.startId as string, person(0), 'p0')
-    f.state.agents.find(a => a.buddyOf)!.downSince = new Date(NOW - 60 * 60_000).toISOString()
-    const again = f.run({ type: 'buddy.create', machineId: 'p0-laptop', engine: 'claude' } as Command, person(0), own('p0'))
-    expect(f.startOf(again.result.startId).request.name).toBe(name)
-  })
-
-  it('gets a fresh real name when its owner clears its name', () => {
-    const f = swarm(1)
-    const made = f.bring(person(0))
-    const chat = f.chatOf(made.result.conversationId)
-    f.run({ type: 'buddy.rename', conversationId: chat.id, name: 'Moonbeam' }, person(0))
-    f.run({ type: 'buddy.rename', conversationId: chat.id, name: null }, person(0))
-    const cleared = f.chatOf(chat.id)
-    expect(AGENT_NAMES).toContain(cleared.title)
-    expect(cleared.buddyName).toBe(cleared.title)
-  })
-})
 
 describe('+ New agent', () => {
   function withComputer() {
@@ -121,6 +67,20 @@ describe('+ New agent', () => {
     expect(code(() => add({ name: taken }))).toBe('AGENT_NAME_TAKEN')
     expect(code(() => add({ name: 'person0' }))).toBe('AGENT_NAME_TAKEN')
     expect(f.chatOf(add({ name: 'Moonbeam' }).result.conversationId).title).toBe('Moonbeam')
+  })
+
+  // Security review 2 of #3560: an agent never comes up with a teammate's shown name or username, an agent passing as a person.
+  it('never picks a name a person in the Swarm goes by', () => {
+    const first = withComputer()
+    const name = first.f.chatOf(first.add({}).result.conversationId).title
+    for (const field of ['name', 'username'] as const) {
+      const { f, add } = withComputer()
+      // The Swarm's owner goes by the name this person's agent would be offered first.
+      Object.assign(f.state.people.find(p => p.id === 'owner')!, { [field]: name })
+      const picked = f.chatOf(add({}).result.conversationId).title
+      expect(AGENT_NAMES).toContain(picked)
+      expect(picked.toLowerCase()).not.toBe(name.toLowerCase())
+    }
   })
 })
 

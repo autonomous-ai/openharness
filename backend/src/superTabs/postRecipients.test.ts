@@ -251,14 +251,11 @@ describe('a post to an agent whose session is down', () => {
     expect(sent(f, f.dev, [f.lead]).result).not.toHaveProperty('offline')
   })
 
-  it('says nothing of an agent asleep, which wakes on the message, one told to stop, a post that names no agent, or an agent-only notice', () => {
+  it('says nothing of an agent told to stop, a post that names no agent, or an agent-only notice', () => {
     const f = stepsFixture()
     const other = f.add('other', f.task)
     // Everything is down, the Engineer too: an agent-only notice is its own, whatever its record says.
     down(f, [])
-    agent(f.state, other).asleep = { since: f.now }
-    expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
-    delete agent(f.state, other).asleep
     agent(f.state, other).workDecision = 'stop'
     expect(sent(f, f.dev, [other]).result).not.toHaveProperty('offline')
     expect(sent(f, f.dev, []).result).not.toHaveProperty('offline')

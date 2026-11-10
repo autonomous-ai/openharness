@@ -1,8 +1,13 @@
 import { isRoleName } from './agentNames.js'
 import { printable } from './profile.js'
-import { reserved } from './buddies.js'
 import type { Author, Person, SuperTabState } from './model.js'
 import { swarmUsernames, usernameOf } from './usernames.js'
+
+/** Names nobody's may be, beside roles (agentNames.ts isRoleName): the Reviewer and the Swarm's own voices. Compared NFKC and
+ *  lowercased, numbered too ("Reviewer 2", "system-3"), as the role check reads "Lead 2". Look-alike letters of other scripts
+ *  are out of scope (review of #2094). */
+const RESERVED_NAMES: ReadonlySet<string> = new Set(['reviewer', 'admin', 'administrator', 'system', 'swarm', 'harness', 'everyone'])
+const reserved = (name: string): boolean => RESERVED_NAMES.has(name.normalize('NFKC').toLowerCase().replace(/[\s#-]+\d+$/, ''))
 
 /**
  * Why [name] (already trimmed) cannot be a name people see for a person, or null: a web address, or a role's or the
@@ -15,7 +20,7 @@ export function nameRefusal(name: string): { code: 'INVALID_NAME' | 'NAME_RESERV
   // A web address would show as a link in the lines the server writes (review 2 of #2794), a protocol-relative one too
   // ("//ev.il", security review 2 of #3015).
   if (/\/\/|^www\./i.test(folded)) return { code: 'INVALID_NAME', message: 'Use a name, not a web address.' }
-  // A role's or the Swarm's own voice, as a Buddy may not take (buddies.ts), and the words readers put in place of a name.
+  // A role's or the Swarm's own voice, and the words readers put in place of a name.
   if (isRoleName(folded) || reserved(folded) || /^(?:tester|you|someone)(?:[\s#-]+\d+)?$/i.test(folded)) {
     return { code: 'NAME_RESERVED', message: `${name} is a role's name. Choose another.` }
   }

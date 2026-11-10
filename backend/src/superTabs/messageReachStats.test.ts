@@ -37,12 +37,12 @@ describe('message reach latency', () => {
     recordMessageReach({ reader: 'person', via: 'read' }, 5 * 60_000)
     recordMessageReach({ reader: 'agent', via: 'delivery' }, 5 * 60_000)
     recordMessageReach({ reader: 'agent', via: 'delivery' }, LATE_MS.delivery + 1)
-    recordMessageReach({ reader: 'buddy', via: 'read' }, 3 * 3_600_000)
+    recordMessageReach({ reader: 'agent', via: 'read' }, 3 * 3_600_000)
     vi.advanceTimersByTime(60_000)
     expect(log.mock.calls[0]![1].rows).toEqual([
       { reader: 'person', via: 'read', n: 1, p50: 400, p95: 400, max: 400, late: 2 },
       { reader: 'agent', via: 'delivery', n: 1, p50: 300_000, p95: 300_000, max: 300_000, late: 1 },
-      { reader: 'buddy', via: 'read', n: 0, late: 1 },
+      { reader: 'agent', via: 'read', n: 0, late: 1 },
     ])
     expect(LATE_MS).toEqual({ read: 60_000, delivery: 600_000 })
     stop()

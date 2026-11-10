@@ -124,7 +124,7 @@ describe('which messages to the coordinator are gathered', () => {
     expect((await deliveryOf(other, f.worker)).status).toBe('queued')
   })
 
-  it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'agent-only', 'instructions', 'system'])('a %s row goes at once', async kind => {
+  it.each(['pair-loop', 'terminal-alert', 'update-request', 'agent-only', 'instructions', 'system'])('a %s row goes at once', async kind => {
     const f = await swarm()
     const id = await f.write({ kind }, f.lead)
     expect((await deliveryOf(id, f.lead)).status).toBe('queued')

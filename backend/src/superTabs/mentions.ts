@@ -1,8 +1,7 @@
-/** A person, or any agent of the project but a Buddy, tags people in a message: the message keeps whom it tags (`mentions`), as
+/** A person, or any agent of the project, tags people in a message: the message keeps whom it tags (`mentions`), as
  *  its readers see them. Swarm v4 (anh Dee, 2026-11-10) keeps no tag list: an agent reaches its person in their 1:1 chat. */
 import { fail, isLeads, type Actor, type Conversation, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, inChannelOf, isAgentChat, projectAgent, projectsOf } from './projects.js'
-import { isBuddyChat, isSwarmBuddyChat } from './buddies.js'
 import { usernameOf } from './usernames.js'
 
 export const MAX_MENTIONS = 5
@@ -65,11 +64,9 @@ export function namedIn(state: SuperTabState, text: string, names: ReadonlyMap<s
 
 /** The agents of [group] that [text] names by `@Name` (task #2963): its display name or name in any case, matched only when
  *  exactly one agent there goes by it and no person's username is the same, so a person's tag stays a tag. [names] is the
- *  Swarm's usernames by person (usernames.ts swarmUsernames). A Buddy chat names no one this way: its sessions hear their own
- *  threads alone (buddySessions.ts). In a project's chat, its channel (Swarm v4, anh Dee 2026-11-08), every agent of the
+ *  Swarm's usernames by person (usernames.ts swarmUsernames). In a project's chat, its channel (Swarm v4, anh Dee 2026-11-08), every agent of the
  *  project goes by its name, joined or not: agents there talk to each other by name, as lampOS's did in its issues. */
 export function agentsNamedIn(state: SuperTabState, group: Conversation, text: string, names: ReadonlyMap<string, string>): string[] {
-  if (isBuddyChat(group)) return []
   const people = new Set([...names.values()].map(name => name.toLowerCase()))
   const tokens = tagTokens(text).filter(token => !token.includes('@') && !people.has(token))
   if (!tokens.length) return []
@@ -101,12 +98,11 @@ const OPENS_BLOCK = new RegExp('^(?: {4}|\\t| {0,3}(?:[-*+](?:[ \\t\\n]|$)|#{1,6
   + '|\\d{1,9}[.)](?:[ \\t\\n]|$)|```|~~~|\\||\\[[^\\]\\n]+\\]:'
   + '|(?:(?:\\*[ \\t]*){3,}|(?:-[ \\t]*){3,}|(?:_[ \\t]*){3,})(?:\\n|$)))')
 
-/** Whether [actor] may tag people in [group]: a person who can post there; any agent of the project but a Buddy, in its own
+/** Whether [actor] may tag people in [group]: a person who can post there; any agent of the project, in its own
  *  project's conversations (project instructions, phase 4); nobody in the Leads conversation. */
 function mayTag(state: SuperTabState, actor: Actor, group: Conversation): boolean {
-  // Nobody else reads a person's one Buddy chat, or their 1:1 chat with an agent of theirs, so nobody is tagged there (Dee,
-  // 10-31; Swarm v4). Such a chat is in no project, so the project check below would refuse the post itself (2026-11-09).
-  if (isLeads(group) || isSwarmBuddyChat(group) || isAgentChat(group)) return false
+  // Nobody else reads a person's 1:1 chat with an agent of theirs, so nobody is tagged there (Swarm v4). Such a chat is in no project, so the project check below would refuse the post itself (2026-11-09).
+  if (isLeads(group) || isAgentChat(group)) return false
   return actor.kind !== 'agent' || projectAgent(state, actor, groupProject(state, group).id)
 }
 
@@ -118,13 +114,12 @@ export function textTags(state: SuperTabState, actor: Actor, group: Conversation
     && canReadGroup(state, { kind: 'person', userId: p.id, email: p.email }, group)))
 }
 
-/** A person who can post here tags people; so does any agent of the project but a Buddy, in that project's conversations.
+/** A person who can post here tags people; so does any agent of the project, in that project's conversations.
  *  Never in the Leads conversation, and only people who can read the conversation. A person's tag of themselves is dropped. */
 export function checkMentions(state: SuperTabState, actor: Actor, group: Conversation, personIds: string[]): string[] {
   const ids = [...new Set(personIds)].filter(id => actor.kind !== 'person' || id !== actor.userId)
   if (!ids.length) return ids
   if (isLeads(group)) fail('INVALID_MENTION', 'Nobody is tagged in the Leads conversation.', 400)
-  if (isSwarmBuddyChat(group)) fail('INVALID_MENTION', 'Nobody else reads your Buddy chat.', 400)
   if (actor.kind === 'agent' && !projectAgent(state, actor, groupProject(state, group).id)) {
     fail('FORBIDDEN', 'Only a person or an agent of this project tags people here.', 403)
   }

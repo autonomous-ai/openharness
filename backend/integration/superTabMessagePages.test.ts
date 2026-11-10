@@ -194,23 +194,6 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
     expect(page.messages.filter(m => m.id !== first.messageId)).toEqual(live.messages.filter(m => m.id !== first.messageId))
   })
 
-  it('a compacted receipt for news a row does not name (a Buddy\'s) is shown only to that agent, as a live one is', async () => {
-    const { tab, lead } = await fixture()
-    // The Lead's delivery of a row that does not list it among its recipients: the shape of Buddy news (buddyNews.ts).
-    const id = `${tab}-news`
-    await db.superTabMessage.create({ data: { id, tabId: tab, conversationId: 'lead', sequence: 900, text: 'News', replyTo: null, recipientIds: [],
-      mentions: [], thread: id, author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' } } })
-    await db.superTabDelivery.create({ data: { id: `${id}-d`, tabId: tab, conversationId: 'lead', messageId: id, agentId: lead, machineId: 'test-host',
-      membershipGeneration: 'g', authorKind: 'person', authorId: owner.sub, authorGeneration: 'g', status: 'answered' } })
-    const receipts = async (user: AuthUser, asAgentId?: string) =>
-      (await store.messages(user, tab, 'lead', {}, asAgentId)).messages.find(m => m.id === id)!.deliveries.map(d => d.agentId)
-    expect(await receipts(owner)).toEqual([])
-    expect(await receipts(host, lead)).toEqual([lead])
-    await compactByHand([`${id}-d`])
-    expect(await receipts(owner)).toEqual([])
-    expect(await receipts(host, lead)).toEqual([lead])
-  })
-
   it('no message read returns a receipts map or a compacted receipt\'s host fields', async () => {
     const f = await answered()
     await compactByHand(f.deliveries.slice(0, 3).map(d => d.id))

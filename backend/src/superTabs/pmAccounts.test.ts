@@ -43,10 +43,9 @@ describe('pmAccounts', () => {
     expect(pmAccounts(s.state, owner).find(a => a.project === 'Secret')!.pm).toBe('Sage')
   })
 
-  it('gives a person\'s read and a Buddy\'s none', () => {
+  it('gives a person\'s read none', () => {
     const s = twoPms()
     expect(visibleState(s.state, owner, NOW)).not.toHaveProperty('pmAccounts')
-    expect(visibleState(s.state, agentActor(s.buddy), NOW)).not.toHaveProperty('pmAccounts')
   })
 
   it('leaves out a PM on a machine the reader cannot see', () => {

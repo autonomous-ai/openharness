@@ -1,5 +1,4 @@
 import type { Prisma, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
-import { routingRow } from './buddies.js'
 import { ms } from './parts/light.js'
 import { agentOnly, stableId, type Author } from './model.js'
 import { readBy } from './parts/indexed.js'
@@ -78,7 +77,7 @@ export async function compactedDelivery(tx: Transaction, tabId: string, agentId:
 }
 
 /** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
-export const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
+const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** The deliveries a cancel ends: the open ones, and those gathered for a digest (noticeDigest.ts), which hosts are not told about
  *  yet: a gathered delivery outlives its reason no more than an open one. */
 export const CANCELLABLE_DELIVERY = [...OPEN_DELIVERY, 'gathered'] as const
@@ -176,14 +175,13 @@ export async function heldPast(tx: Transaction, at: { tabId: string; conversatio
  * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).
  */
 export async function messagesById(tx: Transaction, tabId: string, conversationId: string, ids: string[]):
-  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'buddySession' | 'author' | 'buddyProject'>>> {
+  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds' | 'thread' | 'author'>>> {
   if (!ids.length) return []
-  // Its author too: a project session of a person's one Buddy chat reads only its person's words and its own (buddySessions.ts).
   const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId, conversationId } },
-    { $project: { source: 1, recipientIds: 1, thread: 1, buddySession: 1, author: 1, buddyProject: 1 } }])
+    { $project: { source: 1, recipientIds: 1, thread: 1, author: 1 } }])
   return rows.map(row => {
-    const { id, source, recipientIds, thread, buddySession, author, buddyProject } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
-    return { id, source, recipientIds, thread: thread ?? null, buddySession: buddySession ?? null, author, buddyProject: buddyProject ?? null }
+    const { id, source, recipientIds, thread, author } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
+    return { id, source, recipientIds, thread: thread ?? null, author }
   })
 }
 
@@ -219,21 +217,12 @@ export async function deliveredCopies(tx: Transaction, tabId: string, rows: Read
   return new Set(copies.filter(row => reached.has(stableId(row.id, 'lead'))).map(row => row.id))
 }
 
-/** `routing`: a route, override or rule row (buddies.ts routingRow), which a Buddy never reads, as a reply or a thread's root.
- *  `count`: how many of the thread's rows this one stands for (pageThreads); a row without it is one. */
-export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean
-  count?: number
-  /** A reply in a Buddy thread session's thread (buddySessions.ts), which the main Buddy never counts. */
-  session?: boolean
-  /** Its source's kind, and what it says for its task's row (threads.ts). */
-  kind?: unknown
-  ask?: TaskAsk }
-/** What a task line's reply said for its task's row: written until Swarm v4 removed task lines (2026-11-10), still stored. */
-type TaskAsk = 'on-it' | 'shipped' | 'closed'
+/** `count`: how many of the thread's rows this one stands for (pageThreads); a row without it is one. */
+export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean
+  count?: number }
 
-/** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly, routingRow). */
-interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean; session?: boolean | null
-  ask?: TaskAsk }
+/** The rows of one thread that every reader sees or skips alike: one author, and one kind of row (agentOnly). */
+interface ThreadPart { thread: string; root: boolean; kind?: unknown; only?: unknown; to: boolean }
 /** One row of a part, by its place in the thread. */
 interface ThreadPlace { s: number; i: string; at: unknown; author: Author; slot?: number }
 /** What the database sums up of some threads' rows (threadFacet), as it returns it: the same whoever reads. */
@@ -262,9 +251,8 @@ async function rowsFacet(tx: Transaction, tabId: string, conversationId: string,
 
 async function summed(tx: Transaction, index: 'thread' | 'id', match: Prisma.InputJsonObject): Promise<ThreadFacet> {
   const root = { $eq: ['$_id', '$thread'] }
-  const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly', ask: '$source.ask',
-    to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' },
-    session: { $eq: ['$buddySession', true] } }
+  const part = { thread: '$thread', root, kind: '$source.kind', only: '$source.recipientsOnly',
+    to: { $gt: [{ $size: { $ifNull: ['$recipientIds', []] } }, 0] }, author: { kind: '$author.kind', id: '$author.id' } }
   // (sequence, id) lead each place, so the database's min and max order rows as threadReplies sorts them (ids are ASCII).
   const place = { s: '$sequence', i: '$_id', at: '$createdAt', author: '$author' }
   const [found] = await readBy(tx, 'SuperTabMessage', index, [{ $match: match },
@@ -290,8 +278,7 @@ export async function threadReplies(tx: Transaction, tabId: string, { parts, men
   const row = (key: ThreadPart, at: ThreadPlace) => {
     let kept = rows.get(at.i)
     if (!kept) rows.set(at.i, kept = { thread: key.thread, id: at.i, author: at.author, mentions: [], sequence: at.s, createdAt: new Date(ms(at.at)),
-      agentOnly: hidden(key), routing: routingRow({ kind: key.kind }), ...(key.session ? { session: true } : {}), kind: key.kind,
-      ...(key.ask ? { ask: key.ask } : {}), count: 0, slots: [] })
+      agentOnly: hidden(key), count: 0, slots: [] })
     return kept
   }
   for (const p of parts) {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor } from '../model.js'
-import { openSwarmBuddyChat } from '../buddies.js'
 import { storedAssignment, storedStatus } from '../storedWork.test-support.js'
 import { touchesFor } from './touches.js'
 
@@ -112,7 +111,7 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
     expect(has(touches, 'head', 'head')).toBe(true)
   })
 
-  // Review of #3560: + New agent picks a name free across the Swarm, so two at once must meet, as Buddy names do.
+  // Review of #3560: + New agent picks a name free across the Swarm, so two at once must meet.
   it('makes two new agents meet on the head, where their names are claimed', () => {
     const f = swarm()
     const { touches } = f.run({ type: 'agent.new', kind: 'regular', machineId: 'host', engine: 'claude', local: true }, owner,
@@ -121,16 +120,3 @@ describe('the parts a command touches (design section 1.2, column T)', () => {
   })
 })
 
-
-it('guards an already awake Buddy hearing its own chat against a concurrent sleep', () => {
-  const f = swarm(), a = f.group('A')
-  const buddy = f.state.agents.find(agent => agent.id === a.worker)!
-  buddy.buddyOf = { personId: 'owner', generation: f.state.people[0]!.generation }
-  buddy.buddyScope = 'swarm'
-  const chat = openSwarmBuddyChat(f.state, f.state.people[0]!)
-  chat.agentIds.push(buddy.id)
-  const touches = touchesFor({ type: 'message.send', conversationId: chat.id, text: 'Hi', replyTo: null, recipientIds: [] },
-    owner, f.state, { state: f.state, messages: [{ id: 'input', conversationId: chat.id, text: 'Hi', replyTo: null,
-      recipients: [buddy.id], author: { kind: 'person', id: 'owner', name: 'Owner', membershipGeneration: f.state.people[0]!.generation } }] })
-  expect(has(touches, 'agent', buddy.id)).toBe(true)
-})

@@ -30,9 +30,9 @@ describe('messages by reader', () => {
   it('logs nothing for a quiet minute, and starts each window empty', () => {
     const logged: Array<Record<string, unknown>> = []
     stop = startMessageReadStats({ everyMs: 60_000, log: (_message, context) => logged.push(context) })
-    recordMessageRead({ reader: 'buddy', cursor: 'after', session: 'sso' }, 1, 0, 0)
+    recordMessageRead({ reader: 'agent', cursor: 'after', session: 'sso' }, 1, 0, 0)
     vi.advanceTimersByTime(180_000)
-    expect(logged).toEqual([{ windowMs: 60_000, rows: [{ reader: 'buddy', cursor: 'after', session: 'sso', n: 1, batches: 1, decoded: 0, shown: 0 }] }])
+    expect(logged).toEqual([{ windowMs: 60_000, rows: [{ reader: 'agent', cursor: 'after', session: 'sso', n: 1, batches: 1, decoded: 0, shown: 0 }] }])
   })
 
   it('keeps nothing while stopped, and logs what is left when it stops', () => {

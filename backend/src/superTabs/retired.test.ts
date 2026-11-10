@@ -60,3 +60,12 @@ describe('a step an older agent opens', () => {
     expect(await counted(RETIRED_STEP, 'cli')).toBe(before + 3)
   })
 })
+
+// Desktop sends `oneBuddy` with every post and reaction while its last read said the Swarm had one Buddy per person
+// (controller.dart), and keeps that until it restarts: refusing it would stop a running Desktop posting anything.
+describe('a running Desktop\'s Buddy flag', () => {
+  it('takes a post and a reaction that still carry it', () => {
+    expect(commandSchema.safeParse({ type: 'message.send', conversationId: 'c', text: 'Hi', replyTo: null, recipientIds: [], oneBuddy: true }).success).toBe(true)
+    expect(commandSchema.safeParse({ type: 'message.react', conversationId: 'c', messageId: 'm', emoji: 'eyes', on: true, oneBuddy: true }).success).toBe(true)
+  })
+})

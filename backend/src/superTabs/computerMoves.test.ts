@@ -4,7 +4,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor } from './model.js'
-import { swarmBuddyChatId } from './buddies.js'
 import type { ContributedMachine } from './machines.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -66,15 +65,12 @@ describe("another account's sign-in on a computer", () => {
     }
   })
 
-  it("stops the old account's agents first, and tells their groups and the old owner", () => {
+  it("stops the old account's agents first, and tells their groups", () => {
     const f = setup()
     const effects = f.run(MOVED, kelvin, moveTo())
     expect(f.state.agents.map(a => a.id)).not.toContain(f.builder)
     expect(effects.cancelledAgents).toEqual(expect.arrayContaining([f.builder]))
     expect(effects.messages.find(m => m.conversationId === f.group)?.text).toContain('MacBooks-MacBook-Pro-7 is signed in to another account now')
-    const told = effects.messages.filter(m => m.conversationId === swarmBuddyChatId(f.state.people.find(p => p.id === 'kelvin')!))
-    expect(told).toHaveLength(1)
-    expect(told[0]!.text).toBe('Your MacBooks-MacBook-Pro-7 is signed in as ttkhoahcmus now, so it left this Swarm under your account, and Birch3 with it.')
   })
 
   it('leaves the computer\'s folders to the new account', () => {
@@ -100,12 +96,10 @@ describe("another account's sign-in on a computer", () => {
     expect(f.state.machines!.find(m => m.machineId === 'tt-mac')).toMatchObject({ maxAgents: 1, paused: false, previousOwner: { personId: 'kelvin' } })
   })
 
-  it('only takes the old entry out when the new account is not in the Swarm, and names no one to the old owner', () => {
+  it('only takes the old entry out when the new account is not in the Swarm', () => {
     const f = setup({ ttMember: false })
-    const effects = f.run(MOVED, kelvin, moveTo())
+    f.run(MOVED, kelvin, moveTo())
     expect(entries(f)).toEqual([])
-    const told = effects.messages.filter(m => m.conversationId === swarmBuddyChatId(f.state.people.find(p => p.id === 'kelvin')!))
-    expect(told[0]!.text).toBe('Your MacBooks-MacBook-Pro-7 is signed in to another account now, so it left this Swarm under your account, and Birch3 with it.')
   })
 
   it('does not add the new account\'s machine where its person took it out', () => {

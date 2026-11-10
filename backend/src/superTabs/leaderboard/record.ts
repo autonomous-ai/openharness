@@ -78,8 +78,6 @@ export interface GroupLedger {
   reviews?: ReviewCount[]
   /** The same by hour, for the last LEDGER_WEEKS weeks. */
   reviewHours?: ReviewHour[]
-  /** The Buddy's proposal the group was opened from, written until proposals went (2026-11-10): the Buddy earns when it ships. */
-  proposal?: { buddyId: string; messageId: string }
 }
 
 /** The leaderboard reads this week and last; a little more keeps a streak and week boundaries safe. */
