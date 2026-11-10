@@ -10,7 +10,6 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { DISPATCH_RULES, freeCrew } from './dispatch.js'
 import type { ContributedMachine } from './machines.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
-import { reviewerCandidates } from './reviewerPick.js'
 
 const NOW = 50_000_000
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -99,11 +98,8 @@ describe('with Team accounts removed', () => {
   it('gives a Team-account agent no new work, and leaves it the task it holds', () => {
     const f = swarm()
     const team = f.member('mates-team', 'mate-team', 'mate')
-    const own = f.member('mates-own', 'mate-mac', 'mate', 'Tester')
     expect(refusal(() => f.assign(team))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED' })
     expect(freeCrew(f.state, 'lead', DISPATCH_RULES, NOW).map(a => a.id)).not.toContain(team)
-    f.state.agents.find(a => a.id === team)!.roleName = 'Tester'
-    expect(reviewerCandidates(f.state, f.group(), 'test', null, NOW).map(a => a.id)).toEqual([own])
     // What it already holds stays with it.
     const held = f.group()
     held.assignment = { id: 'a1', agentId: team, status: 'working', configuration: config, execution: { machineId: 'mate-team', harnessId: 'harness-mates-team',

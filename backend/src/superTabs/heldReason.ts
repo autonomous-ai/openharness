@@ -36,7 +36,7 @@ export function missingReason(): never {
 
 /**
  * The facts a reason claims, checked against the Swarm: the task it waits on is another task of this project, the person is a
- * member (not checked: that they were asked, which lives in their decisions), the requester exists, and a time is still ahead.
+ * member (not checked: that they were asked), the requester exists, and a time is still ahead.
  * A reason that is not true is no reason.
  */
 export function checkReason(state: SuperTabState, group: Conversation, reason: HeldReason, now: number): void {

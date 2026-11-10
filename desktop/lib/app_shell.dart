@@ -37,6 +37,7 @@ import 'widgets/environment_preflight_screen.dart';
 import 'widgets/environment_setup_screen.dart';
 import 'widgets/export_logs_dialog.dart';
 import 'widgets/in_window_menu_bar.dart';
+import 'widgets/old_team_account.dart';
 import 'widgets/setup_tour.dart';
 import 'widgets/sign_in_step.dart';
 import 'widgets/transient_menus.dart';
@@ -531,7 +532,11 @@ class _RootShellState extends ConsumerState<RootShell>
           );
         }
         _home = home;
-        final framed = home ? screen : FullWindowScreen(child: screen);
+        // The workspace asks once a launch about an old Team account left on
+        // this computer (widgets/old_team_account.dart).
+        final framed = home
+            ? OldTeamAccountAsk(child: screen)
+            : FullWindowScreen(child: screen);
         // The band takes a row of its own rather than floating over one. As an
         // overlay it landed on the rail's head — covering the wordmark and the
         // three buttons beside it, which is the one strip of this window that

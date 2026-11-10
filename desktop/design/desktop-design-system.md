@@ -844,6 +844,15 @@ overflows, including before the first scroll gesture. Text leaves 12 points of
 clearance for the thumb. Short content has no visible scroll furniture; nested
 editors keep their own input and scrolling behavior.
 
+**Old Team Account** (`widgets/old_team_account.dart`) — the one task dialog
+the app opens by itself: once a launch, as the workspace opens on a computer
+whose old Harness Team account is still there. One line, "An old Harness Team
+account is still on this computer. Remove it.", and one action, Remove, which
+opens the system's administrator prompt. Nothing else closes it until the
+removal has run; then the footer shows "Removed." or the CLI's own reason in
+the danger color, with Close and Retry. Cancelled or failed, the next launch
+asks again. `test/old_team_account_test.dart` clicks through it.
+
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,
 harness count and optional number accelerator. Selection uses the same blue

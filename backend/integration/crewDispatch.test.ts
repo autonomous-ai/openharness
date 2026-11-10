@@ -119,11 +119,9 @@ describe('the crew dispatch pass', () => {
     } finally { errors.mockRestore() }
   })
 
-  it('lets a review step open under invalid rules but refuses new tasks with a repair instruction', async () => {
+  it('refuses new tasks under invalid rules with a repair instruction', async () => {
     const s = await twoProjects()
     await s.corrupt()
-    const step = await s.execute({ type: 'conversation.create', title: 'Review', brief: 'Review the change.', reviewOf: s.tasks.Api!, step: 'Review', checks: [] })
-    expect((await readGroup(s.tab, String(step.result.conversationId))).reviewOf).toBe(s.tasks.Api)
     await expect(s.execute({ type: 'conversation.create', title: 'New task', brief: 'A new task.', checks: [] })).rejects.toMatchObject({
       code: 'RULES_INVALID', message: expect.stringMatching(/lead.*repair.*rules/i),
     })

@@ -29,6 +29,7 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
       byRuntimeEngine: vi.fn(() => undefined),
       openProcessAgent: vi.fn(() => null),
       adoptEngine: vi.fn(() => row()),
+      reinstateArchived: vi.fn(() => null),
       updateRuntimes: vi.fn(),
       updateProcessIdentity: vi.fn(),
       setBypassPermission: vi.fn(),
@@ -54,7 +55,8 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(),
     retainExitedSession: vi.fn(),
-    stoppedAgents: { finishResume: vi.fn() },
+    stoppedAgents: { finishResume: vi.fn(), list: vi.fn(() => []), remove: vi.fn(), resumeReservedAt: vi.fn(() => null) },
+    send: vi.fn(),
     restoreDegraded: (agentId) => restoreDegraded(agentId),
     terminals: { backendFor: vi.fn(() => paneBackend) },
     ...over,
@@ -165,6 +167,128 @@ describe('discovery', () => {
       expect(run.deps.syncRecapPool).toHaveBeenCalled()
       expect(run.deps.announceSession).toHaveBeenCalledWith(adopted)
       expect(String(log.mock.calls[0][0])).toContain('terminal → claude')
+    })
+
+    // CLI 0.5.97 could not see Hermes in its panes on Windows: its restore archived "Hermes harness 11-9 20:28" as exited,
+    // gave pane %2007 to a new terminal row, and the harness answered Enter with AGENT_BUSY while its own Hermes (pid
+    // 25492) ran on (DESKTOP-0TFH0OJ, 2026-11-10). Seen again, that same process brings the harness back.
+    describe('an archived harness whose own engine never stopped', () => {
+      const PANE = { backend: 'ptyhost', instance: 'p2-0.5.80', paneId: '%2007' } as const
+      const HERMES = { pid: 25492, executable: 'python.exe', startMarker: 'w:134387585146660684' }
+      const archived = (over: Partial<RegisteredSession> = {}) => row({ agentId: 'bcdaa2eb', engine: 'hermes', sessionId: '', active: false,
+        defaultName: 'Hermes harness 11-9 20:28', runtimes: [PANE], processIdentity: HERMES, ...over } as Partial<RegisteredSession>)
+      const shell = row({ agentId: '0e375534', engine: 'terminal', sessionId: '', runtimes: [PANE] } as Partial<RegisteredSession>)
+      const hermesSeen = (over: Partial<DiscoveredTerminalAgent> = {}) => seen({ engine: 'hermes', runtimes: [PANE],
+        primaryRuntimeKey: 'ptyhost:p2-0.5.80:%2007', processIdentity: HERMES, args: 'python.exe -I hermes-boot.py', ...over })
+
+      it('comes back under its own id on its pane, the terminal tile moving to it, nothing restarted', async () => {
+        const run = setup()
+        const saved = archived()
+        const live = { ...saved, active: true, processIdentity: HERMES }
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived({ agentId: 'other', runtimes: [{ ...PANE, paneId: '%2009' }] }), saved])
+        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue(live as RegisteredSession)
+        run.rows.set('bcdaa2eb', live as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), shell)
+        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES)
+        expect(run.deps.stoppedAgents.remove).toHaveBeenCalledWith('bcdaa2eb')
+        expect(run.deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: '0e375534', successor: 'bcdaa2eb' } })
+        expect(run.deps.announceSession).toHaveBeenCalledWith(live)
+        expect(run.deps.registry.adoptEngine).not.toHaveBeenCalled()
+        expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('bcdaa2eb', HERMES, undefined, undefined)
+      })
+
+      it.each([
+        ['another process typed into that shell', hermesSeen({ processIdentity: { ...HERMES, startMarker: 'w:1' } }), archived()],
+        ['the same process number in another pane', hermesSeen(), archived({ runtimes: [{ ...PANE, paneId: '%2008' }] })],
+        ['another engine', hermesSeen({ engine: 'codex' }), archived()],
+      ])('is not what %s is: the terminal adopts its engine as before', async (_name, observed, saved) => {
+        const run = setup()
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        await run.handlers.onObserved(observed, shell)
+        expect(run.deps.registry.reinstateArchived).not.toHaveBeenCalled()
+        expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('0e375534', observed.engine, observed.processIdentity)
+      })
+
+      it('waits for a resume already under way, and adopts when the archive cannot be read or the registry refuses', async () => {
+        const reserved = setup()
+        vi.mocked(reserved.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(reserved.deps.stoppedAgents.resumeReservedAt).mockReturnValue(1)
+        await reserved.handlers.onObserved(hermesSeen(), shell)
+        expect(reserved.deps.registry.reinstateArchived).not.toHaveBeenCalled()
+
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const unreadable = setup()
+        vi.mocked(unreadable.deps.stoppedAgents.list).mockImplementation(() => { throw new Error('EACCES') })
+        await unreadable.handlers.onObserved(hermesSeen(), shell)
+        expect(unreadable.deps.registry.adoptEngine).toHaveBeenCalled()
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('saved harnesses unreadable'))
+
+        const refused = setup()
+        vi.mocked(refused.deps.stoppedAgents.list).mockReturnValue([archived()])
+        await refused.handlers.onObserved(hermesSeen(), shell)
+        expect(refused.deps.stoppedAgents.remove).not.toHaveBeenCalled()
+        expect(refused.deps.registry.adoptEngine).toHaveBeenCalled()
+      })
+
+      it('also from a terminal row that adopted that engine already, while no conversation is bound to it; looked up once', async () => {
+        const run = setup()
+        const saved = archived()
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        const adopted = row({ agentId: '0e375534', engine: 'hermes', terminalHost: true, sessionId: '', runtimes: [PANE],
+          processIdentity: HERMES } as Partial<RegisteredSession>)
+        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue({ ...saved, active: true } as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), adopted)
+        expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES)
+
+        const bound = setup()
+        vi.mocked(bound.deps.stoppedAgents.list).mockReturnValue([saved])
+        await bound.handlers.onObserved(hermesSeen(), { ...adopted, sessionId: 'local-61' })
+        expect(bound.deps.stoppedAgents.list).not.toHaveBeenCalled()
+
+        const twice = setup()
+        await twice.handlers.onObserved(hermesSeen(), adopted)
+        await twice.handlers.onObserved(hermesSeen(), adopted)
+        expect(twice.deps.stoppedAgents.list).toHaveBeenCalledTimes(1)
+      })
+
+      it('forgets what it looked at once it has looked at 4096, and looks again', async () => {
+        const run = setup()
+        for (let i = 0; i < 4096; i++) {
+          await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: `t${i}` } as RegisteredSession)
+        }
+        expect(run.deps.stoppedAgents.list).toHaveBeenCalledTimes(4096)
+        await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: 't0' } as RegisteredSession)
+        expect(run.deps.stoppedAgents.list).toHaveBeenCalledTimes(4096)
+        // The 4097th row starts over; the first is looked at again.
+        await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: 't4096' } as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), { ...shell, agentId: 't0' } as RegisteredSession)
+        expect(run.deps.stoppedAgents.list).toHaveBeenCalledTimes(4098)
+      })
+
+      it('names what it could not read or remove, whatever was thrown', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const unreadable = setup()
+        vi.mocked(unreadable.deps.stoppedAgents.list).mockImplementation(() => { throw 'EACCES' })
+        await unreadable.handlers.onObserved(hermesSeen(), shell)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('adopts its engine as new: EACCES'))
+        const busy = setup()
+        vi.mocked(busy.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(busy.deps.stoppedAgents.remove).mockImplementation(() => { throw 'EBUSY' })
+        vi.mocked(busy.deps.registry.reinstateArchived).mockReturnValue({ ...archived(), active: true } as RegisteredSession)
+        await busy.handlers.onObserved(hermesSeen(), shell)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed: EBUSY'))
+      })
+
+      it('says so, and stays back, when its archive cannot be removed', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const run = setup()
+        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(run.deps.stoppedAgents.remove).mockImplementation(() => { throw new Error('EBUSY') })
+        vi.mocked(run.deps.registry.reinstateArchived).mockReturnValue({ ...archived(), active: true } as RegisteredSession)
+        await run.handlers.onObserved(hermesSeen(), shell)
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed'))
+        expect(run.deps.send).toHaveBeenCalled()
+      })
     })
 
     it('wakes a dormant row and attaches it in the background, or puts it back to sleep if its pane is gone', async () => {

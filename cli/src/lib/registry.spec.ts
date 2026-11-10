@@ -2417,6 +2417,61 @@ describe('a terminal: a pane that becomes an engine and back', () => {
     expect(registry.list()).toHaveLength(1)
   })
 
+  // The path a restore takes when it cannot see a pane's engine: the harness is archived (`retainExitedSession` saves
+  // it), its pane goes to a new terminal row (`releaseEngine(…, true)`), and its engine runs on. Seen again, it comes
+  // back on that pane under its own id (DESKTOP-0TFH0OJ, 2026-11-10, CLI 0.5.97 and Hermes).
+  it('gives a pane back to the archived harness whose own engine never left it, and only then', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const harness = registry.openPendingAgent({ engine: 'hermes', runtimes: [pane], cwd: '/tmp/work' })!
+    registry.updateProcessIdentity(harness.agentId, processIdentity(25492))
+    const saved = { ...registry.byAgent(harness.agentId)!, active: false }
+    const shell = registry.releaseEngine(harness.agentId, true)!
+    expect(shell.agentId).not.toBe(harness.agentId)
+    expect(registry.byAgent(harness.agentId)).toBeUndefined()
+
+    // A conversation bound elsewhere, or an id live already, refuses and changes nothing.
+    expect(registry.reinstateArchived(shell.agentId, { ...saved, agentId: shell.agentId }, processIdentity(25492))).toBeNull()
+    expect(registry.reinstateArchived('no-such-row', saved, processIdentity(25492))).toBeNull()
+    expect(registry.byAgent(shell.agentId)?.engine).toBe('terminal')
+
+    const back = registry.reinstateArchived(shell.agentId, saved, processIdentity(25492))!
+    expect(back).toMatchObject({ agentId: harness.agentId, engine: 'hermes', defaultName: harness.defaultName, active: true,
+      launch: { state: 'ready' }, processIdentity: processIdentity(25492) })
+    expect(registry.byAgent(shell.agentId)).toBeUndefined()
+    expect(registry.byRuntimeEngine(pane, 'hermes')?.agentId).toBe(harness.agentId)
+    expect(registry.byProcess('hermes', processIdentity(25492))?.agentId).toBe(harness.agentId)
+    expect(registry.list().map((row) => row.agentId)).toEqual([harness.agentId])
+    // Not twice, and never over a row that is not a terminal.
+    expect(registry.reinstateArchived(shell.agentId, saved, processIdentity(25492))).toBeNull()
+    expect(registry.reinstateArchived(harness.agentId, saved, processIdentity(25492))).toBeNull()
+
+    registry.flush()
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    expect(reloaded.byAgent(harness.agentId)).toMatchObject({ engine: 'hermes', processIdentity: processIdentity(25492) })
+  })
+
+  it('takes the pane back from a terminal row that adopted the engine already, never from one with a conversation', async () => {
+    const transcriptPath = join(dataDir, 'session-r.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const harness = registry.openPendingAgent({ engine: 'claude', runtimes: [pane], cwd: '/tmp/work' })!
+    registry.updateProcessIdentity(harness.agentId, processIdentity(915))
+    const saved = { ...registry.byAgent(harness.agentId)!, active: false }
+    const shell = registry.releaseEngine(harness.agentId, true)!
+    const adopted = registry.adoptEngine(shell.agentId, 'claude', processIdentity(915))!
+    expect(registry.reinstateArchived(adopted.agentId, { ...saved, engine: 'codex' }, processIdentity(915))).toBeNull()
+
+    registry.register({ engine: 'claude', sessionId: 'session-r', transcriptPath, tmuxPane: '%9', processIdentity: processIdentity(915) })
+    expect(registry.byAgent(adopted.agentId)?.sessionId).toBe('session-r')
+    expect(registry.reinstateArchived(adopted.agentId, saved, processIdentity(915))).toBeNull()
+    registry.unbindSession('session-r')
+    expect(registry.reinstateArchived(adopted.agentId, saved, processIdentity(915))?.agentId).toBe(harness.agentId)
+    expect(registry.byAgent(adopted.agentId)).toBeUndefined()
+  })
+
   it('tells the core each session\'s engine as it enters: opened, adopted, registered and loaded', async () => {
     // The core starts loading what that engine's sessions read then (engines/inProcess.ts `preloadEngine`).
     const transcriptPath = join(dataDir, 'session-e.jsonl')

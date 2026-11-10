@@ -42,13 +42,6 @@ export function bindPullRequestCards(group: Conversation, message: MessageDraft,
 export const pullRequestCard = (group: Conversation, url: string): PullRequestCard | undefined =>
   group.cards?.pullRequests?.find(card => card.url === url)
 
-/** A merge of [url] was recorded at [mergedAt]: its card shows it, even to a reader whose computer cannot read GitHub. The
- *  earliest record stands, as the leaderboard's does (leaderboard/record.ts recordMerged). */
-export function recordCardMerged(group: Conversation, url: string, mergedAt: number): void {
-  const card = pullRequestCard(group, url)
-  if (card) card.mergedAt = Math.min(card.mergedAt ?? mergedAt, mergedAt)
-}
-
 /** Every link [group] holds is its project's own pull request, once: a link into any other repository (another owner's
  *  included) is dropped, a spelling is made the project's, and cards that now name one pull request become one (the earliest
  *  message, the earliest merge). */

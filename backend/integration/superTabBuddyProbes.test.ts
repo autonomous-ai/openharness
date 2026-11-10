@@ -111,7 +111,6 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
   it('hands a Buddy an archived task in the dormant view the moment it is archived, with no report to wait for (#3593)', async () => {
     const f=await swarm(), {agentId}=await buddy(f)
     const group=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Archived at once',brief:'',checks:[]})).result.conversationId)
-    await f.execute({type:'conversation.merged',conversationId:group,pullRequestUrl:'https://github.com/example/app/pull/7'})
     await f.execute({type:'conversation.archive',conversationId:group,archived:true})
     const reads=new SwarmReads(f.store), active=await reads.firstLoad(peer,f.tab,agentId)
     expect(active.groups.some(g=>g.key===group)).toBe(false)
@@ -158,7 +157,6 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
     await expect(reads.changes(peer,f.tab,before.cursor,agentId)).rejects.toThrow()
     await expect(reads.firstLoad(peer,f.tab,agentId)).rejects.toThrow()
     for(const id of [group,chat,'lead']) await expect(f.store.messages(peer,f.tab,id,{},agentId)).rejects.toThrow()
-    await expect(f.store.decisions(peer,f.tab,'open',agentId)).rejects.toThrow()
     await expect(reads.dormant(peer,f.tab,{projectId:'lead'},agentId)).rejects.toThrow()
   })
 })
@@ -178,16 +176,6 @@ it('pages messages that share a sequence by sequence and id, as the CLI now send
   expect(new Set([...first.messages,...next.messages].map(m=>m.id)).size).toBe(150)
 })
 
-it('does not disclose a decision question from a private chat visible to its own person',async()=>{
-  const f=await swarm()
-  // Asked before the chat closed as a Chat with PM: its person still reads it there (projects.ts readsRecordsIn).
-  const privateChat=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Shared private',brief:'',checks:[]})).result.conversationId)
-  await f.execute({type:'decision.ask',conversationId:privateChat,personId:peer.sub,questions:[{question:'PRIVATE QUESTION SENTINEL',options:['Yes','No'],recommended:0,unblocks:'Private plan'}]},owner,f.lead)
-  await closedPmChat(f,privateChat,[owner.sub,peer.sub])
-  expect(JSON.stringify(await f.store.decisions(peer,f.tab,'open'))).toContain('PRIVATE QUESTION SENTINEL')
-  const {agentId}=await buddy(f)
-  expect(JSON.stringify(await f.store.decisions(peer,f.tab,'open',agentId))).not.toContain('PRIVATE QUESTION SENTINEL')
-})
 it('denies the old Buddy identity after its person leaves and rejoins',async()=>{
   const f=await swarm(), {agentId}=await buddy(f)
   await f.execute({type:'member.remove',userId:peer.sub})

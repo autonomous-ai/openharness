@@ -904,18 +904,6 @@ describe('an instructions save may move a person\'s rule', () => {
     expect(tasksHoldingMoves(f.state, project, doc(leo, quiet), doc(leo)).map(t => t.id)).toContain(singular.id)
   })
 
-  // River, 11-05 (review of #3220): a task's own merge record is any agent's word, with any pull request link. Only the
-  // Swarm's own read of GitHub makes a moved rule's task merged.
-  it('takes no task\'s merge record for a merge: a forged one keeps the line', () => {
-    const { f, lead } = pm()
-    const task = codeTask(f, quiet)
-    f.run({ type: 'conversation.merged', conversationId: task.id, pullRequestUrl: PR }, as(lead))
-    expect(f.state.conversations.find(c => c.id === task.id)!.ledger?.mergedAt).toBeDefined()
-    expect(refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))).toMatchObject({ details: { dropped: [{ rule: quiet, why: 'waiting' }] } })
-    // Nor can any command write when a brief was set.
-    expect(() => f.run({ type: 'conversation.create', title: 'Forged', brief: `Changes:\n- ${quiet}`, checks: [], briefAt: 1 } as never, as(lead))).toThrow()
-  })
-
   it('still refuses a real drop, a move without who gave it, and a move into a cancelled task, saying how a rule may move', () => {
     const { f, lead } = pm()
     const refused = refusal(() => f.run(save(1, doc(leo)), as(lead), stored()))

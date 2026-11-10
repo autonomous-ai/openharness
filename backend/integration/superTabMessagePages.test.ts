@@ -81,13 +81,11 @@ describe('messages by reader (spec 5 A1)', () => {
       await store.messages(host, tab, 'lead', { before: edge.sequence, beforeId: edge.id }, lead)
       await store.messages(owner, tab, 'lead', {})
       await store.messages(owner, tab, 'lead', { before: 1150 })
-      await store.catchUp(owner, tab, 'lead', 1140)
     })
     const row = (reader: string, cursor: string) => rows.find(r => r.reader === reader && r.cursor === cursor)
     expect(row('agent', 'beforeId')).toMatchObject({ session: 'sso', n: 1, batches: 1, shown: 100 })
     expect(row('person', 'latest')).toMatchObject({ session: 'sso', n: 1, batches: 1, decoded: 101, shown: 100 })
     expect(row('person', 'before')).toMatchObject({ n: 1, shown: 100 })
-    expect(row('person', 'catchUp')).toMatchObject({ n: 1, batches: 1, decoded: 9, shown: 9 })
     expect(JSON.stringify(rows)).not.toMatch(/[0-9a-f]{12,}|@|tab-/i)
   })
 })
@@ -217,8 +215,7 @@ describe('receipts read the same live or compacted (spec 5 A3)', () => {
     const f = await answered()
     await compactByHand(f.deliveries.slice(0, 3).map(d => d.id))
     const replies = [await store.messages(owner, f.tab, 'lead', {}), await store.messages(host, f.tab, 'lead', {}, f.lead),
-      await store.messages(owner, f.tab, 'lead', { messageId: f.deliveries[0]!.messageId }), await store.catchUp(owner, f.tab, 'lead', 0),
-      await store.mentions(owner, f.tab, 'waiting')]
+      await store.messages(owner, f.tab, 'lead', { messageId: f.deliveries[0]!.messageId })]
     for (const reply of replies) expect(JSON.stringify(reply)).not.toMatch(/"receipts"|"deliveryIds"|"deliveryId"|"machineOwnerId"|"claimId"/)
   })
 })
