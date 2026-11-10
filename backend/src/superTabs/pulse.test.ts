@@ -9,6 +9,7 @@ import type { Author } from './model.js'
 import { projectsOf } from './projects.js'
 import { recordPulse, storedPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
+import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 import { owedLines } from './inbox.js'
 
 const MINUTE = 60_000
@@ -160,14 +161,12 @@ describe('the pulse', () => {
   const pulseOf = (f: ReturnType<typeof stepsFixture>) => { recordPulse(f.state, f.now); return storedPulse(f.state, projectsOf(f.state)[0]!)! }
   /** The pulse as recorded, without working it out again. */
   const stored = (f: ReturnType<typeof stepsFixture>) => storedPulse(f.state, projectsOf(f.state)[0]!)!
-  /** A task the PM opens, unassigned (Next up). */
+  /** A task the PM opens, unassigned (Next up); set for a later day as work.queue stored it before Swarm v4. */
   const open = (f: ReturnType<typeof stepsFixture>, title: string, extra: { notBefore?: string } = {}) => {
     const id = f.run({ type: 'conversation.create', title, brief: `${title}.`, checks: DONE_WHEN, priority: 'P2', requesterId: 'owner' } as Command, f.as(f.lead)).result.conversationId as string
-    if (extra.notBefore) f.run({ type: 'work.queue', conversationId: id, notBefore: extra.notBefore, hold: { kind: 'requester' } } as Command, f.as(f.lead))
+    if (extra.notBefore) Object.assign(f.group(id), { notBefore: extra.notBefore, hold: { kind: 'requester' } })
     return id
   }
-  const status = (f: ReturnType<typeof stepsFixture>, task: string, by: string, value: string, result: string | null) =>
-    f.run({ type: 'work.status', conversationId: task, assignmentId: f.group(task).assignment!.id, status: value, result } as Command, f.as(by))
 
   it('counts the asks the PM owes, the oldest one\'s age and who asked', () => {
     const { f, post } = setup()
@@ -184,7 +183,7 @@ describe('the pulse', () => {
     const { f } = setup()
     const idle = f.add('idle', f.task)
     expect(pulseOf(f).working).toEqual({ count: 1, crew: 2, agentIds: [f.dev] })
-    status(f, f.task, f.dev, 'review', 'PR #12')
+    storedStatus(f.state, f.task, 'review', 'PR #12')
     expect(pulseOf(f).working).toEqual({ count: 0, crew: 2, agentIds: [] })
     expect(idle).toBeTruthy()
   })
@@ -211,12 +210,11 @@ describe('the pulse', () => {
   it('counts Held with the reason recorded for it: blocked or needs a person, and a task set for a later day', () => {
     const { f } = setup()
     const later = '2099-01-01T00:00:00.000Z'
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'blocked', result: null,
-      hold: { kind: 'reset', what: 'quota', at: later } } as Command, f.as(f.dev))
+    storedStatus(f.state, f.task, 'blocked').hold = { kind: 'reset', what: 'quota', at: later }
     const other = open(f, 'Second')
     const builder = f.add('builder', other)
-    f.run({ type: 'work.assign', conversationId: other, agentId: builder }, f.as(f.lead))
-    status(f, other, builder, 'needs_human', 'Which bucket should the logs go to?')
+    storedAssignment(f.state, other, builder, f.now)
+    storedStatus(f.state, other, 'needs_human', 'Which bucket should the logs go to?')
     const dated = open(f, 'Later', { notBefore: '2099-01-01' })
     const held = pulseOf(f).held
     expect(held.count).toBe(3)
@@ -227,16 +225,15 @@ describe('the pulse', () => {
 
   it('turns red for a hold with no reason recorded, not for one with a reason and no words', () => {
     const { f } = setup()
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'blocked', result: null,
-      hold: { kind: 'requester' } } as Command, f.as(f.dev))
+    storedStatus(f.state, f.task, 'blocked').hold = { kind: 'requester' }
     expect(pulseOf(f).redAt.held).toBeNull()
-    status(f, f.task, f.dev, 'blocked', 'Stuck on the key, says why in words only.')
+    delete storedStatus(f.state, f.task, 'blocked', 'Stuck on the key, says why in words only.').hold
     expect(pulseOf(f).redAt.held).toBe(0)
   })
 
   it('counts a blocked task whose agent is gone as Lost, not Held: it waits for an agent first', () => {
     const { f } = setup()
-    status(f, f.task, f.dev, 'blocked', 'Waiting for the key.')
+    storedStatus(f.state, f.task, 'blocked', 'Waiting for the key.')
     f.group(f.task).liveness = { state: 'orphaned', why: 'removed', since: f.now }
     expect(pulseOf(f).lost.conversationIds).toEqual([f.task])
     expect(pulseOf(f).held.count).toBe(0)
@@ -256,7 +253,7 @@ describe('the pulse', () => {
     post(null, 'lead', 'An ask.')
     const askedAt = f.now
     expect(pulseOf(f).redAt.asks).toBe(askedAt + 5 * MINUTE)
-    status(f, f.task, f.dev, 'blocked', null)
+    storedStatus(f.state, f.task, 'blocked')
     expect(pulseOf(f).redAt.held).toBe(0)
   })
 
@@ -272,15 +269,16 @@ describe('the pulse', () => {
     open(f, 'Waiting task')
     expect(pulseOf(f).idleSince).toBeNull()
     f.tick(MINUTE)
-    status(f, f.task, f.dev, 'done', 'Merged.')
+    storedStatus(f.state, f.task, 'done', 'Merged.')
     const idleAt = f.now
+    recordPulse(f.state, idleAt)
     f.tick(MINUTE)
     f.run({ type: 'message.send', conversationId: 'lead', text: 'Anyone?', replyTo: null, recipientIds: [] } as Command)
     expect(stored(f).idleSince).toBe(idleAt)
     expect(stored(f).asks.count).toBe(1)
     expect(pulseOf(f).redAt.idle).toBe(idleAt + 10 * MINUTE)
     const task = pulseOf(f).nextUp.conversationIds[0]!
-    f.run({ type: 'work.assign', conversationId: task, agentId: f.dev }, f.as(f.lead))
+    storedAssignment(f.state, task, f.dev, f.now)
     expect(pulseOf(f).idleSince).toBeNull()
     expect(pulseOf(f).redAt.idle).toBeNull()
   })

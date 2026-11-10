@@ -15,6 +15,7 @@ import { REMINDER_CAP, REMINDER_EXPIRY_MS, REMINDER_READS, resetReminderReads, s
 import { stableId, type Command, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { plan, planDatabase, profiled, reads } from './plans.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -68,7 +69,7 @@ async function scene() {
   const openChat = s.group('Open chat', open)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const secretGroup = s.group('Secret work', secret)
   const tabId = `tab-${randomUUID()}`
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 3 })

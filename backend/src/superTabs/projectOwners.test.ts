@@ -7,6 +7,7 @@ import { admitPerson, ownerAccount, ownsProject, projectOf, projectsOf, readConv
 import { teamWorkCheck } from './machines.js'
 import type { ContributedMachine } from './machines.js'
 import { visibilityChanged } from './parts/commit.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 // Task #3073 (Diego, 11-05): a private project's owner who leaves the Swarm, or is removed, loses it, and the project stays
 // manageable. Ownership is a membership (id and generation), as a project member's is, never the account id alone.
@@ -166,7 +167,7 @@ describe('a private project left with no member', () => {
     const task = f.run({ type: 'conversation.create', projectId: x.projectId, title: 'Secret task', brief: 'Secret', checks: [] }, p).conversationId as string
     const agentId = f.run({ type: 'agent.add', conversationId: task, harnessId: 'h', machineId: 'p-mac', name: 'Worker', configuration, lead: false }, p,
       { contribution: { machineOwnerId: 'p', contributorId: 'p' } }).agentId as string
-    f.run({ type: 'work.assign', conversationId: task, agentId }, p)
+    storedAssignment(f.state, task, agentId, 1000)
     f.run({ type: 'member.remove', userId: 'p' })
     return { f, x, task, agentId }
   }

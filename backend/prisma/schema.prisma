@@ -1573,6 +1573,9 @@ model RoutingPolicy {
   @@unique([userId, autonomousEnv])
 }
 
+/// A task's earlier attempt, as work.define and work.assign replaced it. Written no more since those commands went (Swarm v4,
+/// 2026-11-10); still read by a task's attempts (store.ts) until routing goes (S8). Its rows go with the old collections
+/// (migration/dropCollections.ts REMOVED_COLLECTIONS), which needs the owner's go.
 model SuperTabAttempt {
   id              String   @id @map("_id")
   tabId           String

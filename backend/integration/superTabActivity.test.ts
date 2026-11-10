@@ -31,7 +31,7 @@ import { apnsSender, type ApnsRequest } from '../src/push/apns.js'
 import { fcmSender } from '../src/push/fcm.js'
 import { registerPushDevice } from '../src/push/devices.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
-import { quotaReset } from './holds.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -102,7 +102,7 @@ async function scene(extra: Array<{ kind: 'person'; userId: string; email: strin
   const openChat = s.group('Open chat', open)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const secretGroup = s.group('Secret work', secret)
   let buddyId = s.group('Peer\'s Buddy')
   s.edit(state => {
@@ -508,18 +508,6 @@ describe('Phone push: who each push type reaches, and what it carries (task #324
     expect(await pushed(() => tagging(s.tabId, s.web, 'Peer, the build is red', owner, null, [peer.sub], {}, s.worker))).toEqual([])
     expect(await whom(() => tagging(s.tabId, s.web, 'Note to self', owner, null, [owner.sub]))).toEqual([])
     expect(await whom(() => tagging(s.tabId, s.web, 'Peer, if nobody takes this', owner, null, [peer.sub], { mentionsIfNoWorker: true }))).toEqual([])
-  })
-
-  // Swarm v4 opens no decision (anh Dee, 2026-11-10): an agent reaches its person in their 1:1 chat.
-  it('a task\'s needs_human that names a person rings no phone, and opens no decision', async () => {
-    const s = await scene()
-    const state = (await store.read(owner, s.tabId)).state as unknown as SuperTabState
-    const assignmentId = state.conversations.find(c => c.id === s.web)!.assignment!.id
-    const notices = await pushed(() => run(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', hold: quotaReset(),
-      result: 'Ship it behind a flag?', ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command,
-    owner, s.worker))
-    expect(notices).toEqual([])
-    expect(await db.superTabDecision.count({ where: { tabId: s.tabId } })).toBe(0)
   })
 
   it('tags nobody who cannot read the chat, so no push reaches them', async () => {

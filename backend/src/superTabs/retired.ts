@@ -18,6 +18,9 @@ export const RETIRED_COMMANDS = [
   'decision.ask', 'decision.answer',
   // Review steps, check verdicts and merge records (2026-11-10): a task is the project's GitHub issue, and its pull request is GitHub's.
   'work.check', 'conversation.merged',
+  // Task records and the crew dispatch (2026-11-10): a task is the project's GitHub issue, and an agent works on what its person asks.
+  'work.assign', 'work.status', 'work.cancel', 'work.define', 'work.queue', 'work.priority', 'work.pause', 'work.resume', 'work.lane',
+  'member.start', 'member.helper',
 ] as const
 export type RetiredCommand = (typeof RETIRED_COMMANDS)[number]
 
@@ -30,11 +33,14 @@ export const RETIRED_STEP = 'conversation.create.step'
 export const opensRetiredStep = (command: { type?: unknown; reviewOf?: unknown; step?: unknown } | undefined): boolean =>
   command?.type === 'conversation.create' && (command.reviewOf !== undefined || command.step !== undefined)
 
+const TASKS_RETIRED = { code: 'TASKS_RETIRED', status: 410, message: 'Tasks are GitHub issues now.' }
 /** A check verdict a person records in an older Desktop's work details (work.check) is refused in these words, which it shows
  *  where the verdict was typed, rather than answered as ignored: the app takes an ok answer for a saved verdict and closes the
  *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
 export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; status: number; message: string }>> = {
   'work.check': { code: 'CHECKS_RETIRED', status: 410, message: 'Checks can’t be recorded any more.' },
+  // An older Desktop's Next up, priority and pause on a task: its tasks are the project's GitHub issues now.
+  'work.queue': TASKS_RETIRED, 'work.priority': TASKS_RETIRED, 'work.pause': TASKS_RETIRED,
 }
 
 /** One schema per type, as every command has. The parse drops whatever else the old client sent: nothing of it is kept or

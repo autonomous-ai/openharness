@@ -303,9 +303,8 @@ export interface HostAgentRow {
   paused: boolean
   active: boolean
   attention: { assignmentId: string; status: WorkStatus; result: string | null } | null
-  /** Its task lost to a usage limit, still waiting for it: when its host types it back into the same session. `lostAt`
-   *  names that loss, since one task can be lost, resumed and lost again. */
-  resume: { conversationId: string; assignmentId: string; lostAt: number; at: string } | null
+  /** Always null since Swarm v4 (no task resumes after a usage limit); an older host still reads it. Goes after 2026-12-09. */
+  resume: null
   agent: Agent
   /** A Buddy's own chat, its main one's or the thread session's (task #3818): its host ends a session and moves a model switch
    *  there. Absent on every other agent; null while its chat is not loaded. An older backend sends none: the person's main chat. */

@@ -21,6 +21,7 @@ import { buddyChatId } from '../src/superTabs/buddies.js'
 import { stableId, type Author, type Conversation, type SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { resolveByAnswer } from '../src/superTabs/mentions.js'
 import { plan, profiled } from './plans.test-support.js'
 
@@ -70,7 +71,7 @@ async function scene() {
   const pm = s.add('pm-harness', 'lead', true, ownerActor, 'host', owner.sub)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   let buddyId = s.group('Peer\'s Buddy')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peer.sub)!.generation

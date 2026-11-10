@@ -8,34 +8,20 @@ import { REOPEN_OWNER_MS } from './handed.js'
 import { currentGroup } from './terminal.js'
 import { workHolds, startedHolds, endedHolds, tokenTask } from '../github/holds.js'
 import { stepsFixture } from './steps.test-support.js'
+import { storedAssignment, storedStatus } from './storedWork.test-support.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
 
 /** The fixture's task, handed over by its Engineer, and a second task for the same Engineer. */
 function handedFixture() {
   const f = stepsFixture()
-  f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `Ready for review: ${PR} at abc1234` }, f.as(f.dev))
+  storedStatus(f.state, f.task, 'review', `Ready for review: ${PR} at abc1234`)
   const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [{ description: 'Signs out offline', independent: true }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
   // Not a spread: it would copy the fixture's `state` getter as a snapshot.
   return Object.assign(f, { next })
 }
 
 describe('a ready pull request frees its Engineer (#3399)', () => {
-  it('lets the PM assign the Engineer its next task while the first is in review', () => {
-    const f = handedFixture()
-    const before = f.state
-    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
-    expect(f.group(f.next).assignment).toMatchObject({ agentId: f.dev, status: 'working' })
-    // The first task stays open, with the same attempt, in review.
-    expect(f.group(f.task).assignment).toMatchObject({ agentId: f.dev, status: 'review', id: before.conversations.find(c => c.id === f.task)!.assignment!.id })
-  })
-
-  it('still refuses a second task while the first is in the Engineer\'s hands', () => {
-    const f = stepsFixture()
-    const next = f.run({ type: 'conversation.create', title: 'Fix logout', brief: 'Sign out works offline.', checks: [{ description: 'Signs out offline', independent: true }], priority: 'P2', requesterId: 'owner' }, f.as(f.lead)).result.conversationId as string
-    expect(() => f.run({ type: 'work.assign', conversationId: next, agentId: f.dev }, f.as(f.lead))).toThrow(expect.objectContaining({ code: 'AGENT_BUSY' }))
-  })
-
   it('counts the Engineer as free for routing (awaitingWorkers) once it handed over', () => {
     const f = handedFixture()
     expect(workerIndex(f.state).working.has(f.dev)).toBe(false)
@@ -46,16 +32,9 @@ describe('a ready pull request frees its Engineer (#3399)', () => {
     const f = handedFixture()
     const handedAt = structuredClone(f.state)
     expect(workHolds(handedAt)).toEqual([{ agentId: f.dev, assignmentId: f.group(f.task).assignment!.id }])
-    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
+    storedAssignment(f.state, f.next, f.dev, f.now)
     expect(endedHolds(handedAt, f.state)).toEqual([])
     expect(startedHolds(handedAt, f.state)).toEqual([{ agentId: f.dev, assignmentId: f.group(f.next).assignment!.id }])
-  })
-
-  it('does not mark the Engineer finished when its handed task is done while it works on the next', () => {
-    const f = handedFixture()
-    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: `Merged ${PR}` }, f.as(f.dev))
-    expect(f.state.agents.find(a => a.id === f.dev)!.workDecision).toBeUndefined()
   })
 
   it('gives the GitHub token for the task in the Engineer\'s hands first, then the handed one, and none without either', () => {
@@ -64,10 +43,10 @@ describe('a ready pull request frees its Engineer (#3399)', () => {
     // Only the handed task: it still gets a token, to push fixes.
     expect(tokenTask(f.state, dev)?.id).toBe(f.task)
     // A new task listed after it in the Swarm is still the one it pushes for now.
-    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
+    storedAssignment(f.state, f.next, f.dev, f.now)
     expect(tokenTask(f.state, dev)?.id).toBe(f.next)
-    f.run({ type: 'work.status', conversationId: f.next, assignmentId: f.group(f.next).assignment!.id, status: 'done', result: 'Merged' }, f.as(f.dev))
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'done', result: `Merged ${PR}` }, f.as(f.dev))
+    storedStatus(f.state, f.next, 'done', 'Merged')
+    storedStatus(f.state, f.task, 'done', `Merged ${PR}`)
     expect(tokenTask(f.state, dev)).toBeUndefined()
   })
 })
@@ -139,13 +118,6 @@ describe('a task reopened for its owner before Swarm v4 (#3399)', () => {
     expect(f.group(f.task).assignment!.status).toBe('lost')
   })
 
-  it('is handed over again by the Engineer\'s next Ready, which clears the reopen', () => {
-    const f = reviewed()
-    fail(f)
-    f.run({ type: 'work.status', conversationId: f.task, assignmentId: f.group(f.task).assignment!.id, status: 'review', result: `Ready for review: ${PR} at def5678` }, f.as(f.dev))
-    expect(f.group(f.task).assignment).toMatchObject({ status: 'review' })
-    expect(f.group(f.task).assignment!.reopened).toBeUndefined()
-  })
 })
 
 describe('an Engineer\'s terminal rows go to the task in its hands (#3399, review of #3221)', () => {
@@ -153,7 +125,7 @@ describe('an Engineer\'s terminal rows go to the task in its hands (#3399, revie
     const f = handedFixture()
     const dev = () => f.state.agents.find(a => a.id === f.dev)!
     expect(currentGroup(f.state, dev()).id).toBe(f.task)
-    f.run({ type: 'work.assign', conversationId: f.next, agentId: f.dev }, f.as(f.lead))
+    storedAssignment(f.state, f.next, f.dev, f.now)
     expect(currentGroup(f.state, dev()).id).toBe(f.next)
   })
 })

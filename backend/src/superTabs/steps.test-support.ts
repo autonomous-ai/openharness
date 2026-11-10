@@ -6,6 +6,7 @@
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, nextConversationNumber, type Actor, type AgentConfiguration, type CommandEffects, type SuperTabState } from './model.js'
 import { groupProject } from './projects.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 export const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const config: AgentConfiguration = { engine: 'codex', model: 'test-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
@@ -51,7 +52,7 @@ export function stepsFixture() {
   const task = run({ type: 'conversation.create', title: 'Fix login', brief: 'Sign in works offline.',
     checks: [{ description: 'Signs in offline', independent: true }], priority: 'P2', requesterId: 'owner' }, as(lead)).result.conversationId as string
   const dev = add('dev', task)
-  run({ type: 'work.assign', conversationId: task, agentId: dev }, as(lead))
+  storedAssignment(state, task, dev, now)
   const step = (name: string, actor: Actor = as(dev), on = task, checks: Array<{ description: string; independent: boolean }> = []) =>
     run({ type: 'conversation.create', title: name, brief: `${name} it.`, reviewOf: on, step: name, checks } as Command, actor).result.conversationId as string
   const group = (id: string) => state.conversations.find(c => c.id === id)!

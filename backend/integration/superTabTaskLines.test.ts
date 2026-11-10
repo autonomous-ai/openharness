@@ -9,6 +9,7 @@ import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
+import { storeAssignment } from './storedWork.test-support.js'
 
 // Plain chat (task #2294; docs/plans/2026-11-03-plain-chat-work-plan.md): each task is one ordinary message, its title alone, in
 // its project chat, never edited, with the PM's replies in its thread as it moves, none for its steps, and a private
@@ -64,17 +65,12 @@ async function swarm() {
 
 describe('a task\'s one message in its project chat', () => {
   // Anh Dee, 11-04 ('bot messages'): a person sees only rows they wrote. A task no message asked for lives in Backlog and its own
-  // conversation: no row under its requester's name, and nothing in the project chat as it moves.
+  // conversation: no row under its requester's name, and nothing in the project chat.
   it('posts nothing in the project chat for a task no message asked for, while it is still in the Swarm\'s tasks', async () => {
     const s = await swarm()
     const P = await s.add('Coordinator', 'lead', true)
     const before = (await store.messages(owner, s.tab, 'lead', {})).messages.length
     const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', requesterId: owner.sub, brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2' })).result.conversationId)
-    const E = await s.add('Engineer', T)
-    const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
-    const pr = 'https://github.com/example/app/pull/7'
-    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'review', result: `Ready: ${pr}` })
-    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'done', result: `Checks passed: ${pr}` })
     const chat = await store.messages(owner, s.tab, 'lead', {})
     expect(chat.messages.slice(before).filter(m => !(m.source as { kind?: string } | null)?.kind?.startsWith('route'))
       .map(m => [m.text, (m.author as { id: string }).id])).toEqual([])
@@ -93,7 +89,7 @@ describe('a task\'s one message in its project chat', () => {
     expect((await s.page('lead')).lines).toEqual([])
     expect((await store.read(owner, s.tab)).state.conversations.find(c => c.id === T)?.requesterId).toBe(peer.sub)
     const E = await s.add('Engineer', T)
-    await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })
+    await storeAssignment(db, s.tab, T, E)
     // A second task may hang under the same message; its thread names both.
     await s.as(P)({ type: 'conversation.create', title: 'Desktop shows who answered', brief: 'Same on Desktop.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: asked })
     expect((await s.page('lead')).lines).toEqual([])
@@ -104,30 +100,6 @@ describe('a task\'s one message in its project chat', () => {
     await expect(s.as(P)({ type: 'conversation.create', title: 'Another', brief: '', checks: [], requestMessageId: 'missing' })).rejects.toThrow('own message')
   })
 
-  // The server reacts for no agent any more (anh Dee, 2026-11-09: the 👀 on every message).
-  it('leaves the asking message as it was when its task starts and finishes: no reaction, no Activity, nothing to poll', async () => {
-    const s = await swarm()
-    const P = await s.add('Coordinator', 'lead', true)
-    const asked = String((await run(s.tab, { type: 'message.send', conversationId: 'lead', text: 'Can drafts survive a restart?', replyTo: null,
-      recipientIds: [] }, peer)).result.messageId)
-    const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: asked }))
-      .result.conversationId)
-    const E = await s.add('Engineer', T)
-    const reactions = async () => {
-      const page = await store.messages(peer, s.tab, 'lead', {}) as unknown as { messages: Array<{ id: string; reactions: unknown }>; reactionSeq: number }
-      return { on: page.messages.find(m => m.id === asked)!.reactions, seq: page.reactionSeq }
-    }
-    const before = await reactions()
-    expect(before.on).toEqual([])
-    const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
-    expect(await reactions()).toEqual(before)
-    const pr = 'https://github.com/example/app/pull/7'
-    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'done', result: `Checks passed: ${pr}` })
-    expect(await reactions()).toEqual(before)
-    expect(await db.superTabReaction.count({ where: { tabId: s.tab, messageId: asked } })).toBe(0)
-    expect(await db.superTabActivity.count({ where: { tabId: s.tab, personId: peer.sub, kind: 'reaction' } })).toBe(0)
-  })
-
   // Diego, 2026-11-04 (task #2693): a stop its host confirms is no command, so its thread kept saying On it.
   it('says Not building this in the thread once when the host confirms the stop', async () => {
     const s = await swarm()
@@ -136,7 +108,7 @@ describe('a task\'s one message in its project chat', () => {
     const T = String((await s.as(P)({ type: 'conversation.create', title: 'Offline drafts', brief: 'Keep drafts.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: root }))
       .result.conversationId)
     const E = await s.add('Engineer', T)
-    const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
+    const assignmentId = (await storeAssignment(db, s.tab, T, E)).id
     await store.stopped(host, s.tab, assignmentId, 'fixture stop receipt')
     await store.stopped(host, s.tab, assignmentId, 'fixture stop receipt')
     const replies = (await store.messages(owner, s.tab, 'lead', { thread: root })).messages.filter(m => m.text.startsWith('Not building this'))
@@ -151,8 +123,7 @@ describe('a task\'s one message in its project chat', () => {
     const root = await s.ask('Can we do the hidden work?', created.conversationId)
     const T = String((await s.as(P)({ type: 'conversation.create', title: 'Hidden work', brief: 'Quietly.', checks: [{ description: 'Done', independent: false }], priority: 'P2', requestMessageId: root })).result.conversationId)
     const E = await s.add('Engineer', T)
-    const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
-    await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'working', result: 'Started.' })
+    await storeAssignment(db, s.tab, T, E)
 
     const named = (await store.messages(owner, s.tab, created.conversationId, { thread: root })).messages.find(m => m.text === 'Hidden work')!
     expect(named).toMatchObject({ thread: root, replyTo: root })

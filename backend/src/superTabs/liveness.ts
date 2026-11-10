@@ -65,12 +65,12 @@ const reachable = (state: SuperTabState, row: MessageDraft): MessageDraft => ({ 
 
 /** A notice for the Lead (terminal.ts toLead): when the Lead hears it in its own chat, the copy left in the task's chat for
  *  no one is that same notice, read by no one either. With no Lead to hear it, people read it (review of #2177). */
-export function leadNoticeRows(rows: MessageDraft[]): MessageDraft[] {
+function leadNoticeRows(rows: MessageDraft[]): MessageDraft[] {
   return rows.some(row => row.recipients.length) ? rows.map(row => row.recipients.length ? row : { ...row, source: forRecipients(row.source ?? {}) }) : rows
 }
 
 /** The agent's own progress (an assignment, a status, a check, a post) renews the lease stored on its assignment. */
-export function renewLease(assignment: Assignment, now: number): void {
+function renewLease(assignment: Assignment, now: number): void {
   assignment.leaseUntil = now + LEASE_MS
   assignment.progressAt = now
 }
@@ -90,13 +90,6 @@ export function waitingForReview(assignment: Assignment): boolean {
   if (assignment.status === 'review') return true
   return assignment.status === 'working' && assignment.reviewFoundAt === undefined && !!assignment.result
     && READY_FOR_REVIEW.test(assignment.result) && REVISION.test(assignment.result)
-}
-
-/** Work that stopped waiting for its review counts its quiet time from now: its agent keeps it QUIET_RUNNING_MS without
- *  progress, as after its last screen change, though its screen stayed still while it waited. */
-export function restartQuietTime(assignment: Assignment, now: number): void {
-  assignment.progressAt = now
-  assignment.leaseUntil = Math.max(assignment.leaseUntil ?? 0, now + QUIET_RUNNING_MS)
 }
 
 /** The active assignments held by workers, not by a Lead, and not already being reconciled after their agent left. */
@@ -183,7 +176,7 @@ const reopening = (worker: Agent, now: number): boolean => {
  *  [holds], a crew member its host is reopening, crew.ts), its machine offline, a usage limit, or its model failing. A task
  *  its agent holds is lost for it (lostReason); the crew dispatch hands such a member nothing new (dispatch.ts freeCrew).
  *  Only a machine that has reported can be offline. */
-export function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false, holds = false): string | null {
+function unavailableReason(state: SuperTabState, worker: Agent, now: number, closedOnPurpose = false, holds = false): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
   if (!closedOnPurpose && pool?.observation?.stoppedHarnessIds.includes(worker.harnessId) && !(holds && reopening(worker, now))) return sessionStopped(pool.name)
   if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)

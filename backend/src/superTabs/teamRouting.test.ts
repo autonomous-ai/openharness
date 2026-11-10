@@ -4,8 +4,6 @@ import { admitMachineStart, availableSlots, machineSlots, removalPreview, type C
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
-const HOLD = { kind: 'person', personId: 'owner', defaultAt: '2026-11-06T02:00:00.000Z' } as const
-
 // Teammates' work runs only on Team machines (docs/plans/2026-10-24-swarm-team-account.md, Task 3): a start or an
 // assignment for a project whose owner did not contribute the machine needs a Harness Team account whose privacy check
 // passed, or a machine used only for agents. A person's own projects on their own machine are unchanged.
@@ -120,21 +118,6 @@ describe('starting a teammate\'s work', () => {
 })
 
 describe('giving an existing agent a teammate\'s work', () => {
-  it('work.assign is admitted for the teammate\'s own agent and refused for an agent in a Team account', () => {
-    const f = swarm(), group = f.group()
-    const personal = f.member('personal', 'mate-mac', 'mate'), team = f.member('team', 'mate-team', 'mate')
-    expect(refusal(() => f.run({ type: 'work.assign', conversationId: group, agentId: team }))).toMatchObject({ code: 'TEAM_ACCOUNTS_REMOVED', status: 403 })
-    f.run({ type: 'work.assign', conversationId: group, agentId: personal })
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: personal, status: 'working' })
-  })
-
-  it('work.assign of a person\'s own project to their own agent is unchanged', () => {
-    const f = swarm(), group = f.group(f.mine, mate)
-    const personal = f.member('personal', 'mate-mac', 'mate', f.mine)
-    f.run({ type: 'work.assign', conversationId: group, agentId: personal }, mate)
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ agentId: personal })
-  })
-
   it('adding a Reviewer to a group, which hands it the review, is admitted for the teammate\'s own agent and refused in a Team account', () => {
     const f = swarm(), group = f.group()
     const reviewer = f.member('reviewer', 'mate-mac', 'mate', 'lead', { role: 'reviewer' })
@@ -222,7 +205,7 @@ describe('routing a teammate\'s work', () => {
 })
 
 describe('agents already working in a Team account', () => {
-  it('keep their task, its reports and their messages; only new work for them is refused', () => {
+  it('keep their task and their messages', () => {
     const f = swarm(), group = f.group()
     // Work assigned before the release: a teammate's Team-account agent doing the owner's project.
     const old = f.member('old', 'mate-team', 'mate')
@@ -230,13 +213,8 @@ describe('agents already working in a Team account', () => {
     work.agentIds.push(old)
     work.assignment = { id: 'before-release', agentId: old, status: 'working', configuration: config,
       execution: { machineId: 'mate-team', harnessId: 'harness-old', machineOwnerId: 'mate' }, result: null }
-    const oldActor: Actor = { kind: 'agent', agentId: old, machineOwnerId: 'mate' }
-    f.run({ type: 'work.status', conversationId: group, assignmentId: 'before-release', status: 'blocked', hold: HOLD, result: 'Needs a token.' }, oldActor)
     expect(f.run({ type: 'message.send', conversationId: group, text: 'Here it is.', replyTo: null, recipientIds: [old] }).messages[0]!.recipients).toEqual([old])
-    expect(f.state.agents.find(a => a.id === old)).not.toHaveProperty('workDecision')
-    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ id: 'before-release', status: 'blocked' })
-    f.run({ type: 'work.cancel', conversationId: group, assignmentId: 'before-release', reason: 'Moving it.' })
-    expect(refusal(() => f.run({ type: 'work.assign', conversationId: group, agentId: old }))?.code).toBe('TEAM_ACCOUNTS_REMOVED')
+    expect(f.state.conversations.find(c => c.id === group)!.assignment).toMatchObject({ id: 'before-release', status: 'working' })
   })
 })
 

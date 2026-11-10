@@ -16,7 +16,6 @@
     "integration/shareRaces.test.ts": 500,
     "integration/superTabActivity.test.ts": 1900,
     "integration/superTabMessageEdits.test.ts": 1500,
-    "integration/superTabAttemptModels.test.ts": 700,
     "integration/superTabAutoJoin.test.ts": 4300,
     "integration/superTabBuddies.test.ts": 22500,
     "integration/superTabBuddyProbes.test.ts": 4800,

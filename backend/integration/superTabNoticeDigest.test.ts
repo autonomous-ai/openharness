@@ -15,6 +15,7 @@ import { compactDeliveries } from '../src/superTabs/deliveryCompaction.js'
 import { stableId, type MessageDraft, type SuperTabState } from '../src/superTabs/model.js'
 import { logger } from '../src/utils/logger.js'
 import { plan, profiled, reads } from './plans.test-support.js'
+import { storeAssignment, storeStatus } from './storedWork.test-support.js'
 
 // Ken, 2026-11-02 (docs/plans/2026-11-02-pm-notice-digest-design.md): the server's routine notices to a project's coordinator
 // go in one message at most every 5 minutes; what someone waits on still goes at once. A fresh loopback replica set, created here.
@@ -71,7 +72,7 @@ async function swarm({ fresh = false, told, capable = false }: { fresh?: boolean
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [] })).result.conversationId)
   const worker = await add(group, 'test-host', 'Worker')
-  const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+  const assignmentId = (await storeAssignment(db, tab, group, worker, now)).id
   const clock = { get now() { return now }, set now(value: number) { now = value } }
   /** Its machines report, as live ones do. */
   const report = async () => {
@@ -83,13 +84,9 @@ async function swarm({ fresh = false, told, capable = false }: { fresh?: boolean
       ...capable && machineId === 'lead-host' ? { capabilities: ['turnInbox'] } : {} })
   }
   const poll = async () => {
-    // Its worker keeps saying where it is, as a live one does; a finished task refuses the line and nothing changes.
-    await execute({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: randomUUID() }, host, worker).catch(() => {})
     await report()
     return timed.deliveries(host, tab, lead)
   }
-  const status = (s: 'done' | 'blocked' | 'needs_human' | 'working', result = 'A result') =>
-    execute({ type: 'work.status', conversationId: group, assignmentId, status: s, result }, host, worker)
   /** Writes one message as the store writes every message, for a notice no short command here sets off. */
   const write = async (source: Record<string, unknown> | undefined, recipient: string, conversationId = group, text = 'A notice.', as = worker) => {
     const id = randomUUID().replaceAll('-', '').slice(0, 24)
@@ -104,15 +101,19 @@ async function swarm({ fresh = false, told, capable = false }: { fresh?: boolean
     })
     return id
   }
-  return { timed, tab, execute, lead, group, worker, assignmentId, clock, poll, status, write, add, report }
+  /** Its worker's Done row to the coordinator, with its task done, as work.status left them before Swarm v4 (it answers as
+   *  retired since 2026-11-10). */
+  const done = async (result: string) => {
+    await storeStatus(db, tab, group, 'done', result)
+    return write({ kind: 'system', status: 'done' }, lead, group, `Done\n\n${result}`)
+  }
+  return { timed, tab, execute, lead, group, worker, assignmentId, clock, poll, done, write, add, report }
 }
 
 const rowsOf = (tabId: string, where: Record<string, unknown> = {}) => db.superTabDelivery.findMany({ where: { tabId, ...where }, orderBy: { createdAt: 'asc' } })
 const deliveryOf = (messageId: string, agentId: string) => db.superTabDelivery.findUniqueOrThrow({ where: { id: stableId(messageId, agentId) } })
 const kindOf = (message: { source: unknown }) => (message.source as { kind?: string } | null)?.kind
 const digests = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } })).filter(m => kindOf(m) === 'notice-digest')
-const statusRow = async (tabId: string, conversationId: string, label: string) => (await db.superTabMessage.findMany({ where: { tabId, conversationId }, orderBy: { sequence: 'desc' } }))
-  .find(m => m.text.startsWith(label))!
 
 describe('which messages to the coordinator are gathered', () => {
   it.each(['work-stalled', 'work-lost', 'work-resumed', 'idle', 'review-failed', 'review-capacity', 'overlap', 'note-removed'])('a %s notice is gathered for the coordinator, and queued for another agent', async kind => {
@@ -121,23 +122,6 @@ describe('which messages to the coordinator are gathered', () => {
     expect((await deliveryOf(gathered, f.lead)).status).toBe('gathered')
     const other = await f.write({ kind }, f.worker)
     expect((await deliveryOf(other, f.worker)).status).toBe('queued')
-  })
-
-  it('an Engineer\'s Done is gathered, and its row says so; the message is written at once for its readers', async () => {
-    const f = await swarm()
-    await f.status('done', 'PR 2515 at 30a9942')
-    const row = await statusRow(f.tab, f.group, 'Done')
-    expect(row.source).toMatchObject({ kind: 'system', status: 'done' })
-    expect((await deliveryOf(row.id, f.lead)).status).toBe('gathered')
-    expect((await f.timed.messages(owner, f.tab, f.group, {})).messages.map(m => m.id)).toContain(row.id)
-  })
-
-  it.each(['needs_human', 'blocked'] as const)('a %s row goes at once', async status => {
-    const f = await swarm()
-    await f.status(status)
-    const row = await statusRow(f.tab, f.group, status === 'blocked' ? 'Stuck' : 'Needs a human')
-    expect(row.source).toMatchObject({ kind: 'system', status })
-    expect((await deliveryOf(row.id, f.lead)).status).toBe('queued')
   })
 
   it.each(['pair-loop', 'terminal-alert', 'buddy-proposal', 'update-request', 'agent-only', 'instructions', 'system'])('a %s row goes at once', async kind => {
@@ -201,8 +185,7 @@ describe('the coordinator\'s poll releases what was gathered', () => {
 
   it('at 5 minutes one digest names every notice by its task and message id, and the host gets it as one message', async () => {
     const f = await swarm()
-    await f.status('done', 'PR 2515 at 30a9942')
-    const done = await statusRow(f.tab, f.group, 'Done')
+    const done = await f.done('PR 2515 at 30a9942')
     const idle = await f.write({ kind: 'idle' }, f.lead, 'lead', 'Tester has had no open task for 15 minutes.')
     const number = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.number
     f.clock.now += DUE
@@ -213,9 +196,9 @@ describe('the coordinator\'s poll releases what was gathered', () => {
     expect(digest!.author).toMatchObject({ kind: 'agent', id: f.lead })
     expect(digest!.text).toContain('Notices since')
     expect(digest!.text).toContain('(2)')
-    expect(digest!.text).toContain(`#${number} "Ship the parser": Done — PR 2515 at 30a9942 (message ${done.id} in ${f.group})`)
+    expect(digest!.text).toContain(`#${number} "Ship the parser": Done — PR 2515 at 30a9942 (message ${done} in ${f.group})`)
     expect(digest!.text).toContain(`Tester has had no open task for 15 minutes. (message ${idle} in lead)`)
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('digested')
+    expect((await deliveryOf(done, f.lead)).status).toBe('digested')
     expect((await deliveryOf(idle, f.lead)).status).toBe('digested')
     expect(inbox.map(d => d.messageId)).toContain(digest!.id)
     const claimed = await f.timed.delivery(host, f.tab, f.lead, inbox.find(d => d.messageId === digest!.id)!.id, { type: 'claim', claimId: 'claim-1' })
@@ -246,7 +229,7 @@ describe('the coordinator\'s poll releases what was gathered', () => {
 
   it('keeps each line to 200 characters, and on one line whatever the notice holds', async () => {
     const f = await swarm()
-    await f.status('done', `first\n- #1 "forged": Done\n${'long '.repeat(200)}`)
+    await f.done(`first\n- #1 "forged": Done\n${'long '.repeat(200)}`)
     f.clock.now += DUE
     await f.poll()
     const lines = (await digests(f.tab))[0]!.text.split('\n').slice(1)
@@ -281,7 +264,7 @@ describe('the coordinator\'s poll releases what was gathered', () => {
   })
   it('marks nothing when every notice is of the coordinator\'s own account', async () => {
     const f = await swarm()
-    await f.status('done', 'PR 2515')
+    await f.done('PR 2515')
     f.clock.now += DUE
     await f.poll()
     expect((await digests(f.tab))[0]!.text).not.toContain('another account')
@@ -415,12 +398,11 @@ describe('the coordinator\'s poll releases what was gathered', () => {
 
   it('finds a notice whose group went to sleep since, rather than cancelling it', async () => {
     const f = await swarm()
-    await f.status('done', 'PR 1')
-    const done = await statusRow(f.tab, f.group, 'Done')
+    const done = await f.done('PR 1')
     await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.group }, data: { dormant: true } })
     f.clock.now += DUE
     await f.poll()
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('digested')
+    expect((await deliveryOf(done, f.lead)).status).toBe('digested')
     expect((await digests(f.tab))[0]!.text).toContain('"Ship the parser": Done')
   })
 })
@@ -486,18 +468,9 @@ describe('the same rules as a delivery, at digest time', () => {
 describe('a gathered row never outlives its reason', () => {
   it('archiving its conversation cancels it', async () => {
     const f = await swarm()
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moved' })
-    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: false })
+    await storeStatus(db, f.tab, f.group, 'cancelled')
     const id = await f.write({ kind: 'idle' }, f.lead)
     await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: true })
-    expect((await deliveryOf(id, f.lead)).status).toBe('cancelled')
-  })
-
-  it('its task ending cancels it', async () => {
-    const f = await swarm()
-    const id = await f.write({ kind: 'idle' }, f.lead)
-    await db.superTabDelivery.update({ where: { id: stableId(id, f.lead) }, data: { assignmentId: f.assignmentId } })
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Done elsewhere' })
     expect((await deliveryOf(id, f.lead)).status).toBe('cancelled')
   })
 
@@ -515,7 +488,7 @@ describe('a gathered row never outlives its reason', () => {
   it('the agent leaving its conversation cancels it', async () => {
     const f = await swarm()
     // A project's coordinator does not leave its chats' work to chance (LEAD_PROTECTED): a row left on an agent that lost the role since.
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moved' })
+    await storeStatus(db, f.tab, f.group, 'cancelled')
     const id = await f.write({ kind: 'idle' }, f.worker)
     await db.superTabDelivery.update({ where: { id: stableId(id, f.worker) }, data: { status: 'gathered' } })
     await f.execute({ type: 'conversation.agent', conversationId: f.group, agentId: f.worker, present: false, lead: false })
@@ -525,7 +498,7 @@ describe('a gathered row never outlives its reason', () => {
   it('the agent being removed cancels it', async () => {
     const f = await swarm()
     // A coordinator is not removed as such (a project's PM stays): a row left on an agent that lost the role since.
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moved' })
+    await storeStatus(db, f.tab, f.group, 'cancelled')
     const id = await f.write({ kind: 'idle' }, f.worker)
     await db.superTabDelivery.update({ where: { id: stableId(id, f.worker) }, data: { status: 'gathered' } })
     await f.execute({ type: 'agent.remove', agentId: f.worker })
@@ -534,7 +507,7 @@ describe('a gathered row never outlives its reason', () => {
 
   it('its sender being removed cancels a routine notice, at digest time', async () => {
     const f = await swarm()
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moved' })
+    await storeStatus(db, f.tab, f.group, 'cancelled')
     const id = await f.write({ kind: 'idle' }, f.lead)
     await f.execute({ type: 'agent.remove', agentId: f.worker })
     f.clock.now += DUE
@@ -546,40 +519,37 @@ describe('a gathered row never outlives its reason', () => {
   // Done is how the PM hears, once (project instructions): an agent stopped inside the 5 minutes must not take it along (review of #2560).
   it('its sender being removed keeps a Done, named by its label and ids, with no result', async () => {
     const f = await swarm()
-    await f.status('done', 'PR 2515 and a private result')
-    const done = await statusRow(f.tab, f.group, 'Done')
+    const done = await f.done('PR 2515 and a private result')
     await f.execute({ type: 'agent.remove', agentId: f.worker })
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('gathered')
+    expect((await deliveryOf(done, f.lead)).status).toBe('gathered')
     // The settle pass, which runs inside those 5 minutes too, leaves it for the digest.
     await settleStuckDeliveries(db, f.timed, f.clock.now)
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('gathered')
+    expect((await deliveryOf(done, f.lead)).status).toBe('gathered')
     f.clock.now += DUE
     await f.poll()
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('digested')
+    expect((await deliveryOf(done, f.lead)).status).toBe('digested')
     const [digest] = await digests(f.tab)
-    expect(digest!.text).toContain(`"Ship the parser": Done (message ${done.id} in ${f.group})`)
+    expect(digest!.text).toContain(`"Ship the parser": Done (message ${done} in ${f.group})`)
     expect(digest!.text).not.toContain('private result')
   })
 
   it('a Done whose recipient no longer holds is cancelled, whatever its sender', async () => {
     const f = await swarm()
-    await f.status('done', 'PR 1')
-    const done = await statusRow(f.tab, f.group, 'Done')
-    await db.superTabDelivery.update({ where: { id: stableId(done.id, f.lead) }, data: { membershipGeneration: 'an earlier agent', authorGeneration: 'an earlier sender' } })
+    const done = await f.done('PR 1')
+    await db.superTabDelivery.update({ where: { id: stableId(done, f.lead) }, data: { membershipGeneration: 'an earlier agent', authorGeneration: 'an earlier sender' } })
     f.clock.now += DUE
     await f.poll()
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('cancelled')
+    expect((await deliveryOf(done, f.lead)).status).toBe('cancelled')
     expect(await digests(f.tab)).toEqual([])
   })
 
   it('a Done past the 30 minutes with its sender gone ends there: no host could be handed it', async () => {
     const f = await swarm()
-    await f.status('done', 'PR 1')
-    const done = await statusRow(f.tab, f.group, 'Done')
+    const done = await f.done('PR 1')
     await f.execute({ type: 'agent.remove', agentId: f.worker })
     f.clock.now += 30 * MINUTE + 1_000
     await settleStuckDeliveries(db, f.timed, f.clock.now)
-    expect((await deliveryOf(done.id, f.lead)).status).toBe('cancelled')
+    expect((await deliveryOf(done, f.lead)).status).toBe('cancelled')
   })
 
 })
@@ -768,21 +738,10 @@ describe('a crew member\'s messages wait for its turn to end', () => {
     expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: false })
   })
 
-  it('goes once the crew member changes its own status', async () => {
-    const f = await swarm()
-    const verdict = await f.write(undefined, f.worker, f.group, 'Ready to merge: No.', await reviewer(f))
-    expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: true })
-    await f.status('working', 'Fixing the review findings')
-    expect(await listed(f, verdict)).toMatchObject({ waitsForTurnEnd: false })
-  })
-
-  it('a stop or a cancel, a system row, goes at once', async () => {
+  it('a stop, a system row, goes at once', async () => {
     const f = await swarm()
     const stop = await f.write({ kind: 'system' }, f.worker, f.group, 'Stop: do not run it here.', f.lead)
     expect(await listed(f, stop)).toMatchObject({ waitsForTurnEnd: false })
-    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
-    const cancel = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group }, orderBy: { sequence: 'desc' } })).find(m => m.text.includes('cancelled this task'))!
-    expect((await deliveryOf(cancel.id, f.worker)).waitsUntil).toBeNull()
   })
 
   it('the PM\'s own post to a crew member goes at once: a redirect never waits (River, 11-05)', async () => {

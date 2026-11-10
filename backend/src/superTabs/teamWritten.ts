@@ -45,12 +45,6 @@ function mark(group: Conversation, cause: Cause): void {
   group.teamWrittenBy = cause.kind === 'pushed' && was?.kind === 'pushed' ? { kind: 'pushed', pulls: [...new Set([...was.pulls, ...cause.pulls])] } : cause
 }
 
-/** Marks [group] when [worker], assigned to build it, runs in a Team account. A step or the project's coordinator marks nothing. */
-export function markTeamWritten(state: SuperTabState, group: Conversation, worker: Agent): void {
-  if (group.reviewOf || coordinates(state, group, worker) || !onTeamAccount(state, worker)) return
-  mark(group, { kind: 'assigned' })
-}
-
 /** Refuses an agent outside a Team account for Team-written code. The project's coordinator stays: it never builds or runs it. */
 export function requireTeamWrittenAccount(state: SuperTabState, group: Conversation, worker: Agent): void {
   if (barredFromTeamWritten(state, group, worker)) failTeamWritten()

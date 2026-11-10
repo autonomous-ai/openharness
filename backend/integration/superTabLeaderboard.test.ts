@@ -17,7 +17,7 @@ import type { SuperTabState } from '../src/superTabs/model.js'
 import { WEEK_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
-import { quotaReset } from './holds.test-support.js'
+import { storedAssignment, storedStatus } from '../src/superTabs/storedWork.test-support.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -65,9 +65,10 @@ async function scene(before?: (state: SuperTabState) => void) {
   const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
   const fresh = s.group('Fresh'), old = s.group('Old'), chat = s.group('Peer and PM'), hidden = s.group('Hidden', secret), waiting = s.group('Waiting')
   const worker = s.add('worker-harness', waiting)
-  s.run({ type: 'work.assign', conversationId: waiting, agentId: worker })
-  s.run({ type: 'work.status', conversationId: waiting, assignmentId: s.state.conversations.find(c => c.id === waiting)!.assignment!.id,
-    status: 'needs_human', hold: quotaReset(), result: 'Flag?' }, { kind: 'agent', agentId: worker, machineOwnerId: `${owner.sub}-machine` })
+  s.edit(state => {
+    storedAssignment(state, waiting, worker, NOW)
+    storedStatus(state, waiting, 'needs_human', 'Flag?')
+  })
   s.edit(state => {
     const done = { id: 'done', agentId: worker, status: 'done' as const, result: PR, configuration: state.agents[0]!.configuration,
       execution: { machineId: 'host', harnessId: 'h', machineOwnerId: owner.sub } }

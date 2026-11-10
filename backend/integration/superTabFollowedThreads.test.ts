@@ -27,6 +27,7 @@ import { THREAD_MARK_CAP, writeThreadFollow, writeThreadMark } from '../src/supe
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { backfillThreads } from '../src/superTabs/threadBackfill.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { PROFILE_STAGES, profileEntry, type ProfileEntry } from './bench/profile.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
@@ -80,7 +81,7 @@ async function scene(extra: (s: ReturnType<typeof swarm>) => void = () => {}) {
   const openChat = s.group('Open chat', open)
   const web = s.group('Web')
   const worker = s.add('worker-harness', web, false, ownerActor, 'host', owner.sub)
-  s.run({ type: 'work.assign', conversationId: web, agentId: worker })
+  s.edit(state => { storedAssignment(state, web, worker, MIGRATED) })
   const secretGroup = s.group('Secret work', secret)
   let buddyId = s.group('Peer\'s Buddy')
   s.edit(state => {

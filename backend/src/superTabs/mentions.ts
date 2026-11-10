@@ -260,14 +260,6 @@ export async function resolveByAnswer(tx: Tx, tabId: string, personId: string, a
   await resolveIds(tx, tabId, personId, rows.filter(row => answered.has(row.authorAgentId)).map(row => row.id), 'answer', now)
 }
 
-/** A worker took the group: its held tags are over. A listed one moves to Earlier; one not yet listed is dropped, as if never
- *  made. Run before [dropHeldTags] of the same command, which would drop the listed ones too. */
-export async function resolveWhenWorked(tx: Tx, tabId: string, conversationId: string, now: number): Promise<void> {
-  const held = { tabId, conversationId, holdUntil: { isSet: true as const }, ...waiting }
-  await tx.superTabMention.updateMany({ where: { ...held, holdUntil: { lte: new Date(now) } }, data: { resolvedAt: new Date(now), resolvedBy: 'worker' } })
-  await tx.superTabMention.deleteMany({ where: held })
-}
-
 /** The task was handled (leadAction in the state: any agent's route, start or assignment there, or its coordinator's post): the
  *  held tags made before that are dropped for good, listed or not.
  *  Dropped, not resolved, so a later reply or assignment cannot bring one back in Earlier. */

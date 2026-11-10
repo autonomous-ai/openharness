@@ -18,6 +18,7 @@ import { stableId, type Author, type Conversation, type SuperTabState } from '..
 import { WEEK_MS, weekStart } from '../src/superTabs/leaderboard/week.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { storedAssignment } from '../src/superTabs/storedWork.test-support.js'
 import { filterOf, planDatabase, profiled } from './plans.test-support.js'
 import { profiledReads } from './profiledReads.test-support.js'
 
@@ -55,7 +56,7 @@ async function scene() {
   const lead = s.add('lead-harness', 'lead', true)
   const fresh = s.group('Fresh'), old = s.group('Old'), lastWeek = s.group('Last week'), waiting = s.group('Waiting')
   const worker = s.add('worker-harness', waiting)
-  s.run({ type: 'work.assign', conversationId: waiting, agentId: worker })
+  s.edit(state => { storedAssignment(state, waiting, worker, NOW) })
   s.edit(state => {
     const done = { id: 'done', agentId: worker, status: 'done' as const, result: PR, configuration: state.agents[0]!.configuration,
       execution: { machineId: 'host', harnessId: 'h', machineOwnerId: owner.sub } }
