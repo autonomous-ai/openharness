@@ -102,13 +102,13 @@ void main() {
   });
 
   testWidgets(
-    'Manage rows have leading dots, owner badge and aligned disk bars',
+    'Manage rows have leading dots, owner badge and aligned disk bars, and no crew (v3)',
     (tester) async {
       await mount(tester);
       expect(find.text('OWNER'), findsOneWidget);
       for (final id in ['mine', 'build', 'sleep', 'old']) {
         expect(tester.getSize(key('machines-line-$id')).height, 56);
-        expect(key('machines-crew-$id'), findsOneWidget);
+        expect(key('machines-crew-$id'), findsNothing);
         expect(key('machines-disk-$id'), findsOneWidget);
         expect(
           tester.getTopLeft(key('machines-dot-$id')).dx,
@@ -164,16 +164,6 @@ void main() {
     expect(find.text('Online 1'), findsOneWidget);
     expect(find.text('Asleep 2'), findsOneWidget);
     expect(find.text('1 online · 2 asleep · 1 offline'), findsOneWidget);
-  });
-
-  testWidgets('crew chip expands the existing machine details', (tester) async {
-    final c = await mount(tester);
-    expect(find.text('1 crew'), findsOneWidget);
-    await tester.tap(key('machines-crew-mine'));
-    await tester.pump();
-    expect(c.isMachineExpanded('mine'), isTrue);
-    expect(key('super-machine-crew-member-mine-0'), findsOneWidget);
-    await c.flush();
   });
 
   testWidgets(

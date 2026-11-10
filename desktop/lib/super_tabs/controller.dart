@@ -15,7 +15,6 @@ import 'attachment_upload.dart';
 import 'avatar_upload.dart';
 import 'backlog.dart' show SuperTabTaskPriority;
 import 'message_link.dart';
-import 'identity.dart' show superTabMachineName;
 import 'machine_status.dart' show kSuperTabMachineOfflineAfter;
 import 'model.dart';
 import 'task_groups.dart';
@@ -790,9 +789,6 @@ class SuperTabController extends ChangeNotifier {
 
   /// When the parts held were last read: how old a [savedView] of them is.
   DateTime? _partsReadAt;
-
-  /// When the Swarm was last read (Manage ▸ Backlog's "Synced", #2774).
-  DateTime? get syncedAt => _partsReadAt;
 
   /// The rows each conversation's messages were read from, kept only to save
   /// the view ([SuperTabReading.drawsSaved]).
@@ -1873,12 +1869,6 @@ class SuperTabController extends ChangeNotifier {
     final result = await sending;
     _forgetRefusedUploads(result);
     return result;
-  }
-
-  /// The Swarm's name for [machineId], as people read it; null when unknown.
-  String? sessionMachineName(String machineId) {
-    final name = snapshot?.pool(machineId)?['name'];
-    return name is String && name.isNotEmpty ? superTabMachineName(name) : null;
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(

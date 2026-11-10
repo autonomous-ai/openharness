@@ -131,11 +131,20 @@ void main() {
     expect(find.text('Leaderboard'), findsWidgets);
     expect(tester.takeException(), isNull);
 
-    // Manage keeps its Machines page.
+    // Manage: Machines, Models, Devices and Swarm, each opening; no v3 Backlog or Scorecard, no crew on a machine.
     await tester.tap(key('super-manage'));
     await tester.pumpAndSettle();
     expect(find.text('Manage'), findsWidgets);
-    expect(tester.takeException(), isNull);
+    for (final gone in ['backlog', 'scorecard']) {
+      expect(key('super-manage-tab-$gone'), findsNothing, reason: gone);
+    }
+    expect(find.textContaining('crew'), findsNothing);
+    for (final tab in ['models', 'swarm', 'machines']) {
+      await tester.tap(key('super-manage-tab-$tab'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: tab);
+    }
+    expect(find.textContaining('crew'), findsNothing);
 
     // And back to a chat: the left pane still answers.
     await tester.tap(key('super-agent-second'));

@@ -115,6 +115,8 @@ void main() {
         find.descendant(of: row, matching: find.byTooltip('Reply')),
         findsOneWidget,
       );
+      // The view saves its read mark 200 ms after the change: let it land.
+      await tester.pump(const Duration(milliseconds: 250));
     });
 
     testWidgets(

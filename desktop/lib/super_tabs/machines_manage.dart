@@ -298,17 +298,13 @@ class _ManageMachineLine extends StatelessWidget {
       'asleep' => MachinesStyle.asleep,
       _ => MachinesStyle.offline,
     };
-    final crew = view.crew;
-    final awake = crew.where((a) => !a.crewAsleep && !a.crewMoving).length;
     final age = view.readingAt == null ? null : now.difference(view.readingAt!);
     final metadata = [
       local ? 'This machine' : view.owner?.shownName ?? 'Owner unavailable',
       if (view.problem != null)
         view.problem!
       else if (group != 'online')
-        'last seen ${age == null ? 'unknown' : superTabAgo(age)}'
-      else if (crew.isNotEmpty)
-        '${crew.length} crew · $awake online',
+        'last seen ${age == null ? 'unknown' : superTabAgo(age)}',
     ].join(' · ');
     return Container(
       key: ValueKey('machines-line-${view.id}'),
@@ -415,84 +411,6 @@ class _ManageMachineLine extends StatelessWidget {
                       style: MachinesStyle.body(),
                     ),
                   ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: narrow ? 2 : 5,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (!narrow &&
-                          group == 'online' &&
-                          view.owner != null) ...[
-                        Container(
-                          width: 20,
-                          height: 20,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: MachinesStyle.chip,
-                          ),
-                          child: Text(
-                            view.owner!.shownName.trim().isEmpty
-                                ? '?'
-                                : view.owner!.shownName
-                                      .trim()
-                                      .characters
-                                      .first
-                                      .toUpperCase(),
-                            style: MachinesStyle.small(
-                              color: MachinesStyle.metadata,
-                            ),
-                          ),
-                        ),
-                        if (crew.length > 1)
-                          Container(
-                            width: 20,
-                            height: 20,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: MachinesStyle.chip,
-                            ),
-                            child: Text(
-                              '+${crew.length - 1}',
-                              style: MachinesStyle.small(
-                                color: MachinesStyle.metadata,
-                              ),
-                            ),
-                          ),
-                        const SizedBox(width: 8),
-                      ],
-                      Flexible(
-                        child: Container(
-                          key: ValueKey('machines-crew-${view.id}'),
-                          padding: MachinesStyle.chipInset,
-                          decoration: BoxDecoration(
-                            color: group == 'asleep'
-                                ? MachinesStyle.asleep.withValues(alpha: .12)
-                                : MachinesStyle.chip,
-                            borderRadius: MachinesStyle.radius,
-                          ),
-                          child: Text(
-                            group == 'asleep' && crew.isNotEmpty
-                                ? '${crew.length} asleep'
-                                : '${crew.length} crew',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: MachinesStyle.small(
-                              color: group == 'asleep'
-                                  ? MachinesStyle.asleep
-                                  : MachinesStyle.metadata,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
               const SizedBox(width: 12),

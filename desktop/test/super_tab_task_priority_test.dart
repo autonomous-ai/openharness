@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/backlog.dart';
-import 'package:harness/super_tabs/backlog_view.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/tasks_view.dart';
@@ -19,7 +18,6 @@ final _now = DateTime(2026, 11, 4, 9);
 Finder _key(String key) => find.byKey(ValueKey(key));
 Finder _column(String name) => _key('super-tasks-column-$name');
 Finder _card(String id) => _key('super-task-card-$id');
-Finder _row(String id) => _key('super-backlog-row-$id');
 Finder _in(Finder of, String text) =>
     find.descendant(of: of, matching: find.text(text, findRichText: true));
 
@@ -434,42 +432,6 @@ void main() {
       await c.select('review-step');
       await tester.pumpAndSettle();
       expect(button, findsNothing);
-    });
-  });
-
-  group('Backlog', () {
-    testWidgets('each row shows its Px badge, and P0 leads its group', (
-      tester,
-    ) async {
-      final server = _server();
-      // Waiting for a machine, newest first today: preview, shipped-means,
-      // ask.
-      _group(server, 'shipped-means')['priority'] = 'P0';
-      _groups(server).add(taskFixture('ask', 'An old ask (Scholes, high)', 5));
-      await tester.binding.setSurfaceSize(const Size(1100, 2000));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final c = server.controller();
-      addTearDown(c.dispose);
-      await c.refresh();
-      await tester.pumpWidget(
-        _app(
-          SuperTabBacklogView(
-            controller: c,
-            onOpenConversation: (_) {},
-            now: () => _now,
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(_in(_row('shipped-means'), 'P0'), findsOneWidget);
-      expect(_in(_row('ask'), 'P1'), findsOneWidget);
-      expect(_in(_row('ask'), 'An old ask'), findsOneWidget);
-      expect(_in(_row('preview'), 'P2'), findsOneWidget);
-      expect(find.text('URGENT'), findsNothing);
-      expect(find.text('HIGH'), findsNothing);
-      double top(String id) => tester.getTopLeft(_row(id)).dy;
-      expect(top('shipped-means'), lessThan(top('ask')));
-      expect(top('ask'), lessThan(top('preview')));
     });
   });
 }

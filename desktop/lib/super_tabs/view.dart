@@ -3811,8 +3811,8 @@ class _SuperTabViewState extends State<SuperTabView>
       consumeOutsideTap: false,
       alignmentOffset: Offset.zero,
       children: [
-        _notifyMenu(group),
-        const AppMenuDivider(),
+        // Swarm v4 (anh Dee, 2026-11-09): a project has its settings and nothing else; notifications are v3 (agents
+        // talk to agents).
         item(
           'Project settings…',
           () => unawaited(_projectSettings(group, project)),
@@ -5778,8 +5778,6 @@ class _SuperTabViewState extends State<SuperTabView>
                                             widget.onOpenTerminal)
                                         .call(agent);
                                   },
-                                  onOpenConversation: _openConversation,
-                                  facts: _facts,
                                 )
                               : const SizedBox.shrink(),
                         ],

@@ -7,7 +7,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:flutter/services.dart';
 import 'package:harness/super_tabs/attention.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/shortcuts/keymap.dart';
@@ -323,31 +322,6 @@ void main() {
         expect(c.selectedId, order.first);
         await jump(LogicalKeyboardKey.arrowUp);
         expect(c.selectedId, order.first);
-        await _done(tester, c);
-      },
-      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
-    );
-
-    testWidgets(
-      'the chat menu\'s Notifications sets Muted, and the row greys',
-      (tester) async {
-        // A project's chat: the sidebar lists no tasks (task #2569).
-        final (c, _) = await _show(
-          tester,
-          Brightness.dark,
-          selected: 'web-lead',
-        );
-        await tester.tap(find.byKey(const ValueKey('super-project-menu')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-notify-menu')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const ValueKey('super-notify-muted')));
-        await tester.pumpAndSettle();
-        expect(c.notifyOf('web-lead'), SuperTabNotify.muted);
-        expect(
-          find.byKey(const ValueKey('super-muted-web-lead')),
-          findsOneWidget,
-        );
         await _done(tester, c);
       },
       variant: TargetPlatformVariant.only(TargetPlatform.macOS),

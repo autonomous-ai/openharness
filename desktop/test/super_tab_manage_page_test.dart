@@ -82,17 +82,15 @@ void main() {
     return (c: c, server: server);
   }
 
-  testWidgets('its five tabs, Devices only where this build has them', (
+  testWidgets('its four tabs, Devices only where this build has them', (
     tester,
   ) async {
     await show(tester);
-    for (final label in const [
-      'Machines',
-      'Models',
-      'Devices',
-      'Swarm',
-      'Backlog',
-    ]) {
+    // Backlog and Scorecard were v3 (the scorecard's backend went in #3629).
+    for (final gone in const ['Backlog', 'Scorecard']) {
+      expect(find.text(gone), findsNothing, reason: gone);
+    }
+    for (final label in const ['Machines', 'Models', 'Devices', 'Swarm']) {
       expect(
         find.descendant(
           of: find.byType(SuperTabManageTabs),
