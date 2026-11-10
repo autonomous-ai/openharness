@@ -1909,6 +1909,33 @@ class ConversationServer {
                 )['archived'] =
             command['archived'];
         revision++;
+      } else if (command['type'] == 'project.closeTab') {
+        // As backend commands.ts closes a v3 tab's project: gone when none of its chats has a message, else kept
+        // read-only and archived.
+        final projectId = command['projectId'];
+        final groups = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .where((g) => g['projectId'] == projectId)
+            .toList();
+        if (groups.any((g) => ((g['lastMessageSequence'] ?? 0) as num) > 0)) {
+          for (final project
+              in (state['projects'] as List).cast<Map<String, dynamic>>()) {
+            if (project['id'] == projectId) project['archived'] = true;
+          }
+          for (final group in groups) {
+            group['archived'] = true;
+          }
+          output['outcome'] = 'archived';
+        } else {
+          state['projects'] = (state['projects'] as List)
+              .where((p) => p['id'] != projectId)
+              .toList();
+          (state['conversations'] as List).removeWhere(
+            (g) => g['projectId'] == projectId,
+          );
+          output['outcome'] = 'deleted';
+        }
+        revision++;
       } else if (command['type'] == 'project.delete') {
         final projectId = command['projectId'];
         final projects =

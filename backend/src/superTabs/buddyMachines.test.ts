@@ -341,8 +341,13 @@ describe('a Buddy-only machine after its reviews', () => {
     const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
     const lead = f.run({ type: 'agent.add', conversationId: docs.conversationId, harnessId: 'docs-pm', machineId: 'owner-laptop', name: 'Lead', configuration,
       lead: true }, owner, { contribution: own('owner') }).result.agentId as string
+    // The owner's Buddy session there, in a live chat too: never it, as its record is not the machine in the Swarm.
+    const person = f.state.people.find(p => p.id === 'owner')!
+    f.state.agents.push({ ...f.state.agents.find(a => a.id === lead)!, id: 'owner-buddy', harnessId: 'buddy-session', buddyOf: { personId: person.id, generation: person.generation } })
+    f.state.conversations.find(c => c.id === docs.conversationId)!.agentIds.push('owner-buddy')
     const rows = await hostTab('swarm', f.state, 'owner-laptop', hostUser('owner'), null, lookups)
     expect(rows.roster.find(r => 'agent' in r && r.agent.id === lead)).toMatchObject({ joinSwarm: true })
+    expect(rows.roster.find(r => 'agent' in r && r.agent.id === 'owner-buddy')).toMatchObject({ joinSwarm: false })
   })
 
   it('counts a Buddy-only machine in its person\'s 20, never in another person\'s (#2637)', () => {

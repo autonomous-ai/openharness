@@ -258,8 +258,8 @@ export interface MessagePageCursor { sequence: number; id: string }
 export interface MessagePage<M = Record<string, unknown>> {
   messages: M[]
   next: MessagePageCursor | null
-  /** The conversation's reaction counter (reactions.ts): when it moved, read the page shown again for its counts. Each
-   *  message carries `reactions: [{ emoji, count, by: [{ kind, id }] }]`, current members only. */
+  /** Moves when a message here is edited or deleted (messageEdits.ts): read the page shown again. Named for the reactions it
+   *  first counted. Each message still carries `reactions`, always empty since 2026-11-09 (reactions.ts), for apps from before. */
   reactionSeq: number
 }
 

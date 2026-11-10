@@ -1,46 +1,47 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../logging/app_log.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 
 /// A fenced code block in a message, as Slack shows one: monospace, the
-/// fence's name or language over it, Copy beside that, and a long one folded
-/// to its first [foldedLines] lines behind Show more.
-class SuperTabCodeBlock extends StatefulWidget {
+/// fence's name or language over it, and Copy beside that. It shows every
+/// line, like the message it is in (anh Dee, 2026-11-09), and wraps one wider
+/// than the column rather than scrolling inside the chat.
+class SuperTabCodeBlock extends StatelessWidget {
   const SuperTabCodeBlock({super.key, required this.code, this.language});
-
-  static const foldedLines = 12;
 
   final String code;
 
   /// The fence's info string — `dart`, `main.dart` — or null without one.
   final String? language;
 
-  @override
-  State<SuperTabCodeBlock> createState() => _SuperTabCodeBlockState();
-}
-
-class _SuperTabCodeBlockState extends State<SuperTabCodeBlock> {
-  bool _unfolded = false;
-
-  Future<void> _copy() async {
-    await Clipboard.setData(ClipboardData(text: widget.code));
-    if (!mounted) return;
+  /// Copies the block, and says whether it did: a clipboard that refuses (no helper on Linux, a browser that denies it)
+  /// is said, not taken for a copy.
+  Future<void> _copy(BuildContext context) async {
+    var copied = true;
+    try {
+      await Clipboard.setData(ClipboardData(text: code));
+    } on PlatformException catch (error) {
+      copied = false;
+      appLog.warn('super-tabs', 'Code not copied: ${error.code}');
+    }
+    if (!context.mounted) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      const SnackBar(content: Text('Code copied'), duration: Durations.long4),
+      SnackBar(
+        content: Text(copied ? 'Code copied' : 'Couldn\'t copy it.'),
+        duration: Durations.long4,
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    final lines = widget.code.split('\n');
-    final long = lines.length > SuperTabCodeBlock.foldedLines;
-    final shown = long && !_unfolded
-        ? lines.take(SuperTabCodeBlock.foldedLines).join('\n')
-        : widget.code;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         grid.AppDesktop.groupGap,
@@ -55,19 +56,26 @@ class _SuperTabCodeBlockState extends State<SuperTabCodeBlock> {
             children: [
               Expanded(
                 child: Text(
-                  widget.language ?? '',
+                  language ?? '',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: DesktopChrome.metadata(),
                 ),
               ),
-              _quiet(label: 'Copy', icon: AppIcons.copy, onPressed: _copy),
+              DesktopPill(
+                label: 'Copy',
+                icon: AppIcons.copy,
+                onPressed: () => unawaited(_copy(context)),
+                quiet: true,
+                compact: true,
+                foregroundColor: DesktopChrome.accent,
+              ),
             ],
           ),
           Padding(
             padding: const EdgeInsets.only(right: grid.AppDesktop.controlGap),
             child: Text(
-              shown,
+              code,
               softWrap: true,
               style: grid.AppType.mono(
                 color: DesktopChrome.foreground,
@@ -75,27 +83,8 @@ class _SuperTabCodeBlockState extends State<SuperTabCodeBlock> {
               ),
             ),
           ),
-          if (long)
-            _quiet(
-              label: _unfolded ? 'Show less' : 'Show more',
-              onPressed: () => setState(() => _unfolded = !_unfolded),
-            ),
         ],
       ),
     );
   }
 }
-
-/// A quiet control in the block, in the accent: no fill or rim at rest.
-Widget _quiet({
-  required String label,
-  required VoidCallback onPressed,
-  IconData? icon,
-}) => DesktopPill(
-  label: label,
-  icon: icon,
-  onPressed: onPressed,
-  quiet: true,
-  compact: true,
-  foregroundColor: DesktopChrome.accent,
-);

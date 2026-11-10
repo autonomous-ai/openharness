@@ -333,6 +333,12 @@ const storeCoverArt = <String, StoreCoverArt>{
     description: 'Field, a live WebGL instrument made with Web Studio',
     imageSize: Size(1600, 1000),
   ),
+  'autonomous/files': StoreCoverArt(
+    asset: 'assets/store/covers/files.jpg',
+    description: 'A trip plan read in Files, its folder in a tree beside it',
+    imageSize: Size(1600, 1000),
+    viewport: Rect.fromLTWH(0, 0, 1200, 600),
+  ),
   'autonomous/score': StoreCoverArt(
     asset: 'assets/store/covers/score.jpg',
     description: 'An ensemble score made with Score',

@@ -5,6 +5,10 @@ import type { AgentEngine } from '../engines/types.js'
 import type { NativePathFact } from '../engines/kit/nativePaths.js'
 import type { RegisteredSession } from './registry.js'
 
+/** How long a change-agent preparation may take before it gives up without writing, under the desktop's 6 s
+ *  wait; the core keeps what it observed for the request as long (core/handoffPublication.ts). */
+export const HANDOFF_DEADLINE_MS = 5_000
+
 export interface NativeHandoffRead {
   ownerAgentId: string
   engine: AgentEngine

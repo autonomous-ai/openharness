@@ -98,6 +98,7 @@ describe('live worker transport', () => {
   it.each([
     {}, page({ cursor: cursor({ serial: 3 }) }),
     page({ cursor: cursor({ turn: { identity: 'another:empty', turnOpen: false, continued: false } }) }),
+    page({ cursor: cursor({ turn: { identity: 'binding:empty', turnOpen: true, continued: false, openedAt: 'soon' } as never }) }),
     page({ frames: [{ raw: '', profile: true, observe: true, events: [], replay: false,
       turn: { identity: 'another:empty', turnOpen: false, continued: false } }] }),
   ])('refuses a malformed page or one from another binding', async answer => {

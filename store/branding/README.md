@@ -17,6 +17,7 @@ The real Flutter `EngineMark` widget, rendered at 96, 16, 24 and 32 px:
 |---|---|---|
 | Web Studio | Original interwoven web loops | MIT |
 | Data Studio | Original bars and analysis spark | MIT |
+| Files | Original folder with an open page | MIT |
 | Quantum Studio | Original orbit / Bloch-sphere motif | MIT |
 | GIS | Original folded map and location pin | MIT |
 | OpenSCAD | Official upstream 256 px icon, copied unchanged | GPL-2.0-or-later |
