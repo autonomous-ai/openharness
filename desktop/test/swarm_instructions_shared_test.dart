@@ -10,7 +10,8 @@ import 'package:harness/super_tabs/model.dart';
 import 'support/swarm_v4_data.dart';
 
 /// An agent's instructions pane shows, under the agent's own file, what else instructs it in its folder, read only: the
-/// project's `AGENTS.md` and `CLAUDE.md` (anh Dee, 2026-11-10: Faye's instructions, in lampOS).
+/// project's `AGENTS.md` and `CLAUDE.md` (anh Dee, 2026-11-10: Faye's instructions, in lampOS), each folded to its name and
+/// size until opened (anh Dee, the same day: a project's long AGENTS.md read as the agent's own).
 void main() {
   Finder key(String k) => find.byKey(ValueKey(k));
 
@@ -51,24 +52,44 @@ void main() {
     ),
   );
 
+  /// Opens every file of the folder that has text of its own and is closed, as a person clicks each.
+  Future<void> openFiles(WidgetTester tester) async {
+    for (var i = 0; key('swarm-shared-name-$i').evaluate().isNotEmpty; i++) {
+      final row = key('swarm-shared-row-$i');
+      if (row.evaluate().isEmpty ||
+          key('swarm-shared-text-$i').evaluate().isNotEmpty) {
+        continue;
+      }
+      await tester.ensureVisible(row);
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+    }
+  }
+
+  /// [open]: with the folder's files opened, as most of these read them.
   Future<void> show(
     WidgetTester tester,
     SwarmV4Computer computer, {
     Size size = const Size(880, 800),
     Brightness brightness = Brightness.light,
     String name = 'Faye',
+    bool open = true,
   }) async {
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(pane(computer, brightness: brightness, name: name));
     await tester.pumpAndSettle();
+    if (open) await openFiles(tester);
   }
+
+  const empty =
+      'Empty for now. Tell Faye how you want it to work, and it writes it down here.';
 
   double top(WidgetTester tester, Finder finder) =>
       tester.getTopLeft(finder).dy;
 
   testWidgets(
-    'Faye has no file of her own: her AGENTS.md and CLAUDE.md show under her name, read only and whole, at 880 wide',
+    'Faye has no file of her own: it says so, and her AGENTS.md and CLAUDE.md, opened, show read only and whole, at 880 wide',
     (tester) async {
       final computer = SwarmV4Computer()
         ..shared = [
@@ -79,7 +100,7 @@ void main() {
       expect(find.text('agents/Faye.md'), findsOneWidget);
       expect(find.text('AGENTS.md'), findsOneWidget);
       expect(find.text('CLAUDE.md'), findsOneWidget);
-      expect(find.textContaining('No instructions yet'), findsNothing);
+      expect(find.text(empty), findsOneWidget);
       // The whole text of each, selectable, and nothing to type into.
       expect(
         tester.widget<SelectableText>(key('swarm-shared-text-0')).data,
@@ -116,6 +137,51 @@ void main() {
       expect(find.text('Read AGENTS.md first.').hitTestable(), findsOneWidget);
       // Her own file is hers to write: Edit is there.
       expect(key('swarm-instructions-edit'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  // anh Dee, 2026-11-10, on Arlo's pane in openharness: "why is the default instructions for the PM so long" (its own file
+  // was empty; the long text was the repository's AGENTS.md), and "click edit the instruction becomes blank".
+  testWidgets(
+    'an agent with no file of its own says so first; its folder\'s files are folded, a click opens one; Edit says what to write',
+    (tester) async {
+      final computer = SwarmV4Computer()
+        ..shared = [
+          file('AGENTS.md', agentsMd, truncated: false),
+          file('CLAUDE.md', 'Read AGENTS.md first.', truncated: false),
+        ];
+      await show(tester, computer, open: false);
+      expect(find.text(empty), findsOneWidget);
+      expect(find.text('From its folder'), findsOneWidget);
+      // Each by name and size, its text a click away.
+      expect(find.text('AGENTS.md'), findsOneWidget);
+      expect(find.text('320 lines'), findsOneWidget);
+      expect(find.text('CLAUDE.md'), findsOneWidget);
+      expect(find.text('1 line'), findsOneWidget);
+      expect(key('swarm-shared-text-0'), findsNothing);
+      expect(key('swarm-shared-text-1'), findsNothing);
+      await tester.tap(find.text('AGENTS.md'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<SelectableText>(key('swarm-shared-text-0')).data,
+        agentsMd,
+      );
+      expect(key('swarm-shared-text-1'), findsNothing);
+      await tester.tap(find.text('AGENTS.md'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-shared-text-0'), findsNothing);
+
+      // Her own file, empty, and what goes in it.
+      await tester.tap(key('swarm-instructions-edit'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-instructions-field'), findsOneWidget);
+      expect(
+        find.text(
+          'Rules for Faye, as you would tell it. It reads them at every start.',
+        ),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -214,7 +280,7 @@ void main() {
     expect(find.text('CLAUDE.md'), findsOneWidget);
     expect(find.text('AGENTS.md'), findsNothing);
     expect(find.text('Read the docs first.'), findsOneWidget);
-    expect(find.textContaining('No instructions yet'), findsNothing);
+    expect(find.text(empty), findsOneWidget);
   });
 
   testWidgets('a file the computer cut says so, and only that file does', (
@@ -248,13 +314,13 @@ void main() {
       expect(find.text('Be brief.'), findsOneWidget);
       expect(find.text('AGENTS.md'), findsNothing);
       expect(find.text('CLAUDE.md'), findsNothing);
-      expect(find.textContaining('No instructions yet'), findsNothing);
+      expect(find.text(empty), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
 
   testWidgets(
-    '"No instructions yet" shows only when the own file and every other file are empty',
+    '"Empty for now" shows whenever her own file is empty, whatever else her folder holds',
     (tester) async {
       Future<void> check({
         String? own,
@@ -268,7 +334,7 @@ void main() {
           ..skipped = skipped;
         await show(tester, computer);
         expect(
-          find.textContaining('No instructions yet'),
+          find.text(empty),
           says ? findsOneWidget : findsNothing,
           reason: reason,
         );
@@ -290,8 +356,8 @@ void main() {
       );
       await check(
         shared: [file('AGENTS.md', 'Ship small.')],
-        says: false,
-        reason: 'only AGENTS.md',
+        says: true,
+        reason: 'only AGENTS.md: hers is still empty',
       );
       await check(
         own: 'Be brief.',
@@ -337,14 +403,14 @@ void main() {
   });
 
   testWidgets(
-    'only skipped files: "No instructions yet", and why the others are not shown',
+    'only skipped files: "Empty for now", and why the others are not shown',
     (tester) async {
       final computer = SwarmV4Computer()
         ..skipped = [
           {'name': 'AGENTS.md', 'why': 'not_text'},
         ];
       await show(tester, computer);
-      expect(find.textContaining('No instructions yet'), findsOneWidget);
+      expect(find.text(empty), findsOneWidget);
       expect(find.text('AGENTS.md isn\'t text.'), findsOneWidget);
     },
   );
@@ -517,6 +583,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(key('swarm-instructions-error'), findsNothing);
       expect(find.text('Be brief.'), findsOneWidget);
+      await openFiles(tester);
       expect(find.text('Ship small.'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
@@ -566,6 +633,7 @@ void main() {
       computer.shared = [file('AGENTS.md', 'Kai\'s project.')];
       who.value = 'Kai';
       await tester.pumpAndSettle();
+      await openFiles(tester);
       expect(find.text('Kai\'s own.'), findsOneWidget);
       expect(find.text('Kai\'s project.'), findsOneWidget);
       slow.complete();

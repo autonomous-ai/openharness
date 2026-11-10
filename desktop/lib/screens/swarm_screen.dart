@@ -3122,6 +3122,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
       context,
       workspaceTabNames(app)[id] ?? swarm.name,
       keymap: _keymap,
+      // A Swarm is renamed for everyone in it, not as this window's tab.
+      swarm: swarm.superTabId != null,
     );
     if (name == null) return;
     if (swarm.superTabId case final tabId?) {
@@ -8540,6 +8542,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           onAttachAgent: _attachAgent,
                                           onNewSwarm: () =>
                                               _newTab(superTab: true),
+                                          onRenameSwarm: () => unawaited(
+                                            _rename(app.activeSwarmId),
+                                          ),
                                           onAddAgent: (group) => unawaited(
                                             _addAgent(conversationId: group.id),
                                           ),

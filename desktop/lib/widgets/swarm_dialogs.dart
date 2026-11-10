@@ -20,18 +20,20 @@ import 'desktop_chrome.dart';
 import 'terminal_name_prompt.dart';
 import 'terminal_prompt.dart';
 
+/// [swarm]: a Swarm's tab, whose name is the Swarm's own, for everyone in it.
 Future<String?> showSwarmRenameDialog(
   BuildContext context,
   String name, {
   AppKeymap? keymap,
+  bool swarm = false,
 }) => showTerminalPrompt<String>(
   context,
   keymap: keymap,
   builder: (_) => TerminalNamePrompt(
-    title: 'Rename Tab',
+    title: swarm ? 'Rename Swarm' : 'Rename Tab',
     name: name,
     fieldKey: const Key('tab-rename-input'),
-    fieldLabel: 'Tab name',
+    fieldLabel: swarm ? 'Swarm name' : 'Tab name',
     maxLength: 80,
   ),
 );

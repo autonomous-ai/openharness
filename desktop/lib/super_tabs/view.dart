@@ -138,6 +138,7 @@ class SuperTabView extends StatefulWidget {
     this.onNewAgent,
     this.onAttachAgent,
     this.onNewSwarm,
+    this.onRenameSwarm,
     this.onChooseAgentTerminal,
     this.linkSwarms,
     this.voiceRecorder,
@@ -174,6 +175,9 @@ class SuperTabView extends StatefulWidget {
   /// The existing New Swarm, for the Swarm dropdown atop the left bar; none
   /// without it.
   final VoidCallback? onNewSwarm;
+
+  /// Rename in that dropdown, for this Swarm; none without it.
+  final VoidCallback? onRenameSwarm;
   final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
 
   /// How a message link reaches the account's other Swarms. Without it, and
@@ -1941,6 +1945,7 @@ class _SuperTabViewState extends State<SuperTabView>
     onOpenPane: _openPane,
     joining: _joining,
     onNewSwarm: widget.onNewSwarm,
+    onRenameSwarm: widget.onRenameSwarm,
     page: _pageShown,
     onManage: _openManage,
     onManageMachines: () {
@@ -3494,8 +3499,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 ? widget.onCloseTerminal
                 : () {
                     setState(
-                      () => _instructionsOpen = _infoOpen = _browserOpen =
-                          false,
+                      () =>
+                          _instructionsOpen = _infoOpen = _browserOpen = false,
                     );
                     _openTerminals(group)?.call();
                   },

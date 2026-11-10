@@ -208,6 +208,9 @@ Future<List<SuperTabController>> _show(
   // The pane's read answers after the first frame, and shows on the next.
   await tester.pump();
   await tester.pump();
+  // Its folder's files start folded; AGENTS.md is opened, as a person clicks it, and CLAUDE.md stays folded.
+  await tester.tap(find.byKey(const ValueKey('swarm-shared-row-0')));
+  await tester.pump();
   expect(tester.takeException(), isNull);
   return [c];
 }
@@ -803,7 +806,7 @@ class _Gallery extends StatelessWidget {
                 ],
               ),
               title(
-                'Instructions: the agent\'s own file, then its folder\'s AGENTS.md and CLAUDE.md, read only',
+                'Instructions: the agent\'s own file, then its folder\'s files, read only and folded',
               ),
               SizedBox(
                 width: 380,
