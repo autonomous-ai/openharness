@@ -39,7 +39,6 @@ import { COMMENT_KINDS, MAX_COMMENT_IDS } from '../superTabs/githubComments.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { PICTURES_RETIRED, REMINDERS_RETIRED, RETIRED_READS, RETIRED_WRITES, retiredCatchUp } from '../superTabs/retired.js'
-import { isTeamSession } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 import { markNothingNew } from '../lib/routeLatency.js'
@@ -106,8 +105,6 @@ const notifyBody = z.object({ notify: z.enum(NOTIFY_LEVELS) }).strict()
 const threadParams = messageParams.extend({ threadId: id })
 const fileParams = messageParams.extend({ messageId: id, attachmentId: id })
 const noQuery = z.object({}).strict()
-// The project whose open Buddy proposals a person reads (superTabs/proposals.ts).
-const proposalsQuery = z.object({ projectId: id }).strict()
 /** The Cmd-N and join project list's query (superTabs/projectList.ts): the project the person was invited to, if any. */
 const projectListQuery = z.object({ invitedTo: id.optional() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
@@ -531,8 +528,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   // records into it: each is answered ok and ignored, to everyone, naming no Swarm. An older Desktop's open then gets no context (it
   // says it could not prepare terminal sharing) and an older host's read finds no terminal (its prepare fails), so nothing new is
   // recorded. A host drops an observation once it is acknowledged by the id it makes of it (cli superTabs/native.ts eventId), so
-  // that one is answered with it: without it, a journal from before would send the same observation again, for ever. A Team session
-  // reaches these on its own list (lib/teamSession.ts).
+  // that one is answered with it: without it, a journal from before would send the same observation again, for ever.
   const recordingGone = (_req: unknown, reply: FastifyReply) => sendSuccess(reply, { ok: true, ignored: true })
   app.post('/api/super-tabs/:tabId/native', { bodyLimit: HOT_BODY_LIMIT, preHandler: validateParams(tabParams) }, recordingGone)
   app.get('/api/super-tabs/:tabId/native/:contextId', { preHandler: validateParams(nativeParams) }, recordingGone)
@@ -588,10 +584,6 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/machine-readings',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => reads.machineReadings(req.user!, req.params.tabId, req.query.asAgentId)))
-  // One project's Buddy proposals its PM has not answered, oldest first (superTabs/proposals.ts): the Tasks view's Proposals.
-  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof proposalsQuery> }>('/api/super-tabs/:tabId/proposals',
-    { preHandler: [validateParams(tabParams), validateQuery(proposalsQuery)] },
-    (req, reply) => respond(reply, () => store.proposals(req.user!, req.params.tabId, req.query.projectId)))
   // The projects a person may pick a main project from (superTabs/projectList.ts, task #4540), read when Cmd-N or Join opens.
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof projectListQuery> }>('/api/super-tabs/:tabId/project-list',
     { preHandler: [validateParams(tabParams), validateQuery(projectListQuery)] },
@@ -644,10 +636,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       }
       await requireApproval(req.user!, grant, repository)
       const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
-      // A Harness Team account has no git identity of its own: its commits are the app's, as its pull requests are
-      // (github/app.ts commitIdentity). A person's machine keeps its owner's, as before.
-      const commitAs = isTeamSession(req.user) ? github.app.commitIdentity() : null
-      return { ...issued, ...attribution(grant), ...(commitAs ? { commitAs } : {}) }
+      return { ...issued, ...attribution(grant) }
     }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },

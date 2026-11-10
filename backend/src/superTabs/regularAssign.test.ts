@@ -13,7 +13,7 @@ const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'own
 const mate: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'mate', email: 'mate@example.com' }
 const config: AgentConfiguration = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
 const own = (userId: string) => ({ contribution: { machineOwnerId: userId, contributorId: userId } })
-const resources = { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
+const resources = { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
   deviceType: null, chip: null, os: null, gpuPercent: null }
 const code = (body: () => unknown): string | null => {
   try { body(); return null } catch (error) { return error instanceof SuperTabError ? error.code : 'INVALID' }
@@ -32,7 +32,7 @@ function swarm() {
   const generation = (userId: string) => state.people.find(p => p.id === userId)!.generation
   state.machines = [{ machineId: 'mate-mac', name: 'mate-mac', contributorId: 'mate', membershipGeneration: generation('mate'), generation: 'g1',
     cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 4, paused: false,
-    observation: { generation: 'g1', receivedAt: NOW, sessionKind: 'computer', resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['regularAgent'] } } as ContributedMachine]
+    observation: { generation: 'g1', receivedAt: NOW, resources, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['regularAgent'] } } as ContributedMachine]
   // Mate's Regular agent Ada, running in its chat.
   const made = run({ type: 'agent.new', kind: 'regular', name: 'Ada', engine: 'claude', machineId: 'mate-mac' } as Command, mate, own('mate'))
   const startId = made.result.startId as string

@@ -9,12 +9,13 @@ const count = vi.hoisted(() => vi.fn())
 const create = vi.hoisted(() => vi.fn())
 const consumeNewIdQuota = vi.hoisted(() => vi.fn())
 const findUnique = vi.hoisted(() => vi.fn())
+const machineFindMany = vi.hoisted(() => vi.fn())
 const publishDeviceStatus = vi.hoisted(() => vi.fn())
 
 vi.mock('../lib/prisma.js', () => ({
   prisma: {
     deviceBinding: { findMany, findFirst, findUnique, count, create, update, updateMany },
-    machine: { findMany: vi.fn() },
+    machine: { findMany: machineFindMany },
   },
   machineAlive: {},
 }))
@@ -85,6 +86,16 @@ describe('listDetailedForUser', () => {
     const [row] = await deviceService.listDetailedForUser('u1')
     expect(JSON.stringify(row)).not.toContain('tokenHash')
     expect(JSON.stringify(row)).not.toContain('"h"')
+  })
+})
+
+// Harness Team accounts are gone (anh Dee, 2026-11-10): the picker never offers a Team account's machine, whose daemon stopped.
+describe('machinesForUser', () => {
+  it("leaves out a Harness Team account's machine", async () => {
+    const row = { authMode: 'remote', billingStatus: 'not_required', createdAt: new Date('2026-01-01') }
+    machineFindMany.mockResolvedValue([{ ...row, machineId: 'mac', name: 'Mac', sessionKind: 'computer' },
+      { ...row, machineId: 'mac-team', name: 'Mac · Team', sessionKind: 'team' }, { ...row, machineId: 'older', name: 'Older' }])
+    expect((await deviceService.machinesForUser('u1')).map(m => m.machineId)).toEqual(['mac', 'older'])
   })
 })
 

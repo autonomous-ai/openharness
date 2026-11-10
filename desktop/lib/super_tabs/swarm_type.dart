@@ -7,17 +7,19 @@ import '../widgets/finger_target.dart';
 import '../widgets/markdown_style.dart';
 
 /// The Swarm's text in the system font (task #2312, Huy, 2026-11-03). The chat reads by anh Dee's three sizes (11-07,
-/// #4467): 14 for chat text on 20 px lines, 13 for names in semibold, 12 for details such as the time, in tertiary ink.
+/// #4467), raised to Codex's reading size (anh Dee, 2026-11-10: "the font size is also small. see codex for example"; Codex
+/// sets its prose at 16 on 28 px lines): 16 for chat text on 26 px lines, 14 for names in semibold, 13 for details such as
+/// the time, in tertiary ink.
 /// The sidebar keeps Slack's 15 px on 28 px rows. Only the Swarm's screens use these: the terminal, Settings and every
 /// other screen keep [DesktopChrome]'s.
 ///
 /// A phone's layout (`workspaceIsCompact`) keeps the app's sizes: its rows, composer and finger targets were measured
 /// on them (Huy, 2026-11-02), and Slack's numbers are its desktop app's.
 abstract final class SwarmType {
-  static const double bodySize = 14;
-  static const double bodyLine = 20;
-  static const double nameSize = 13;
-  static const double timeSize = 12;
+  static const double bodySize = 16;
+  static const double bodyLine = 26;
+  static const double nameSize = 14;
+  static const double timeSize = 13;
   static const double sidebarSize = 15;
   static const double sidebarLine = 22;
   static const double sidebarRow = 28;
@@ -42,13 +44,38 @@ abstract final class SwarmType {
           letterSpacing: grid.AppType.trackingFor(nameSize),
         );
 
-  /// A detail beside a name, such as a message's time: 12 px in tertiary ink.
-  static TextStyle time(BuildContext context, {Color? color}) =>
-      DesktopChrome.metadata(color: color ?? DesktopChrome.hint)
-          .copyWith(fontSize: timeSize);
+  /// A detail beside a name, such as a message's time: 13 px in tertiary ink; a phone's the app's 12.
+  static TextStyle time(BuildContext context, {Color? color}) {
+    final style = DesktopChrome.metadata(color: color ?? DesktopChrome.hint);
+    return workspaceIsCompact(context)
+        ? style
+        : style.copyWith(fontSize: timeSize);
+  }
+
+  /// The name over another's first bubble, plain in [color]: [nameSize] on [bodyLine] lines; a phone's the app's 13 on 20 px
+  /// lines, which its finger-tall name was measured on (message_row.dart: the gap above gives up half a finger).
+  static TextStyle nameLine(BuildContext context, {Color? color}) =>
+      workspaceIsCompact(context)
+      ? DesktopChrome.text(color: color, size: 13, height: 20 / 13)
+      : DesktopChrome.text(
+          color: color,
+          size: nameSize,
+          height: bodyLine / nameSize,
+        );
 
   static TextStyle composer(BuildContext context, {Color? color}) =>
       body(context, color: color);
+
+  /// A task card's title on the board: 14 on 20 px lines in semibold, as GitHub's own boards set an issue's, so a column of
+  /// cards keeps its density while the chat reads larger (anh Dee, 2026-11-10, of the chat alone).
+  static TextStyle boardTitle(BuildContext context) =>
+      (workspaceIsCompact(context)
+              ? DesktopChrome.text()
+              : DesktopChrome.text(
+                  size: 14,
+                  height: 20 / 14,
+                ).copyWith(letterSpacing: grid.AppType.trackingFor(14)))
+          .copyWith(fontWeight: FontWeight.w600);
 
   /// A sidebar row's text: 15 px on [sidebarLine] lines, as Slack lists its channels; a phone's ([compact]) the app's
   /// 13 px.

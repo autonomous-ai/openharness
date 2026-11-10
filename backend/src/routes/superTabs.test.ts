@@ -4,7 +4,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma, type PrismaClient } from '@prisma/client'
 
 // Real Harness sessions for the sign-in tests below, minted and redeemed through lib/harnessSession.ts against in-memory
-// stores, as routes/control.test.ts does, so the real authentication and team gate run.
+// stores, as routes/control.test.ts does, so the real authentication runs.
 const fakes = vi.hoisted(() => {
   const redis = new Map<string, string>()
   const sessions: Array<Record<string, unknown> & { id: string }> = []
@@ -30,12 +30,6 @@ const fakes = vi.hoisted(() => {
           const row = { id: `s${sessions.length + 1}`, ...data }; sessions.push(row); return row
         }),
         findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => pick(where)),
-      },
-      machine: {
-        findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => where.computerId === 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-          ? [{ machineId: 'team-mac', userId: 'owner', computerId: where.computerId, billingStatus: 'not_required', sessionKind: 'team' }] : []),
-        // Other accounts' Team machines on the redeeming computer (superTabs/computerMoves.ts teamCleanupPending): none here.
-        aggregateRaw: vi.fn(async () => []),
       },
     },
     user: { id: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' },
@@ -252,6 +246,14 @@ describe('the retired reads', () => {
       body: { success: false, error: { code: 'REMINDERS_RETIRED', message: 'Reminders are gone. Nothing was set.' } } })
   })
 
+  // Proposals go too (S9): an older Desktop's Tasks view reads a project's.
+  it('answers an older client\'s proposals read with none, with each query it sent, and reads nothing', async () => {
+    for (const url of ['/api/super-tabs/tab-1/proposals?projectId=app', '/api/super-tabs/tab-2/proposals?projectId=lead', '/api/super-tabs/tab-1/proposals']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect({ status: res.statusCode, body: res.json() }, url).toEqual({ status: 200, body: { success: true, data: { proposals: [] } } })
+    }
+  })
+
   it('answers an older client\'s decisions read with none, with each query it sent, and reads nothing', async () => {
     for (const url of ['/api/super-tabs/tab-1/decisions?state=open', '/api/super-tabs/tab-1/decisions?state=answered&asAgentId=agent-1',
       '/api/super-tabs/tab-2/decisions?state=settled', '/api/super-tabs/tab-2/decisions']) {
@@ -424,15 +426,13 @@ describe('Super Tab body limits (roadmap 2.8)', () => {
 })
 
 // The web calls Swarm routes straight from the browser with the person's own sign-in (docs/specs/2026-10-30-web-swarm-
-// direct.md): a viewer session reaches them as the person, through the real authentication; a team sign-in is still
-// refused as the person (the store refuses it on the routes the team gate admits for its agents, superTabBuddies).
+// direct.md): a viewer session reaches them as the person, through the real authentication.
 describe('the browser\'s own sign-in on Swarm routes', () => {
   let app: FastifyInstance
-  let viewer: string, team: string
+  let viewer: string
   const seen: Array<{ route: string; user: AuthUser }> = []
   beforeAll(async () => {
-    viewer = (await redeemHandoff((await startHandoff(fakes.user.id, 'viewer')).code, 'Safari on iPhone'))!.token
-    team = (await redeemHandoff((await startHandoff(fakes.user.id, 'team')).code, 'MacBook Pro · Team', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))!.token
+    viewer = (await redeemHandoff((await startHandoff(fakes.user.id)).code, 'Safari on iPhone'))!.token
     app = Fastify()
     app.setErrorHandler(errorHandler)
     registerAuthMiddleware(app)
@@ -458,16 +458,6 @@ describe('the browser\'s own sign-in on Swarm routes', () => {
     expect(post.statusCode).toBe(200)
     expect(seen.map(s => s.route)).toEqual(['parts', 'commands'])
     for (const { user } of seen) expect(user).toMatchObject({ sub: 'owner', harnessSessionKind: 'viewer' })
-  })
-
-  it('refuses a team sign-in as the person, before any Swarm is read', async () => {
-    const auth = { authorization: `Bearer ${team}` }
-    for (const url of ['/api/super-tabs/tab-1/parts', '/api/super-tabs/list']) {
-      const res = await app.inject({ method: 'GET', url, headers: auth })
-      expect(res.statusCode, url).toBe(403)
-      expect(res.json().error.code).toBe('TEAM_SESSION_LIMITED')
-    }
-    expect(seen).toEqual([])
   })
 
   it('refuses no sign-in at all', async () => {
@@ -577,33 +567,3 @@ describe('the machine lines of a change read', () => {
   })
 })
 
-// The Tasks view's Proposals (#2569): one project's open Buddy proposals, read by the store as the project chat's reader.
-describe('a project\'s open proposals', () => {
-  let app: FastifyInstance
-  const calls: unknown[][] = []
-  beforeEach(async () => {
-    calls.length = 0
-    app = Fastify()
-    app.setErrorHandler(errorHandler)
-    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    const store = { proposals: async (...args: unknown[]) => { calls.push(args); return { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } } }
-    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
-    await app.ready()
-  })
-  afterEach(async () => { await app.close() })
-
-  it('answers the store\'s list for the project named, as the signed-in person', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/super-tabs/tab-1/proposals?projectId=app' })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ success: true, data: { proposals: [{ messageId: 'm1', title: 'Sync edits', personId: 'p1', at: 5 }] } })
-    expect(calls).toEqual([[expect.objectContaining({ sub: 'u1' }), 'tab-1', 'app']])
-  })
-
-  it('refuses a read that names no project, or anything else', async () => {
-    for (const query of ['', '?projectId=', '?projectId=app&asAgentId=a1']) {
-      const res = await app.inject({ method: 'GET', url: `/api/super-tabs/tab-1/proposals${query}` })
-      expect(res.statusCode, query).toBe(400)
-    }
-    expect(calls).toEqual([])
-  })
-})

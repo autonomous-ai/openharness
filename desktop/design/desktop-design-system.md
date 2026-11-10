@@ -739,12 +739,17 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   2026-11-07, task #4529). Your own messages are bubbles on the right in
   `SwarmPalette.ownBubble` (#0A84FF) under white text (`onSelection`);
   everyone else's on the left in grey (`field`). Radius 18, and 4 on the
-  sender's side where one sender's bubbles meet; a bubble takes at most three
-  quarters of the row (`SwarmBubble`, `super_tabs/chat/bubble.dart`). Between
+  sender's side where one sender's bubbles meet; your own bubble takes at most
+  three quarters of the row, and another's, like a card, 92% of it, so an
+  agent's words read nearly the column's width, as Codex's answers do (anh
+  Dee, 2026-11-10; `SwarmBubble`, `super_tabs/chat/bubble.dart`,
+  `SuperTabMessageRow.shareOf`). Between
   you and a chat's own agent (a Buddy chat, an agent chat) there are no names
   or faces; in a group chat a speaker's name sits over their first bubble in
-  13 plain secondary ink, and their round 28 face by their last. No engine
-  mark: colour is the face's. Text reads at 14 on 20 px lines (`SwarmType`). A
+  14 plain secondary ink, and their round 28 face by their last. No engine
+  mark: colour is the face's. Text reads at 16 on 26 px lines, names at 14 and
+  times at 13 (`SwarmType`): Codex's reading size (anh Dee, 2026-11-10: "the
+  font size is also small"); a phone keeps the app's 14, 13 and 12. A
   message reads in the direction of its first words (the first letter of its prose; code, links, `@name` and `#12`
   aside): Arabic or Hebrew from the bubble's right edge, whatever the app's; its code still left to right
   (`SuperTabMessageText.directionOf`).
@@ -778,11 +783,12 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   round send (`SwarmSendButton`, 28, blue) in its place once there is text or
   a file. A thread's box keeps its row under the text, with a grey send until
   there is something to send. No @ button: an @ typed tags.
-- **Chat column.** A chat is one column, at most 720 wide and centred in its
-  pane (`SwarmChatColumn`, `super_tabs/chat/column.dart`; anh Dee, 2026-11-09).
+- **Chat column.** A chat is one column, at most 880 wide and centred in its
+  pane (`SwarmChatColumn`, `super_tabs/chat/column.dart`; anh Dee, 2026-11-09;
+  720 until anh Dee's 2026-11-10 "the center chat area is too small").
   Its message rows, day lines, New messages line, composer and the notes
   around it (an error, a reply being written, the agents-only line) share it,
-  each keeping its own 24-point inset inside it, so a pane under 720 is filled
+  each keeping its own 24-point inset inside it, so a pane under 880 is filled
   with 24 each side. The header stays the pane's whole width, and so does the
   list, so its scrollbar sits at the pane's edge, and the bars across the top
   of the chat (the connection line, Find, the unread bar) and the Jump to

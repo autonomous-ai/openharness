@@ -1,6 +1,5 @@
 import type { Command, CommandContext } from '../commands.js'
 import type { Actor, CommandEffects, SuperTabState } from '../model.js'
-import type { ContributedMachine } from '../machines.js'
 import { agentProjectId, canReadProject, groupProject, projectsOf } from '../projects.js'
 import type { Touch } from './commit.js'
 import { waitsNow } from '../leaderboard/record.js'
@@ -34,13 +33,7 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       if ((start.request.member || start.request.helperOf) && !(before.starts ?? []).some(s => s.id === start.id)) { head(); slots(start.request.machineId) }
     }
   }
-  const slots = (machineId: string) => {
-    const pool = before.machines?.find(m => m.machineId === machineId)
-    const mac: ContributedMachine | undefined = pool?.hostMachineId ? before.machines?.find(m => m.machineId === pool.hostMachineId) : pool
-    for (const id of new Set([machineId, mac?.machineId, ...(before.machines ?? []).filter(m => mac && m.hostMachineId === mac.machineId).map(m => m.machineId)])) {
-      if (id) machine(id)
-    }
-  }
+  const slots = (machineId: string) => machine(machineId)
 
   // D1: the actor's own part (spec ruling 2).
   if (actor.kind === 'person') member(actor.userId)
@@ -86,30 +79,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       newMemberStarts()
       break
     }
-    case 'proposal.close':
-      head()
-      leadCheck(command.projectId)
-      break
-    case 'proposal.create':
-      head()
-      group(leadGroupOf(command.projectId))
-      break
-    case 'proposal.decide': case 'proposal.ask': case 'proposal.answer': case 'proposal.merge': {
-      head()
-      const card = before.conversations.find(c => c.id === command.conversationId)
-      leadCheck(card && groupProject(before, card).id)
-      for (const identity of card?.proposal?.senders ?? []) member(identity.personId)
-      if (command.type === 'proposal.merge') {
-        group(command.intoConversationId)
-        for (const id of card?.proposal?.mergedFrom ?? []) group(id)
-      }
-      break
-    }
-    case 'buddy.propose':
-      head()
-      leadCheck(command.projectId)
-      if (actor.kind === 'agent') member(before.agents.find(a => a.id === actor.agentId)?.buddyOf?.personId)
-      break
     case 'buddy.create':
       // It may record a Buddy-only machine, or count on one that a concurrent removal of its last Buddy ends.
       slots(command.machineId)
@@ -162,7 +131,6 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
       group(leadGroupOf(projectId))
       member(command.requesterId)
       for (const created of effects.state.conversations.filter(c => !before.conversations.some(b => b.id === c.id))) member(created.requesterId)
-      if (command.proposalMessageId) head()
       break
     }
     case 'conversation.unlink':

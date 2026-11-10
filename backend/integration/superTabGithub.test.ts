@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -68,9 +68,7 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   app.addHook('onRequest', async (request, reply) => {
     // GitHub sends a person back here without a Harness token, as the server's own gate lets it (authMiddleware.ts).
     if (request.url.startsWith('/api/github/callback')) return
-    // `x-test-team` signs in as that person's Harness Team account, where one is listed.
-    const team = request.headers['x-test-team'] === '1'
-    const user = users.find(u => `Bearer ${u.sub}` === request.headers.authorization && (u.harnessSessionKind === 'team') === team)
+    const user = users.find(u => `Bearer ${u.sub}` === request.headers.authorization)
     if (!user) return reply.code(401).send({ success: false })
     request.user = user
   })
@@ -143,7 +141,7 @@ describe('the GitHub token endpoint', () => {
     const minted = env.github.calls.find(c => c.path === '/app/installations/91/access_tokens')!
     expect(minted.body).toEqual({ repositories: ['app'],
       permissions: { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } })
-    // A person's machine keeps its owner's git identity: the app's is for a Harness Team account.
+    // A person's machine keeps its owner's git identity.
     expect(data).not.toHaveProperty('commitAs')
     // The same task gets the same token back.
     expect((await ask(env, tab, worker)).json().data.token).toBe('ghs_fixture_1')
@@ -177,28 +175,6 @@ describe('the GitHub token endpoint', () => {
     // Refused as on main (here before the owner's own check, as this owner's account no longer matches): no token, whoever asked.
     expect(refused.json().error.code).toBe('NOT_FOUND')
     expect(env.github.calls.filter(c => c.path.endsWith('/access_tokens'))).toHaveLength(1)
-  })
-
-  // A Harness Team account has no git identity of its own (PR #1934, 2026-10-28): its commits are the app's bot account's.
-  it('names Harness by Autonomous as who a Harness Team account\'s commits are by, asking GitHub nothing', async () => {
-    const env = await fresh()
-    const { tab, worker } = await working(env)
-    const computerId = createHash('sha256').update('gh-host').digest('hex').slice(0, 32)
-    await db.machine.update({ where: { machineId: 'gh-host' }, data: { computerId, sessionKind: 'team' } })
-    onTestFinished(async () => { await db.machine.update({ where: { machineId: 'gh-host' }, data: { computerId: null, sessionKind: null } }) })
-    const team: AuthUser = { ...host, sub: host.sub, harnessSessionId: 'team-gh-host', harnessSessionKind: 'team', harnessComputerId: computerId }
-    users.push(team)
-    onTestFinished(() => { users.splice(users.indexOf(team), 1) })
-    const response = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
-      headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
-    expect(response.statusCode, response.body).toBe(200)
-    expect(response.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
-    // GitHub is not asked: not saying who the bot is changes nothing.
-    env.github.control.botId = null
-    const again = await env.app.inject({ method: 'POST', url: `/api/super-tabs/${tab}/github-token?asAgentId=${worker}`,
-      headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' }, payload: { machineId: 'gh-host' } })
-    expect(again.statusCode, again.body).toBe(200)
-    expect(again.json().data.commitAs).toEqual({ name: 'Harness by Autonomous', email: 'noreply@autonomous.ai' })
   })
 
   it('warns, but still gives the token, when the default branch does not require a pull request; and says when it does', async () => {

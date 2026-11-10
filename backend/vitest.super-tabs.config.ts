@@ -3,12 +3,10 @@ import { defineConfig } from 'vitest/config'
 // One file a line: a pull request that deletes a test deletes its line, and two such pull requests do not conflict.
 export default defineConfig({ test: {
   include: [
-    'integration/superTabProposalCards.test.ts',
     'integration/superTabs.test.ts',
     'integration/superTabSharing.test.ts',
     'integration/superTabAutoJoin.test.ts',
     'integration/superTabGithub.test.ts',
-    'integration/superTabTeam.test.ts',
     'integration/superTabRead.test.ts',
     'integration/superTabPersonalTasksFeed.test.ts',
     'integration/superTabOneGroup.test.ts',
@@ -72,8 +70,8 @@ export default defineConfig({ test: {
     'integration/superTabComputerMoves.test.ts',
     'integration/swarmAgentTombstones.test.ts',
     'integration/superTabTimeChecks.test.ts',
+    'integration/superTabTeamMachines.test.ts',
     'integration/superTabGithubComments.test.ts',
-    'integration/superTabProposals.test.ts',
     'integration/superTabCanChat.test.ts',
     'integration/superTabChatPush.test.ts',
     'integration/superTabRequestReads.test.ts',

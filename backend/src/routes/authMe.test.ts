@@ -29,13 +29,11 @@ import { errorHandler } from '../middlewares/errorHandler.js'
 import { SsoAuthError, type AuthUser } from '../lib/ssoAuth.js'
 
 const elvis: AuthUser = { sub: 'u1', email: 'phorom12a@example.com', role: 'user', autonomousEnv: 'prod' }
-const team: AuthUser = { ...elvis, harnessSessionId: 's-team', harnessSessionKind: 'team', harnessComputerId: 'c'.repeat(32) }
 const phone: AuthUser = { ...elvis, harnessSessionId: 's-phone', harnessSessionKind: 'viewer' }
 
 const authenticate = vi.fn(async (token: string) => {
   if (token === 'elvis') return elvis
   if (token === 'phone') return phone
-  if (token === 'team') return team
   throw new SsoAuthError('Invalid', 'INVALID_TOKEN')
 })
 
@@ -111,10 +109,4 @@ describe('PATCH /api/auth/me: a person changes their own account name', () => {
     expect(fakes.users.get('u1')!.name).toBe('Elvis')
   })
 
-  it('refuses a team machine\'s sign-in: it runs other people\'s agents under the owner\'s account', async () => {
-    const response = await patch('team', { name: 'Elvis' })
-    expect(response.statusCode).toBe(403)
-    expect(response.json().error.code).toBe('TEAM_SESSION_LIMITED')
-    expect(fakes.update).not.toHaveBeenCalled()
-  })
 })

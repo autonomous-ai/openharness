@@ -12,8 +12,9 @@ abstract final class SwarmLayout {
     vertical: 6,
   );
 
-  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane.
-  static const double chatColumn = 720;
+  /// The most a chat's column is wide: its rows, day lines, composer and the notes around it, centred in the chat's pane. An
+  /// agent's words get about the 768 Codex gives its answers (anh Dee, 2026-11-10: "the center chat area is too small").
+  static const double chatColumn = 880;
 
   /// The strip that leads back to the chat when a pane has taken its place: the pill's room, in from the bar's side.
   static const EdgeInsets backPadding = EdgeInsets.symmetric(

@@ -66,8 +66,8 @@ export function fullSwarm(now = NOW) {
   // A function, not one object: a stored state never holds one object twice (cloneData.test.ts reachedOnce).
   const tokens = () => ({ 'test-model': { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 } })
   s.edit(state => {
-    state.machines!.find(m => m.machineId === 'host')!.observation = { generation: 'g1', receivedAt: now, sessionKind: 'team',
-      resources: { cpuPercent: 1, memoryTotalBytes: 8, memoryUsedBytes: 1, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
+    state.machines!.find(m => m.machineId === 'host')!.observation = { generation: 'g1', receivedAt: now,
+      resources: { cpuPercent: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 1e9, diskFreeBytes: 8, diskTotalBytes: 8, projectDiskFreeBytes: 8,
         deviceType: null, chip: null, os: null, gpuPercent: null },
       tools: {}, quotas: [], runningHarnessIds: ['worker-harness', 'gone-harness'], stoppedHarnessIds: [],
       harnessTokens: { 'worker-harness': tokens(), 'gone-harness': tokens() } }

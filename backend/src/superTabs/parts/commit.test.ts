@@ -79,10 +79,10 @@ describe('what a write tells host reads (review round 1)', () => {
 })
 
 describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
-  // Mac A lends a pool and runs agent a1; the team account B follows Mac A; Mac C runs agent c1 only.
+  // Mac A lends a pool and runs agent a1; Mac B lends a pool; Mac C runs agent c1 only.
   const swarm = () => {
     const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
-    state.machines = [{ machineId: 'A' }, { machineId: 'B', hostMachineId: 'A' }] as never
+    state.machines = [{ machineId: 'A' }, { machineId: 'B' }] as never
     state.agents = [{ id: 'a1', machineId: 'A' }, { id: 'c1', machineId: 'C' }] as never
     return state
   }
@@ -104,9 +104,8 @@ describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
     expect(tell([update('group', 'g', {})])).toEqual([])
   })
 
-  it('tells a machine whose settings changed, the Mac it follows and the team accounts that follow it, never for its reading alone', () => {
-    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
-    expect(tell([update('machine', 'B', { machineId: 'B', contribution: { hostMachineId: 'A' } }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+  it('tells a machine whose settings changed, never for its reading alone', () => {
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} }, { hostChangedAt: new Date(9) })])).toEqual(['A'])
     expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} })])).toEqual([])
   })
 

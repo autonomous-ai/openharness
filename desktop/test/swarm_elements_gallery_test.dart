@@ -182,7 +182,7 @@ Future<List<SuperTabController>> _show(
   final browserApp = _BrowserSettingsApp();
   addTearDown(browserApp.dispose);
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(760, 4340);
+  tester.view.physicalSize = const Size(760, 4456);
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(

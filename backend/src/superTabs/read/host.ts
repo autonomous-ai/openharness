@@ -6,15 +6,14 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { machineAlive } from '../../lib/prisma.js'
-import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
 import { fail, type SuperTabState } from '../model.js'
-import { GrantReads, TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, teamByRecord, type SuperTabStore } from '../store.js'
+import { GrantReads, type SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
 import { readLastChangedAts, readMachines, deriveLight } from '../cachedReads.js'
 import { retryTransient } from '../retry.js'
 import * as parts from '../parts/index.js'
-import type { MachineData, Part } from '../parts/index.js'
+import type { Part } from '../parts/index.js'
 import { groupsBy, retryStaleIndex } from '../parts/indexed.js'
 import { plainHost } from '../parts/write.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
@@ -50,7 +49,6 @@ export class HostReads {
     // Outside any transaction: each Swarm's signature and state come through the read cache (cache.ts), at stamps read once.
     const tx = this.db
     const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
-    await this.store.hostFor(tx, user, machineId, owned)
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     // Every agent's grant check of this read shares one read of each machine, share and contributor.
     const grants = new GrantReads(owned)
@@ -72,8 +70,6 @@ export class HostReads {
       const inputs = await cached.get(tabId, 'host:inputs', 'main', () => hostInputs(tx, cached, tabId))
       if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
       const state = await this.tabState(tx, cached, tabId, machineId)
-      // Its Team account alone hosts a machine this Swarm records as one, whatever its account row says now (store.ts).
-      if (!isTeamSession(user) && teamByRecord(state, machineId)) fail(TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, 403)
       const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, grants))
       const etag = rows.etag + (inputs ?? '')
       // The host already holds these rows: say so instead of sending them again.
@@ -98,16 +94,11 @@ export class HostReads {
       // Through the host's own index by name (parts/indexed.ts): every host runs this every second, and reads no other host's.
       groupsBy(tx, 'wake', [{ $match: { tabId: { $in: ids }, changedAt: { $gt: { $date: after.toISOString() } }, hostMachineIds: machineId } },
         { $project: { _id: 0, tabId: 1 } }]) as Promise<unknown> as Promise<Array<{ tabId: string }>>,
-      tx.swarmMachine.findMany({ where: { tabId: { in: ids }, hostChangedAt: { gt: after } }, select: { tabId: true, key: true, data: true } }),
+      tx.swarmMachine.findMany({ where: { tabId: { in: ids }, hostChangedAt: { gt: after } }, select: { tabId: true, key: true } }),
     ])
     const woken = new Set([...ids.filter(id => changed.get(id)?.some(p => plainlyRelevant(p, machineId))), ...groups.map(g => g.tabId)])
-    // This machine's own settings, a team account's pool on this Mac, or the Mac this team account follows. Not read when no
-    // machine changed, as on most polls: Prisma sends an empty list as a filter no index serves, a scan of every Swarm's machines.
-    const follows = new Map(machines.length ? (await tx.swarmMachine.findMany({ where: { tabId: { in: [...new Set(machines.map(m => m.tabId))] }, key: machineId },
-      select: { tabId: true, data: true } })).map(m => [m.tabId, (m.data as MachineData | null)?.contribution?.hostMachineId]) : [])
-    for (const m of machines) {
-      if (m.key === machineId || (m.data as MachineData | null)?.contribution?.hostMachineId === machineId || follows.get(m.tabId) === m.key) woken.add(m.tabId)
-    }
+    // This machine's own settings.
+    for (const m of machines) if (m.key === machineId) woken.add(m.tabId)
     return woken
   }
 

@@ -36,7 +36,6 @@ function machineParts(state: SuperTabState): Map<string, MachineData> {
   for (const pool of state.machines ?? []) of(pool.machineId).contribution = pool
   for (const { machineId, harnessId, generation, renewed } of state.harnessReservations ?? []) of(machineId).reservations.push({ harnessId, generation, renewed })
   for (const { machineId, harnessId } of state.releasedHarnesses ?? []) of(machineId).released.push(harnessId)
-  // With its Team account hold (`heldFor`, `since`, `noticed`): dropped here, the account was free on the next read (review of #2142).
   for (const { machineId, ...closing } of state.closingSessions ?? []) of(machineId).closingSessions.push(closing)
   for (const { machineId, ...cleanup } of state.machineCleanups ?? []) of(machineId).cleanups.push(cleanup)
   for (const { machineId, ...removed } of state.removedSessions ?? []) (of(machineId).removedSessions ??= []).push(removed)

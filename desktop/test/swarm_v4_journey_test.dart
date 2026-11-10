@@ -168,7 +168,12 @@ void main() {
     }
     expect(find.textContaining(crew), findsNothing);
 
-    // A machine's Details have no Configure: no agents limit, and nothing it may reach or run for others.
+    // A machine opens to its readings and Details, with nothing of v3's team capacity: no subscriptions spent for
+    // others, and no Configure for an agents limit or what the machine may reach.
+    await tester.tap(key('super-machine-host'));
+    await tester.pumpAndSettle();
+    expect(key('super-machine-agents-host'), findsOneWidget);
+    expect(find.text('Subscriptions'), findsNothing);
     await tester.tap(key('super-machine-host'), buttons: kSecondaryButton);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Details'));
