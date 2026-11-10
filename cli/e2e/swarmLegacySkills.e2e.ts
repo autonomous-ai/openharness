@@ -8,13 +8,14 @@ import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
 import { retainContributions } from '../src/superTabs/retention.js'
 import { overOldRoutes } from './harness/swarmReads.js'
+import { PM_BASICS, swarmBasics } from '../src/lib/swarmSkills.js'
 
 const ME: FakeMachine = { machineId: 'c9'.repeat(16), computerId: 'legacy-sw-test', name: 'Fixture', token: 'legacy-sw-token' }
 let daemon: IsolatedDaemon | undefined, relay: FakeBackend | undefined, client: LocalClient | undefined
 afterEach(async () => { client?.close(); await daemon?.close(); await relay?.close(); client = undefined; daemon = undefined; relay = undefined })
 
-/** What a launch tells a Swarm agent (lib/swarmSkills.ts swarmBasics). */
-const BASICS = 'You are a Swarm agent', PM_PART = 'You are your project\'s PM.'
+/** What a launch tells a Swarm agent: the first line of the team's basics, and of a PM's part (lib/swarmSkills.ts). */
+const BASICS = swarmBasics(false).text.split('\n')[0]!, PM_PART = `${PM_BASICS.split('.')[0]!}.`
 
 it('old Lead and worker restarts and stopped resume gain only their role; personal and removed sessions gain none', async () => {
   const b = await FakeBackend.start(); relay = b; b.addMachine(ME)
@@ -78,8 +79,8 @@ it('old Lead and worker restarts and stopped resume gain only their role; person
   expect(launch.args.join(' ')).not.toContain(PM_PART)
   expect(saved(ids.resumed!).swarmSkill).toEqual({ role: 'agent', key: ids.resumed, mode: 'orchestration' })
   expect(readFileSync(join(cwd, 'AGENTS.md'), 'utf8')).toBe('Project rules stay here\n')
-  expect(existsSync(join(cwd, '.harness', 'runtime'))).toBe(false)
+  expect(existsSync(join(cwd, '.harness'))).toBe(false)
   for (const home of [d.engineConfig.codexHome, join(d.root, 'home', '.claude')]) {
-    expect(readdirSync(home, { recursive: true }).map(String).some(file => file.includes('swarm-lead') || file.includes('swarm-dev'))).toBe(false)
+    expect(readdirSync(home, { recursive: true }).map(String).filter(file => /(^|\/)(swarm-[^/]*|SKILL\.md)$/.test(file))).toEqual([])
   }
 })
