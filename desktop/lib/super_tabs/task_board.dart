@@ -54,8 +54,9 @@ class SwarmTaskBoard extends StatefulWidget {
   final Duration? refreshEvery;
   final DateTime Function() now;
 
-  /// The least a column is wide: a narrower pane scrolls sideways.
-  static const columnMinWidth = 220.0;
+  /// The least a column is wide: a narrower pane scrolls sideways. Three of them fit beside the channel in the window the
+  /// app opens in (1280 wide: a pane of 490, 147 a column), so On it, the column people look for, is never out of sight.
+  static const columnMinWidth = 140.0;
 
   /// The project's repository as `owner/name`, or null when it has none on GitHub.
   static String? repositoryOf(
@@ -222,7 +223,8 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
                     child: Text(
                       stale,
                       key: const ValueKey('swarm-tasks-stale'),
-                      maxLines: 1,
+                      // Two lines: at the 1280 window the bar has about 175 px for it, and what to do is its end.
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: DesktopChrome.metadata(),
                     ),
@@ -383,8 +385,12 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(bottom: SwarmLayout.capsuleGap),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                // The pull request sits at the top right, or under the task's number when the column has no room for both
+                // whole: a chip cut to "#7…" said neither which pull request nor where it stands.
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
                     Container(
                       padding: SwarmLayout.capsulePadding,
@@ -399,11 +405,7 @@ class _SwarmTaskBoardState extends State<SwarmTaskBoard> {
                         style: DesktopChrome.metadata(),
                       ),
                     ),
-                    // A narrow column shortens the chip's words, never the task's number.
-                    if (pull != null) ...[
-                      const SizedBox(width: 8),
-                      Flexible(child: SwarmPullChip(pull: pull)),
-                    ],
+                    ?(pull == null ? null : SwarmPullChip(pull: pull)),
                   ],
                 ),
               ),
