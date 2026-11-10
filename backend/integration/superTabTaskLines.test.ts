@@ -105,8 +105,8 @@ describe('a task\'s one message in its project chat', () => {
     await expect(s.as(P)({ type: 'conversation.create', title: 'Another', brief: '', checks: [], requestMessageId: 'missing' })).rejects.toThrow('own message')
   })
 
-  // In place of the On it / Shipped label (anh Dee, 11-04, 'bot messages'): the task's agent reacts on the message that asked.
-  it('reacts 👀 as the agent when its work starts and ✅ once when it merges, on the asking message, with its author told', async () => {
+  // The server reacts for no agent any more (anh Dee, 2026-11-09: the 👀 on every message).
+  it('leaves the asking message as it was when its task starts and merges: no reaction, no Activity, nothing to poll', async () => {
     const s = await swarm()
     const P = await s.add('Coordinator', 'lead', true)
     const asked = String((await run(s.tab, { type: 'message.send', conversationId: 'lead', text: 'Can drafts survive a restart?', replyTo: null,
@@ -121,17 +121,14 @@ describe('a task\'s one message in its project chat', () => {
     const before = await reactions()
     expect(before.on).toEqual([])
     const assignmentId = String((await s.as(P)({ type: 'work.assign', conversationId: T, agentId: E })).result.assignmentId)
-    const started = await reactions()
-    expect(started.on).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: E }] }])
-    expect(started.seq).toBeGreaterThan(before.seq)
+    expect(await reactions()).toEqual(before)
     const pr = 'https://github.com/example/app/pull/7'
     await s.as(E)({ type: 'work.status', conversationId: T, assignmentId, status: 'done', result: `Checks passed: ${pr}` })
     await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
     await s.as(P)({ type: 'conversation.merged', conversationId: T, pullRequestUrl: pr })
-    expect((await reactions()).on).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: E }] }, { emoji: 'check', count: 1, by: [{ kind: 'agent', id: E }] }])
-    // Its author hears each as any reaction to their message (activity.ts).
-    expect((await db.superTabActivity.findMany({ where: { tabId: s.tab, personId: peer.sub, kind: 'reaction', messageId: asked } }))
-      .map(row => [row.actorId, row.emoji]).sort()).toEqual([[E, 'check'], [E, 'eyes']])
+    expect(await reactions()).toEqual(before)
+    expect(await db.superTabReaction.count({ where: { tabId: s.tab, messageId: asked } })).toBe(0)
+    expect(await db.superTabActivity.count({ where: { tabId: s.tab, personId: peer.sub, kind: 'reaction' } })).toBe(0)
   })
 
   // Diego, 2026-11-04 (task #2693): a stop its host confirms is no command, so its thread kept saying On it.
