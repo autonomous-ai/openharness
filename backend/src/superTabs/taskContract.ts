@@ -7,7 +7,7 @@
 export const CONTRACT_FIELDS = ['goal', 'checks', 'priority', 'requester'] as const
 export type ContractField = typeof CONTRACT_FIELDS[number]
 
-/** What a create gave. `requester` is the person already resolved from requesterId, a proposal or a request message. */
+/** What a create gave. `requester` is the person already resolved from requesterId or a request message. */
 export interface ContractGiven { goal: string; checks: number; priority: boolean; requester: boolean }
 
 export const missingContract = (given: ContractGiven): ContractField[] => CONTRACT_FIELDS.filter(field =>

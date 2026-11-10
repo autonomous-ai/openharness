@@ -1,4 +1,4 @@
-import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, rejectTaskApproval, REQUESTER_LEFT, requireTaskApproval, stageTaskApproval } from './taskApproval.js'
+import { authorizeTaskApproval, pendingTaskApproval, personalApprovalCommand, rejectTaskApproval, REQUESTER_LEFT, requireTaskApproval, stageTaskApproval, undecidedProposal } from './taskApproval.js'
 import { handoffAsk, pulseProjectOf, recordPulse, owe, settleDeleted, settleReaction, settleReply, settleRequest } from './pulse.js'
 import { linesOf } from './statusCard.js'
 import { applyPushOrigin, barredFromTeamWritten, failPushUnknown, failTeamWritten, mainAccountMembers, mayName, ownersOwnAgent, ownersOwnMachine, requireTeamWrittenAccount, requireTeamWrittenMachine, TEAM_WRITTEN_REASON, TEAM_WRITTEN_STOP, teamWrittenTask } from './teamWritten.js'
@@ -13,7 +13,7 @@ import { ownedPath, pathsOverlap } from './ownedPaths.js'
 import { addedAgentName, newAgentName, renameAgentTo } from './agentRename.js'
 import { addCrew, CREW_ROLE_MAX, removeCrew } from './crew.js'
 import { githubRelaySchema, relayGitHub } from './githubRelay.js'
-import { ownsBoard, pmAcceptsMessage, readsProject, requireCanChat, requirePriorityRight } from './boardRights.js'
+import { ownsBoard, readsProject, requireCanChat, requirePriorityRight } from './boardRights.js'
 import { keepUsernames, swarmUsernames, usernameOf } from './usernames.js'
 import { agentWrittenNameOf, nameFromAccount } from './personNames.js'
 import { z } from 'zod'
@@ -848,7 +848,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   try { sender = author(effects.state, actor) } catch { sender = undefined }
   syncTaskLines(original, effects, sender, stableId(original.id, actorKey(actor), context.operationId))
   refuseOthersInPrivateChat(effects.state, effects.messages, original)
-  for (const row of effects.messages) row.recipients = row.recipients.filter(id => pmAcceptsMessage(effects.state, id, row.source))
   // Every open group is loaded for a command (parts/load.ts): the board's pulse is worked out on it (pulse.ts), for the project
   // of the conversation the command names when it names one (it moves no other), else for every project.
   const only = pulseProjectOf(effects.state, input)
@@ -2670,6 +2669,7 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
     }
     case 'agent.start': {
       requireTaskApproval(conversation(state, command.request.conversationId), null)
+      if (undecidedProposal(conversation(state, command.request.conversationId))) fail('PROPOSAL_UNDECIDED', 'The PM must accept or reshape this proposal before starting work.', 409)
       chatOnly(command.request.conversationId)
       projectChatWork(command.request.conversationId)
       // A coordinator starts there through lead.start alone.
@@ -3717,9 +3717,6 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
       if (command.notice && !command.agentOnly) fail('VALIDATION_ERROR', 'A skills notice is an agent-only notice to the agent itself.', 400)
-      // Apply the Board's PM boundary before reporting delivery or recording work that depends on who heard the post.
-      const excludedPm = command.agentOnly ? [] : recipients.filter(id => !pmAcceptsMessage(state, id, undefined))
-      recipients = recipients.filter(id => !excludedPm.includes(id))
       if (command.handoff) {
         if (command.agentOnly || group.audience || group.kind || isBuddyChat(group)) fail('ASK_HANDOFF_PUBLIC', 'Hand off an ask in a public post to its project agent.', 400)
         handoffAsk(state, group, poster?.id ?? null, command.handoff, addressed)
@@ -3737,16 +3734,12 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
       }
       // After the person's message: nobody answers it, so its person is told why (Dee, review of #2447).
       if (buddyDown) buddyDownLine(group, buddyDown)
-      if ((poster || excludedPm.length) && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
+      if (poster && !command.agentOnly && !recipients.length) effects.result.reachedNoAgent = REACHED_NO_AGENT
       if (barred.length) effects.result.notReached = notReachedLine(barred.map(id => agent(state, id).displayName ?? agent(state, id).name))
       // A recipient whose session is down keeps the delivery queued and reads it when it is back, and nothing else tells its sender
       // the post is waiting. Not an agent-only notice (the sender's own), an agent asleep (it wakes on the message) or one told to stop.
       const away = command.agentOnly ? [] : recipients.filter(id => !agent(state, id).asleep && agent(state, id).workDecision !== 'stop' && downSince(state, agent(state, id), context.now))
       if (away.length) effects.result.offline = offlineLine(away.map(id => agentDisplayName(state.agents, id) ?? agent(state, id).name))
-      if (excludedPm.length) {
-        const names = excludedPm.map(id => agent(state, id).displayName ?? agent(state, id).name).join(', ')
-        effects.result.notReached = [effects.result.notReached, `This post did not reach ${names}: the PM of a Board project takes only the Swarm's own notices.`].filter(Boolean).join('\n')
-      }
       // A Personal Swarm project chat with no Lead: the message waits for the Lead its person's Desktop starts (task #2633).
       // A Team Swarm's says Not sent, as before.
       const unled = actor.kind === 'person' && !recipients.length && !isBuddyChat(group) && isPersonalSwarm(state) ? groupProject(state, group) : undefined
@@ -3927,6 +3920,8 @@ function applyCommandOnce(original: SuperTabState, actor: Actor, input: Command,
         approval.state = 'proposal'
         delete approval.decidedAt
       } else {
+        if (command.type === 'task.approve' && undecidedProposal(group))
+          fail('PROPOSAL_UNDECIDED', 'Approve the task once the PM has accepted or reshaped this proposal.', 409)
         // A suggestion that moved between the person's look and their tap is not what they approved.
         if (command.type === 'task.approve' && command.suggestedAgentId !== undefined && command.suggestedAgentId !== (approval.suggestedAgentId ?? null)) {
           fail('TASK_SUGGESTION_CHANGED', 'The suggested agent changed since you looked. Read the task again and approve the agent it names now.', 409)

@@ -144,6 +144,20 @@ describe('personal approval enforced before work', () => {
     expect(f.card(id)).toMatchObject({ requesterId: owner.userId, assignment: { agentId: f.candidate } })
     expect(f.card(id).taskApproval).toBeUndefined()
   })
+  // Proposals are gone (2026-11-10), but cards made before are stored: one its PM never accepted or reshaped, Later too, is still no
+  // task its person approves or anyone starts (#4249).
+  it.each([['undecided', undefined], ['Later', 'later']] as const)('refuses approving or starting a stored proposal card its PM left %s', (_, decision) => {
+    const f = fixture(); f.mode('review'); const id = f.create()
+    const senders = [{ personId: peer.userId, generation: f.state.people.find(p => p.id === peer.userId)!.generation }]
+    f.edit(s => { s.conversations.find(c => c.id === id)!.proposal = { senders, ...decision ? { decision: { kind: decision, reason: 'Next week' } } : {} } })
+    f.runCommand({ type: 'task.suggest', conversationId: id, agentId: f.candidate }, f.pm)
+    expect(() => f.runCommand({ type: 'task.approve', conversationId: id })).toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
+    // Approved while undecided, as a server before #4249 allowed, with no agent chosen.
+    f.edit(s => { s.conversations.find(c => c.id === id)!.taskApproval = { ...s.conversations.find(c => c.id === id)!.taskApproval!, state: 'approved', decidedAt: NOW, suggestedAgentId: undefined } })
+    expect(() => f.runCommand({ type: 'agent.start', request: { conversationId: id, machineId: 'host', engine: 'codex', name: 'New worker', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, f.pm))
+      .toThrow(expect.objectContaining({ code: 'PROPOSAL_UNDECIDED' }))
+  })
   it('refuses invalid suggestions and rechecks a changed agent atomically on approval', () => {
     const f = fixture(); f.mode('review'); const id = f.create()
     for (const agentId of [f.buddy, 'missing']) expect(() => f.runCommand({ type: 'task.suggest', conversationId: id, agentId })).toThrow()

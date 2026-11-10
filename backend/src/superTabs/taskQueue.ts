@@ -4,6 +4,7 @@
  */
 import type { Conversation, SuperTabState } from './model.js'
 import { groupProject, type SwarmProject } from './projects.js'
+import { undecidedProposal } from './taskApproval.js'
 
 type Queued = Pick<Conversation, 'id' | 'number' | 'queueRank'>
 /** Closer than this, two ranks leave no room between them: the whole queue is numbered again. */
@@ -17,7 +18,7 @@ export const queueOrder = <T extends Queued>(tasks: readonly T[]): T[] =>
 
 /** The tasks a project's Next up orders: open, never its chat, a Buddy chat, a private chat, a step or a stored proposal card. */
 export function queueSiblings(state: SuperTabState, project: SwarmProject): Conversation[] {
-  return state.conversations.filter(c => (!c.taskApproval || c.taskApproval.state === 'approved') && (!c.proposal || ['accept', 'reshape'].includes(c.proposal.decision?.kind ?? '')) && !c.archived && !c.kind && !c.audience && !c.reviewOf && c.id !== project.leadConversationId
+  return state.conversations.filter(c => (!c.taskApproval || c.taskApproval.state === 'approved') && !undecidedProposal(c) && !c.archived && !c.kind && !c.audience && !c.reviewOf && c.id !== project.leadConversationId
     && groupProject(state, c).id === project.id)
 }
 

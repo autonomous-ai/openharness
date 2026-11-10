@@ -50,6 +50,10 @@ export function authorizeTaskApproval(state: SuperTabState, actor: Actor, type: 
 }
 /** Why a leaving person's pending approvals are rejected (commands.ts member.remove). */
 export const REQUESTER_LEFT = 'Its requester left the Swarm.'
+/** A stored proposal card the PM has not accepted or reshaped is not yet a task to queue, start or approve (#4249): Later is
+ *  undecided too. */
+export const undecidedProposal = (group: Pick<Conversation, 'proposal'>): boolean =>
+  !!group.proposal && !['accept', 'reshape'].includes(group.proposal.decision?.kind ?? '')
 /** Rejects [group]'s approval for [reason]. */
 export function rejectTaskApproval(group: Conversation, reason: string, now: number): void {
   const approval = pendingTaskApproval(group)

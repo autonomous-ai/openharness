@@ -7,13 +7,8 @@
  * store.ts poster), so an older app is held to them too.
  */
 import { fail, type Actor, type Conversation, type SuperTabState } from './model.js'
-import { canReadProject, ledProject, ownsProject, projectsOf, type SwarmProject } from './projects.js'
+import { canReadProject, ownsProject, projectsOf, type SwarmProject } from './projects.js'
 
-/** A switched project's PM takes only what the Swarm writes (a source): a raw chat line never enters its delivery queue. */
-export function pmAcceptsMessage(state: SuperTabState, recipientId: string, source: unknown): boolean {
-  const project = ledProject(state, recipientId)
-  return !project?.boardMode || !!source && typeof source === 'object' && typeof (source as { kind?: unknown }).kind === 'string'
-}
 
 /** Whether [project] works the Board way. */
 export const switched = (project: Pick<SwarmProject, 'boardMode'>): boolean => project.boardMode === true

@@ -68,7 +68,7 @@ const conversation: Required<Conversation> = {
   priority: 'P0',
   process: 'full',
   projectId: 'p',
-  proposal: { decision: { kind: 'accept' } },
+  proposal: { senders: [], decision: { kind: 'accept', reason: 'r' }, mergedInto: 'g' },
   proposals: [],
   pullRequestUrls: [],
   pulse: {} as never,

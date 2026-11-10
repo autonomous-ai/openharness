@@ -1,22 +1,23 @@
 import type { PrismaClient } from '@prisma/client'
 import type { Conversation } from '../model.js'
 
-type FeedFields = Pick<Conversation, 'kind' | 'audience' | 'reviewOf' | 'requesterId' | 'taskApproval' | 'assignment' | 'foldedInto'>
+type FeedFields = Pick<Conversation, 'kind' | 'audience' | 'reviewOf' | 'requesterId' | 'taskApproval' | 'proposal' | 'assignment' | 'foldedInto'>
 
-/** A person at one membership, as an approval names them: a later membership of the same account matches none. */
+/** A person at one membership, as an approval or a proposal names them: a later membership of the same account matches none. */
 export const askedKey = (personId: string, generation: string): string => `${personId}:${generation}`
 
 /**
  * The keys whose Tasks feed lists a task (read/personalTasks.ts, task #4203), exactly as the feed counts a task as the
- * reader's: who asked (the approver at their membership, else the requester), the login its agent runs
+ * reader's: who asked (the approver or proposal senders at their membership, else the requester), the login its agent runs
  * under, which outlives the agent, and the agent doing it or suggested for it. Stored as the conversation's indexed `feedIds`
  * on every write (parts/write.ts extracted), so a page is one read of the reader's keys and own agents. A conversation that
- * is no task, and a task closed into another (foldedInto), names nobody.
+ * is no task, a proposal merged into another, and a task closed into another (foldedInto), names nobody.
  */
 export function feedIdsOf(group: FeedFields): string[] {
-  if (group.kind || group.audience || group.reviewOf || group.foldedInto) return []
+  if (group.kind || group.audience || group.reviewOf || group.proposal?.mergedInto || group.foldedInto) return []
   const approval = group.taskApproval
-  const asked = approval ? [askedKey(approval.personId, approval.generation)] : [group.requesterId]
+  const asked = approval ? [askedKey(approval.personId, approval.generation)]
+    : group.proposal ? group.proposal.senders.map(s => askedKey(s.personId, s.generation)) : [group.requesterId]
   const ids = [...asked, group.assignment?.execution?.contributorId, group.assignment?.agentId ?? approval?.suggestedAgentId]
   return [...new Set(ids.filter((id): id is string => typeof id === 'string' && !!id))]
 }
@@ -33,8 +34,8 @@ export async function markFeedIds(db: PrismaClient): Promise<number> {
   let set = 0
   for (;;) {
     const rows = await db.swarmGroup.aggregateRaw({ pipeline: [{ $match: { feedIds: { $exists: false } } }, { $limit: BATCH },
-      { $project: { tabId: 1, 'data.kind': 1, 'data.audience': 1, 'data.reviewOf': 1, 'data.requesterId': 1, 'data.taskApproval': 1,
-        'data.assignment.agentId': 1, 'data.assignment.execution.contributorId': 1 } }] }) as unknown as Stored[]
+      { $project: { tabId: 1, 'data.kind': 1, 'data.audience': 1, 'data.reviewOf': 1, 'data.requesterId': 1, 'data.taskApproval': 1, 'data.proposal.senders': 1,
+        'data.proposal.mergedInto': 1, 'data.assignment.agentId': 1, 'data.assignment.execution.contributorId': 1 } }] }) as unknown as Stored[]
     if (!rows.length) return set
     const agentOf = (row: Stored) => row.data?.assignment && !row.data.assignment.execution?.contributorId ? `${row.tabId}:${row.data.assignment.agentId}` : null
     const named = [...new Set(rows.map(agentOf).filter((id): id is string => !!id))]

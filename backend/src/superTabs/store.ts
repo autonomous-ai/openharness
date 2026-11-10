@@ -1,6 +1,5 @@
 import { v3Stopping, withdrawV3Stops } from './agentStops.js'
 import { chatlessAgents, giveAgentsChats } from './agentChats.js'
-import { pmAcceptsMessage } from './boardRights.js'
 import { canReadProject } from './projects.js'
 import { timeCommand, timedPhase, type CommandPhases } from './commandTiming.js'
 import { refusalLogFields, type DeclaredClient } from './refusalLog.js'
@@ -2723,7 +2722,6 @@ export class SuperTabStore {
         thread: message.thread ?? message.id, ...(message.alsoInChat ? { alsoInChat: true } : {}),
         ...(message.buddySession ? { buddySession: true } : {}), ...(message.buddyProject ? { buddyProject: message.buddyProject } : {}) })
       for (const recipient of [...message.recipients, ...message.buddyRecipients ?? []]) {
-        if (!pmAcceptsMessage(state, recipient, message.source)) continue
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
         // Written as ever, so its readers see the message at once; only its coordinator's delivery waits for the digest (noticeDigest.ts).
@@ -3682,7 +3680,7 @@ export class SuperTabStore {
     return generation === delivery.authorGeneration && (!('role' in sender) || sender.role !== 'viewer')
   }
 
-  private async senderAllowed(tx: Transaction, state: SuperTabState, delivery: SuperTabDelivery, knownSource?: unknown): Promise<boolean> {
+  private async senderAllowed(tx: Transaction, state: SuperTabState, delivery: SuperTabDelivery): Promise<boolean> {
     const group = state.conversations.find(c => c.id === delivery.conversationId)
     const sender = delivery.authorKind === 'person' ? state.people.find(p => p.id === delivery.authorId) : state.agents.find(a => a.id === delivery.authorId)
     if (!group || !sender) return false
@@ -3690,11 +3688,6 @@ export class SuperTabStore {
       : { kind: 'agent', agentId: delivery.authorId, machineOwnerId: (sender as Agent).machineOwnerId }
     // A sender outside the conversation delivers nothing there: no other agent writes in a person's private chat (task #4558).
     if (!canReadGroup(state, actor, group)) return false
-    if (ledProject(state, delivery.agentId)?.boardMode) {
-      const source = knownSource === undefined
-        ? (await tx.superTabMessage.findUnique({ where: { id: delivery.messageId }, select: { source: true } }))?.source : knownSource
-      if (!pmAcceptsMessage(state, delivery.agentId, source)) return false
-    }
     if (delivery.authorKind !== 'agent') return true
     try { await this.agentGrant(tx, state, agent(state, delivery.authorId)); return true }
     catch (error) { if (error instanceof SuperTabError) return false; throw error }
@@ -3875,14 +3868,9 @@ export class SuperTabStore {
   /** The agent's open deliveries, and those of them its Swarm still lets reach it. */
   private async allowedDeliveries(tx: Transaction, state: SuperTabState, tabId: string, agentId: string) {
     const open = await openDeliveries(tx, tabId, agentId, !!ledProject(state, agentId)?.boardMode)
-    // One bounded primary-key batch, rather than a source lookup for every queued PM input or private Buddy notice.
-    const needsSources = !!ledProject(state, agentId)?.boardMode || open.some(d => isBuddyChat(state.conversations.find(c => c.id === d.conversationId) ?? { kind: undefined } as Conversation))
-    const sources = needsSources && open.length ? new Map((await readBy(tx, 'SuperTabMessage', 'id', [
-      { $match: { tabId, _id: { $in: open.map(d => d.messageId) } } }, { $project: { _id: 1, source: 1 } },
-    ])).map(m => [m._id as string, m.source ?? null])) : null
     const allowed: SuperTabDelivery[] = []
     for (const delivery of open) {
-      if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery, sources?.get(delivery.messageId) ?? (sources ? null : undefined))) allowed.push(delivery)
+      if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
     }
     return { open, allowed: allowed.slice(0, 100), state }
   }

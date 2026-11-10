@@ -82,14 +82,17 @@ describe('which hosts a write concerns', () => {
 describe('the feed ids a conversation write stores (read/feedIds.ts, task #4203)', () => {
   const work = { id: 'w', agentId: 'worker', status: 'done' as const, configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
     execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'machine-owner', contributorId: 'runner' }, result: null }
+  const proposal = { version: 1, text: 'Keep drafts', goal: 'Drafts', why: 'Loss', doneWhen: 'Returns', evidence: ['Repro'], priority: 'P2', createdAt: 1, questions: [],
+    senders: [{ personId: 'proposer', generation: 'g1' }, { personId: 'asker', generation: 'g2' }] } as NonNullable<GroupData['proposal']>
   const task = (change: Partial<GroupData> = {}): GroupData => ({ id: 'g', projectId: 'p', title: 'Work', leadId: 'lead', agentIds: ['lead', 'worker'],
     archived: true, dormant: true, brief: '', checks: [], lastMessageSequence: 0, requesterId: 'asker', assignment: work, ...change })
   const ids = (data: GroupData) => (extracted('group', data, 1).feedIds as string[]).sort()
 
-  it('names who asked as the feed checks it: the approver at their membership, else the requester', () => {
+  it('names who asked as the feed checks it: the approver or the proposal senders at their membership, else the requester', () => {
     expect(ids(task())).toEqual(['asker', 'runner', 'worker'])
-    expect(ids(task({ taskApproval: { personId: 'asker', generation: 'g1', state: 'approved', createdAt: 1, suggestedAgentId: 'suggested' } })))
+    expect(ids(task({ taskApproval: { personId: 'asker', generation: 'g1', state: 'approved', createdAt: 1, suggestedAgentId: 'suggested' }, proposal })))
       .toEqual(['asker:g1', 'runner', 'worker'])
+    expect(ids(task({ proposal }))).toEqual(['asker:g2', 'proposer:g1', 'runner', 'worker'])
   })
 
   it('names the agent about to do it, and the login its agent ran under, which outlives the agent', () => {
@@ -97,8 +100,9 @@ describe('the feed ids a conversation write stores (read/feedIds.ts, task #4203)
       suggestedAgentId: 'suggested' } }))).toEqual(['approver:g1', 'suggested'])
   })
 
-  it('names nobody for a conversation that is no task', () => {
-    for (const change of [{ kind: 'buddy' as const }, { kind: 'agent-chat' as const }, { audience: { people: [{ id: 'asker', generation: 'g1' }] } }, { reviewOf: 'task' }])
+  it('names nobody for a conversation that is no task, or a proposal merged into another', () => {
+    for (const change of [{ kind: 'buddy' as const }, { kind: 'agent-chat' as const }, { audience: { people: [{ id: 'asker', generation: 'g1' }] } }, { reviewOf: 'task' },
+      { proposal: { ...proposal, mergedInto: 'other' } }])
       expect(ids(task(change as Partial<GroupData>))).toEqual([])
   })
 

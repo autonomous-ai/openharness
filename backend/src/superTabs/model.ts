@@ -483,9 +483,11 @@ export interface Conversation {
   /** The tasks its work goes on in, as its cancel's reason names them (commands.ts goesOnIn, task #4462): a duplicate, or
    *  work folded or split into others. It leaves people's Tasks feeds and stays in its project's archived list, which can open them. */
   foldedInto?: string[]
-  /** A proposal card's decision, written until proposals went (2026-11-10): a card its PM did not accept or reshape is no task to
-   *  queue or hand out (taskQueue.ts). Goes with the task records (slice S13). */
-  proposal?: { decision?: { kind: string } }
+  /** A proposal card, written until proposals went (2026-11-10), as its readers still take it: a card its PM did not accept or
+   *  reshape is no task to queue, start or approve (taskApproval.ts undecidedProposal), and a person's Tasks show it with its
+   *  senders, its decision and its merge (read/personalTasks.ts, read/feedIds.ts). Goes with the task records (slice S13). */
+  proposal?: { senders: Array<{ personId: string; generation: string }>; decision?: { kind: 'accept' | 'reshape' | 'later' | 'no'; reason: string }
+    mergedInto?: string }
   /** A Buddy chat's owner messages its Buddy proposed for, written until proposals went (2026-11-10): never served (read/views.ts). */
   proposals?: string[]
   /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so

@@ -54,8 +54,8 @@ describe('a stored proposal card in Next up', () => {
     const state = createSuperTab('swarm', 'Team', { id: 'owner', email: 'owner@example.com' }, 'test')
     const group = (id: string, number: number, proposal?: Conversation['proposal']): Conversation => ({ id, number, title: id, leadId: null, agentIds: [],
       archived: false, brief: 'Keep drafts.', checks: [], assignment: null, lastMessageSequence: 0, ...proposal ? { proposal } : {} })
-    state.conversations.push(group('undecided', 2, {}), group('later', 3, { decision: { kind: 'later' } }), group('accepted', 4, { decision: { kind: 'accept' } }),
-      group('reshaped', 5, { decision: { kind: 'reshape' } }), group('task', 6))
+    state.conversations.push(group('undecided', 2, { senders: [] }), group('later', 3, { senders: [], decision: { kind: 'later', reason: 'PM' } }), group('accepted', 4, { senders: [], decision: { kind: 'accept', reason: 'PM' } }),
+      group('reshaped', 5, { senders: [], decision: { kind: 'reshape', reason: 'PM' } }), group('task', 6))
     expect(queueSiblings(state, projectsOf(state)[0]!).map(c => c.id)).toEqual(['accepted', 'reshaped', 'task'])
   })
 })
