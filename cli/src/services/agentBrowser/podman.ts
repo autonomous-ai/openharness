@@ -54,8 +54,11 @@ const MESSAGE_LIMIT = 2_000
 // An image build prints a line per package it installs, past execFile's 1 MB default, which kills the child.
 const OUTPUT_LIMIT = 64 * 1024 * 1024
 // `cat | podman …` with podman ($0 "$@") ended by the shell when a timeout ends the shell, never left running. In the
-// background so the trap runs at once; stdin is kept on fd 3, since a background list's own stdin is /dev/null.
-const STDIN_RELAY = `exec 3<&0; cat <&3 | "$0" "$@" 3<&- & trap 'kill $! 2>/dev/null' TERM; wait $!`
+// background so the trap runs at once; stdin is kept on fd 3, since a background list's own stdin is /dev/null. The
+// trap is set first and `ended` looked at once podman is started, so a timeout before then still ends it. The shell
+// exits only after waiting for both (`wait` again after the trap): a run that failed on its timeout left podman
+// unreaped behind it, and a spec's teardown deleted the fake's folder under it (CI, 2026-11-10).
+const STDIN_RELAY = `trap 'ended=1; kill $! 2>/dev/null' TERM; exec 3<&0; cat <&3 | "$0" "$@" 3<&- & [ -z "$ended" ] || kill $!; wait $!; s=$?; until wait; do :; done; exit $s`
 
 /** Where Podman's own installers put it, for a daemon whose login shell does not have it on PATH yet. */
 function installedPaths(platform: NodeJS.Platform): string[] {

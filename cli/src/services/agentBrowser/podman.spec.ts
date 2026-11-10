@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,7 +8,7 @@ import { createPodman, PodmanError } from './podman.js'
 
 // Pass-through spies: every call still reaches the fake script, and the spec can read the options it was started with.
 vi.mock('node:child_process', async (importOriginal) => {
-  const real = await importOriginal<typeof import('node:child_process')>()
+  const real = (await import('./fakePodman.js')).trackingFakes(await importOriginal<typeof import('node:child_process')>())
   return { ...real, execFile: vi.fn(real.execFile), spawn: vi.fn(real.spawn) }
 })
 // The login shell is never started in a spec; this stands for what it would have given.
@@ -19,8 +19,8 @@ const info = (version: string, memTotal: number) => JSON.stringify({ version: { 
 
 let fake: FakePodman
 beforeEach(() => { fake = fakePodman() })
-afterEach(() => {
-  fake.remove()
+afterEach(async () => {
+  await fake.remove()
   vi.unstubAllEnvs()
   vi.mocked(execFile).mockClear()
   vi.mocked(spawn).mockClear()
@@ -261,9 +261,19 @@ describe('createPodman', () => {
     // Long enough for the fake to start and read its stdin, so there is a podman to leave behind.
     const slow = await failure(found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw', timeoutMs: 2_000 }))
     expect(slow.message).toBe('podman secret timed out after 2000 ms')
-    const pid = fake.lastPid()
-    // Not left running behind the relay's shell (its hang is 10 s; a killed one is reaped in moments).
-    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(/ESRCH/), { timeout: 2_000 })
+    // The relay's shell leads its own process group (ownProcessGroup): once run() has failed, its podman and cat are
+    // gone with it, not left running or unreaped behind it.
+    const shell = vi.mocked(execFile).mock.results[0]!.value as ChildProcess
+    expect(() => process.kill(fake.lastPid(), 0)).toThrow(/ESRCH/)
+    expect(() => process.kill(-shell.pid!, 0)).toThrow(/ESRCH/)
+  })
+
+  it('a run with stdin ends only after its podman and cat have', async () => {
+    fake.reply('secret create', { stdout: 'abc123\n' })
+    await found('linux').run(['secret', 'create', 's1', '-'], { stdin: 'pw' })
+    const shell = vi.mocked(execFile).mock.results[0]!.value as ChildProcess
+    expect(() => process.kill(fake.lastPid(), 0)).toThrow(/ESRCH/)
+    expect(() => process.kill(-shell.pid!, 0)).toThrow(/ESRCH/)
   })
 
   it('a failed or slow run is a named PodmanError', async () => {

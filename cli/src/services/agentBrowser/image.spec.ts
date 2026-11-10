@@ -6,6 +6,8 @@ import { fakePodman, type FakePodman } from './fakePodman.js'
 import { ensureImage, imageTag, pruneImages } from './image.js'
 import { createPodman, PodmanError, type Podman } from './podman.js'
 
+vi.mock('node:child_process', async (importOriginal) =>
+  (await import('./fakePodman.js')).trackingFakes(await importOriginal<typeof import('node:child_process')>()))
 // The login shell is never started in a spec.
 vi.mock('../../lib/loginShellEnv.js', () => ({ oneShotParentEnv: () => ({ ...process.env }) }))
 
@@ -66,7 +68,7 @@ beforeEach(() => {
     },
   }
 })
-afterEach(() => { fake.remove() })
+afterEach(async () => { await fake.remove() })
 
 const builds = () => fake.calls().filter(call => call.args[0] === 'build')
 const removals = () => fake.calls().filter(call => call.args[0] === 'rmi').map(call => call.args)

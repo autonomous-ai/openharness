@@ -2,9 +2,38 @@
  * A stand-in `podman` for specs: a script in a temp folder that records each call and answers from a table, so no
  * spec ever starts the real Podman (another process may be using it on the machine running the specs).
  */
+import type * as ChildProcesses from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+/** Each fake's script path: whether it was removed, and its children still running. */
+const fakes = new Map<string, { removed: boolean; running: Set<ChildProcess> }>()
+let tracking = false
+
+/**
+ * node:child_process for a spec that starts fakes, installed with
+ * `vi.mock('node:child_process', async (real) => (await import('./fakePodman.js')).trackingFakes(await real()))`.
+ * Each child that runs a fake, directly or as the stdin relay's `$0`, is kept until it exits, so `remove` waits for
+ * it; a removed fake is never started again, as a podman that is gone. A spec's service went on restarting a browser
+ * after the spec ended, and its teardown deleted the fake's folder under a running fake (CI, 2026-11-10).
+ */
+export function trackingFakes(real: typeof ChildProcesses): typeof ChildProcesses {
+  tracking = true
+  const started = <T extends (...args: never[]) => ChildProcess>(start: T): T => ((file: string, args: unknown, ...rest: unknown[]) => {
+    const fake = [file, ...(Array.isArray(args) ? args as string[] : [])].map(arg => fakes.get(arg)).find(Boolean)
+    if (fake?.removed) throw Object.assign(new Error(`spawn ${file} ENOENT: the fake podman was removed`), { code: 'ENOENT' })
+    const child = (start as unknown as (...all: unknown[]) => ChildProcess)(file, args, ...rest)
+    // A child that failed to start has no pid and never exits.
+    if (fake && child.pid !== undefined) {
+      fake.running.add(child)
+      child.once('exit', () => fake.running.delete(child))
+    }
+    return child
+  }) as unknown as T
+  return { ...real, execFile: started(real.execFile), spawn: started(real.spawn) }
+}
 
 export interface FakeReply { stdout?: string; stderr?: string; code?: number; hangMs?: number }
 /** `mark` is FAKE_PODMAN_MARK from the environment the call was started with. */
@@ -18,7 +47,8 @@ export interface FakePodman {
   calls(): FakeCall[]
   /** The process id of the call that read its stdin last. */
   lastPid(): number
-  remove(): void
+  /** Starts no more calls, waits for the running ones to exit, then deletes the folder. */
+  remove(): Promise<void>
 }
 
 // CommonJS on purpose: the temp folder has no package.json, so Node reads the script as CommonJS.
@@ -46,8 +76,11 @@ setTimeout(() => {
 `
 
 export function fakePodman(): FakePodman {
+  if (!tracking) throw new Error('mock node:child_process with trackingFakes before starting a fake podman')
   const dir = mkdtempSync(join(tmpdir(), 'fake-podman-'))
   const path = join(dir, 'podman')
+  const fake = { removed: false, running: new Set<ChildProcess>() }
+  fakes.set(path, fake)
   const replies: Record<string, FakeReply> = {}
   const save = () => writeFileSync(join(dir, 'replies.json'), JSON.stringify(replies))
   writeFileSync(path, `#!${process.execPath}\n${SCRIPT}`)
@@ -65,6 +98,10 @@ export function fakePodman(): FakePodman {
       return readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as FakeCall)
     },
     lastPid: () => Number(readFileSync(join(dir, 'last.pid'), 'utf8')),
-    remove: () => rmSync(dir, { recursive: true, force: true }),
+    async remove() {
+      fake.removed = true
+      await Promise.all([...fake.running].map(child => new Promise(done => child.once('exit', done))))
+      rmSync(dir, { recursive: true, force: true })
+    },
   }
 }

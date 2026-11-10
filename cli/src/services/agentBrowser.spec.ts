@@ -16,6 +16,9 @@ import { createPodman } from './agentBrowser/podman.js'
 import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
 import { AGENT_BROWSER_REQUESTS, daemonIdOf, startAgentBrowser, type AgentBrowserOptions } from './agentBrowser.js'
 
+vi.mock('node:child_process', async (importOriginal) =>
+  (await import('./agentBrowser/fakePodman.js')).trackingFakes(await importOriginal<typeof import('node:child_process')>()))
+
 const GiB = 1024 ** 3
 const NOW = new Date('2026-11-10T12:00:00Z')
 const HOST = { timeZone: 'Asia/Ho_Chi_Minh', languages: 'vi-VN' }
@@ -40,13 +43,18 @@ beforeEach(() => {
     stdout: JSON.stringify([{ Names: [`localhost/${imageTag(browserAssetsHash(), NOW)}`], Created: 1, Containers: 0 }]),
   })
 })
-afterEach(() => {
-  for (const ports of started.splice(0)) ports.agentBrowser?.stop()
+afterEach(async () => {
+  await stopAll()
   for (const server of servers.splice(0)) server.close()
-  fake.remove()
   rmSync(dataDir, { recursive: true, force: true })
   vi.restoreAllMocks()
 })
+
+/** Every service stopped and the fake removed once its calls have ended: a save's restart goes on after the request. */
+async function stopAll() {
+  for (const ports of started.splice(0)) ports.agentBrowser?.stop()
+  await fake.remove()
+}
 
 function start(core: CoreApi = fakeCore({ dataDir }), options: AgentBrowserOptions = {}) {
   const ports = emptyPorts()
@@ -391,7 +399,7 @@ describe('the agent browser service', () => {
 
     // No answer, a failed one, or a core that has no such call: nothing is deleted.
     for (const ids of [async () => { throw new Error('timed out') }, undefined]) {
-      fake.remove()
+      await stopAll()
       fake = fakePodman()
       fake.reply('ps', { stdout: '[]' })
       saveState(listed)
