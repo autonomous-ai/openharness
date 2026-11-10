@@ -52,6 +52,8 @@ import { appendDeviceKey } from './deviceKeyLog.js'
 import { TEAM_CONVERTED_FRAME } from './teamSession.js'
 import { AppError } from '../errors/index.js'
 import {
+  AGENT_BROWSER_UP_TYPES,
+  browserRateNotice,
   isEncryptedTerminalFrame,
   TERMINAL_ENVELOPE_MAX_BYTES,
   TERMINAL_UP_TYPES,
@@ -452,9 +454,17 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
     else void publishUp(machineId, msg as UpBusMsg)
   }
 
+  // A browser frame dropped here would corrupt its VNC stream, so the machine is told and closes its relayed streams.
+  const browserRefused = browserRateNotice((frame) => { send({ t: 'down', connId: '', frame }) })
+
   onMessage = (raw: RawData, isBinary: boolean): void => {
     if (isBinary) {
       const hop = decodeTerminalHop(new Uint8Array(raw as Buffer))
+      if (hop?.kind === TerminalBinaryKind.browser && hop.direction === TerminalHopDirection.up) {
+        if (!terminalRate.allow('agent_browser_output', hop.clientFrame.length)) { browserRefused(); return }
+        routes.hop(Buffer.from(raw as Buffer), hop.connId)
+        return
+      }
       if (!hop || hop.direction !== TerminalHopDirection.up
         || (hop.kind !== TerminalBinaryKind.output && hop.kind !== TerminalBinaryKind.keyframe
           && hop.kind !== TerminalBinaryKind.sync)
@@ -480,6 +490,20 @@ async function attachAdapter(ws: WebSocket, machine: AttachedMachine, label?: st
         const bytes = terminalFrameBytes(env.frame)
         if (!env.targetConnId || bytes > TERMINAL_ENVELOPE_MAX_BYTES
           || !isEncryptedTerminalFrame(env.frame) || !terminalRate.allow(terminalType, bytes)) return
+        sendTargeted({
+          webEligible: true,
+          commanderEligible: false,
+          targetConnId: env.targetConnId,
+          targetKind: 'web',
+          frame: env.frame,
+        })
+        return
+      }
+      if (typeof terminalType === 'string' && terminalType.startsWith('agent_browser_')) {
+        if (!AGENT_BROWSER_UP_TYPES.has(terminalType)) return
+        const bytes = terminalFrameBytes(env.frame)
+        if (!env.targetConnId || bytes > TERMINAL_ENVELOPE_MAX_BYTES || !isEncryptedTerminalFrame(env.frame)) return
+        if (!terminalRate.allow(terminalType, bytes)) { browserRefused(); return }
         sendTargeted({
           webEligible: true,
           commanderEligible: false,
