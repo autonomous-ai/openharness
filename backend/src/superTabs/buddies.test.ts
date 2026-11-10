@@ -561,11 +561,9 @@ describe('what a Buddy may do', () => {
       .toThrow('A Buddy posts only in its own chat')
   })
 
-  it('never assigns, starts agents, opens groups, sets rules or reacts outside its chat', () => {
+  it('never starts agents, opens groups, sets rules or reacts outside its chat', () => {
     const f = on()
     const refused: Command[] = [
-      { type: 'work.assign', conversationId: f.group, agentId: 'buddy' },
-      { type: 'work.define', conversationId: f.group, brief: 'Do it', checks: [{ description: 'Done', independent: false }] },
       { type: 'conversation.create', projectId: f.app.projectId, title: 'New', brief: 'Brief', checks: [{ description: 'Done', independent: false }] },
       { type: 'agent.start', request: { conversationId: f.group, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
         requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' },

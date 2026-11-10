@@ -10,6 +10,7 @@ import { SwarmReads } from '../src/superTabs/read/service.js'
 import { feedIdsOf, markFeedIds } from '../src/superTabs/read/feedIds.js'
 import { listNamedIndexes } from '../src/superTabs/parts/indexed.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
+import { storeAssignment } from './storedWork.test-support.js'
 
 // Task #4203: the person's Tasks feed is the history of their own agents' tasks and their requests,
 // dormant and archived ones too, newest first, paged through one index, and only what they may read.
@@ -50,11 +51,11 @@ async function fixture() {
     task: { goal: title, changes: title, constraints: 'none', owns: ['backend/'] }, checks: [{ description: `${title} works`, independent: false }] }, owner, pm)).conversationId)
   const theirs = await task('Peer agent work', owner.sub)
   const peerAgent = String((await execute({ type: 'agent.add', conversationId: theirs, machineId: 'feed-peer-mac', harnessId: randomUUID(), name: 'Peers', configuration: config, lead: false }, peer)).agentId)
-  await execute({ type: 'work.assign', conversationId: theirs, agentId: peerAgent }, owner, pm)
+  await storeAssignment(db, tab, theirs, peerAgent, now)
   const asked = await task('Peer asked', peer.sub)
   const ownersOwn = await task('Owner work', owner.sub)
   const ownerAgent = String((await execute({ type: 'agent.add', conversationId: ownersOwn, machineId: 'feed-owner-mac', harnessId: randomUUID(), name: 'Builder', configuration: config, lead: false })).agentId)
-  await execute({ type: 'work.assign', conversationId: ownersOwn, agentId: ownerAgent }, owner, pm)
+  await storeAssignment(db, tab, ownersOwn, ownerAgent, now)
   const secret = String((await execute({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).projectId)
   // Archived and quiet, as the archive pass leaves a finished task: still in its people's history.
   const row = await db.swarmGroup.findUniqueOrThrow({ where: { tabId_key: { tabId: tab, key: theirs } } })

@@ -860,9 +860,8 @@ describe('an instructions save may move a person\'s rule', () => {
     expect(task.briefAt).toBe(1000)
     expect(refusal(() => f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(900) })))
       .toMatchObject({ details: { dropped: [{ rule: quiet, why: 'waiting', movedTo: `task #${task.number}` }] } })
-    // Defined again later, carrying the rule: a merge between the two briefs is older than the move too.
-    f.run({ type: 'work.define', conversationId: task.id, brief: `Changes:\n- ${quiet}`, checks: [] }, owner, { now: 2000 })
-    expect(f.state.conversations.find(c => c.id === task.id)!.briefAt).toBe(2000)
+    // Defined again later (as work.define stored it before Swarm v4), carrying the rule: a merge between the two briefs is older than the move too.
+    Object.assign(f.state.conversations.find(c => c.id === task.id)!, { brief: `Changes:\n- ${quiet}`, briefAt: 2000 })
     expect(refusal(() => f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(1500) }))).toMatchObject({ details: { dropped: [{ why: 'waiting' }] } })
     expect(f.run(save(1, doc(leo)), as(lead), { ...stored(), ...mergedAt(2500) }).result.revision).toBe(2)
   })

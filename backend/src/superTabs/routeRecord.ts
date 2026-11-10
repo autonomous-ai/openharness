@@ -133,7 +133,7 @@ export function readRecord(stored: StoredRouteRecord | RouteRecord): ReadRouteRe
  * Whether a started agent is the candidate's: the same machine, engine, and the model and effort that were
  * requested. After a failed switch `final` holds what ran, so the request is the one that names the candidate.
  */
-export const startedAs = (candidate: KeptCandidate, final: Extract<RouteFinal, { kind: 'new' }>): boolean =>
+const startedAs = (candidate: KeptCandidate, final: Extract<RouteFinal, { kind: 'new' }>): boolean =>
   final.machineId === candidate.machineId && final.engine === candidate.engine &&
   (final.requested?.model ?? final.model) === candidate.model && (final.requested?.effort ?? final.effort) === candidate.effort &&
   (final.gridModel ?? null) === (candidate.gridModel ?? null) && (final.gridName ?? null) === (candidate.gridName ?? null)

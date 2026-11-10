@@ -6,6 +6,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
+import { storeAssignment, storeStatus } from './storedWork.test-support.js'
 
 // Task #2924 (Dee and River, 2026-11-04): an agent with a task in the project talks in its project chat without joining it, and a
 // person's answer to its line there reaches it. Through the store, as hosts and apps call it. A fresh loopback replica set;
@@ -40,7 +41,7 @@ async function working() {
   const lead = await add('lead', 'Lead', true)
   const task = String((await run(tab, { type: 'conversation.create', title: 'Login bug', brief: 'Fix it.', checks: [] })).result.conversationId)
   const engineer = await add(task, 'Builder', false)
-  await run(tab, { type: 'work.assign', conversationId: task, agentId: engineer })
+  await storeAssignment(db, tab, task, engineer)
   const members = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!.agentIds
   return { tab, lead, task, engineer, members }
 }
@@ -68,8 +69,7 @@ describe('an agent with a task in the project, in its project chat', () => {
     // Once its work there ends, what waits for it is no longer handed to its host.
     const late = String((await run(tab, post('One more thing?', top))).result.messageId)
     const waiting = (await store.deliveries(host, tab, engineer)).find(d => d.messageId === late)!
-    const assignmentId = (await store.read(owner, tab)).state.conversations.find(c => c.id === task)!.assignment!.id
-    await run(tab, { type: 'work.cancel', conversationId: task, assignmentId, reason: 'Moved on.' })
+    await storeStatus(db, tab, task, 'cancelled', 'Moved on.')
     await expect(store.delivery(host, tab, engineer, waiting.id, { type: 'claim', claimId: randomUUID() })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
     expect((await store.deliveries(host, tab, engineer)).map(d => d.messageId)).not.toContain(late)
   })

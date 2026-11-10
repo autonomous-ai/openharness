@@ -20,6 +20,9 @@ export const RETIRED_COMMANDS = [
   'mention.done',
   // Review steps, check verdicts and merge records (2026-11-10): a task is the project's GitHub issue, and its pull request is GitHub's.
   'work.check', 'conversation.merged',
+  // Task records and the crew dispatch (2026-11-10): a task is the project's GitHub issue, and an agent works on what its person asks.
+  'work.assign', 'work.status', 'work.cancel', 'work.define', 'work.queue', 'work.priority', 'work.pause', 'work.resume', 'work.lane',
+  'member.start', 'member.helper',
   // Proposals (2026-11-10): a person asks an agent in their 1:1 chat, and a task is the project's GitHub issue.
   'proposal.create', 'proposal.decide', 'proposal.ask', 'proposal.answer', 'proposal.merge', 'proposal.close', 'buddy.propose',
 ] as const
@@ -34,6 +37,8 @@ export const RETIRED_STEP = 'conversation.create.step'
 export const opensRetiredStep = (command: { type?: unknown; reviewOf?: unknown; step?: unknown } | undefined): boolean =>
   command?.type === 'conversation.create' && (command.reviewOf !== undefined || command.step !== undefined)
 
+const TASKS_RETIRED = { code: 'TASKS_RETIRED', status: 410, message: 'Tasks are GitHub issues now.' }
+
 /** A proposal a person sends or answers in an older Desktop: refused in these words, which it shows where it was typed. */
 const PROPOSALS_RETIRED = { code: 'PROPOSALS_RETIRED', status: 410, message: 'Proposals are gone. Ask an agent in its chat.' }
 
@@ -42,6 +47,8 @@ const PROPOSALS_RETIRED = { code: 'PROPOSALS_RETIRED', status: 410, message: 'Pr
  *  form. An agent's is ignored, as any retired command's. Goes with this file's commands, not before 2026-12-09. */
 export const REFUSED_TO_PEOPLE: Partial<Record<RetiredCommand, { code: string; status: number; message: string }>> = {
   'work.check': { code: 'CHECKS_RETIRED', status: 410, message: 'Checks can’t be recorded any more.' },
+  // An older Desktop's Next up, priority and pause on a task: its tasks are the project's GitHub issues now.
+  'work.queue': TASKS_RETIRED, 'work.priority': TASKS_RETIRED, 'work.pause': TASKS_RETIRED,
   // An older Desktop's proposal from the Board, and its answer to a PM's question on one.
   'proposal.create': PROPOSALS_RETIRED,
   'proposal.answer': PROPOSALS_RETIRED,

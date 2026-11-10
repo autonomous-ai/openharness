@@ -6,6 +6,7 @@ import { touchesFor } from './parts/touches.js'
 import { projectsOf } from './projects.js'
 import { storedPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 function setup() {
   const f = stepsFixture()
@@ -28,7 +29,7 @@ function setup() {
   const lines = () => owedLines(f.state, project(), f.now).join('\n')
   const anotherGuide = () => {
     const task = f.step('More support'), guide = f.add('other-guide', task)
-    f.run({ type: 'work.assign', conversationId: task, agentId: guide }, f.as(f.lead))
+    storedAssignment(f.state, task, guide, f.now)
     return guide
   }
   return { f, guest, project, ask, handoffCommand, handoff, reply, owes, count, lines, anotherGuide }

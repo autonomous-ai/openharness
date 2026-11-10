@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
+import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { CREW_NEED_KIND, crewNeedOf } from './crewNeeds.js'
 import { agentOnly, createSuperTab, type Actor, type MessageDraft } from './model.js'
 
-// People talk only to the PM (anh Dee, 2026-11-05; task #3404, River's ruling): an agent's tag of a person, its needs_human
+// People talk only to the PM (anh Dee, 2026-11-05; task #3404, River's ruling): an agent's tag of a person
 // and its person.tell become a crew need for the PM, and the agent is told. The PM tags anyone; any other
 // agent tags only the person it is answering. With no PM in the project, everything stays as before.
 
@@ -12,7 +12,6 @@ const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer
 const third: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'third', email: 'third@example.com' }
 const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
 const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'owner' })
-const choices = { options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }
 
 function fixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
@@ -104,60 +103,9 @@ describe('an agent’s tag of a person goes to the PM', () => {
   })
 })
 
-describe('an agent’s needs_human and line to a person go to the PM', () => {
-  const assigned = () => {
-    const f = fixture()
-    const assignmentId = f.run({ type: 'work.assign', conversationId: f.group, agentId: f.worker }).result.assignmentId as string
-    return Object.assign(f, { assignmentId })
-  }
-
-  it('opens no decision for the person; the status row to the PM carries the crew need', () => {
-    const f = assigned()
-    const sent = f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
-      result: 'Ship to everyone, or behind a flag?', ask: { personId: 'peer', ...choices } }, asAgent(f.worker))
-    const row = sent.messages.find(m => (m.source as { status?: string } | null)?.status === 'needs_human')!
-    expect(row.recipients).toEqual([f.pm])
-    expect(row.text).not.toContain('Asked peer')
-    expect(crewNeedOf(row.source)).toEqual({ agentId: f.worker, personIds: ['peer'], messageId: row.id, conversationId: f.group,
-      question: 'Ship to everyone, or behind a flag?', options: choices.options, recommended: 0 })
-    expect(sent.result.routedToPm).toMatch(/PM/)
-    // Whom it waits on stays on the task for the board, which notifies nobody.
-    expect(f.state.conversations.find(c => c.id === f.group)!.assignment!.askedOf).toBe('peer')
-    // Without a person named, the needs_human is the PM's crew need as well.
-    const plain = f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human', result: 'Which database?' }, asAgent(f.worker))
-    const plainRow = plain.messages.find(m => (m.source as { status?: string } | null)?.status === 'needs_human')!
-    expect(crewNeedOf(plainRow.source)).toMatchObject({ agentId: f.worker, personIds: [], question: 'Which database?' })
-  })
-
-  // As a decision's were (until Swarm v4, 2026-11-10): the recommended option is one of them, and a default time gives the person
-  // 15 minutes. What an older CLI still sends for a decision (unblocks, mustAgree) is taken and kept nowhere.
-  it('refuses an ask that recommends no option of its own or defaults within 15 minutes, and keeps nothing of unblocks', () => {
-    const f = assigned()
-    const status = (ask: Record<string, unknown>) => ({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
-      result: 'Ship how?', ask: { personId: 'peer', ...ask } })
-    expect(commandSchema.safeParse(status({ ...choices, recommended: 2 })).success).toBe(false)
-    expect(() => f.run(commandSchema.parse(status({ ...choices, defaultAt: new Date(1000 + 60_000).toISOString() })), asAgent(f.worker))).toThrow('15 minutes')
-    const sent = f.run(commandSchema.parse(status({ ...choices, mustAgree: true, defaultAt: new Date(1000 + 3_600_000).toISOString() })), asAgent(f.worker))
-    expect(JSON.stringify(sent.messages)).not.toContain('The release')
-  })
-
-  // Review of #3223, Important 1: routing is by who sends it, not whose assignment it is.
-  it('routes another agent’s needs_human on the task to the PM as well, and keeps the PM’s own', () => {
-    const f = assigned()
-    const other = f.add(f.app.conversationId, 'other', false)
-    f.run({ type: 'conversation.agent', conversationId: f.group, agentId: other, present: true, lead: false })
-    const ask = (actor: Actor) => f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'needs_human',
-      result: 'Ship to everyone, or behind a flag?', ask: { personId: 'peer', ...choices } }, actor)
-    const byOther = ask(asAgent(other))
-    expect(byOther.messages.map(m => crewNeedOf(m.source)).filter(Boolean)).toEqual([expect.objectContaining({ agentId: other, personIds: ['peer'] })])
-    expect(byOther.result.routedToPm).toMatch(/PM/)
-    f.run({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, asAgent(f.worker))
-    const byPm = ask(asAgent(f.pm))
-    expect(byPm.messages.filter(m => crewNeedOf(m.source))).toEqual([])
-  })
-
+describe('an agent’s line to a person goes to the PM', () => {
   it('turns a worker’s line to a person into a crew need in the project chat, and refuses the PM’s private line (task #4558)', () => {
-    const f = assigned()
+    const f = fixture()
     const byWorker = f.run({ type: 'person.tell', personId: 'peer', text: 'Look at the mockup in #12' }, asAgent(f.worker))
     // Nothing lands in the person's Buddy chats: the crew need is the command's only message.
     expect(byWorker.messages.filter(m => !crewNeedOf(m.source))).toEqual([])

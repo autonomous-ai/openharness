@@ -27,12 +27,6 @@ export function stageTaskApproval(state: SuperTabState, group: Conversation, now
     personId: member.id, generation: member.generation, state: 'proposal', createdAt: now,
   }
 }
-/** A task whose scope changed goes back to its person: an approval is of the work as it was shown (#4249). */
-export function reopenTaskApproval(group: Conversation): void {
-  if (group.taskApproval?.state !== 'approved') return
-  group.taskApproval.state = 'proposal'
-  delete group.taskApproval.decidedAt
-}
 export function requireTaskApproval(group: Conversation, agentId?: string | null): void {
   if (group.taskApproval && group.taskApproval.state !== 'approved')
     fail('TASK_APPROVAL_REQUIRED', 'The person who requested this task must approve it before work starts.', 409)

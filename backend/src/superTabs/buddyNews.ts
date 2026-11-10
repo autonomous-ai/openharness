@@ -4,7 +4,7 @@
  *  the delivery up (store.ts deliveryAllowed). Nothing else of the project chat, and nothing private, reaches a Buddy. */
 import { buddyChatOf, defaultBuddy, isBuddy, isBuddyChat, isSwarmBuddy, routingRow } from './buddies.js'
 import { mainBuddyOf } from './buddySessions.js'
-import { agentOnly, isLeads, stableId, AGENT_ONLY, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { agentOnly, isLeads, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, canReadGroup, groupProject, isAgentChat } from './projects.js'
 import { SHIP_KIND } from './ship.js'
 
@@ -56,17 +56,6 @@ export function buddiesTold(state: SuperTabState, message: MessageDraft, threadS
 export function tellBuddies(state: SuperTabState, message: MessageDraft, threadSource: Record<string, unknown> | null): void {
   const buddies = buddiesTold(state, message, threadSource)
   if (buddies.length) message.buddyRecipients = buddies
-}
-
-/** Work recorded as [group]'s requester's was just assigned: one line for their Buddy alone, inside the task, saying only what
- *  its person reads there (its number, title and status, Lead's ruling 10-29). None when the Buddy cannot read the task.
- *  An agent may name a task's requester, so the line says only what the server knows: the record (task #4217). */
-export function assignedNotice(state: SuperTabState, group: Conversation, author: Author, operationId: string): MessageDraft | null {
-  if (groupProject(state, group).boardMode) return null
-  const buddy = group.requesterId ? listeningBuddy(state, group.requesterId, group) : undefined
-  if (!buddy || !group.assignment) return null
-  return { id: stableId(operationId, 'buddy-news'), conversationId: group.id, author, replyTo: null, recipients: [buddy.id], source: AGENT_ONLY,
-    text: `News for your owner: #${group.number} "${group.title}", recorded as their request, is assigned and ${group.assignment.status}.` }
 }
 
 /** Every Buddy hearing input, in its own chat too: the agent guard meets a concurrent sleep (#3824), and the person's

@@ -4,8 +4,10 @@ import { describe, expect, it } from 'vitest'
 import { appendPullRequestUrls, visibleState } from './model.js'
 import { projectOf } from './projects.js'
 import { PROJECT_STATUS_MAX } from './projects.js'
-import { cardText, projectCard } from './statusCard.js'
+import { cardText, linesOf, projectCard } from './statusCard.js'
+import { recordPulse } from './pulse.js'
 import { owner, stepsFixture } from './steps.test-support.js'
+import { storedStatus } from './storedWork.test-support.js'
 import { usernameOf } from './usernames.js'
 
 const PR = 'https://github.com/acme/app/pull/7'
@@ -16,14 +18,18 @@ function cardFixture() {
   const lines = () => projectCard(f.state, projectOf(f.state, 'lead'), f.now).lines
   const line = (id = f.task) => lines().find(l => l.id === id)
   const text = () => visibleState(f.state, owner).projects!.find(p => p.id === 'lead')!.status?.text
-  const assignment = () => f.group(f.task).assignment!.id
+  // The line work.assign wrote when it set the task working, before Swarm v4.
+  f.group(f.task).statusLine = { text: line()!.text, since: f.now }
+  /** The task's status moving to [status] with [result], as a work.status from before Swarm v4 stored it, and the pass after it
+   *  (a command or the PM's sweep) writing the lines it moved. */
   const work = (status: 'working' | 'review' | 'blocked' | 'needs_human' | 'done', result: string | null = null) => {
-    const effects = f.run({ type: 'work.status', conversationId: f.task, assignmentId: assignment(), status, result }, f.as(f.dev))
-    // As the store does after each command: the Ready line's link is the task's linked pull request.
-    if (result?.includes(PR)) { appendPullRequestUrls(f.group(f.task), [PR]); f.run({ type: 'message.send', conversationId: 'lead', text: 'tick', replyTo: null, recipientIds: [] }) }
-    return effects
+    const before = linesOf(f.state, f.now)
+    storedStatus(f.state, f.task, status, result)
+    // As the store did after that command: the Ready line's link is the task's linked pull request.
+    if (result?.includes(PR)) appendPullRequestUrls(f.group(f.task), [PR])
+    recordPulse(f.state, f.now, undefined, before)
   }
-  return Object.assign(f, { chat, lines, line, text, work, assignment })
+  return Object.assign(f, { chat, lines, line, text, work })
 }
 
 describe('the status card the server writes (#3593)', () => {
@@ -58,9 +64,10 @@ describe('the status card the server writes (#3593)', () => {
     expect(f.line(proposed)!.text).toBe(`#2 "Offline editing": proposed. Waits on: @${usernameOf(f.state, 'owner')}'s approval. Owner: none.`)
     f.run({ type: 'task.reject', conversationId: proposed, reason: 'Not now.' })
     expect(f.line(proposed)).toBeUndefined()
-    f.run({ type: 'work.pause', conversationId: f.task, paused: true, reason: 'release freeze' })
+    // A pause stored before Swarm v4 (work.pause answers as retired).
+    f.group(f.task).paused = { by: 'person:owner', at: f.now, reason: 'release freeze' }
     expect(f.line()!.text).toBe('#1 "Fix login": paused. Waits on: a person to resume it (release freeze). Owner: Andie.')
-    f.run({ type: 'work.pause', conversationId: f.task, paused: false })
+    delete f.group(f.task).paused
     expect(f.line()!.text).toBe('#1 "Fix login": working. Waits on: nothing. Owner: Andie.')
   })
 

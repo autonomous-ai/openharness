@@ -2,10 +2,9 @@
  * What the leaderboard counts, recorded as it happens on the group it happened in (docs/swarms.md, Leaderboard): when a
  * request was asked and first shipped, which item waits on a person, and who answered it. Only facts and times, never text.
  */
-import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
+import { isLeads, type Actor, type Agent, type Author, type Conversation, type SuperTabState } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
 import { WEEK_MS } from './week.js'
-import { agentTarget } from '../rules.js'
 import type { UnblockKind } from './contract.js'
 
 /** How a person unblocked work (Dee, 2026-10-28): answered a decision, approved the Lead's plan, answered work waiting on them,
@@ -97,39 +96,6 @@ export function recordAsked(group: Conversation, requesterId: string | undefined
   group.ledger = { askedAt: now }
 }
 
-/** A status change opens, closes or ships: needs_human starts a wait (again, when the agent asks anew after an answer), any
- *  other status ends it, done ships once. */
-export function recordStatus(group: Conversation, assignment: Assignment, previous: WorkStatus, now: number, messageId: string | null): void {
-  const ledger = group.ledger ??= {}
-  const open = ledger.waiting?.assignmentId === assignment.id && ledger.waiting.answeredAt == null
-  if (assignment.status === 'needs_human' && messageId && (previous !== 'needs_human' || !open)) {
-    ledger.waiting = { assignmentId: assignment.id, since: now, messageId }
-  } else if (assignment.status !== 'needs_human') delete ledger.waiting
-  if (assignment.status === 'done' && ledger.shippedAt == null) {
-    ledger.shippedAt = now
-    shipOn(group, ledger.runs?.find(r => r.assignmentId === assignment.id))
-  }
-}
-
-/** Keeps who led a request when it first shipped, and the attempt it shipped on: the given one, else the last one
- *  assigned by the time it shipped. Once kept, never rewritten. */
-function shipOn(group: Conversation, run?: Run): void {
-  const ledger = group.ledger!
-  if (ledger.shippedLeadId !== undefined) return
-  ledger.shippedLeadId = group.leadId ?? null
-  shipAttempt(ledger, run)
-}
-
-/** The attempt a request shipped on: the given one, else the latest started by the time it shipped, else (merged before any
- *  attempt started) the earliest. */
-function shipAttempt(ledger: GroupLedger, run?: Run): void {
-  const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1) ?? ledger.runs?.[0]
-  if (!shipping) return
-  const { firstVerdicts: _verdicts, firstReview: _review, reworkRounds: _rounds, reworks: _reworks, agentId: _agent, harnessId: _harness,
-    ...shippedBy } = shipping
-  ledger.shippedBy = shippedBy
-}
-
 /** One GitHub pull request link, as a merge record names it (model.ts appendPullRequestUrls finds the same in text). */
 export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/
 
@@ -186,17 +152,6 @@ export function waitsNow(group: Conversation): boolean {
   return group.assignment?.status === 'needs_human' && !(waiting?.assignmentId === group.assignment.id && waiting.answeredAt != null)
 }
 
-/** An assignment records what its agent runs on (ranOn), for the board's models. */
-export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
-  const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now,
-    agentId: worker.id, harnessId: worker.harnessId, machineId: assignment.execution.machineId,
-    ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}),
-    ...(agentTarget(state, worker).launchedDefault ? { engineDefault: true as const } : {}) }
-  const ledger = group.ledger ??= {}
-  ledger.firstAssignedAt ??= firstAssignedAt(ledger) ?? now
-  ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
-}
-
 /** An agent started on its engine's own model reports which one only once it runs (Codex): its attempts recorded before
  *  then, with none, take the model it reports, so the board names it and step-ups rate it by it rather than by the engine
  *  alone (Dee, 2026-10-30). That holds for a finished or handed-on attempt too (Scholes, 2026-10-30: a review done before
@@ -233,18 +188,4 @@ export function firstAssignedAt(ledger: GroupLedger): number | undefined {
   if (!runs.length) return undefined
   return runs.length < MAX_RUNS ? runs[0]!.at : ledger.askedAt ?? runs[0]!.at
 }
-
-/** What [worker] runs on: the grid model its start named, else what its configuration reports. An agent started before it
- *  kept its grid model has it only on its start, which is here while that start is not finished. */
-function ranOn(state: SuperTabState, worker: Agent, configuration: AgentConfiguration): RanOn {
-  const gridModel = worker.gridModel
-    ?? state.starts?.find(s => s.harnessId === worker.harnessId && s.request.machineId === worker.machineId)?.request.gridModel
-  const effort = namedEffort(configuration.effort)
-  return { engine: configuration.engine, model: gridModel ?? configuration.model, ...(effort ? { effort } : {}), ...(gridModel ? { grid: true as const } : {}) }
-}
-
-/** An effort that says which one runs: 'auto' is what Claude Code reports for one it was launched with, and 'default' what a
- *  start asks when it leaves the engine its own (desktop agent_line.dart reads them the same way). */
-const namedEffort = (effort: string | null): string | undefined =>
-  effort && effort !== 'auto' && effort !== 'default' ? effort : undefined
 

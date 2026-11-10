@@ -3,7 +3,6 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectOf } from './projects.js'
 import { canChat, steers, switched } from './boardRights.js'
-import { openTasks } from './dispatch.js'
 import { owedLines } from './inbox.js'
 import { holdOf } from './pulse.js'
 
@@ -184,8 +183,6 @@ describe('priority by role in a switched project', () => {
   const card = (f: ReturnType<typeof boardFixture>, requesterId: string, actor: Actor = projectOwner, priority: 'P0' | 'P1' | 'P2' | 'P3' = 'P2') =>
     f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Card', priority, requesterId,
       task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }, actor).conversationId as string
-  const set = (f: ReturnType<typeof boardFixture>, conversationId: string, priority: 'P0' | 'P1' | 'P2' | 'P3', actor: Actor) =>
-    f.run({ type: 'work.priority', conversationId, priority }, actor)
   const switchedFixture = () => {
     const f = boardFixture()
     f.run({ type: 'project.boardMode', projectId: f.app.projectId, on: true })
@@ -193,99 +190,52 @@ describe('priority by role in a switched project', () => {
     return f
   }
 
-  it('lets a member set P1-P3 on their own card, never P0 and never another\'s card', () => {
+  it('lets a member open their own card at P1-P3, never at P0', () => {
     const f = switchedFixture()
-    const mine = card(f, 'd'), theirs = card(f, 'p')
-    set(f, mine, 'P1', member)
-    set(f, mine, 'P3', member)
-    expect(() => set(f, mine, 'P0', member)).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN', status: 403 }))
-    expect(() => set(f, theirs, 'P1', member)).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
-    // A P0 the owners set stays theirs to lower.
-    set(f, mine, 'P0', projectOwner)
-    expect(() => set(f, mine, 'P2', member)).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
-    expect(() => card(f, 'd', member, 'P0')).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN' }))
+    card(f, 'd', member, 'P1')
+    card(f, 'd', member, 'P3')
+    expect(() => card(f, 'd', member, 'P0')).toThrow(expect.objectContaining({ code: 'PRIORITY_FORBIDDEN', status: 403 }))
   })
 
   // The rule is for people: the PM's rights are today's (coordinatorOrPerson), untouched.
-  it('lets the owners and the decider set any priority on any card', () => {
+  it('lets the owners and the decider open a card at any priority', () => {
     const f = switchedFixture()
-    const theirs = card(f, 'd')
-    set(f, theirs, 'P0', projectOwner)
-    set(f, theirs, 'P1', swarmOwner)
-    set(f, theirs, 'P0', granted)
+    card(f, 'd', projectOwner, 'P0')
+    card(f, 'd', swarmOwner, 'P0')
     card(f, 'd', granted, 'P0')
   })
 
   it('changes nothing in a project not switched', () => {
     const f = boardFixture()
-    const theirs = card(f, 'p')
-    set(f, theirs, 'P0', member)
     card(f, 'd', member, 'P0')
   })
 })
 
-describe('pause and resume', () => {
-  const task = (f: ReturnType<typeof boardFixture>) => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Card', priority: 'P2',
-    requesterId: 'd', task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }).conversationId as string
-  const group = (f: ReturnType<typeof boardFixture>, id: string) => f.state.conversations.find(c => c.id === id)!
-  const lines = (f: ReturnType<typeof boardFixture>, id: string) => f.posted.filter(m => m.conversationId === id).map(m => m.text)
+// A pause stored before Swarm v4 (work.pause answers as retired, 2026-11-10) still holds its task.
+describe('a paused task', () => {
+  const paused = (f: ReturnType<typeof boardFixture>) => {
+    const id = f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'Card', priority: 'P2', requesterId: 'd',
+      task: { goal: 'Do it', changes: 'It', constraints: 'None', owns: ['x'] }, checks: [{ description: 'Done', independent: false }] }).conversationId as string
+    const group = f.state.conversations.find(c => c.id === id)!
+    group.paused = { by: 'person:c', at: 1000, reason: 'Wait for the release' }
+    return group
+  }
 
-  it('lets those who steer pause a task, with its reason and a line in it, and resume it', () => {
+  it('is held with its reason until the pause is cleared', () => {
     const f = boardFixture()
-    f.run({ type: 'project.decider', projectId: f.app.projectId, personId: 'c' })
-    const id = task(f)
-    f.run({ type: 'work.pause', conversationId: id, paused: true, reason: 'Wait for the release' }, granted)
-    expect(group(f, id).paused).toMatchObject({ by: 'person:c', at: 1000, reason: 'Wait for the release' })
-    expect(holdOf(group(f, id), '2026-11-06')).toEqual({ reason: expect.stringMatching(/paused/i) })
-    f.run({ type: 'work.pause', conversationId: id, paused: false }, swarmOwner)
-    expect(group(f, id).paused).toBeUndefined()
-    expect(lines(f, id).join('\n')).toMatch(/paused[\s\S]*Wait for the release[\s\S]*resumed/i)
+    const group = paused(f)
+    expect(holdOf(group, '2026-11-06')).toEqual({ reason: 'paused: Wait for the release' })
+    delete group.paused
+    expect(holdOf(group, '2026-11-06')).toBeNull()
   })
 
-  // Review of #3310 at c91dc2489 (task #3595): a pause reason was stored and posted as written. A person's text is redacted.
-  it('redacts a credential in a pause reason, in the task and its line', () => {
+  // Readycheck's review: a start into the task went past the pause.
+  it('refuses starting an agent on it, whoever asks', () => {
     const f = boardFixture()
-    const id = task(f)
-    const token = ['ghp', 'Q7mZ2xK9pL4vR8nT1wB6yC3dF5hJ0aE2sG7u'].join('_')
-    f.run({ type: 'work.pause', conversationId: id, paused: true, reason: `Rotate ${token} first` })
-    expect(group(f, id).paused!.reason).toContain('[credential removed]')
-    expect(JSON.stringify(f.state)).not.toContain(token)
-    expect(lines(f, id).join('\n')).not.toContain(token)
-  })
-
-  it('refuses a member, the PM and any other agent, in every project', () => {
-    const f = boardFixture()
-    const id = task(f)
-    for (const actor of [member, f.asAgent(f.pm), f.asAgent(f.worker)]) {
-      expect(() => f.run({ type: 'work.pause', conversationId: id, paused: true }, actor), JSON.stringify(actor))
-        .toThrow(expect.objectContaining({ status: 403 }))
-    }
-    f.run({ type: 'work.pause', conversationId: id, paused: true }, projectOwner)
-    expect(() => f.run({ type: 'work.pause', conversationId: id, paused: false }, member)).toThrow(expect.objectContaining({ code: 'PAUSE_FORBIDDEN' }))
-  })
-
-  // Readycheck's review: a hand assignment, or a start into the task, went past the pause.
-  it('refuses assigning or starting an agent on a paused task, whoever asks', () => {
-    const f = boardFixture()
-    const id = task(f)
-    f.run({ type: 'work.pause', conversationId: id, paused: true }, projectOwner)
-    for (const actor of [projectOwner, f.asAgent(f.pm)]) {
-      expect(() => f.run({ type: 'work.assign', conversationId: id, agentId: f.worker }, actor), JSON.stringify(actor))
-        .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
-    }
-    expect(() => f.run({ type: 'agent.start', request: { conversationId: id, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
+    const group = paused(f)
+    expect(() => f.run({ type: 'agent.start', request: { conversationId: group.id, machineId: 'machine', engine: 'claude', name: 'Helper', cwd: '/repo', worktree: true,
       requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }, routeDecisionId: 'route' }))
       .toThrow(expect.objectContaining({ code: 'TASK_PAUSED' }))
-  })
-
-  it('keeps a paused task from being handed out, until it is resumed', () => {
-    const f = boardFixture()
-    const id = task(f)
-    expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).toContain(id)
-    f.run({ type: 'work.pause', conversationId: id, paused: true }, projectOwner)
-    expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).not.toContain(id)
-    f.run({ type: 'work.pause', conversationId: id, paused: false }, projectOwner)
-    expect(openTasks(f.state, f.app.projectId, 1000).map(g => g.id)).toContain(id)
   })
 })
 

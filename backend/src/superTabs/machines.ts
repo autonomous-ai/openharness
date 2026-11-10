@@ -189,7 +189,8 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
    *  before it, which are never given one. */
   capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
-  /** The accounts a Product Manager could move to, per engine (cli superTabs/profiles): `id` is a stable 16-hex handle,
+  /** The accounts a Product Manager could move to, per engine (cli superTabs/machines.ts profiles), of which only each engine's
+   *  default account is kept (storedObservation): `id` is a stable 16-hex handle,
    *  `label` a name its owner chose (never an email, so no '@'), `leftPercent` the allowance left. Absent from hosts before it. */
   profiles: z.array(z.object({ engine: z.enum(['claude', 'codex']), id: z.string().regex(/^[0-9a-f]{16}$/),
     label: z.string().min(1).max(40).refine(l => !l.includes('@')), leftPercent: z.number().int().min(0).max(100).nullable(),
@@ -229,7 +230,8 @@ export function storedObservation(pool: ContributedMachine, observation: Machine
   const engines = contributedEngines(pool, observation)
   return { ...reading, quotas: observation.quotas.filter(q => engines.includes(q.engine)), receivedAt: opts.now,
     ...(idleBuddyHarnessIds ? { idleBuddyHarnessIds: [...new Set(idleBuddyHarnessIds.filter(running))] } : {}),
-    ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine)) } : {}),
+    // Each engine's default account alone: a PM runs on no other (pmAccount.ts), whatever a CLI of the last 30 days reports.
+    ...(profiles ? { profiles: profiles.filter(p => engines.includes(p.engine) && p.id === defaultProfileId(pool.machineId, p.engine)) } : {}),
     sessionKind: opts.team ? 'team' : 'computer', ...(progress ? { harnessProgress: progress } : {}),
     ...(tokens ? { harnessTokens: tokens } : {}), ...(preparing ? { preparingStartIds: preparing } : {}),
     ...(refused?.length ? { refusedStarts: refused } : {}) }

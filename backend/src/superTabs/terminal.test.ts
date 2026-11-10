@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 import { mayDrive } from './terminal.js'
+import { storedAssignment } from './storedWork.test-support.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -149,7 +150,7 @@ describe('reading and typing in an agent terminal', () => {
 
   it('logs typed input as a terminal-input row in the agent\'s current group, delivered to nobody', () => {
     const s = swarm()
-    s.run({ type: 'work.assign', conversationId: s.group, agentId: s.worker })
+    storedAssignment(s.state, s.group, s.worker, 1_000_000)
     const effects = s.run({ type: 'agent.input', agentId: s.worker, text: 'y'.repeat(250), keys: ['Enter'] }, as(s.lead))
     expect(effects.terminal).toMatchObject({ op: 'request', kind: 'input', text: 'y'.repeat(250), keys: ['Enter'] })
     expect(effects.messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [],
@@ -159,7 +160,7 @@ describe('reading and typing in an agent terminal', () => {
 
   it('types a credential as given but never shows it in the group\'s row, even where the row is cut', () => {
     const s = swarm()
-    s.run({ type: 'work.assign', conversationId: s.group, agentId: s.worker })
+    storedAssignment(s.state, s.group, s.worker, 1_000_000)
     // Assembled at run time from obviously fake parts.
     const token = ['ghp', 'Fixture0Token1Not2Real3Value4abcdefgh'].join('_')
     const text = `${'x'.repeat(150)} gh auth login --with-token ${token} and more words after it`
@@ -237,7 +238,7 @@ describe('answering a terminal request', () => {
 describe('terminal alerts', () => {
   it('posts one row per episode to the agent\'s group and delivers it to the Lead', () => {
     const s = swarm()
-    s.run({ type: 'work.assign', conversationId: s.group, agentId: s.worker })
+    storedAssignment(s.state, s.group, s.worker, 1_000_000)
     const prompt: Command = { type: 'agent.alert', agentId: s.worker, alert: 'prompt', active: true }
     expect(s.run(prompt, as(s.worker)).messages).toEqual([expect.objectContaining({ conversationId: s.group, recipients: [s.lead],
       text: `${name(s, s.worker)} is waiting at a prompt in its terminal.`, source: { kind: 'terminal-alert', agentId: s.worker, alert: 'prompt' } })])

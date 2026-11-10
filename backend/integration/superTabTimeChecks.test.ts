@@ -13,6 +13,7 @@ import type { MachineObservation } from '../src/superTabs/machines.js'
 import { QUIET_CHECK_MS, runTimeCheckPass, timeCheckSwarms } from '../src/superTabs/timeChecks.js'
 import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { plan, profiled, reads } from './plans.test-support.js'
+import { storeAssignment } from './storedWork.test-support.js'
 
 // Task #3385 (anh Dee's Swarm redesign, 11-05): the stall, idle and lost-task follow-ups run in the backend worker, so they
 // keep running while the PM is down. Before, only the PM's own poll ran them: with the PM hung, five people's asks waited 3 to
@@ -64,7 +65,7 @@ async function swarm() {
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
     checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
   const worker = await add(group, 'test-host', harness.worker, 'Worker')
-  const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
+  await storeAssignment(db, tab, group, worker, now)
   const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}) => timed.observeMachine(host, tab, machineId, {
     generation: generations.get(machineId)!, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9,
       diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
@@ -73,7 +74,7 @@ async function swarm() {
   const workerBeat = () => observe('test-host', [harness.worker], { harnessProgress: { [harness.worker]: now } })
   const rows = async (kind: string) => (await db.superTabMessage.findMany({ where: { tabId: tab }, orderBy: { sequence: 'asc' } }))
     .filter(m => (m.source as { kind?: string } | null)?.kind === kind)
-  return { timed, tab, execute, lead, group, worker, assignmentId, harness, observe, workerBeat, rows,
+  return { timed, tab, execute, lead, group, worker, harness, observe, workerBeat, rows,
     clock: { get now() { return now }, set now(value: number) { now = value } } }
 }
 
@@ -81,7 +82,6 @@ describe('the time checks with the PM down', () => {
 
   it('are no longer run by the PM\'s poll', async () => {
     const f = await swarm()
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
     f.clock.now += 31 * MINUTE
     await f.workerBeat()
     await f.timed.deliveries(host, f.tab, f.lead)
@@ -131,7 +131,6 @@ describe('the stops from before v4', () => {
 describe('the worker\'s pass', () => {
   it('runs the checks of each Swarm active in the last week, writes nothing (Swarm v4), and leaves a deleted one alone', async () => {
     const f = await swarm(), quiet = await swarm()
-    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
     f.clock.now += 31 * MINUTE
     await f.workerBeat()
     expect(await timeCheckSwarms(db, f.clock.now)).toEqual(expect.arrayContaining([f.tab, quiet.tab]))
