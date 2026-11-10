@@ -234,8 +234,7 @@ Map<String, dynamic>? swarmBuddyStart(SwarmReader reader, String projectId) {
 }
 
 /// The engines a Buddy runs on (spec: Buddies, 10-28), as people read them,
-/// each offered alike, as the desktop's `kBuddyEngines` (desktop_parity_test):
-/// a Buddy runs with its owner's full access on their own machine, Codex as
+/// each offered alike: a Buddy runs with its owner's full access on their own machine, Codex as
 /// Claude Code (Ken, 11-04, #2832).
 const swarmBuddyEngines = {'claude': 'Claude', 'codex': 'Codex'};
 

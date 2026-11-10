@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/message_row.dart';
-import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/theme/app_theme.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/markdown_style.dart';
@@ -129,34 +128,6 @@ void main() {
     expect(lineOf(field.style), closeTo(20, 0.01));
   });
 
-  testWidgets('sidebar items read at 15 px on rows 28 px apart, a project 32', (
-    tester,
-  ) async {
-    await showView(tester, ConversationServer(), board: false);
-    final side = find.byType(ProjectSidebar);
-    final project = find.byKey(const ValueKey('super-group-lead'));
-    final name = tester.widget<Text>(
-      find.descendant(of: project, matching: find.text('Pilot')),
-    );
-    expect(name.style!.fontSize, 15);
-    expect(lineOf(name.style!), closeTo(22, 0.01));
-    // A 26 px row and its 2 px gap: Slack's 28 px pitch; a project's row 4 px
-    // taller, as Huy asked (11-03, #2427).
-    expect(tester.getSize(project).height, 30);
-    final activity = tester.widget<Text>(
-      find.descendant(of: side, matching: find.text('Manage')),
-    );
-    expect(activity.style!.fontSize, 15);
-    expect(
-      tester.getSize(find.byKey(const ValueKey('super-manage'))).height,
-      26,
-    );
-    final heading = tester.widget<Text>(
-      find.descendant(of: side, matching: find.text('Projects')),
-    );
-    expect(heading.style!.fontSize, 15);
-  });
-
   testWidgets('a phone keeps the app\'s sizes, which its finger rows were '
       'measured on', (tester) async {
     final (_, controller) = await mountPhoneSuperTab(
@@ -165,28 +136,6 @@ void main() {
       seed: (server) => server.append('Shipped the search field'),
     );
     expect(styleOf(tester, 'Shipped the search field')!.fontSize, 14);
-    await unmountPhoneSuperTab(tester, controller);
-  });
-
-  testWidgets('a phone\'s sidebar keeps the app\'s 13 px on 36 px rows', (
-    tester,
-  ) async {
-    final (_, controller) = await mountPhoneSuperTab(
-      tester,
-      const Size(390, 844),
-    );
-    await tester.tap(find.byTooltip('Conversations'));
-    await tester.pumpAndSettle();
-    final project = find.byKey(const ValueKey('super-group-lead'));
-    final name = tester.widget<Text>(
-      find.descendant(of: project, matching: find.text('Pilot')),
-    );
-    expect(name.style!.fontSize, 13);
-    expect(tester.getSize(project).height, 36);
-    expect(
-      tester.getSize(find.byKey(const ValueKey('super-manage'))).height,
-      36,
-    );
     await unmountPhoneSuperTab(tester, controller);
   });
 }

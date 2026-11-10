@@ -769,22 +769,9 @@ void main() {
     });
   });
 
-  test('the words are the desktop\'s', () {
-    final roster = File('../desktop/lib/super_tabs/roster.dart')
-        .readAsStringSync();
+  test('the Add agent title is the desktop\'s', () {
     final screen = File('../desktop/lib/screens/swarm_screen.dart')
         .readAsStringSync();
-    expect(roster, contains("addTooltip: 'Add agent'"));
-    expect(roster, contains("'Remove \$name from this Swarm?'"));
-    expect(
-      roster,
-      contains(
-        "'Any open task needs to be assigned again or closed. Its session on "
-        "\$machine will stop.'",
-      ),
-    );
-    expect(roster, contains("Text(checking ? 'Retry' : 'Remove from Swarm')"));
-    expect(roster, contains("'its computer'"));
     expect(screen, contains("'Add agent to \${"));
   });
 }

@@ -60,7 +60,6 @@ void main() {
             child: Scaffold(
               body: SuperTabView(
                 controller: controller,
-                onInvite: () {},
                 onAddAgent: (_) {},
                 onOpenTerminal: (_) {},
                 machineName: (_) => 'Studio',

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -9,10 +7,8 @@ import 'package:harness_mobile/swarm/swarm_task_status.dart';
 
 import 'swarm_fixture.dart';
 
-/// The line under each task row, as the desktop's (#957, #2125, the mockup
-/// Ken approved): whether the task is moving, waiting on purpose and for
-/// what, or stuck, and what the PM did about it. The same data reads the
-/// same words as `desktop/test/super_tab_task_status_test.dart`.
+/// The line under each task row (#957, #2125, the mockup Ken approved): whether the task is moving, waiting on purpose and for
+/// what, or stuck, and what the PM did about it.
 void main() {
   final now = DateTime.utc(2026, 10, 29, 12);
   int ago(Duration age) => now.subtract(age).millisecondsSinceEpoch;
@@ -580,38 +576,5 @@ void main() {
       expect(find.byKey(const ValueKey('swarm-task-line-g')), findsNothing);
       await tester.pumpWidget(const SizedBox());
     });
-  });
-
-  // The desktop's words for each wait and stuck state, read from its model:
-  // a state added or reworded there fails here until the phone says the same.
-  test('every wait and stuck state the desktop\'s model names reads the '
-      'same words and mark on the phone', () {
-    final source = File('../desktop/lib/super_tabs/task_status.dart');
-    if (!source.existsSync()) {
-      throw StateError(
-        '${source.path} missing — run from mobile/ in the monorepo',
-      );
-    }
-    // Plain words, or words before the agent's note (none given here).
-    final cases = RegExp(
-      r"\('(\w+)', '([\w-]+)'\) => \(\s*HarnessActivity\.(\w+),\s*"
-      r"(?:'([^']*)'|\['([^']*)', \?asked\]\.join\(' · '\)),?\s*\)",
-    ).allMatches(source.readAsStringSync()).toList();
-    // review, revision, blocked, queued, starting, and three ways to be
-    // stuck: fewer means the desktop's table changed shape and this reads too
-    // little.
-    expect(cases.length, greaterThanOrEqualTo(8));
-    for (final match in cases) {
-      final [state!, why!, activity!] = [
-        for (final i in [1, 2, 3]) match.group(i),
-      ];
-      final words = match.group(4) ?? match.group(5)!;
-      final status = swarmTaskStatus(
-        task(liveness: {'state': state, 'why': why, 'since': ago(minute * 5)}),
-        now,
-      );
-      expect(status?.reason, words, reason: '$state/$why');
-      expect(status?.mark.name, activity, reason: '$state/$why');
-    }
   });
 }

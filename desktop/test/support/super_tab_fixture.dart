@@ -600,8 +600,6 @@ class ConversationServer {
   bool refuseReusedOperations = false;
   final receiptCommands = <String, String>{};
   final messages = <Map<String, dynamic>>[];
-  // Route decisions by id, answered by GET .../route-decisions/:id.
-  final routeDecisions = <String, Map<String, dynamic>>{};
 
   /// The leaderboard read's answer; reads of it are listed in [leaderboardReads].
   Map<String, dynamic>? leaderboard;
@@ -769,16 +767,11 @@ class ConversationServer {
     if (!agent) group['lastPersonSequence'] = revision;
   }
 
-  /// Each project's unanswered Buddy proposals, as the backend's proposals
-  /// read answers them (task #2569), by project id; [proposalReads] records
-  /// each read's path. With [proposalsUnsupported], it answers 404 as a
-  /// backend from before the read does.
-  final proposals = <String, List<Map<String, dynamic>>>{};
-  final proposalReads = <String>[];
-  bool proposalsUnsupported = false;
-
   /// The read marks this device sent, in order: {conversationId, sequence}.
   final readMarkPosts = <Map<String, dynamic>>[];
+
+  /// Every request's path, in order.
+  final requested = <String>[];
 
   /// Every fresh file-link read (backend fileLinks.ts), by path. [fileLink]
   /// answers one, by attachment id: an attachment row, or a throw; unset, it
@@ -1118,6 +1111,7 @@ class ConversationServer {
     String path, {
     Map<String, dynamic>? body,
   }) async {
+    requested.add(path);
     final reader = Zone.current[_reader] as String?;
     final read = method == 'POST'
         ? RegExp(r'/conversations/([^/]+)/read$').firstMatch(path)
@@ -1319,21 +1313,6 @@ class ConversationServer {
           messages.last['id'] = id;
         }
         output['messageId'] = messages.last['id'];
-        // New session starts the thread's own session (backend commands.ts
-        // routeBuddySession): a top-level message roots its own thread.
-        if (command['newSession'] == true) {
-          final sent = messages.last;
-          final thread = (sent['thread'] ?? sent['id']) as String;
-          sent['buddySession'] = true;
-          final chat = (state['conversations'] as List).cast<Map>().firstWhere(
-            (c) => c['id'] == command['conversationId'],
-          );
-          chat['buddySessions'] = [
-            ...(chat['buddySessions'] as List? ?? const []),
-            {'thread': thread, 'startId': operationId, 'at': 1},
-          ];
-          output['startId'] = operationId;
-        }
       } else if (command['type'] == 'message.edit') {
         output['changed'] = editMessage(
           command['messageId'] as String,
@@ -1736,38 +1715,6 @@ class ConversationServer {
           'brief': command['brief'] ?? '',
         });
         output.addAll({'projectId': id, 'conversationId': leadId});
-      } else if (command['type'] == 'work.queue') {
-        // As backend taskQueue.ts places it: right after `after` among the
-        // project's open tasks, by rank or else number; null for the top.
-        final groups = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>();
-        final task = groups.firstWhere(
-          (g) => g['id'] == command['conversationId'],
-        );
-        num key(Map<String, dynamic> g) =>
-            (g['queueRank'] ?? g['number'] ?? 0) as num;
-        final siblings =
-            groups
-                .where(
-                  (g) =>
-                      g['projectId'] == task['projectId'] &&
-                      g['archived'] != true &&
-                      g['number'] != null &&
-                      g['id'] != task['id'],
-                )
-                .toList()
-              ..sort((a, b) => key(a).compareTo(key(b)));
-        final after = command['after'];
-        if (after == null) {
-          task['queueRank'] = siblings.isEmpty ? 1 : key(siblings.first) - 1;
-        } else {
-          final i = siblings.indexWhere((g) => g['id'] == after);
-          final next = i + 1 < siblings.length ? siblings[i + 1] : null;
-          task['queueRank'] = next == null
-              ? key(siblings[i]) + 1
-              : (key(siblings[i]) + key(next)) / 2;
-        }
-        revision++;
       } else if (command['type'] == 'work.priority') {
         // As backend taskPriority.ts sets it: the task's one field.
         (state['conversations'] as List)
@@ -1776,82 +1723,6 @@ class ConversationServer {
                   (g) => g['id'] == command['conversationId'],
                 )['priority'] =
             command['priority'];
-        revision++;
-      } else if (command['type'] == 'project.canChat') {
-        // As #3819 keeps it: the people granted Can chat, on the project.
-        final project = (state['projects'] as List).cast<Map>().firstWhere(
-          (p) => p['id'] == command['projectId'],
-        );
-        final granted = {...(project['canChat'] as List? ?? const [])};
-        command['granted'] == true
-            ? granted.add(command['personId'])
-            : granted.remove(command['personId']);
-        project['canChat'] = granted.toList();
-        revision++;
-      } else if (command['type'] == 'proposal.create') {
-        // As #3817 makes it: a card of its own, in Proposals until the PM decides. Its schema (proposalCards.ts
-        // proposalFields) takes one to five non-empty pieces of evidence, as this checks.
-        final evidence = command['evidence'];
-        if (evidence is! List ||
-            evidence.isEmpty ||
-            evidence.length > 5 ||
-            evidence.any((e) => e is! String || e.trim().isEmpty)) {
-          throw const SuperTabFailure(
-            'VALIDATION_ERROR',
-            'evidence: Array must contain at least 1 element(s)',
-            statusCode: 400,
-          );
-        }
-        final id = 'proposal-${(state['conversations'] as List).length}';
-        (state['conversations'] as List).add({
-          ...conversationFixture(id, command['title'] as String),
-          'projectId': command['projectId'],
-          'agentIds': <String>[],
-          'priority': command['priority'],
-          'proposal': {
-            'version': 1,
-            'text': command['text'],
-            'goal': command['goal'],
-            'why': command['why'],
-            'doneWhen': command['doneWhen'],
-            'evidence': command['evidence'],
-            'createdAt': DateTime.now().millisecondsSinceEpoch,
-            'senders': [
-              {'personId': Zone.current[_reader] as String? ?? 'owner'},
-            ],
-            'questions': <dynamic>[],
-          },
-        });
-        output['conversationId'] = id;
-        revision++;
-      } else if (command['type'] == 'proposal.answer') {
-        // As #3817 records it: the question's answer, by the person asked.
-        final card = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .firstWhere((g) => g['id'] == command['conversationId']);
-        final question = ((card['proposal'] as Map)['questions'] as List)
-            .cast<Map>()
-            .firstWhere((q) => q['id'] == command['questionId']);
-        question['answer'] = {
-          'text': command['text'],
-          'at': DateTime.now().millisecondsSinceEpoch,
-          'by': Zone.current[_reader] as String? ?? 'owner',
-        };
-        revision++;
-      } else if (command['type'] == 'work.pause') {
-        // As #3819 keeps it: the task's `paused` while paused, absent otherwise.
-        final task = (state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .firstWhere((g) => g['id'] == command['conversationId']);
-        if (command['paused'] == true) {
-          task['paused'] = {
-            'by': Zone.current[_reader] as String? ?? 'owner',
-            'at': DateTime.now().millisecondsSinceEpoch,
-            'reason': ?command['reason'],
-          };
-        } else {
-          task.remove('paused');
-        }
         revision++;
       } else if (command['type'] == 'conversation.archive') {
         (state['conversations'] as List)
@@ -2026,15 +1897,6 @@ class ConversationServer {
       }
       return {'attachment': await answer(uri.pathSegments.last)};
     }
-    if (uri.pathSegments.last == 'proposals') {
-      proposalReads.add(path);
-      if (proposalsUnsupported) {
-        throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
-      }
-      return {
-        'proposals': [...?proposals[uri.queryParameters['projectId']]],
-      };
-    }
     if (uri.pathSegments.last == 'threads' ||
         uri.pathSegments.last == 'inbox') {
       threadListReads.add(path);
@@ -2185,14 +2047,6 @@ class ConversationServer {
         throw const SuperTabFailure('NOT_FOUND', 'No routing policy.');
       }
       return jsonDecode(jsonEncode(policy)) as Map<String, dynamic>;
-    }
-    if (uri.pathSegments.length > 2 &&
-        uri.pathSegments[uri.pathSegments.length - 2] == 'route-decisions') {
-      final decision = routeDecisions[uri.pathSegments.last];
-      if (decision == null) {
-        throw const SuperTabFailure('NOT_FOUND', 'No such decision.');
-      }
-      return jsonDecode(jsonEncode(decision)) as Map<String, dynamic>;
     }
     if (uri.pathSegments.last == 'messages') {
       onRead?.call(path);
