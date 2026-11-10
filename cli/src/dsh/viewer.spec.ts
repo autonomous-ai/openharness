@@ -132,6 +132,71 @@ describe('DshViewerManager', () => {
     ])
   })
 
+  describe('a preview the verdict names', () => {
+    function previewSetup(reserved: number[] = []) {
+      const urls: Array<string | null> = []
+      const asked: Array<{ port: number; host?: string }> = []
+      const answers = new Map<number, (up: boolean) => void>()
+      manager = new DshViewerManager({
+        onUrl: (_agentId, url) => urls.push(url),
+        freePort: async () => 4790,
+        // The package's viewer answers at once; a preview answers when the test says so.
+        waitForPort: (port, _timeout, host) => {
+          if (port === 4790) return Promise.resolve(true)
+          asked.push({ port, host })
+          return new Promise((resolve) => { answers.set(port, resolve) })
+        },
+        spawn: (() => fakeChild()) as unknown as typeof import('./shell.js').spawnDshCommand,
+        reservedPorts: () => reserved,
+      })
+      const listen = async (port: number, up = true): Promise<void> => { answers.get(port)?.(up); await new Promise((r) => setImmediate(r)) }
+      return { urls, asked, listen }
+    }
+    const web = () => dsh({ command: 'v', url: 'http://127.0.0.1:${port}/?file=${artifact}' })
+
+    it('shows the page once it listens, forwards it, and goes back to the package when the verdict stops naming it', async () => {
+      const { urls, asked, listen } = previewSetup()
+      await manager!.start('a1', web(), '/ws')
+      manager!.setVerdictPreview('a1', 'http://localhost:5173/')
+      expect(asked).toEqual([{ port: 5173, host: 'localhost' }])
+      // Not listening yet: the package's viewer stays, and the dev server's port is not forwarded.
+      expect(manager!.url('a1')).toBe('http://127.0.0.1:4790/?file=')
+      expect(manager!.forwardingUrl('a1')).toBe('http://127.0.0.1:4790/?file=')
+      await listen(5173)
+      expect(manager!.url('a1')).toBe('http://localhost:5173/')
+      expect(manager!.forwardingUrl('a1')).toBe('http://localhost:5173/')
+      manager!.setVerdictPreview('a1', null)
+      expect(manager!.url('a1')).toBe('http://127.0.0.1:4790/?file=')
+      expect(urls).toEqual(['http://127.0.0.1:4790/?file=', 'http://localhost:5173/', 'http://127.0.0.1:4790/?file='])
+    })
+
+    it('keeps the package when the page never listens, and ignores an answer for a preview since replaced', async () => {
+      const { listen } = previewSetup()
+      await manager!.start('a1', web(), '/ws')
+      manager!.setVerdictPreview('a1', 'http://127.0.0.1:5173/')
+      await listen(5173, false)
+      expect(manager!.url('a1')).toBe('http://127.0.0.1:4790/?file=')
+      manager!.setVerdictPreview('a1', 'http://127.0.0.1:3000/')
+      manager!.setVerdictPreview('a1', 'http://127.0.0.1:4000/')
+      await listen(3000)
+      expect(manager!.url('a1')).toBe('http://127.0.0.1:4790/?file=')
+      await listen(4000)
+      expect(manager!.url('a1')).toBe('http://127.0.0.1:4000/')
+    })
+
+    it('never names the daemon\'s own port, and follows a preview named before the viewer started', async () => {
+      const { asked, listen } = previewSetup([18473])
+      manager!.setVerdictPreview('a1', 'http://127.0.0.1:18473/')
+      await manager!.start('a1', web(), '/ws')
+      expect(asked).toEqual([])
+      expect(manager!.forwardingUrl('a1')).toBe('http://127.0.0.1:4790/?file=')
+      manager!.setVerdictPreview('a2', 'http://127.0.0.1:5173/')
+      await manager!.start('a2', web(), '/ws2')
+      await listen(5173)
+      expect(manager!.url('a2')).toBe('http://127.0.0.1:5173/')
+    })
+  })
+
   it('publishes null when the port never answers, and stops the child', async () => {
     const { urls } = setup({ portUp: false })
     await manager!.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
