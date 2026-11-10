@@ -457,6 +457,10 @@ class NewHarnessOption {
 enum NewHarnessOutcome { created, failed }
 
 class NewHarnessController extends ChangeNotifier {
+  /// How often a request the machine holds is asked after ([followHeld]): by an open form, and by a start that goes on
+  /// without its form (`super_tabs/swarm_starts.dart`). Tests shorten it.
+  static Duration heldFollowInterval = const Duration(seconds: 3);
+
   NewHarnessController(
     this.app, {
     required String machineId,
@@ -1752,7 +1756,9 @@ class NewHarnessController extends ChangeNotifier {
     };
   }
 
-  String? get _leadRepositoryName =>
+  /// The new project's repository, else its folder, by name: also what its row in the left pane says while it starts
+  /// without this form (`super_tabs/swarm_starts.dart`).
+  String? get leadRepositoryName =>
       _project.repository?.name ??
       _project.newRepository?.name ??
       switch (_project.folder) {
@@ -1771,12 +1777,12 @@ class NewHarnessController extends ChangeNotifier {
 
   /// Under [leadLine]: the repo that machine clones first, or null.
   String? get leadCloneNote {
-    if (_leadRepositoryName == null) return null;
+    if (leadRepositoryName == null) return null;
     final target = leadMachine;
     final clones = leadThroughSwarm
         ? target != null && !target.has(leadRepositoryUrl)
         : _project.repository != null;
-    return clones ? 'Clones $_leadRepositoryName there first' : null;
+    return clones ? 'Clones $leadRepositoryName there first' : null;
   }
 
   /// Why New Project cannot start its Product Manager now, or null.
@@ -4515,6 +4521,9 @@ class NewHarnessController extends ChangeNotifier {
   bool get canCancelPending => _attempt?.canCancelPending == true;
   bool get canFollowPending => _attempt?.canFollowPending == true;
 
+  /// The harness this form's start made on [machineId], once the machine has it.
+  String? get createdAgentId => _attempt?.agentId;
+
   /// The folder a new project's typed name found already there
   /// (`PROJECT_EXISTS`), with the project and machine it was refused for.
   (String, NewHarnessProject, String)? _existing;
@@ -4637,7 +4646,11 @@ class NewHarnessController extends ChangeNotifier {
       warn('Linking the profile. You can close once it is done.');
       return false;
     }
-    if (busy && integration?.stopBuddy?.call() != true) {
+    // A Swarm's start closes at once whatever it is doing: before it is under way nothing was sent, and after, it goes on
+    // without this form (anh Dee, 2026-11-10: never block for minutes).
+    if (busy &&
+        integration?.inBackground != true &&
+        integration?.stopBuddy?.call() != true) {
       warn('Still working on it. You can close once it is done.');
       return false;
     }
@@ -4656,15 +4669,30 @@ class NewHarnessController extends ChangeNotifier {
     return !endCompletion();
   }
 
+  /// The start in flight, or the last one: what a start that goes on without its form waits for
+  /// (`super_tabs/swarm_starts.dart`).
+  Future<NewHarnessOutcome>? get running => _running;
+  Future<NewHarnessOutcome>? _running;
+
   /// [quiet] is [followHeld]'s: a check on a held request that changes
   /// nothing on screen until it has an answer.
   Future<NewHarnessOutcome> create({
     bool quiet = false,
     bool? resendAttachments,
+  }) {
+    // Refused while one runs: a second press must not take the place of the start a form handed on.
+    if (busy || linkingProfile) return Future.value(NewHarnessOutcome.failed);
+    // Kept before the start runs: it may hand itself on ([HarnessLaunchIntegration.onStarted]) before its first wait.
+    final done = Completer<NewHarnessOutcome>();
+    _running = done.future;
+    done.complete(_create(quiet: quiet, resendAttachments: resendAttachments));
+    return done.future;
+  }
+
+  Future<NewHarnessOutcome> _create({
+    required bool quiet,
+    bool? resendAttachments,
   }) async {
-    if (busy || linkingProfile) {
-      return NewHarnessOutcome.failed;
-    }
     final resume =
         resendAttachments != null && integration?.resolveAttachments != null
         ? () => integration!.resolveAttachments!(resendAttachments)
@@ -4673,6 +4701,7 @@ class NewHarnessController extends ChangeNotifier {
       busy = true;
       status = 'Checking on the harness…';
       notifyListeners();
+      if (!quiet) integration?.onStarted?.call();
       try {
         await resume();
         busy = false;
@@ -4822,6 +4851,7 @@ class NewHarnessController extends ChangeNotifier {
       status = recheck ? 'Checking on the harness…' : _startingLine;
       notifyListeners();
     }
+    if (!quiet) integration?.onStarted?.call();
     if (!recheck && !asGuest) {
       // What is sent, not what is shown: a terminal takes no project.
       if (projectFolderRequest?.repository case final repository?) {
@@ -5080,13 +5110,14 @@ class NewHarnessController extends ChangeNotifier {
     status =
         'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
     notifyListeners();
+    integration?.onStarted?.call();
     try {
       await start(
         LeadSwarmStart(
           machineId: _swarmLeadMachine!,
           engine: _engine,
           repositoryUrl: leadRepositoryUrl,
-          title: _leadRepositoryName,
+          title: leadRepositoryName,
           task: task.trim(),
           files: attachments?.files ?? const [],
         ),

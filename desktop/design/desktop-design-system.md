@@ -814,6 +814,8 @@ Top to bottom:
 ```text
  autonomous.ai ⌄              org name, semibold 13 primary; ⌄ only on hover
  Your Team           ⌄  ∞ +  quiet heading; ⌄ folds the list (open); ∞ (link) Attach agent, + New agent
+ ◌  Faye            starting  first: a New agent going on after its form closed, a grey face; a click opens nothing yet
+ ◌  Ivy               failed  its start failed: `failed` in red; a click opens its form again with why, and Try again
  ◎  River                     the PM wears the gold ring
  ◉  Kai                 free  bold: something new from it; the state at the right
  ◉  Quinn             on #12
@@ -823,6 +825,7 @@ Top to bottom:
  ◉  Billing fix  joining      while it joins
  ⌄  32 more                   past the first eight; opens the rest, then "Show fewer"
  Projects              ⌄  +  quiet heading; ⌄ folds the list (open); + opens New project
+ #  docs-home       starting  first: a New project going on after its form closed, in place of its own row
  #  lampos                    a project's channel; bold: something new; your Personal Swarm: each repo your panes work in
  Your Machines         ›     quiet heading, folded, but open by itself while a computer is off; each row a computer of this account, `offline` at its right when it is
                               (a click opens Manage's Machines)
@@ -834,6 +837,7 @@ Top to bottom:
 | Element | Implementation | Rule |
 | --- | --- | --- |
 | Quiet row | `SuperTabQuietRow` (`super_tabs/quiet_rows.dart`) | 30 high, 2 under it. A 20 face (`SuperTabQuietRow.faceSize`) or a 16 icon centred in the 32 column, so every name starts on one line. Name 15 (`SwarmType.sidebar`), the size of a project's row: read `textSecondary` regular, unread `textPrimary` semibold, the open row `SidebarInk.selected` with a primary name. One detail, 12 (`DesktopChrome.metadata`) in the tertiary grey (`SidebarInk.faint`, `textFaint`), right-aligned, tabular figures, no brackets; it keeps up to 40% of a row whose name is long, and is cut first. |
+| Start row | `SwarmStart`, `SwarmStarts` (`super_tabs/swarm_starts.dart`, the app's `swarmStarts`); `ProjectSidebar._startRow` | New project and New agent never hold their person while a project or an agent starts (anh Dee, 2026-11-10: "as soon as i hit new project or new agent, just get me back to my main screen ... NEVER block users for minutes"). Once the form's own checks pass and the start is under way, the form closes, back to what its person was doing, and the start goes on: the project made, its folder cloned, its agent started and joined. Meanwhile its row is first in Projects or Your Team: a project's `#` (its lock if private) or a grey face, its name (the repository's, or the agent's once it has one) and `starting`; it opens nothing. A new project's own row is not drawn while its start's is. Done, it is the project's or the agent's own row, and nothing opens by itself: its person goes in when they choose. Failed, its detail is `failed` in red (`colorScheme.error`), and a click, like that section's +, opens its form again with why, its Try again and Discard. Closing the form while it still checks sends nothing. |
 | Shared edges | `SuperTabQuietRow`, gallery check "the left pane's details end at one edge" | Every section's rows share the left edge (the faces' and icons' column), the right edge (every detail ends `AppDesktop.controlGap` from the row's right, with no column kept for anything after it) and the baselines (30 high rows). A heading's + ends on that right edge. |
 | No status marks | — | The left pane draws no spinner, check, `?` or failed mark (anh Dee 22:25, task #4645): status lives on the Tasks cards. An agent with something new is its row's semibold primary name, like an unread Slack channel; read rows stay regular, and the open row keeps its fill. |
 | Agent state | `SwarmAgentStates` (`super_tabs/agent_state.dart`) | An agent's row ends with one state in the row's detail, in this order: `offline` (its machine reports its session gone, `SuperTabAgent.downSince`), `starting` (a message to it waits while its engine starts: its frame's `waitingFor: engine`, which the daemon sends again when it changes and a reconnect reads whole; its 1:1 chat's bar adds `· starting` too, and neither says a failure), `on #12` (its project's board has the open issue labelled `status:taken` and `builder:<its name>`; in a Personal Swarm, whose projects name no repository, the board of the repo its own pane works in), `free` (its latest post in its project's channel says `free: <name>`, as the Swarm's basics ask of an agent with no task); none of them shows nothing. An offline agent's face is grey (`SuperTabAvatar.agent` draws it so, `super-face-offline`) wherever it is drawn: its row, its 1:1 chat's header and its posts. Read only for the projects the person's own agents are in: a channel again when the Swarm says it moved, a board once a minute while the Swarm is on screen. |
