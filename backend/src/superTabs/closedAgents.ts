@@ -75,6 +75,21 @@ export function recordClosing(state: SuperTabState, target: Agent): void {
   ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId, ...hidden })
 }
 
+/** Takes [target] out of the Swarm for good, as a person's removal does: no record of it brings it back when its session reopens,
+ *  its host closes the session unless [close] is false (it closed it already), and it leaves every group, its running task
+ *  waiting to be reconciled. commands.ts removeAgent adds a command's checks; the Buddy conversion calls it as it is. */
+export function removeAgent(state: SuperTabState, target: Agent, close = true): void {
+  state.removedSessions = state.removedSessions?.filter(r => r.machineId !== target.machineId || r.harnessId !== target.harnessId)
+  if (!state.removedSessions?.length) delete state.removedSessions
+  if (close) recordClosing(state, target)
+  state.agents = state.agents.filter(a => a.id !== target.id)
+  for (const group of state.conversations) {
+    group.agentIds = group.agentIds.filter(a => a !== target.id)
+    if (group.leadId === target.id) group.leadId = null
+    if (group.assignment?.agentId === target.id && activeWork(group)) group.assignment.status = 'reconciling'
+  }
+}
+
 /** Removes those of [closed] that hold no task now: from the agents and from every group's members and leads, as commands.ts
  *  removeAgent does, with the close order its host needs. A task just lost keeps its agent until its Lead hands it on or
  *  cancels it (it is still fenced and told by name, liveness.ts); the next report removes the agent then. The removed agents,

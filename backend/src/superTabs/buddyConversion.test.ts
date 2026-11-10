@@ -35,7 +35,7 @@ describe('convertBuddies', () => {
     Object.assign(chatOf(state, id), { title: 'Theo', buddyName: 'Theo', buddyDefault: true, buddyChats: ['gone'], buddyDownTold: true, lastMessageSequence: 7 })
     const v4Before = structuredClone({ agent: state.agents[0], chat: chatOf(state, 'v4-chat') })
 
-    expect(convertBuddies(state, 1_000)).toEqual([])
+    expect(convertBuddies(state)).toEqual([])
 
     const converted = state.agents.find(a => a.id === buddy.id)!
     expect(converted).toEqual({ id: buddy.id, machineId: 'peer-mac', harnessId: buddy.id, machineOwnerId: 'peer', contributorId: 'peer',
@@ -61,9 +61,9 @@ describe('convertBuddies', () => {
   it('does nothing the second time: a converted agent is no Buddy', () => {
     const state = swarm()
     giveOwnBuddy(state, 'peer')
-    convertBuddies(state, 1_000)
+    convertBuddies(state)
     const once = structuredClone(state)
-    expect(convertBuddies(state, 1_000)).toEqual([])
+    expect(convertBuddies(state)).toEqual([])
     expect(state).toEqual(once)
   })
 
@@ -81,7 +81,7 @@ describe('convertBuddies', () => {
       request: { conversationId: id, machineId: 'peer-mac', engine: 'claude', name: 'x', cwd: '/x', requirements: buddy as never, ...request } as AgentStart['request'] })
     state.starts = [start('buddy-start', { buddyOf: { personId: 'peer', generation: 'first' } }), start('plain', {})]
 
-    const removed = convertBuddies(state, 1_000)
+    const removed = convertBuddies(state)
 
     expect(removed.map(a => a.id).sort()).toEqual(['narrow', 'session'])
     expect(state.agents.map(a => a.id).sort()).toEqual([buddy.id, 'v4'])
@@ -101,7 +101,7 @@ describe('convertBuddies', () => {
     state.conversations.push({ id: chat, kind: 'buddy', projectId: 'lead', title: 'Old', leadId: null, agentIds: ['old'], archived: false, brief: '',
       checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation }] } })
 
-    convertBuddies(state, 1_000)
+    convertBuddies(state)
 
     expect(state.agents.find(a => a.id === 'old')).not.toHaveProperty('projectId')
     expect(chatOf(state, chat)).toMatchObject({ kind: 'agent-chat', agentIds: ['old'] })
@@ -117,7 +117,7 @@ describe('convertBuddies', () => {
     const id = swarmBuddyChatId(state.people[1]!)
     const before = structuredClone(chatOf(state, id))
 
-    expect(convertBuddies(state, 1_000).map(a => a.id)).toEqual([buddy.id])
+    expect(convertBuddies(state).map(a => a.id)).toEqual([buddy.id])
 
     // Its chat stays its person's alone, as it was: no agent is in it.
     expect(chatOf(state, id)).toEqual({ ...before, agentIds: [] })
@@ -126,6 +126,6 @@ describe('convertBuddies', () => {
     const left = swarm()
     giveOwnBuddy(left, 'peer')
     left.people = left.people.filter(p => p.id !== 'peer')
-    expect(convertBuddies(left, 1_000).map(a => a.id)).toEqual(['peer-buddy'])
+    expect(convertBuddies(left).map(a => a.id)).toEqual(['peer-buddy'])
   })
 })
