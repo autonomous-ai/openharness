@@ -365,11 +365,12 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
       children: [
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
+          // Each pill's 44-point box leaves 6 above and below what it draws.
           padding: const EdgeInsets.fromLTRB(
             AppSpace.m,
-            AppSpace.xs,
+            0,
             AppSpace.m,
-            AppSpace.s,
+            AppSpace.xs,
           ),
           child: Row(
             children: [
@@ -961,8 +962,11 @@ class _Note extends StatelessWidget {
   );
 }
 
-/// One of Activity's filters: its name and count in a pill a thumb can find,
-/// filled while it is the one open.
+/// One of Activity's filters: its name and count in a pill drawn at a
+/// control's height ([AppControl.height]) and pressed across the 44-point box
+/// it is laid out in ([SwarmTapTarget]), filled while it is the one open; its
+/// name semibold then, medium otherwise, as [SwarmSegments] draws its
+/// segments.
 class SwarmActivityFilterPill extends StatelessWidget {
   const SwarmActivityFilterPill({
     super.key,
@@ -987,45 +991,52 @@ class SwarmActivityFilterPill extends StatelessWidget {
     AppTheme.watch(context);
     final ink = selected ? AppPalette.windowBg : AppPalette.textPrimary;
     final name = label ?? filter?.label ?? 'All';
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '$name, $count',
-      excludeSemantics: true,
-      child: Material(
-        color: selected
-            ? AppPalette.textPrimary
-            : AppPalette.swarmSearchSurface,
-        shape: const StadiumBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    name,
-                    style: AppType.label(
-                      color: ink,
-                      fontWeight: AppFont.semibold,
-                      height: 1,
+    return SwarmTapTarget(
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: '$name, $count',
+        excludeSemantics: true,
+        child: Material(
+          color: selected
+              ? AppPalette.textPrimary
+              : AppPalette.swarmSearchSurface,
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minHeight: AppControl.height,
+                minWidth: AppControl.height,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      style: AppType.label(
+                        color: ink,
+                        fontWeight: selected
+                            ? AppFont.semibold
+                            : AppFont.medium,
+                        height: 1,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '$count',
-                    style: AppType.label(
-                      color: selected
-                          ? ink.withValues(alpha: .7)
-                          : AppPalette.textSecondary,
-                      height: 1,
+                    const SizedBox(width: 6),
+                    Text(
+                      '$count',
+                      style: AppType.label(
+                        color: selected
+                            ? ink.withValues(alpha: .7)
+                            : AppPalette.textSecondary,
+                        height: 1,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -1128,11 +1139,13 @@ class SwarmActivityRow extends StatelessWidget {
         key: ValueKey('swarm-activity-approve-${item.key}'),
         label: 'Approve',
         style: SwarmButtonStyle.fill,
+        compact: true,
         onPressed: onApprove,
       ),
       null => SwarmButton(
         key: ValueKey('swarm-activity-reply-${item.key}'),
         label: 'Reply',
+        compact: true,
         onPressed: onReply,
       ),
     };
