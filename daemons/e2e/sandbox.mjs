@@ -164,7 +164,8 @@ async function startBackend(state, daemons, backendDir) {
   state.pids.backend = child.pid
   state.backend = { dir: backendDir, daemons, startedAt: Date.now() }
   writeState(state)
-  await until('backend health', async () => (await fetch(`http://127.0.0.1:${state.ports.backend}/api/health`)).ok, 60_000)
+  // Ready, not only alive: /api/health answers before its Redis is connected (cli/e2e/harness/realBackend.ts).
+  await until('backend readiness', async () => (await fetch(`http://127.0.0.1:${state.ports.backend}/api/ready`, { signal: AbortSignal.timeout(5_000) })).ok, 60_000)
 }
 
 function stopPid(state, name) {

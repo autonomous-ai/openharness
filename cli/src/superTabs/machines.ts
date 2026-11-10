@@ -25,7 +25,6 @@ import { worktreeFolderName } from '../lib/agentNames.js'
 import { cleanupClosed } from './cleanupCloses.js'
 import { repositoryKey } from './repositoryKey.js'
 import { profileId } from '../lib/claudeProfiles.js'
-import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -255,7 +254,6 @@ export class ContributedMachines {
   private coresRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
-  private tokensRefusedUntil = 0
   private uncommittedRefusedUntil = 0
   private closedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
@@ -610,7 +608,6 @@ export class ContributedMachines {
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
-        const tokens = began >= this.tokensRefusedUntil ? await this.tokensOf(running) : {}
         const allowances = engines.map(engine => this.quotaFor(readings, engine))
         const quotaReasons = began >= this.quotaReasonsRefusedUntil
           ? Object.fromEntries(allowances.flatMap(q => 'reason' in q && q.reason ? [[q.engine, q.reason]] : [])) : {}
@@ -619,7 +616,7 @@ export class ContributedMachines {
         // Only to a backend that asks for capabilities, as it is new enough to know the field: an older one refuses it.
         const profiles = row.capabilitiesWanted === true && began >= this.profilesRefusedUntil ? this.profiles(engines, allowances) : []
 
-        const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
+        const observation = { generation: pool.generation, tools: reportedTools,
           ...(Object.keys(quotaReasons).length ? { quotaReasons } : {}),
 
           ...(profiles.length ? { profiles } : {}),
@@ -876,8 +873,7 @@ export class ContributedMachines {
     const { refusedStarts: _refusedStarts, ...unrefused } = unclosed
     const { profiles: _profiles, ...unprofiled } = unrefused
     const { quotaReasons: _reasons, ...unreasoned } = unprofiled
-    const { harnessTokens: _tokens, ...untokened } = unreasoned
-    const { preparingStartIds: _preparing, ...unprepared } = untokened
+    const { preparingStartIds: _preparing, ...unprepared } = unreasoned
     const { harnessUncommitted: _uncommitted, ...known } = unprepared
     const { readiness: _readiness, ...ready } = known
     const { harnessProgress: _progress, ...withoutProgress } = ready
@@ -885,7 +881,7 @@ export class ContributedMachines {
     // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
     const listedOnly = localModels?.some(m => m.starting)
       ? [{ ...withoutProgress, localModels: localModels.filter(m => !m.starting) }] : []
-    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('harnessTokens' in unreasoned ? [unreasoned] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+    const attempts = [...('closedHarnessIds' in observation ? [observation] : []), ...('refusedStarts' in unclosed ? [unclosed] : []), ...('profiles' in unrefused ? [unrefused] : []), ...('quotaReasons' in unprofiled ? [unprofiled] : []), ...('preparingStartIds' in unreasoned ? [unreasoned] : []),
       ...('harnessUncommitted' in unprepared ? [unprepared] : []),
       ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
       ...listedOnly,
@@ -895,7 +891,6 @@ export class ContributedMachines {
       else if ('refusedStarts' in attempt) this.refusedStartsRefusedUntil = began + FIELD_REFUSED_MS
       else if ('profiles' in attempt) this.profilesRefusedUntil = began + FIELD_REFUSED_MS
       else if ('quotaReasons' in attempt) this.quotaReasonsRefusedUntil = began + FIELD_REFUSED_MS
-      else if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
       else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
       else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
       else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
@@ -1022,20 +1017,6 @@ export class ContributedMachines {
     } finally { launch.checking = false }
   }
 
-  /** Each running session's token counts by model, from the daemon's last usage reading (never a transcript read): the
-   *  Swarm prices each attempt by them (backend superTabs/costs). Counts only; the reading's folders and pull requests stay
-   *  here. A session with none read yet is left out. */
-  private async tokensOf(running: readonly string[]): Promise<Record<string, Record<string, ModelTokens>>> {
-    const counted: Record<string, Record<string, ModelTokens>> = {}
-    for (const id of running) {
-      const session = this.core.agents.byAgent(id)
-      const target = session && usageTarget(session)
-      if (!target || !validUsageTarget(target)) continue
-      const models = (await this.core.usage?.(target).catch(() => null))?.models
-      if (models && Object.keys(models).length && validModelTokens(models)) counted[id] = models
-    }
-    return counted
-  }
   /** Whether each running session's folder has uncommitted changes (git status), as last read, for the sessions git could
    *  read: the backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts).
    *  The folders due are read beside the pass, never holding the reading up; what they say goes with a later one. A folder

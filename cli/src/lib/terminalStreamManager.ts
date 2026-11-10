@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import { typedByPerson } from './typedInput.js'
-import { inputContextIn, nativeSubmitKey } from './nativeTurnObservations.js'
 import { unlink } from 'node:fs/promises'
 import { deflateSync } from 'node:zlib'
 import { ENGINES } from '../engines/types.js'
@@ -134,8 +133,6 @@ interface ActiveStream {
   ownerId: string
   /** What the client declared on open, or what `describeClient` could tell; absent when neither knew. */
   client?: TerminalClientDescriptor
-  /** Opaque input provenance only. It does not affect the control lease. */
-  inputContext?: string
   streamId: string
   /** A stream opened as a WATCHER: it renders, but it never took the control lease and its input is
    *  refused. See the `takeover: false` branch of `open()`. */
@@ -231,7 +228,7 @@ export interface TerminalStreamManagerDeps {
    * `from`: the stream's connection and what its client said it is on `terminal_open`, so a page a program in the
    * pane opens can go to the phone the person is typing on (core/terminals/browser.ts).
    */
-  onInput?: (agentId: string, typed: boolean, from: { connId: string, kind: string | null; inputContext?: string; submitted?: boolean }) => void
+  onInput?: (agentId: string, typed: boolean, from: { connId: string, kind: string | null }) => void
   /** While an agent changes host, every write to its terminal waits here, and goes to the pane it ends on;
    *  its streams follow it through `retarget`. Absent: nothing is ever held. */
   moveGate?: MoveGate
@@ -633,7 +630,6 @@ export class TerminalStreamManager {
         connId,
         ownerId,
         ...(client ? { client } : {}),
-        ...(inputContextIn(payload.inputContext) ? { inputContext: payload.inputContext as string } : {}),
         streamId,
         watching,
         watchOnly: watching && watchOnly,
@@ -859,7 +855,7 @@ export class TerminalStreamManager {
     state.lastInputSeq = inputSeq
     if (this.deps.typingTrace) state.echoProbe = { seq: inputSeq, at: this.now() }
     state.expiresAt = this.now() + HEARTBEAT_TIMEOUT_MS
-    this.tookInput(state, typedByPerson(bytes), nativeSubmitKey(bytes))
+    this.tookInput(state, typedByPerson(bytes))
     // The agent is changing host: the pane this stream writes to is going away. The keystrokes wait, in order
     // with every other write to the agent, and are written once the move ends. The seq is spent either way.
     const gate = this.heldGate(state)
@@ -934,9 +930,8 @@ export class TerminalStreamManager {
   }
 
   /** See `TerminalStreamManagerDeps.onInput`. A listener's failure is its own: input is never held by it. */
-  private tookInput(state: ActiveStream, typed: boolean, submitted = false): void {
-    try { this.deps.onInput?.(state.agentId, typed, { connId: state.connId, kind: state.client?.kind ?? null,
-      ...(state.inputContext ? { inputContext: state.inputContext } : {}), ...(submitted ? { submitted: true } : {}) }) } catch (error) {
+  private tookInput(state: ActiveStream, typed: boolean): void {
+    try { this.deps.onInput?.(state.agentId, typed, { connId: state.connId, kind: state.client?.kind ?? null }) } catch (error) {
       this.diagnostic(state, 'input_listener_failed', { reason: error instanceof Error ? error.message : String(error) })
     }
   }
