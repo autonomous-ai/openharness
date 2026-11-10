@@ -288,7 +288,8 @@ export class GitHubAssign {
       // opened it (verdicts); a reader who signs two ways counts once, as the merger counts it.
       const own = (name: string) => isWriter(people.writers, name)
       const ok = [...readers].filter(([reader, r]) => !own(reader) && !r.ownLogin && r.verdict === 'READ-OK' && onHead(r.sha))
-      const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha))
+      // An unsigned READ-OK from that login was no read, so there is nobody to ask again for it (an unsigned HOLD stands, and is).
+      const stale = [...readers].filter(([reader, r]) => !own(reader) && !onHead(r.sha) && !(r.ownLogin && r.verdict === 'READ-OK'))
       const waiting = [...asked.keys()].filter(name => !readers.has(name) && now - lastAsk(name, false) < READ_WAIT_MS)
       for (const [reader, r] of stale) {
         if (lastAsk(reader, true)) continue
