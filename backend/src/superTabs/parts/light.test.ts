@@ -67,7 +67,7 @@ const conversation: Required<Conversation> = {
   priority: 'P0',
   process: 'full',
   projectId: 'p',
-  proposal: { version: 1, text: 'Words', goal: 'Goal', why: 'Why', doneWhen: 'Done', evidence: ['Evidence'], priority: 'P2', createdAt: 0, senders: [], questions: [] },
+  proposal: { senders: [], decision: { kind: 'accept', reason: 'r' }, mergedInto: 'g' },
   proposals: [],
   pullRequestUrls: [],
   pulse: {} as never,

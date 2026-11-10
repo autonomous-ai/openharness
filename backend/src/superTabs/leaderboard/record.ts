@@ -78,7 +78,7 @@ export interface GroupLedger {
   reviews?: ReviewCount[]
   /** The same by hour, for the last LEDGER_WEEKS weeks. */
   reviewHours?: ReviewHour[]
-  /** The Buddy's proposal the group was opened from: the Buddy earns when it ships (Lead, 2026-10-29). */
+  /** The Buddy's proposal the group was opened from, written until proposals went (2026-11-10): the Buddy earns when it ships. */
   proposal?: { buddyId: string; messageId: string }
 }
 
@@ -187,10 +187,5 @@ export function firstAssignedAt(ledger: GroupLedger): number | undefined {
   const runs = ledger.runs ?? []
   if (!runs.length) return undefined
   return runs.length < MAX_RUNS ? runs[0]!.at : ledger.askedAt ?? runs[0]!.at
-}
-
-/** A group opened from a Buddy's proposal remembers it, for the Buddy's points when it ships. */
-export function recordProposal(group: Conversation, proposal: { buddyId: string; messageId: string }): void {
-  (group.ledger ??= {}).proposal = proposal
 }
 
