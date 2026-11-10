@@ -4,12 +4,18 @@
  * streamed as the Desktop opens it, a page that asks for a person, its login kept across a stop, its restart after a crash, Device, a proxy that fails closed,
  * and a delete that leaves nothing behind. agentBrowser.e2e.ts runs the same daemon against a fake `podman`.
  *
- * Linux only, on rootless Podman, in a store of its own: the daemon finds a `podman` first on its PATH that runs the
- * real one with `--root` and `--runroot` in a folder this file made, so nothing a person or another run keeps in Podman
- * is seen or touched, and the clean-up can remove all that folder holds. On macOS and Windows Podman runs in a machine,
- * and this file never uses one. It is skipped, with the reason, where `podman info` fails. The nightly suite leaves it
- * out (vitest.e2e.ci.config.ts): the image takes minutes to build. CI runs it when asked (cli-e2e.yml,
- * `agent_browser_podman`).
+ * The daemon finds a `podman` first on its PATH that runs the real one, so nothing a person or another run keeps in
+ * Podman is seen or touched, and the clean-up can remove all the run made:
+ * - Linux, on rootless Podman: in a store of its own, `--root` and `--runroot` in a folder this file made. Skipped, with
+ *   the reason, where `podman info` fails.
+ * - macOS: on Harness's own machine, `harness`, made as a person's Install makes it when their machine will not start
+ *   (spec § Podman). The wrapper refuses every machine command but a listing for any machine but `harness`, so the
+ *   product's one start of the person's machine fails as such a machine's does, and their machines and default
+ *   connection are never changed. Skipped unless every machine here is stopped and none is named `harness`. The
+ *   clean-up removes the machine; the files Podman leaves beside it (its image download, SSH key) are not this file's
+ *   to guess, so a person removes them by name (agent-browser-spike-2.md § Cleanup).
+ * The nightly suite leaves it out (vitest.e2e.ci.config.ts): the image takes minutes to build. CI runs it on Linux when
+ * asked (cli-e2e.yml, `agent_browser_podman`).
  *
  * The cases run in order on one daemon and one agent, each starting where the last left the browser; once one fails,
  * the rest are skipped and say which.
@@ -18,7 +24,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_pro
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
@@ -30,6 +36,10 @@ import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
 // The image build may take its whole 15 minutes (image.ts) on a cold runner, and the browser's start follows it.
 const BUILD_MS = 20 * 60_000
+// macOS: Harness's own machine first, its init's 10 minutes (setup.ts, most of it the machine image's download) and its
+// start.
+const MACHINE_MS = process.platform === 'darwin' ? 12 * 60_000 : 0
+const OWN_MACHINE = 'harness'
 // A container created again (new settings) or started again (after an exit): the ready check's 60 s and the restart's
 // backoff, with room.
 const START_MS = 3 * 60_000
@@ -44,15 +54,27 @@ const HOST = 'host.containers.internal'
 // A loopback port inside the container for the Device page (see that case).
 const SECURE_PORT = 18080
 
-const realPodman = process.platform === 'linux'
+const realPodman = process.platform === 'linux' || process.platform === 'darwin'
   ? (process.env.PATH ?? '').split(delimiter).filter(Boolean).map((dir) => join(dir, 'podman')).find((file) => existsSync(file)) ?? null
   : null
 
-/** Why this file cannot run here, or null. Only on Linux is Podman asked anything: elsewhere it would start a machine. */
+// macOS: Podman keeps the person's machines and connections in their home, and vitest.setup.ts gives every test a home
+// of its own. Linux's store is named by flags, and its run keeps the test's home.
+const podmanEnv = process.platform === 'darwin' ? { ...process.env, HOME: userInfo().homedir } : process.env
+
+/** Why this file cannot run here, or null. Only a listing is asked of a machine: it starts none. */
 function unavailable(): string | null {
-  if (process.platform !== 'linux') return `Linux only: on ${process.platform} Podman runs in a machine, and this test never uses one`
+  if (process.platform !== 'linux' && process.platform !== 'darwin') return `Linux and macOS only: Browser is not on ${process.platform} in v1`
   if (!realPodman) return 'podman is not on PATH'
   try {
+    if (process.platform === 'darwin') {
+      const listed = JSON.parse(execFileSync(realPodman, ['machine', 'list', '--format', 'json'], { timeout: 10_000, stdio: 'pipe', env: podmanEnv }).toString()) as Array<{ Name: string; Running: boolean }>
+      // A running machine would be used as the person's; none at all would be made under their default name.
+      if (listed.length === 0) return 'no Podman machine here: this test makes Harness\'s own beside a person\'s that will not start'
+      if (listed.some((machine) => machine.Running)) return 'a Podman machine is running here, and this test never uses a person\'s'
+      if (listed.some((machine) => machine.Name === OWN_MACHINE)) return `a Podman machine named ${OWN_MACHINE} is here already, and this test removes the one it makes`
+      return null
+    }
     execFileSync(realPodman, ['info', '--format', 'json'], { timeout: 10_000, stdio: 'pipe' })
     return null
   } catch (error) {
@@ -62,13 +84,14 @@ function unavailable(): string | null {
 }
 const SKIP = unavailable()
 
-interface Store { dir: string; flags: string[] }
+/** `dir`: Linux's store folder; macOS has the machine instead. */
+interface Store { dir?: string; flags: string[] }
 interface Ran { code: number; stdout: string; stderr: string }
 
 /** Never rejects: a command that failed or ran out of time answers its code (-1 when it had none) and what it said. */
 function run(file: string, args: string[], timeoutMs: number): Promise<Ran> {
   return new Promise((done) => {
-    execFile(file, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(file, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: podmanEnv }, (error, stdout, stderr) => {
       done({ code: !error ? 0 : typeof error.code === 'number' ? error.code : -1, stdout, stderr: error?.killed ? `timed out after ${timeoutMs} ms` : stderr })
     })
   })
@@ -78,8 +101,26 @@ const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
 
 /** Where the daemon looks first (its bin is first on PATH, as agentBrowser.e2e.ts's fake is): the real Podman, in the store. */
 function writePodman(d: IsolatedDaemon, store: Store): void {
-  mkdirSync(join(d.root, 'bin'), { recursive: true })
-  writeFileSync(join(d.root, 'bin', 'podman'), `#!/bin/sh\nexec ${[realPodman!, ...store.flags].map(quote).join(' ')} "$@"\n`, { mode: 0o755 })
+  const bin = join(d.root, 'bin')
+  mkdirSync(bin, { recursive: true })
+  if (process.platform !== 'darwin') {
+    writeFileSync(join(bin, 'podman'), `#!/bin/sh\nexec ${[realPodman!, ...store.flags].map(quote).join(' ')} "$@"\n`, { mode: 0o755 })
+    return
+  }
+  writeFileSync(join(bin, 'podman'), '#!/bin/sh\n'
+    // The daemon names its machine last (setup.ts, podman.ts); every other is the person's, refused as one that fails.
+    + `if [ "$1" = machine ] && [ "$2" != list ]; then for last in "$@"; do :; done; [ "$last" = ${OWN_MACHINE} ] || { echo "Error: this test starts or changes no machine but ${OWN_MACHINE}" >&2; exit 125; }; fi\n`
+    // The person's HOME, where Podman keeps their machines and connections: the daemon's is the run's own.
+    + `HOME=${quote(podmanEnv.HOME!)} exec ${quote(realPodman!)} "$@"\n`, { mode: 0o755 })
+  // macOS's /etc/zprofile (path_helper) puts /etc/paths.d, Homebrew's podman among them, ahead of the daemon's PATH in
+  // the login shell it asks where podman is (lib/tmuxOnPath.ts): this bin goes first again after it.
+  writeFileSync(join(d.env.ZDOTDIR!, '.zprofile'), `path=(${quote(bin)} $path)\n`, { flag: 'a' })
+}
+
+/** The default connection's name, as `podman system connection list` shows it. */
+async function defaultConnection(): Promise<string> {
+  const listed = await run(realPodman!, ['system', 'connection', 'list', '--format', 'json'], 10_000)
+  return (JSON.parse(listed.stdout || '[]') as Array<{ Name: string; Default: boolean }>).find((one) => one.Default)?.Name ?? ''
 }
 
 interface Seen { path: string; query: URLSearchParams; address: string; port: number; cookie: string }
@@ -283,6 +324,8 @@ describe('the agent browser on real Podman', () => {
   let relay: Relay | undefined
   let agent: Record<string, any> | undefined
   let broken: string | null = null
+  /** macOS: the person's default connection before the run, which must be theirs after it. */
+  let personsConnection = ''
 
   const podman = (args: string[], timeoutMs = 60_000) => run(realPodman!, [...store!.flags, ...args], timeoutMs)
   const name = () => `harness-browser-${agent!.id}`
@@ -391,22 +434,58 @@ describe('the agent browser on real Podman', () => {
       if (images.length > 0) await podman(['rmi', '--force', ...images], 300_000)
     }
     if (left.length > 0) console.log(`agent browser e2e: removed what the run left in Podman: ${left.join(', ')}`)
+    if (process.platform === 'darwin') return await removeMachine()
     // The daemon's `podman events` and the relay's `podman exec` start in process groups of their own, so a core that
     // died hard leaves them running. Every one names this store on its command line, and nothing else does.
-    await run('pkill', ['-KILL', '-f', '--', store!.dir], 10_000)
+    await run('pkill', ['-KILL', '-f', '--', store!.dir!], 10_000)
     // The store's files belong to the user namespace's subordinate ids: only inside it can they be removed.
-    const gone = await run(realPodman!, ['unshare', 'rm', '-rf', store!.dir], 120_000)
+    const gone = await run(realPodman!, ['unshare', 'rm', '-rf', store!.dir!], 120_000)
     if (gone.code !== 0) throw new Error(`the Podman store ${store!.dir} was not removed: ${gone.stderr}`)
+  }
+
+  /** macOS: Harness's own machine, with the images in it. None of that name was here before the run (unavailable). */
+  async function removeMachine(): Promise<void> {
+    // As on Linux, the daemon's `podman events` and the relay's `podman exec` can outlive a core that died hard; each
+    // names the connection on its command line.
+    await run('pkill', ['-KILL', '-f', '--', `--connection ${OWN_MACHINE} `], 10_000)
+    await run(realPodman!, ['machine', 'stop', OWN_MACHINE], 120_000)
+    const removed = await run(realPodman!, ['machine', 'rm', '--force', OWN_MACHINE], 120_000)
+    const listed = await run(realPodman!, ['machine', 'list', '--format', 'json'], 10_000)
+    if ((JSON.parse(listed.stdout || '[]') as Array<{ Name: string }>).some((machine) => machine.Name === OWN_MACHINE)) {
+      throw new Error(`the Podman machine ${OWN_MACHINE} was not removed: ${removed.stderr}`)
+    }
+    const connection = await defaultConnection()
+    if (connection !== personsConnection) throw new Error(`the default connection is ${connection}, not ${personsConnection} as before the run`)
+  }
+
+  /**
+   * macOS, as a person whose machine will not start: the browser waits for setup, availability says Harness will make
+   * its own, and Install (`agent_browser_setup`) makes it. Answers when Install was pressed.
+   */
+  async function installOwnMachine(): Promise<number> {
+    await until('the browser to need setup', async () => (await row())?.browser?.error === 'needs_setup' || null, 60_000, 500)
+    expect(await client!.request('agent_browser_available', {})).toMatchObject({ state: 'needs_setup', ownMachine: true })
+    const pressed = Date.now()
+    expect(await client!.request('agent_browser_setup', {})).toMatchObject({ ok: true })
+    // Until setup's first step, the frame still says needs_setup: a wait for ready or failed would read that.
+    await until('setup to start', async () => (await row())?.browser?.state === 'setup' || null, 30_000, 250)
+    return pressed
   }
 
   beforeAll(async () => {
     if (SKIP) return
-    // Short, under the system's temp folder: Podman keeps sockets under the run root.
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hb-podman-')))
-    store = { dir, flags: ['--root', join(dir, 'root'), '--runroot', join(dir, 'run')] }
-    const info = await podman(['info', '--format', 'json'])
-    expect(info.code, info.stderr).toBe(0)
-    expect((JSON.parse(info.stdout) as { store: { graphRoot: string } }).store.graphRoot).toBe(join(dir, 'root'))
+    if (process.platform === 'darwin') {
+      store = { flags: ['--connection', OWN_MACHINE] }
+      personsConnection = await defaultConnection()
+    } else {
+      // Short, under the system's temp folder: Podman keeps sockets under the run root.
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hb-podman-')))
+      store = { dir, flags: ['--root', join(dir, 'root'), '--runroot', join(dir, 'run')] }
+      const info = await podman(['info', '--format', 'json'])
+      expect(info.code, info.stderr).toBe(0)
+      expect((JSON.parse(info.stdout) as { store: { graphRoot: string } }).store.graphRoot).toBe(join(dir, 'root'))
+    }
+    // macOS: unavailable() found no machine of its name, so the one the run makes, and all in it, is the run's.
     isolated = true
     pages = await Pages.start()
     d = await IsolatedDaemon.create()
@@ -427,13 +506,18 @@ describe('the agent browser on real Podman', () => {
     if (closed) throw closed
   }, 600_000)
 
-  step('builds the image, and a browser agent is ready with no published port', BUILD_MS + 120_000, async () => {
+  step('builds the image, and a browser agent is ready with no published port', MACHINE_MS + BUILD_MS + 120_000, async () => {
     const cwd = join(d!.projectsDir, 'with-browser')
     mkdirSync(cwd, { recursive: true })
+    // As the Desktop's form asks before it creates the agent: a stopped machine is one Harness starts, so it goes on.
+    if (process.platform === 'darwin') expect(await client!.request('agent_browser_available', {})).toMatchObject({ state: 'stopped' })
     const created = await client!.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, browser: true }, 60_000)
     expect(created.error, JSON.stringify(created)).toBeUndefined()
     agent = created.agent as Record<string, any>
-    await settled('the image to build and the browser to be ready', BUILD_MS)
+    const pressed = process.platform === 'darwin' ? await installOwnMachine() : Date.now()
+    await settled('the image to build and the browser to be ready', MACHINE_MS + BUILD_MS)
+    console.log(`agent browser e2e: ready ${Math.round((Date.now() - pressed) / 1000)} s after ${process.platform === 'darwin' ? 'Install' : 'the agent was created'}`)
+    if (process.platform === 'darwin') expect(await defaultConnection()).toBe(personsConnection)
     await until('the agent to bind its conversation', async () => (await row())?.sessionId || null, 60_000, 500)
     // Only `podman exec` reaches the browser (spec § The container).
     const ports = await podman(['container', 'port', name()])
@@ -492,9 +576,32 @@ describe('the agent browser on real Podman', () => {
     const init = await take(24)
     await take(init.readUInt32BE(20))
     const [width, height] = [init.readUInt16BE(0), init.readUInt16BE(2)]
-    // Tight (7) alone, then one 64 × 64 update from the middle of the screen, inside the page.
+    // The middle of the screen, inside the page: 64 × 64.
+    const middle = [...u16(width / 2 - 32), ...u16(height / 2 - 32), ...u16(64), ...u16(64)]
+    // First Raw (0) alone, until that middle shows the page's noise: the browser paints it some time after the
+    // navigation answers, and before it does the area is plain, which Tight sends as a fill, not JPEG (measured on the
+    // M2 Mac). Raw's pixels need no decoder to read.
+    send(2, 0, ...u16(1), 0, 0, 0, 0)
+    let colours = 0
+    const deadline = Date.now() + 30_000
+    while (colours < 1_000 && Date.now() < deadline) {
+      send(3, 0, ...middle)
+      const update = await take(4)
+      expect(update[0], 'a FramebufferUpdate').toBe(0)
+      const seen = new Set<number>()
+      for (let rects = update.readUInt16BE(2); rects > 0; rects--) {
+        const rect = await take(12)
+        expect(rect.readInt32BE(8), 'Raw').toBe(0)
+        const pixels = await take(rect.readUInt16BE(4) * rect.readUInt16BE(6) * 4)
+        for (let at = 0; at < pixels.length; at += 4) seen.add(pixels.readUInt32LE(at))
+      }
+      colours = seen.size
+      if (colours < 1_000) await new Promise((done) => setTimeout(done, 250))
+    }
+    expect(colours, 'colours in the middle of the page').toBeGreaterThanOrEqual(1_000)
+    // Then Tight (7) alone, and the same area again.
     send(2, 0, ...u16(1), 0, 0, 0, 7)
-    send(3, 0, ...u16(width / 2 - 32), ...u16(height / 2 - 32), ...u16(64), ...u16(64))
+    send(3, 0, ...middle)
     const update = await take(4)
     expect(update[0], 'a FramebufferUpdate').toBe(0)
     expect(update.readUInt16BE(2)).toBeGreaterThan(0)
@@ -527,7 +634,13 @@ describe('the agent browser on real Podman', () => {
     expect(set.isError, set.text).toBe(false)
     await relay!.close()
     relay = undefined
-    expect((await client!.request('agent_delete', { agentId: agent!.id }, 60_000)).error).toBeUndefined()
+    // A turn first, as every agent a person stops has had (core.e2e.ts does the same): until one ends, the fake engine's
+    // conversation has no opening to keep, and the stop is held (IDENTITY_UNAVAILABLE).
+    const ended = client!.next((frame) => frame.type === 'turn_ended' && frame.agentId === agent!.id, 45_000, 'turn_ended')
+    client!.send('message', { agentId: agent!.id, content: 'Keep this conversation across the stop' })
+    await ended
+    const stopped = await client!.request('agent_delete', { agentId: agent!.id }, 60_000)
+    expect(stopped.error, JSON.stringify(stopped)).toBeUndefined()
     await until('the agent to stop', async () => (await row())?.status === 'stopped' || null, 60_000, 500)
     // Its container and network go with the stop; the volume, which holds the login, stays.
     await until('its container and network to go', async () => (!(await exists('container', name())) && !(await exists('network', name()))) || null, 60_000, 500)

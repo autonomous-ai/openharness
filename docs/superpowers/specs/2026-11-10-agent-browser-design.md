@@ -552,9 +552,10 @@ Saving a change that needs it restarts the browser; the login stays.
   - It answers `initialize` and `tools/list` itself, from `browser-tools.json`. The agent always starts with its
     browser tools, and nothing waits on Podman.
   - For a call, it asks its daemon for the browser's state (`agent_browser_state`, local askers only). The reply
-    carries the agent id, the state, the `podman` path and the human-input setting.
+    carries the agent id, the state, the `podman` path, the connection when Harness runs its own machine, and the
+    human-input setting.
   - When the state is ready, it runs `podman exec -i harness-browser-<agentId> node
-    /opt/harness-browser/browser-tools.mjs`. The exec starts on first use, and starts again after a container
+    /opt/harness-browser/browser-tools.mjs`, on that connection when there is one (`podman --connection harness …`). The exec starts on first use, and starts again after a container
     restart. The relay passes the human-input setting with each call, so a change applies to the next call.
   - While the browser is not ready, a call returns the named reason ("Browser is being set up", "Browser is
     starting", "Podman is not running"…), so the agent can tell its person.
