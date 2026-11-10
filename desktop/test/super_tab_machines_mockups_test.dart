@@ -70,7 +70,6 @@ Future<SuperTabController> mount(
           builder: (context, _) => SuperTabMachines(
             controller: c,
             onAddAgent: (_) {},
-            manage: true,
             ticks: false,
           ),
         ),
@@ -244,7 +243,6 @@ void main() {
           body: SuperTabMachines(
             controller: c,
             onAddAgent: (_) {},
-            manage: true,
             ticks: false,
           ),
         ),

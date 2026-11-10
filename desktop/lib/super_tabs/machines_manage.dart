@@ -301,8 +301,9 @@ class _ManageMachineLine extends StatelessWidget {
     final age = view.readingAt == null ? null : now.difference(view.readingAt!);
     final metadata = [
       local ? 'This machine' : view.owner?.shownName ?? 'Owner unavailable',
-      if (view.problem != null)
-        view.problem!
+      // Removed from the Swarm: its folders are being deleted (Remove from Swarm).
+      if (view.cleaning)
+        'Cleaning up'
       else if (group != 'online')
         'last seen ${age == null ? 'unknown' : superTabAgo(age)}',
     ].join(' · ');
@@ -396,7 +397,7 @@ class _ManageMachineLine extends StatelessWidget {
                                       ' · ${view.id.length > 8 ? view.id.substring(0, 8) : view.id}${port == null ? '' : ' · port $port'}',
                                   style: MachinesStyle.identity(),
                                 ),
-                                if (view.problem != null || group != 'online')
+                                if (view.cleaning || group != 'online')
                                   TextSpan(
                                     text: metadata.substring(
                                       'This machine'.length,
@@ -420,7 +421,13 @@ class _ManageMachineLine extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               // Reserve the column even when the menu is hidden so hover never moves disk values.
-              SizedBox(width: 32, child: _MachineMore(onOpen: onMore)),
+              SizedBox(
+                width: 32,
+                child: _MachineMore(
+                  key: ValueKey('super-machine-more-${view.id}'),
+                  onOpen: onMore,
+                ),
+              ),
             ],
           );
         },

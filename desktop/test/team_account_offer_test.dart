@@ -71,7 +71,6 @@ void main() {
       email: 'owner@example.com',
     );
     app.machineStates['m']!.localOnly = true;
-    app.teamAccountHereForTest = true;
     app.onMachineConnectedForTest('m');
     await pumpEventQueue(times: 100);
     expect(daemon.asked, isEmpty);
@@ -81,7 +80,6 @@ void main() {
     'adding this Mac to a Swarm asks its daemon nothing of a Team account',
     (tester) async {
       final f = SuperTabLaunchFixture();
-      f.app.teamAccountHereForTest = true;
       for (final state in f.app.machineStates.values) {
         state.localOnly = true;
       }
@@ -130,8 +128,7 @@ void main() {
     'and asks its daemon nothing of one',
     (tester) async {
       final daemon = _Daemon();
-      final app = createApp(connectionForTest: (_) => daemon, connected: true)
-        ..teamAccountHereForTest = true;
+      final app = createApp(connectionForTest: (_) => daemon, connected: true);
       app.machineStates['m']!.localOnly = true;
       // A teammate, so the row has someone whose work it would run.
       final server = ConversationServer();

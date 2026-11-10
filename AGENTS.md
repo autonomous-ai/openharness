@@ -11,9 +11,8 @@ Positioning:
   without choking.
 - Every lab in one crew, on the team's own machines, reviewed and tested before merge.
 
-Contributed capacity (a machine, its devices, a subscription through a Team account): working within 5 minutes; the
-contributor's files, secrets and accounts are never exposed, their own work comes first and their quota is never
-drained without them knowing; they see what it shipped; it never sits idle while work waits.
+Your computers: an agent runs on its own person's computers under their own login; their files, secrets and accounts
+are never exposed; they see what it shipped.
 
 Never: the server silently changing or hiding a customer's data; locking a customer to one lab or to our servers;
 more agents and pull requests at the cost of people's attention or quality.

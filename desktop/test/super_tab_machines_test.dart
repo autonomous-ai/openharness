@@ -1,8 +1,6 @@
 import 'dart:io';
 import 'dart:ui' show PointerDeviceKind;
 
-import 'package:flutter/foundation.dart'
-    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -10,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_icons.dart';
-import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/machines.dart';
@@ -23,7 +20,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_icon_button.dart';
 import 'package:harness/widgets/browser_menu_guard.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
-import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
@@ -82,10 +78,6 @@ String _tipOf(WidgetTester tester, Finder row) => tester
     )
     .message!;
 
-/// The words on a machine's line: its name, and its owner's when the name is shared.
-String _lineOf(WidgetTester tester, String id) =>
-    tester.widget<Text>(find.byKey(ValueKey('super-machine-name-$id'))).data!;
-
 /// A machine's details are in its right-click menu; a click expands it (Dee, 2026-10-27).
 Future<void> openMachineDetails(WidgetTester tester, Finder row) async {
   await tester.tap(row, buttons: kSecondaryMouseButton);
@@ -95,33 +87,6 @@ Future<void> openMachineDetails(WidgetTester tester, Finder row) async {
 }
 
 void main() {
-  test('an allowance\'s note names its tightest window and its reset, in either detail format', () {
-    // Another machine's reading: the tightest window first.
-    expect(
-      superMachineAllowanceNote([
-        '5-hour: 44% remaining · resets in 2h 10m',
-        'Weekly: 80% remaining',
-      ]),
-      '5-hour limit · resets in 2h 10m',
-    );
-    // This computer's: the limiting window named, then each window.
-    expect(
-      superMachineAllowanceNote([
-        'Limiting window: Weekly',
-        'Read 3 min ago',
-        '5-hour — 90% remaining · resets in 1h',
-        'Weekly — 62% remaining · resets in 4d',
-      ]),
-      'Weekly limit · resets in 4d',
-    );
-    expect(
-      superMachineAllowanceNote(['Weekly: 62% remaining']),
-      'Weekly limit',
-    );
-    expect(superMachineAllowanceNote(['Usage unavailable']), isNull);
-    expect(superMachineAllowanceNote(const []), isNull);
-  });
-
   final capture = Platform.environment['HARNESS_SUPER_TAB_CAPTURE'];
   setUpAll(() => loadCaptureFonts(capture));
   test('a computer is shown by its real hostname without ".local", and a name a person chose stays as it is', () {
@@ -151,7 +116,7 @@ void main() {
   testWidgets(
     'machine rows disclose readings separately from details, and offline rows stay visible without stale data',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(280, 700));
+      await tester.binding.setSurfaceSize(const Size(1000, 700));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final server = ConversationServer();
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -170,16 +135,6 @@ void main() {
                 'diskTotalBytes': 1000000000000,
                 'diskFreeBytes': 141000000000,
               },
-              'quotas': [
-                {'engine': 'claude', 'known': false, 'windows': []},
-                {
-                  'engine': 'codex',
-                  'known': true,
-                  'windows': [
-                    {'name': '5-hour', 'usedPercent': 0},
-                  ],
-                },
-              ],
             },
           },
       ];
@@ -197,8 +152,6 @@ void main() {
       final offline = find.byKey(const ValueKey('super-machine-offline'));
       final online = find.byKey(const ValueKey('super-machine-online'));
       expect(find.textContaining('CPU'), findsNothing);
-      expect(find.textContaining('GB'), findsNothing);
-      expect(find.textContaining('ago'), findsNothing);
       expect(offline, findsOneWidget);
       expect(find.text('Offline · 1'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('super-machine-online')));
@@ -208,20 +161,11 @@ void main() {
       expect(_hw(tester, 'online', 'RAM'), '0 GB');
       expect(_hw(tester, 'online', 'SSD'), '141 GB');
       expect(
-        find.byKey(const ValueKey('super-machine-allowance-online-codex')),
-        findsOneWidget,
-      );
-      expect(
         _tipOf(tester, online),
         'Owned by owner · CPU 100% free · RAM 0 GB free · SSD 141 GB free',
       );
-      expect(tester.getSize(online).height, 36);
-      // Offline: its state in words, never when it was last seen, and no allowance chip.
+      // Offline: its state in words in the tooltip, never when it was last seen.
       expect(_tipOf(tester, offline), 'Offline · Owned by owner');
-      expect(
-        find.descendant(of: offline, matching: find.byType(EngineMark)),
-        findsNothing,
-      );
       expect(
         tester.getTopLeft(offline).dy,
         greaterThan(tester.getTopLeft(online).dy),
@@ -253,18 +197,6 @@ void main() {
       expect(find.text('141 GB of 1000 GB'), findsOneWidget);
       expect(find.textContaining('GPU'), findsNothing);
       expect(find.text('—'), findsNothing);
-      expect(find.text('100% left'), findsOneWidget);
-      expect(
-        tester
-            .widget<EngineMark>(
-              find.descendant(
-                of: find.byType(SuperTabDetailDialog),
-                matching: find.byType(EngineMark),
-              ),
-            )
-            .engine,
-        'codex',
-      );
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await openMachineDetails(tester, offline);
@@ -278,7 +210,6 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Available capacity'), findsNothing);
-      expect(find.text('Model allowances'), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -310,7 +241,6 @@ void main() {
           home: Scaffold(
             body: SuperTabMachines(
               controller: c,
-              embedded: true,
               onAddAgent: (_) {},
             ),
           ),
@@ -379,54 +309,6 @@ void main() {
         _tipOf(tester, find.byKey(const ValueKey('super-machine-t'))),
         'Owned by Tony Tran',
       );
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
-    },
-  );
-
-  testWidgets(
-    'two machines of one model keep their names, and each has its owner avatar and tooltip',
-    (tester) async {
-      final server = ConversationServer();
-      final now = DateTime.now().millisecondsSinceEpoch;
-      server.state['people'] = [
-        {'id': 'tony', 'email': 'tony@example.com', 'role': 'owner'},
-        {'id': 'dee', 'email': 'dee@example.com', 'role': 'collaborator'},
-      ];
-      Map<String, dynamic> machine(String id, String name, String owner) => {
-        'machineId': id,
-        'name': name,
-        'contributorId': owner,
-        'observation': {'receivedAt': now},
-      };
-      server.state['machines'] = [
-        machine('t', 'MacBooks-MacBook-Pro-9.local', 'tony'),
-        machine('d', 'MacBook Pro', 'dee'),
-      ];
-      final c = server.controller();
-      await c.refresh();
-      final semantics = tester.ensureSemantics();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      // Two MacBook Pros keep their real names, never a model name or an owner.
-      expect(_lineOf(tester, 't'), 'MacBooks-MacBook-Pro-9');
-      expect(_lineOf(tester, 'd'), 'MacBook Pro');
-      expect(find.textContaining('tony'), findsNothing);
-      expect(find.textContaining('dee'), findsNothing);
-      final row = find.byKey(const ValueKey('super-machine-t'));
-      expect(_tipOf(tester, row), 'Owned by tony');
-      expect(
-        tester.getSemantics(row).label,
-        startsWith('MacBooks-MacBook-Pro-9, Live, Owned by tony'),
-      );
-      semantics.dispose();
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       c.dispose();
@@ -856,7 +738,6 @@ void main() {
           home: Scaffold(
             body: SuperTabMachines(
               controller: c,
-              embedded: true,
               onAddAgent: (_) {},
               onOpenAgent: (agent) => opened.add(agent.id),
             ),
@@ -988,283 +869,6 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();
-    },
-  );
-
-  testWidgets(
-    'each known, unexpired allowance is a chip, Claude first: amber under 20%, red under 10%, its windows on hover',
-    (tester) async {
-      final server = ConversationServer();
-      final now = DateTime.now();
-      final at = now.millisecondsSinceEpoch;
-      Map<String, dynamic> quota(
-        String engine,
-        int used, {
-        bool known = true,
-        DateTime? resetsAt,
-      }) => {
-        'engine': engine,
-        'known': known,
-        'windows': [
-          {
-            'name': '5-hour',
-            'usedPercent': used,
-            'resetsAt': (resetsAt ?? now.add(const Duration(hours: 2)))
-                .millisecondsSinceEpoch,
-          },
-        ],
-      };
-      Map<String, dynamic> machine(
-        String id,
-        List<Map<String, dynamic>> quotas, {
-        int age = 0,
-      }) => {
-        'machineId': id,
-        'name': id,
-        'contributorId': 'owner',
-        'observation': {'receivedAt': at - age, 'quotas': quotas},
-      };
-      server.state['machines'] = [
-        // Listed Codex first; shown Claude first.
-        machine('both', [quota('codex', 95), quota('claude', 85)]),
-        machine('fine', [quota('claude', 50)]),
-        machine('expired', [
-          quota(
-            'codex',
-            10,
-            resetsAt: now.subtract(const Duration(minutes: 1)),
-          ),
-        ]),
-        machine('unknown', [quota('claude', 10, known: false)]),
-        // An old reading's allowance is not shown as now.
-        machine('gone', [quota('claude', 50)], age: 600000),
-      ];
-      final c = server.controller();
-      await c.refresh();
-      for (final id in ['both', 'fine', 'expired', 'unknown', 'gone']) {
-        c.toggleMachineExpanded(id);
-      }
-      final semantics = tester.ensureSemantics();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      Finder chip(String id, String engine) =>
-          find.byKey(ValueKey('super-machine-allowance-$id-$engine'));
-      Color? ink(Finder chip, String figure) => tester
-          .widget<Text>(find.descendant(of: chip, matching: find.text(figure)))
-          .style
-          ?.color;
-
-      expect(
-        tester.getTopLeft(chip('both', 'claude')).dx,
-        lessThan(tester.getTopLeft(chip('both', 'codex')).dx),
-      );
-      expect(
-        tester
-            .widget<EngineMark>(
-              find.descendant(
-                of: chip('both', 'claude'),
-                matching: find.byType(EngineMark),
-              ),
-            )
-            .size,
-        14,
-      );
-      final surface = DesktopChrome.surface;
-      expect(
-        ink(chip('both', 'claude'), '15%'),
-        statusLineInkOnSurface(grid.AppPalette.usageLow, surface),
-      );
-      expect(
-        ink(chip('both', 'codex'), '5%'),
-        statusLineInkOnSurface(grid.AppPalette.usageCritical, surface),
-      );
-      expect(
-        ink(chip('fine', 'claude'), '50%'),
-        statusLineInkOnSurface(DesktopChrome.foreground, surface),
-      );
-      expect(
-        tester
-            .widget<Text>(
-              find.descendant(
-                of: chip('fine', 'claude'),
-                matching: find.text('50%'),
-              ),
-            )
-            .style
-            ?.fontFeatures,
-        contains(const FontFeature.tabularFigures()),
-      );
-      // Each chip says its windows on hover, and its share in words to a screen reader.
-      final claudeTip = tester
-          .widget<Tooltip>(
-            find
-                .ancestor(
-                  of: chip('both', 'claude'),
-                  matching: find.byType(Tooltip),
-                )
-                .first,
-          )
-          .message!;
-      expect(
-        claudeTip,
-        startsWith('Claude Code\n5-hour: 15% remaining · resets in '),
-      );
-      // Under the figure, the window that stops work first and when it resets.
-      expect(
-        find.descendant(
-          of: chip('both', 'claude'),
-          matching: find.textContaining(
-            RegExp(r'^5-hour limit · resets in \d'),
-          ),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.bySemanticsLabel(RegExp('Claude Code 15% remaining')),
-        findsOneWidget,
-      );
-      expect(
-        find.bySemanticsLabel(RegExp('Codex 5% remaining')),
-        findsOneWidget,
-      );
-      // No chip for an expired or unknown allowance, nor for an offline machine; no warning icon anywhere.
-      expect(find.byKey(const ValueKey('super-machine-gone')), findsOneWidget);
-      for (final id in ['expired', 'unknown', 'gone']) {
-        expect(
-          find.descendant(
-            of: find.byKey(ValueKey('super-machine-$id')),
-            matching: find.byType(EngineMark),
-          ),
-          findsNothing,
-          reason: id,
-        );
-      }
-      expect(find.byIcon(AppIcons.triangleAlert), findsNothing);
-      semantics.dispose();
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
-    },
-  );
-
-  testWidgets(
-    'main rows and expanded readings retain their controls at narrow widths and larger text',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(900, 1800));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = ConversationServer();
-      final now = DateTime.now().millisecondsSinceEpoch;
-      server.state['agents'] = [
-        {
-          'id': 'dev',
-          'name': 'A long engineer name',
-          'displayName': 'A long engineer name',
-          'machineId': 'm',
-          'harnessId': 'native',
-          'contributorId': 'owner',
-          'configuration': {'engine': 'codex'},
-        },
-      ];
-      server.state['machines'] = [
-        {
-          'machineId': 'm',
-          'name': 'A long machine name.local',
-          'contributorId': 'owner',
-          'observation': {
-            'receivedAt': now,
-            'resources': {
-              'cpuPercent': 71,
-              'gpuPercent': 100,
-              'memoryTotalBytes': 32000000000,
-              'memoryUsedBytes': 15000000000,
-              'diskTotalBytes': 1000000000000,
-              'diskFreeBytes': 207000000000,
-            },
-            'quotas': [
-              for (final engine in ['claude', 'codex'])
-                {
-                  'engine': engine,
-                  'known': true,
-                  'windows': [
-                    {'name': '5-hour', 'usedPercent': 0},
-                  ],
-                },
-            ],
-          },
-        },
-      ];
-      final c = server.controller();
-      await c.refresh();
-      c.toggleMachineExpanded('m');
-      for (final width in [164.0, 188.0, 224.0, 284.0, 420.0]) {
-        for (final scale in [1.0, 2.0]) {
-          await tester.pumpWidget(
-            MaterialApp(
-              builder: (context, child) => MediaQuery(
-                data: MediaQuery.of(context)
-                    .copyWith(textScaler: TextScaler.linear(scale)),
-                child: child!,
-              ),
-              home: Scaffold(
-                body: Align(
-                  alignment: Alignment.topLeft,
-                  child: SizedBox(
-                    width: width,
-                    child: SuperTabMachines(
-                      controller: c,
-                      embedded: true,
-                      onAddAgent: (_) {},
-                      onOpenAgent: (_) {},
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-          await tester.pumpAndSettle();
-          final reason = 'width $width, scale $scale';
-          expect(tester.takeException(), isNull, reason: reason);
-          final row = tester.getRect(
-            find.byKey(const ValueKey('super-machine-m')),
-          );
-          final dot = tester.getRect(
-            find.byKey(const ValueKey('super-machine-state-m-live')),
-          );
-          expect(row.width, width, reason: reason);
-          // No chevron: the status takes the last 32 px column, as on project rows.
-          expect(dot.center.dx, closeTo(row.right - 16, .01), reason: reason);
-          expect(
-            tester
-                .getTopLeft(find.byKey(const ValueKey('super-machine-name-m')))
-                .dx,
-            row.left + 36,
-            reason: reason,
-          );
-          expect(_hw(tester, 'm', 'CPU'), '71%', reason: reason);
-          expect(_hw(tester, 'm', 'GPU'), '100%', reason: reason);
-          expect(_hw(tester, 'm', 'RAM'), '17 GB', reason: reason);
-          expect(_hw(tester, 'm', 'SSD'), '207 GB', reason: reason);
-          expect(
-            find.byKey(const ValueKey('super-machine-allowance-m-claude')),
-            findsOneWidget,
-            reason: reason,
-          );
-          expect(
-            find.byKey(const ValueKey('super-machine-allowance-m-codex')),
-            findsOneWidget,
-            reason: reason,
-          );
-        }
-      }
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
     },
   );
 
@@ -1574,7 +1178,7 @@ void main() {
           {'type': 'machine.remove', 'machineId': 'studio'},
         );
         expect(find.text('Remove Studio from this Swarm?'), findsNothing);
-        expect(find.text('Cleaning up'), findsOneWidget);
+        expect(find.textContaining('Cleaning up'), findsOneWidget);
         if (capture != null) {
           await captureWindow(tester, capture, 'machine-removal-cleaning');
         }
@@ -1703,169 +1307,6 @@ void main() {
       },
     );
 
-    group('in a browser, the ⋯ on a machine row', () {
-      final more = find.byKey(const ValueKey('super-machine-more-studio'));
-      final rowKey = find.byKey(const ValueKey('super-machine-studio'));
-      double width(WidgetTester tester) => tester.getSize(more).width;
-
-      Future<dynamic> browser(
-        WidgetTester tester, {
-        String owner = 'owner',
-        // A test runs as Android unless it says: these are a mouse's browser.
-        TargetPlatform platform = TargetPlatform.macOS,
-      }) async {
-        debugDefaultTargetPlatformOverride = platform;
-        addTearDown(() => debugDefaultTargetPlatformOverride = null);
-        BrowserMenuGuard.debugWeb = true;
-        BrowserMenuGuard.debugSink = (_) async {};
-        addTearDown(BrowserMenuGuard.debugReset);
-        final server = _RemovalServer();
-        server.state['machines'] = [machine(owner)];
-        final c = server.controller();
-        await c.refresh();
-        await mount(tester, c);
-        return c;
-      }
-
-      Future<void> hover(WidgetTester tester) async {
-        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        addTearDown(mouse.removePointer);
-        await mouse.addPointer(location: const Offset(900, 700));
-        await mouse.moveTo(tester.getCenter(rowKey));
-        await tester.pump();
-      }
-
-      Future<void> done(WidgetTester tester, dynamic c) async {
-        await tester.pumpWidget(const SizedBox());
-        await c.flush();
-        c.dispose();
-        debugDefaultTargetPlatformOverride = null;
-      }
-
-      // Huy, 2026-11-02: a touch screen has nothing to hover, so the ⋯ stays.
-      for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
-        testWidgets(
-          'on a ${platform.name} browser it is always there, a finger wide, and a tap opens the menu',
-          (tester) async {
-            final c = await browser(tester, platform: platform);
-            final size = tester.getSize(more);
-            expect(size.width, greaterThanOrEqualTo(44));
-            expect(size.height, greaterThanOrEqualTo(44));
-            // Its corner too: the whole finger's target opens it.
-            await tester.tapAt(tester.getTopLeft(more) + const Offset(2, 2));
-            await tester.pumpAndSettle();
-            expect(find.text('Details'), findsOneWidget);
-            expect(c.isMachineExpanded('studio'), isFalse);
-            await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-            await tester.pumpAndSettle();
-            expect(tester.getSize(more).width, greaterThanOrEqualTo(44));
-            await done(tester, c);
-          },
-        );
-      }
-
-      testWidgets(
-        'a browser with a mouse keeps it for hover, focus or an open menu',
-        (tester) async {
-          final c = await browser(tester);
-          expect(width(tester), 0);
-          await hover(tester);
-          expect(width(tester), 32);
-          await done(tester, c);
-        },
-      );
-
-      testWidgets('shows on pointing and opens the same menu on a left click', (
-        tester,
-      ) async {
-        final c = await browser(tester);
-        expect(width(tester), 0, reason: 'nothing until pointed at');
-        await hover(tester);
-        expect(width(tester), greaterThan(0));
-        await tester.tap(more);
-        await tester.pumpAndSettle();
-        expect(find.text('Details'), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('super-machine-menu-remove')),
-          findsOneWidget,
-        );
-        // The click stayed on the button: the row did not expand as well.
-        expect(c.isMachineExpanded('studio'), isFalse);
-        await tester.tap(find.text('Details'));
-        await tester.pumpAndSettle();
-        expect(
-          find.byKey(const ValueKey('super-machine-remove')),
-          findsOneWidget,
-        );
-        await tester.tap(find.byTooltip('Close').last);
-        await tester.pumpAndSettle();
-        await done(tester, c);
-      });
-
-      testWidgets(
-        'keeps Desktop\'s permissions: another person\'s machine has Details alone',
-        (tester) async {
-          final c = await browser(tester, owner: 'someone-else');
-          await hover(tester);
-          await tester.tap(more);
-          await tester.pumpAndSettle();
-          expect(find.text('Details'), findsOneWidget);
-          expect(find.text('Remove from Swarm'), findsNothing);
-          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-          await tester.pumpAndSettle();
-          await done(tester, c);
-        },
-      );
-
-      testWidgets('a key reaches it: focus shows it and Enter opens the menu', (
-        tester,
-      ) async {
-        final c = await browser(tester);
-        // Tab, as a person does: the row first, the ⋯ after the sidebar's other rows.
-        for (var i = 0; i < 20 && width(tester) == 0; i++) {
-          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-          await tester.pump();
-        }
-        expect(width(tester), greaterThan(0));
-        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-        await tester.pumpAndSettle();
-        expect(find.text('Details'), findsOneWidget);
-        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await tester.pumpAndSettle();
-        await done(tester, c);
-      });
-
-      testWidgets('the menu key on the row itself opens the menu', (
-        tester,
-      ) async {
-        final c = await browser(tester);
-        Focus.of(
-          tester.element(
-            find.byKey(const ValueKey('super-machine-name-studio')),
-          ),
-        ).requestFocus();
-        await tester.pump();
-        await tester.sendKeyEvent(LogicalKeyboardKey.contextMenu);
-        await tester.pumpAndSettle();
-        expect(find.text('Details'), findsOneWidget);
-        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-        await tester.pumpAndSettle();
-        await done(tester, c);
-      });
-
-      testWidgets('a computer has no ⋯: its right-click stays the way in', (
-        tester,
-      ) async {
-        final server = _RemovalServer();
-        server.state['machines'] = [machine('owner')];
-        final c = server.controller();
-        await c.refresh();
-        await mount(tester, c);
-        expect(more, findsNothing);
-        await done(tester, c);
-      });
-    });
-
     testWidgets(
       'the browser menu stays off while the Swarm menu is open, and comes back when it closes',
       (tester) async {
@@ -1918,9 +1359,7 @@ void main() {
         await mount(tester, c);
         await tester.tap(find.byKey(const ValueKey('super-machine-studio')));
         await tester.pumpAndSettle();
-        final below = find.textContaining(
-          RegExp('No agents yet|Offline|Refreshing|reach Harness'),
-        );
+        final below = find.text('No agents yet');
         expect(below, findsOneWidget);
         final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
         addTearDown(mouse.removePointer);
@@ -2172,7 +1611,7 @@ void main() {
       final c = server.controller();
       await c.refresh();
       await mount(tester, c);
-      expect(find.text('Cleaning up'), findsOneWidget);
+      expect(find.textContaining('Cleaning up'), findsOneWidget);
       await openMachineDetails(
         tester,
         find.byKey(const ValueKey('super-machine-studio')),
@@ -2267,299 +1706,6 @@ void main() {
     });
   });
 
-  for (final brightness in [Brightness.dark, Brightness.light]) {
-    for (final textScale in [1.0, 2.0]) {
-      for (final width in [280.0, 380.0]) {
-        testWidgets(
-          'machine identity, full-row target and details fit ${brightness.name} ${textScale}x at $width',
-          (tester) async {
-            await tester.binding.setSurfaceSize(const Size(900, 850));
-            addTearDown(() => tester.binding.setSurfaceSize(null));
-            final previousBrightness = grid.AppTheme.brightness.value;
-            grid.AppTheme.brightness.value = brightness;
-            addTearDown(
-              () => grid.AppTheme.brightness.value = previousBrightness,
-            );
-            final server = ConversationServer();
-            server.state['people'] = [
-              {'id': 'owner', 'email': 'dee@example.com', 'role': 'owner'},
-            ];
-            server.state['agents'] = [
-              for (var i = 0; i < 8; i++)
-                {
-                  'id': 'agent-$i',
-                  'name': 'Harness $i',
-                  'displayName': i == 0 ? 'Atlas' : 'Engineer $i',
-                  'machineId': 'm',
-                  'harnessId': 'native-$i',
-                  'contributorId': 'owner',
-                  'configuration': {'engine': 'codex'},
-                },
-            ];
-            (server.state['conversations'] as List)[0]
-              ..['leadId'] = 'agent-0'
-              ..['agentIds'] = ['agent-0'];
-            server.state['machines'] = [
-              {
-                'machineId': 'm',
-                'name': 'M2',
-                'contributorId': 'owner',
-                'paused': true,
-                'engines': ['claude', 'codex'],
-                'cwd': '/work/a-very-long-project-folder-without-spaces/checked-out-project',
-                'observation': {
-                  'receivedAt': DateTime.now().millisecondsSinceEpoch,
-                  'resources': {
-                    'deviceType': 'MacBook Pro',
-                    'chip': 'Apple M2 Max',
-                    'os': 'macOS',
-                    'cpuPercent': 27,
-                    'gpuPercent': 7,
-                    'memoryTotalBytes': 64000000000,
-                    'memoryUsedBytes': 36000000000,
-                    'diskTotalBytes': 1000000000000,
-                    'diskFreeBytes': 141000000000,
-                  },
-                  'quotas': [
-                    {'engine': 'claude', 'known': false, 'windows': []},
-                    {
-                      'engine': 'codex',
-                      'known': true,
-                      'windows': [
-                        {
-                          'name': '5-hour',
-                          'usedPercent': 30,
-                          'resetsAt': DateTime.now()
-                              .add(const Duration(hours: 2))
-                              .millisecondsSinceEpoch,
-                        },
-                        {
-                          'name': 'Weekly',
-                          'usedPercent': 10,
-                          'resetsAt': DateTime.now()
-                              .add(const Duration(days: 3))
-                              .millisecondsSinceEpoch,
-                        },
-                      ],
-                    },
-                  ],
-                },
-              },
-            ];
-            final c = server.controller();
-            await c.refresh();
-            final machineBoundary = GlobalKey();
-            await tester.pumpWidget(
-              MaterialApp(
-                debugShowCheckedModeBanner: false,
-                theme: grid.buildAppTheme(brightness: brightness),
-                builder: (context, child) => MediaQuery(
-                  data: MediaQuery.of(context)
-                      .copyWith(textScaler: TextScaler.linear(textScale)),
-                  child: child!,
-                ),
-                home: Scaffold(
-                  body: Align(
-                    alignment: Alignment.topLeft,
-                    child: RepaintBoundary(
-                      key: machineBoundary,
-                      child: Material(
-                        color: grid.AppDesktop.surface,
-                        child: SizedBox(
-                          width: width,
-                          child: SuperTabMachines(
-                            controller: c,
-                            embedded: true,
-                            onAddAgent: (_) {},
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-            await tester.pumpAndSettle();
-            final row = find.byKey(const ValueKey('super-machine-m'));
-            final rowRect = tester.getRect(row);
-            expect(rowRect.width, width);
-            // One line at a project row's height and on its columns.
-            if (textScale == 1) expect(rowRect.height, 36);
-            final dot = tester.getRect(
-              find.descendant(
-                of: row,
-                matching: find.byType(SuperTabMachineDot),
-              ),
-            );
-            // No chevron: the status takes the last 32 px column, as on project rows.
-            expect(dot.center.dx, closeTo(rowRect.right - 16, .01));
-            expect(dot.center.dy, closeTo(rowRect.center.dy, .5));
-            expect(
-              tester
-                  .getTopLeft(
-                    find.byKey(const ValueKey('super-machine-name-m')),
-                  )
-                  .dx,
-              rowRect.left + 36,
-            );
-            final owner = tester.widget<SuperTabAvatar>(
-              find.descendant(of: row, matching: find.byType(SuperTabAvatar)),
-            );
-            expect(owner.identity, 'person:owner');
-            expect(owner.name, 'dee');
-            expect(find.text('Atlas'), findsNothing);
-            // The owner, paused and the numbers are in the row's tooltip, not on the line, and never an age.
-            expect(
-              _tipOf(tester, row),
-              'Owned by dee · New work paused · CPU 73% free · GPU 93% free · RAM 28 GB free · SSD 141 GB free',
-            );
-            expect(find.byIcon(AppIcons.pause), findsNothing);
-            for (final value in ['CPU', 'GPU', 'RAM', 'SSD', 'dee', 'ago']) {
-              expect(find.textContaining(value), findsNothing);
-            }
-            // Codex's tightest window, when the line has room for it; Claude's allowance is unknown.
-            final codex = find.byKey(
-              const ValueKey('super-machine-allowance-m-codex'),
-            );
-            if (codex.evaluate().isNotEmpty) {
-              expect(
-                find.descendant(of: codex, matching: find.text('70%')),
-                findsOneWidget,
-              );
-            }
-            expect(
-              find.byKey(const ValueKey('super-machine-allowance-m-claude')),
-              findsNothing,
-            );
-            final ink = find.descendant(
-              of: row,
-              matching: find.byType(InkWell),
-              matchRoot: true,
-            );
-            expect(tester.getRect(ink.first), rowRect);
-            expect(tester.takeException(), isNull);
-
-            if (capture != null && textScale == 1) {
-              await tester.tap(find.byKey(const ValueKey('super-machine-m')));
-              await tester.pumpAndSettle();
-              await tester.runAsync(
-                () => precacheImage(
-                  AssetImage(engineIdentity('codex').asset!),
-                  tester.element(find.byType(EngineMark).first),
-                ).timeout(const Duration(seconds: 10)),
-              );
-              await tester.pumpAndSettle();
-              await captureBoundary(
-                tester,
-                machineBoundary.currentContext!.findRenderObject()!
-                    as RenderRepaintBoundary,
-                capture,
-                'machine-expanded-${brightness.name}-${width.toInt()}',
-              );
-              await tester.tap(find.byKey(const ValueKey('super-machine-m')));
-              await tester.pumpAndSettle();
-            }
-            // The full row owns hover; its details are in its right-click menu.
-            final mouse = await tester.createGesture(
-              kind: PointerDeviceKind.mouse,
-            );
-            await mouse.addPointer(
-              location: Offset(rowRect.right + 20, rowRect.center.dy),
-            );
-            await tester.pump();
-            await mouse.moveTo(Offset(rowRect.right - 2, rowRect.center.dy));
-            await tester.pumpAndSettle();
-            final captureName =
-                '${brightness.name}-${textScale}x-${width.toInt()}';
-            await captureBoundary(
-              tester,
-              machineBoundary.currentContext!.findRenderObject()!
-                  as RenderRepaintBoundary,
-              capture,
-              'machine-hover-$captureName',
-            );
-            await mouse.removePointer();
-            await openMachineDetails(
-              tester,
-              find.byKey(const ValueKey('super-machine-m')),
-            );
-            if (capture != null) {
-              // A frame can settle before asynchronous bitmap decoding has
-              // finished. Wait for the real asset before photographing it.
-              await tester.runAsync(
-                () => precacheImage(
-                  AssetImage(engineIdentity('codex').asset!),
-                  tester.element(find.byType(EngineMark).first),
-                ).timeout(const Duration(seconds: 10)),
-              );
-              await tester.pumpAndSettle();
-            }
-            final dialog = find.byType(SuperTabDetailDialog);
-            final details = find.byType(SuperTabMachineDetails);
-            expect(dialog, findsOneWidget);
-            expect(details, findsOneWidget);
-            expect(
-              find.descendant(
-                of: details,
-                matching: find.text('28 GB of 64 GB'),
-              ),
-              findsOneWidget,
-            );
-            expect(
-              find.descendant(
-                of: details,
-                matching: find.text('141 GB of 1000 GB'),
-              ),
-              findsOneWidget,
-            );
-            expect(
-              find.descendant(
-                of: details,
-                matching: find.textContaining('70% left · resets in '),
-              ),
-              findsOneWidget,
-            );
-            expect(
-              find.descendant(
-                of: details,
-                matching: find.textContaining('90% left · resets in '),
-              ),
-              findsOneWidget,
-            );
-            expect(
-              find.descendant(of: details, matching: find.text('—')),
-              findsNothing,
-            );
-            expect(tester.takeException(), isNull);
-            await captureWindow(
-              tester,
-              capture,
-              'machine-details-$captureName',
-            );
-            if (capture != null && textScale > 1) {
-              await Scrollable.ensureVisible(
-                tester.element(find.text('Model allowances')),
-                alignment: 0,
-              );
-              await tester.pumpAndSettle();
-              await captureWindow(
-                tester,
-                capture,
-                'machine-details-more-$captureName',
-              );
-            }
-            await tester.tap(find.byTooltip('Close'));
-            await tester.pumpAndSettle();
-            expect(tester.takeException(), isNull);
-            await tester.pumpWidget(const SizedBox());
-            await c.flush();
-            c.dispose();
-          },
-        );
-      }
-    }
-  }
-
   test('shared repository metadata excludes embedded credentials', () {
     expect(
       superTabRepositoryUrl('https://token@github.com/example/project'),
@@ -2595,88 +1741,6 @@ void main() {
     expect(superTabRepositoryUrl('/Users/me/project.git'), isNull);
     expect(superTabRepositoryUrl('github.com'), isNull);
   });
-  testWidgets(
-    'Machine details omit unknown subscription allowances; the row says why instead',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.server.state['machines'] = [
-        {
-          'machineId': 'm',
-          'contributorId': 'owner',
-          'engines': ['opencode'],
-          'observation': {
-            'receivedAt': DateTime.now().millisecondsSinceEpoch,
-            'quotas': [
-              for (final engine in ['claude', 'codex', 'opencode', 'cursor'])
-                {
-                  'engine': engine,
-                  'known': engine == 'claude',
-                  'windows': [
-                    {'name': '5-hour', 'usedPercent': 40},
-                  ],
-                },
-            ],
-          },
-        },
-      ];
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(
-              width: 300,
-              height: 400,
-              child: SuperTabMachines(
-                controller: c,
-                app: f.app,
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-machine-m')));
-      await tester.pumpAndSettle();
-      // Both engines the list shows have a card: Claude's figure, and why Codex has none.
-      expect(
-        tester
-            .widgetList<EngineMark>(find.byType(EngineMark))
-            .map((mark) => mark.engine),
-        ['claude', 'codex'],
-      );
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
-          matching: find.text('Update Harness on this machine to see it'),
-        ),
-        findsOneWidget,
-      );
-      await openMachineDetails(
-        tester,
-        find.byKey(const ValueKey('super-machine-m')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('OpenCode'), findsNothing);
-      // The details add Claude's alone, over the row's two cards.
-      expect(
-        tester
-            .widgetList<EngineMark>(find.byType(EngineMark))
-            .map((mark) => mark.engine)
-            .toList()
-          ..sort(),
-        ['claude', 'claude', 'codex'],
-      );
-
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      await tester.pump();
-    },
-  );
-
   // Task #2195: a Swarm that isn't showing reads no machine's usage.
   testWidgets(
     'reads nothing while its Swarm is away, and reads at once on its return',
@@ -2693,7 +1757,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SizedBox(
-              width: 300,
+              width: 800,
               height: 400,
               child: SuperTabMachines(
                 controller: c,
@@ -2725,134 +1789,6 @@ void main() {
     },
   );
 
-  // Ken, 2026-10-28: work kept landing on engines that could not run on a machine. The only visible change: an engine that
-  // is out of quota or suspended there has its name struck through in the machine's Subscriptions, with why on hover.
-  testWidgets(
-    'strikes through an engine suspended on a machine, and says on hover when one has no quota left',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(900, 1400));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final server = ConversationServer();
-      const suspended =
-          'Claude Code is suspended on this machine for new work: its last 2 starts there failed. It is offered again within 6 hours, or once its owner resumes it.';
-      server.state['machines'] = [
-        {
-          'machineId': 'm',
-          'name': 'Studio',
-          'contributorId': 'owner',
-          'suspendedEngines': {'claude': suspended},
-          'observation': {
-            'receivedAt': DateTime.now().millisecondsSinceEpoch,
-            'resources': {'cpuPercent': 10},
-            'quotas': [
-              {'engine': 'claude', 'known': false, 'windows': []},
-              {
-                'engine': 'codex',
-                'known': true,
-                'windows': [
-                  {'name': 'weekly', 'usedPercent': 100},
-                ],
-              },
-            ],
-          },
-        },
-      ];
-      final c = server.controller();
-      await c.refresh();
-      c.toggleMachineExpanded('m');
-      await tester.pumpWidget(
-        MaterialApp(
-          // As the sidebar does: the section is rebuilt whenever the Swarm changes.
-          home: Scaffold(
-            body: ListenableBuilder(
-              listenable: c,
-              builder: (context, _) => SuperTabMachines(
-                controller: c,
-                embedded: true,
-                onAddAgent: (_) {},
-                onOpenAgent: (_) {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      TextDecoration? decoration(String engine, String name) => tester
-          .widget<Text>(
-            find.descendant(
-              of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
-              matching: find.text(name),
-            ),
-          )
-          .style
-          ?.decoration;
-      String tip(String engine) => tester
-          .widget<Tooltip>(
-            find
-                .ancestor(
-                  of: find.byKey(ValueKey('super-machine-allowance-m-$engine')),
-                  matching: find.byType(Tooltip),
-                )
-                .first,
-          )
-          .message!;
-      // Suspended with its allowance unknown: a card all the same, with a dash for the figure.
-      expect(decoration('claude', 'Claude Code'), TextDecoration.lineThrough);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('super-machine-allowance-m-claude')),
-          matching: find.text('—'),
-        ),
-        findsOneWidget,
-      );
-      expect(tip('claude'), startsWith(suspended));
-      // Out of quota: information, never struck; its figure kept.
-      expect(decoration('codex', 'Codex'), isNull);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
-          matching: find.text('0%'),
-        ),
-        findsOneWidget,
-      );
-      expect(tip('codex'), startsWith('No quota left until it resets.'));
-      expect(tip('codex'), isNot(contains('Not used for new work')));
-      expect(tester.takeException(), isNull);
-
-      // Once neither holds, nothing is struck.
-      server.state['machines'] = [
-        {
-          'machineId': 'm',
-          'name': 'Studio',
-          'contributorId': 'owner',
-          'observation': {
-            'receivedAt': DateTime.now().millisecondsSinceEpoch,
-            'resources': {'cpuPercent': 10},
-            'quotas': [
-              for (final engine in ['claude', 'codex'])
-                {
-                  'engine': engine,
-                  'known': true,
-                  'windows': [
-                    {'name': 'weekly', 'usedPercent': 40},
-                  ],
-                },
-            ],
-          },
-        },
-      ];
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(
-        decoration('claude', 'Claude Code'),
-        isNot(TextDecoration.lineThrough),
-      );
-      expect(decoration('codex', 'Codex'), isNot(TextDecoration.lineThrough));
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      c.dispose();
-    },
-  );
 }
 
 /// A hardware reading's value in a machine's expanded readings.
