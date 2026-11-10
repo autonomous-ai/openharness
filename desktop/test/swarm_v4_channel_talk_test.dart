@@ -14,9 +14,9 @@ import 'support/swarm_v4_channel.dart';
 /// Set to a folder to write this file's screenshots there, with the system's real fonts.
 final shots = Platform.environment['SWARM_V4_SHOTS'];
 
-/// The channel as the team talking (anh Dee 2026-11-09: "i dont see any agent to agent chat"), as a person reads it: a channel
-/// nobody has posted in says why, a post to a teammate reads "Pip to Juno", and an ask to an agent whose computer is off says
-/// so under it.
+/// The channel as the team talking (anh Dee 2026-11-09: "i dont see any agent to agent chat"; 2026-11-10: "why not use tag? like
+/// in a group chat"), as a person reads it: a channel nobody has posted in says why, a post to a teammate opens with their tag
+/// under its author's name, and an ask to an agent whose computer is off says so under it.
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
@@ -29,6 +29,23 @@ void main() {
   Finder rowOf(String text) => find.ancestor(
     of: find.textContaining(text),
     matching: find.byType(SuperTabMessageRow),
+  );
+
+  /// Everything the row of the message whose text holds [text] reads, its name line and its bubble, as plain text.
+  String readOf(WidgetTester tester, String text) => tester
+      .widgetList<Text>(
+        find.descendant(of: rowOf(text), matching: find.byType(Text)),
+      )
+      .map((t) => t.data ?? t.textSpan?.toPlainText() ?? '')
+      .join('\n');
+
+  /// How many times [tag] is in what the row of the message whose text holds [text] reads.
+  int tagsIn(WidgetTester tester, String text, String tag) =>
+      RegExp(RegExp.escape(tag)).allMatches(readOf(tester, text)).length;
+
+  /// No name line anywhere says who a post is to: its tags do.
+  final noToLine = find.byWidgetPredicate(
+    (w) => w is Text && (w.data?.startsWith('to ') ?? false),
   );
 
   /// A post by [who] in the channel at [at], to the agents [to] by id, as the backend stores it (`recipientIds`). Returns its id.
@@ -46,8 +63,7 @@ void main() {
     return id;
   }
 
-  const emptyLine =
-      'No posts yet. Agents post here when free or asking a teammate. Task talk is on Tasks.';
+  const emptyLine = 'No posts yet. Agents talk to each other here.';
 
   testWidgets(
     'a channel nobody has posted in says why, and its bar still says who may post',
@@ -106,12 +122,12 @@ void main() {
   );
 
   testWidgets(
-    'a post that names a teammate reads "Pip to Juno"; one that names nobody does not',
+    'a post to a teammate opens with their tag under its author\'s name alone; one that names nobody has none',
     (tester) async {
       final server = swarmV4Channel();
-      final free = say(server, 'Pip', 'free: Pip');
-      final ask = say(server, 'Pip', '@Juno can you read #12?', to: ['juno']);
-      final plan = say(
+      say(server, 'Pip', 'free: Pip');
+      say(server, 'Pip', 'can you read #12?', to: ['juno']);
+      say(
         server,
         'Faye',
         'Plan: @Pip takes #12, @Juno #14.',
@@ -121,26 +137,22 @@ void main() {
       swarmV4Post(server, 'Juno', 'Reading #12 now.');
       server.messages.last['createdAt'] = '2026-11-09T02:10:00Z';
       await openSwarmV4(tester, server);
-      expect(key('super-message-to-$free'), findsNothing);
-      expect(tester.widget<Text>(key('super-message-to-$ask')).data, 'to Juno');
-      expect(
-        tester.widget<Text>(key('super-message-to-$plan')).data,
-        'to Pip, Juno',
-      );
-      expect(
-        find.byWidgetPredicate(
-          (w) => w is Text && (w.data?.startsWith('to ') ?? false),
-        ),
-        findsNWidgets(2),
-      );
-      // Pip's two posts are minutes apart, yet the second stands on its own, with its name, where the phrase shows.
+      expect(tagsIn(tester, 'free: Pip', '@'), 0);
+      // Its words do not tag Juno, so the bubble opens with the tag.
+      expect(tagsIn(tester, 'can you read #12?', '@Juno'), 1);
+      // Its words tag both: nothing is added.
+      expect(tagsIn(tester, 'takes #12', '@Pip'), 1);
+      expect(tagsIn(tester, 'takes #12', '@Juno'), 1);
+      expect(tagsIn(tester, 'Reading #12 now.', '@'), 0);
+      expect(noToLine, findsNothing);
+      // Pip's two posts are minutes apart, yet the second stands on its own, with its name: it is to someone.
       expect(
         find.descendant(of: rowOf('free: Pip'), matching: find.text('Pip')),
         findsOneWidget,
       );
       expect(
         find.descendant(
-          of: rowOf('@Juno can you read #12?'),
+          of: rowOf('can you read #12?'),
           matching: find.text('Pip'),
         ),
         findsOneWidget,
@@ -155,59 +167,47 @@ void main() {
     (tester) async {
       final server = swarmV4Channel();
       say(server, 'Pip', 'free: Pip');
-      final gone = say(server, 'Pip', 'Is @Ghost still here?', to: ['ghost']);
-      final itself = say(server, 'Pip', 'Note to self.', to: ['pip']);
+      say(server, 'Pip', 'Still here?', to: ['ghost']);
+      say(server, 'Pip', 'Note to self.', to: ['pip']);
       await openSwarmV4(tester, server);
-      expect(key('super-message-to-$gone'), findsNothing);
-      expect(key('super-message-to-$itself'), findsNothing);
+      expect(tagsIn(tester, 'Still here?', '@'), 0);
+      expect(tagsIn(tester, 'Note to self.', '@'), 0);
       // Whether a row stands on its own reads the message alone, not the agents the Swarm has: a post to an agent that is gone
       // keeps its name, as it did while the agent was there.
       expect(
-        find.descendant(
-          of: rowOf('Is @Ghost still here?'),
-          matching: find.text('Pip'),
-        ),
+        find.descendant(of: rowOf('Still here?'), matching: find.text('Pip')),
         findsOneWidget,
       );
     },
   );
 
-  testWidgets('an agent named twice in a post is named once', (tester) async {
+  testWidgets('an agent named twice in a post is tagged once', (tester) async {
     final server = swarmV4Channel();
-    final twice = say(
-      server,
-      'Faye',
-      '@Juno and @Pip, read #12.',
-      to: ['juno', 'pip', 'juno'],
-    );
+    say(server, 'Faye', 'read #12.', to: ['juno', 'pip', 'juno']);
     await openSwarmV4(tester, server);
-    expect(
-      tester.widget<Text>(key('super-message-to-$twice')).data,
-      'to Juno, Pip',
-    );
+    expect(tagsIn(tester, 'read #12.', '@Juno'), 1);
+    expect(tagsIn(tester, 'read #12.', '@Pip'), 1);
     expect(find.text('Juno is offline'), findsOneWidget);
   });
 
-  testWidgets('a long name and who it is to stay on one line at 700 px', (
-    tester,
-  ) async {
-    const long = 'Bartholomew of the Northern Reaches and Southern Seas Crew';
-    final server = swarmV4Channel(pip: long);
-    final ask = say(server, long, '@Juno can you read #12?', to: ['juno']);
-    await openSwarmV4(tester, server, size: const Size(700, 800));
-    expect(tester.takeException(), isNull);
-    final to = tester.getRect(key('super-message-to-$ask'));
-    final name = tester.getRect(
-      find.descendant(
-        of: rowOf('@Juno can you read #12?'),
-        matching: find.text(long),
-      ),
-    );
-    // Side by side on one line: the name gives way with an ellipsis, and who it is to stays beside it.
-    expect(to.left, greaterThanOrEqualTo(name.right));
-    expect((to.center.dy - name.center.dy).abs(), lessThan(8));
-    expect(name.height, to.height);
-  });
+  testWidgets(
+    'a long name stays on its line at 700 px, its tags in the bubble',
+    (tester) async {
+      const long = 'Bartholomew of the Northern Reaches and Southern Seas Crew';
+      final server = swarmV4Channel(pip: long);
+      say(server, long, 'can you read #12?', to: ['juno']);
+      await openSwarmV4(tester, server, size: const Size(700, 800));
+      expect(tester.takeException(), isNull);
+      expect(tagsIn(tester, 'can you read #12?', '@Juno'), 1);
+      expect(
+        find.descendant(
+          of: rowOf('can you read #12?'),
+          matching: find.text(long),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('a task\'s chat reads its posts the same way', (tester) async {
     final server = swarmV4Channel();
@@ -217,12 +217,7 @@ void main() {
       '#12 The voice declines in a busy room. @Pip yours.',
       to: ['pip'],
     );
-    final ask = swarmV4Post(
-      server,
-      'Pip',
-      '@Juno can you read #12?',
-      thread: task,
-    );
+    final ask = swarmV4Post(server, 'Pip', 'can you read #12?', thread: task);
     server.messages.last
       ..['createdAt'] = '2026-11-09T02:05:00Z'
       ..['recipientIds'] = ['juno'];
@@ -234,9 +229,9 @@ void main() {
     expect(
       find.descendant(
         of: key('super-thread-panel'),
-        matching: key('super-message-to-$ask'),
+        matching: find.textContaining('@Juno', findRichText: true),
       ),
-      findsOneWidget,
+      findsWidgets,
     );
     expect(
       find.descendant(
@@ -266,20 +261,22 @@ void main() {
       }
 
       // Two minutes apart, so that replies by one agent would be one run: each is to someone else.
-      final toJuno = reply('@Juno read #12.', ['juno'], '2026-11-09T02:00:00Z');
-      final toFaye = reply('@Faye done.', ['faye'], '2026-11-09T02:02:00Z');
+      final toJuno = reply('read #12.', ['juno'], '2026-11-09T02:00:00Z');
+      final toFaye = reply('done.', ['faye'], '2026-11-09T02:02:00Z');
       final c = await openSwarmV4(tester, server);
       await tester.tap(key('super-thread-bar-$task'));
       await tester.pumpAndSettle();
       expect(c.openedThread?.root, task);
-      for (final (id, who) in [(toJuno, 'Juno'), (toFaye, 'Faye')]) {
+      for (final (text, who) in [('read #12.', 'Juno'), ('done.', 'Faye')]) {
         expect(
-          find.descendant(
-            of: key('super-thread-panel'),
-            matching: key('super-message-to-$id'),
-          ),
-          findsOneWidget,
+          tagsIn(tester, text, '@$who'),
+          1,
           reason: 'the reply to $who reads as talk',
+        );
+        expect(
+          find.descendant(of: rowOf(text), matching: find.text('Pip')),
+          findsOneWidget,
+          reason: 'the reply to $who keeps its name line',
         );
       }
       // Only the one to the agent whose computer is off waits.
