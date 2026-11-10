@@ -32,6 +32,8 @@ void main() {
     String? checks = 'SUCCESS',
     String? mergeable = 'MERGEABLE',
     bool intoDefault = true,
+    String? opener,
+    Set<String>? team,
   }) => SwarmPull.statusOf(
     draft: draft,
     head: head,
@@ -41,6 +43,8 @@ void main() {
     checks: checks,
     mergeable: mergeable,
     intoDefault: intoDefault,
+    opener: opener,
+    team: team,
   );
 
   group('where a pull request stands, by the rule Harness merges by', () {
@@ -86,6 +90,91 @@ void main() {
         );
       },
     );
+
+    // Every agent of a person posts as that person's GitHub login, the login that opened its pull request: from it, an
+    // unsigned READ-OK may be the author's own (the merger's rule, cli githubMerge.ts, #3722).
+    group('from the login that opened it', () {
+      const team = {'pip', 'juno', 'kai'};
+      test('an unsigned READ-OK is no read', () {
+        expect(
+          status(opener: 'deehw', comments: [said('READ-OK f6edb44')]),
+          SwarmPullStatus.review,
+        );
+        expect(
+          status(
+            opener: 'DeeHW',
+            team: team,
+            comments: [said('**READ-OK f6edb44**')],
+          ),
+          SwarmPullStatus.review,
+        );
+      });
+
+      test('a verdict\'s own words are no signature', () {
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            comments: [said('READ-OK f6edb44: looks good')],
+          ),
+          SwarmPullStatus.review,
+        );
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            comments: [said('LGTM: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.review,
+        );
+      });
+
+      test('signed by a teammate who is not its author, it counts', () {
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            comments: [said('Juno, 10:00: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.merging,
+        );
+        // Its author's own signature never counts, nor a name that is no teammate's.
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            comments: [said('Pip, 10:00: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.review,
+        );
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            comments: [said('Stranger, 10:00: READ-OK f6edb44')],
+          ),
+          SwarmPullStatus.review,
+        );
+      });
+
+      test('an unsigned HOLD from it still holds', () {
+        expect(
+          status(opener: 'deehw', team: team, comments: [said('HOLD f6edb44')]),
+          SwarmPullStatus.held,
+        );
+      });
+
+      test('another login\'s unsigned READ-OK counts as that person\'s', () {
+        expect(
+          status(
+            opener: 'deehw',
+            team: team,
+            comments: [said('READ-OK f6edb44: looks good', login: '69tc')],
+          ),
+          SwarmPullStatus.merging,
+        );
+      });
+    });
 
     test('TWO READS, in its text or a comment, needs two readers', () {
       final one = [said('Juno, 10:00: READ-OK f6edb44')];

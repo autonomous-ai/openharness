@@ -69,6 +69,12 @@ class SwarmPull {
     r'^\W*([A-Za-z][\w-]*(?: [A-Za-z][\w-]*)?)\**\s*[,:(]',
   );
 
+  /// What a first line opens with that is no reader's name: a verdict, or a reader's shorthand for one.
+  static final _notAName = RegExp(
+    r'^(?:READ-OK|HOLD|LGTM)\b',
+    caseSensitive: false,
+  );
+
   /// Who may give a verdict: the repository's people, as GitHub names them.
   static const _team = {'OWNER', 'MEMBER', 'COLLABORATOR'};
 
@@ -77,7 +83,11 @@ class SwarmPull {
 
   /// A pull request as the GraphQL read in [SwarmGitHub.pulls] answers it (its default branch beside it), or null for
   /// anything else.
-  static SwarmPull? read(Object? row, {String? defaultBranch}) {
+  static SwarmPull? read(
+    Object? row, {
+    String? defaultBranch,
+    Set<String>? team,
+  }) {
     if (row is! Map) return null;
     final number = row['number'], title = row['title'], url = row['url'];
     final head = row['headRefOid'], branch = row['headRefName'];
@@ -118,6 +128,11 @@ class SwarmPull {
         checks: rollup is Map ? rollup['state'] as String? : null,
         mergeable: row['mergeable'] as String?,
         intoDefault: defaultBranch == null || base == defaultBranch,
+        opener: switch (row['author']) {
+          {'login': final String login} => login,
+          _ => null,
+        },
+        team: team,
       ),
     );
   }
@@ -134,7 +149,9 @@ class SwarmPull {
 
   /// Where a pull request stands, in the order the merger asks: a draft is not read; a HOLD stands over everything; a
   /// conflict or a failed check must be fixed before a READ-OK counts; then its checks must finish; then a READ-OK on its head
-  /// from someone other than its author (two, from two readers, when its text or a comment says TWO READS) merges it. A
+  /// from someone other than its author (two, from two readers, when its text or a comment says TWO READS) merges it; from
+  /// [opener], the login that opened it, a READ-OK counts only signed with the name of one of [team] (the Swarm's agents, in
+  /// lowercase; any name when unknown) that is not its author. A
   /// pull request into another branch than the default one is never merged by rule, so it stays in review.
   static SwarmPullStatus statusOf({
     required bool draft,
@@ -145,6 +162,8 @@ class SwarmPull {
     required String? checks,
     required String? mergeable,
     bool intoDefault = true,
+    String? opener,
+    Set<String>? team,
   }) {
     if (draft) return SwarmPullStatus.draft;
     var twoReads = RegExp(r'\bTWO READS\b').hasMatch(body);
@@ -160,11 +179,23 @@ class SwarmPull {
       final found = _verdict.firstMatch(first);
       if (found == null) continue;
       final author = comment['author'];
-      final reader =
-          _signature.firstMatch(first)?.group(1) ??
-          (author is Map && author['login'] is String
-              ? author['login'] as String
-              : '');
+      final login = author is Map && author['login'] is String
+          ? author['login'] as String
+          : '';
+      var signed = _signature.firstMatch(first)?.group(1);
+      // A verdict's own words ("READ-OK f6edb44: looks good") are no name.
+      if (signed != null && _notAName.hasMatch(signed)) signed = null;
+      // Every agent of a person posts as that person's login, which opened the pull request: from it, a READ-OK counts only
+      // signed by a teammate, never unsigned (it may be its author's own). An unsigned HOLD from it still holds.
+      final fromOpener =
+          opener != null && login.toLowerCase() == opener.toLowerCase();
+      if (fromOpener &&
+          (signed == null ||
+              (team != null && !team.contains(signed.toLowerCase())))) {
+        if (found.group(1) != 'HOLD') continue;
+        signed = null;
+      }
+      final reader = signed ?? login;
       if (reader.isEmpty || reader == _harness) continue;
       final at = comment['createdAt'] is String
           ? comment['createdAt'] as String
