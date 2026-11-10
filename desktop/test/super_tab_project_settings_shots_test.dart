@@ -30,16 +30,7 @@ void main() {
           },
         },
       ];
-      (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
-        for (var i = 0; i < 3; i++)
-          {
-            ...conversationFixture('old-$i', 'Old work $i'),
-            'archived': true,
-            'projectId': 'lead',
-          },
-      ]);
       final c = await showView(tester, server, brightness: brightness);
-      await tester.runAsync(() => c.loadDormant('lead'));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Project options'));
       await tester.pumpAndSettle();

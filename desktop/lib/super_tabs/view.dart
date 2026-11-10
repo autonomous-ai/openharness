@@ -40,13 +40,11 @@ import 'leaderboard/shipping.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'profile_actions.dart';
-import 'live_card.dart';
 import 'personal_agents.dart';
 import 'personal_lead.dart';
 import 'personal_lead_card.dart';
 import 'personal_projects.dart';
 import 'private_project_lock.dart';
-import 'pull_request_facts.dart';
 import 'attachment_upload.dart' show kSuperTabFolderZipMaxBytes;
 import 'composer_files.dart';
 import 'composer_newline.dart';
@@ -67,19 +65,11 @@ import 'agent_info.dart';
 import 'identity.dart' show SuperTabAvatar;
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
-import 'task_priority.dart'
-    show
-        SuperTabTaskPriority,
-        superTabCarriesPriority,
-        superTabTaskPriority,
-        superTabTitlePriority;
-import 'chip.dart' show SuperTabPriorityBadge;
 import 'message_link.dart';
 import 'message_link_swarms.dart';
 import 'message_link_preview.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
-import 'message_text.dart';
 import 'notifications.dart';
 import 'day_pill.dart';
 import 'terminal_row.dart';
@@ -91,12 +81,10 @@ import 'instructions_link.dart';
 import 'issue_panel.dart';
 import 'task_board.dart';
 import 'thread_panel.dart';
-import 'work_details.dart';
 import 'manage_page.dart';
 import 'project_sidebar.dart';
 import 'swarm_switcher.dart' show fallBackToPersonal;
 import 'project_options.dart';
-import 'ship_row.dart';
 import 'switch_pm.dart';
 import 'pane_layout.dart';
 import 'composer_actions.dart';
@@ -108,7 +96,6 @@ import 'voice_take.dart';
 import 'swarm_type.dart';
 import '../terminal/terminal_font_store.dart';
 import 'visible_tick.dart';
-import 'chat/chat_card.dart';
 import 'chat/chat_time.dart';
 import 'chat/column.dart';
 import 'chat/composer_pill.dart';
@@ -295,10 +282,6 @@ class _SuperTabViewState extends State<SuperTabView>
     }
   }
 
-  /// Why the last priority change was refused, and for which task: said
-  /// beside that task's title (task #3117).
-  ({String taskId, String error})? _priorityRefusal;
-
   /// The Swarm's page holding the main pane, if one does: the Leaderboard.
   SwarmPage? _page;
 
@@ -397,11 +380,6 @@ class _SuperTabViewState extends State<SuperTabView>
   SuperTabShippingBoard get _shipping =>
       _shippingBoard ??= SuperTabShippingBoard(c);
 
-  /// What this computer's GitHub says of the pull requests on live cards.
-  late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
-    widget.app?.readPullRequestsStatus,
-  );
-
   /// A device with a Lead of this Swarm open scrolls the chat on screen, or
   /// the thread open beside it (the dial's thread face shows that thread).
   late final _dial = DialListScroll(
@@ -444,11 +422,7 @@ class _SuperTabViewState extends State<SuperTabView>
             snapshot!.conversation(project!.leadConversationId)?.leadId ==
                 message.authorId
         ? '$name (${snapshot.roleOf(message.authorId)?.badge ?? 'PM'}) → you'
-        : switch (c.stepNameOf(message)) {
-            // A step's row in its task's chat names its step (task steps design).
-            final String step => '$name · $step',
-            null => name,
-          };
+        : name;
   }
 
   @override
@@ -551,8 +525,6 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c || oldWidget.app != widget.app) {
       _dial.cancel();
       _registerDial();
-      _facts.dispose();
-      _facts = SuperTabPullRequestFacts(widget.app?.readPullRequestsStatus);
       _states?.dispose();
       _states = _agentStates();
     }
@@ -1190,7 +1162,6 @@ class _SuperTabViewState extends State<SuperTabView>
     _projectBoard?.dispose();
     _states?.dispose();
     _shippingBoard?.dispose();
-    _facts.dispose();
     c.removeListener(_changed);
     c.removeListener(_holdVoiceAway);
     _voice?.dispose();
@@ -1757,176 +1728,10 @@ class _SuperTabViewState extends State<SuperTabView>
       if (project != null) await showSwitchPm(context, c, project.id);
       return;
     }
-    if (c.snapshot?.isProjectLead(group.id) == true && action != 'archived') {
+    if (c.snapshot?.isProjectLead(group.id) == true) {
       final project = c.snapshot!.projectFor(group.id);
       if (project != null) await showProjectAction(context, c, project, action);
-      return;
     }
-    if (action == 'archived') {
-      await _archived();
-      return;
-    }
-    if (action == 'work') {
-      await showSuperTabWork(context, c, group.id);
-      return;
-    }
-    if (action == 'archive') {
-      await c.command({
-        'type': 'conversation.archive',
-        'conversationId': group.id,
-        'archived': !group.archived,
-      });
-      return;
-    }
-    var title = group.title, busy = false;
-    await showAppDialog<void>(
-      context: context,
-      builder: (context) => SuperTabDialogScope(
-        controller: c,
-        conversationId: group.id,
-        child: StatefulBuilder(
-          builder: (context, update) => AlertDialog(
-            title: const Text('Rename conversation'),
-            content: TextFormField(
-              initialValue: title,
-              autofocus: true,
-              maxLength: 160,
-              onChanged: (value) => update(() => title = value),
-            ),
-            actions: [
-              TextButton(
-                onPressed: busy ? null : () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: busy || title.trim().isEmpty
-                    ? null
-                    : () async {
-                        update(() => busy = true);
-                        final result = await c.command({
-                          'type': 'conversation.rename',
-                          'conversationId': group.id,
-                          'title': title.trim(),
-                        });
-                        if (!context.mounted) return;
-                        if (result != null) {
-                          Navigator.pop(context);
-                        } else {
-                          update(() => busy = false);
-                        }
-                      },
-                child: const Text('Save'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _archived() async {
-    final c = this.c;
-    var query = '';
-    // Archived groups are out of the active set: read the project's now.
-    final projectId = c.selected?.projectId;
-    if (projectId != null) unawaited(c.loadDormant(projectId));
-    final selected = await showAppDialog<String>(
-      context: context,
-      builder: (context) => SuperTabDialogScope(
-        controller: c,
-        requireWrite: false,
-        child: StatefulBuilder(
-          builder: (context, update) => ListenableBuilder(
-            listenable: c,
-            builder: (context, _) {
-              final groups =
-                  c.snapshot?.conversations
-                      .where(
-                        (group) =>
-                            group.archived &&
-                            !c.hiddenByBuddies(group) &&
-                            group.projectId == c.selected?.projectId &&
-                            group.title.toLowerCase().contains(query),
-                      )
-                      .toList() ??
-                  <SuperTabConversation>[];
-              return AlertDialog(
-                title: const Text('Archived conversations'),
-                content: SizedBox(
-                  width: 400,
-                  height: 320,
-                  child: Column(
-                    children: [
-                      TextField(
-                        autofocus: true,
-                        decoration: const InputDecoration(
-                          hintText: 'Find a conversation',
-                        ),
-                        onChanged: (value) =>
-                            update(() => query = value.trim().toLowerCase()),
-                      ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: groups.isEmpty
-                            ? Center(
-                                child: Text(
-                                  projectId != null &&
-                                          c.dormantLoading(projectId)
-                                      ? 'Loading archived conversations…'
-                                      : 'No archived conversations.',
-                                ),
-                              )
-                            : LaidOutListView(
-                                children: [
-                                  for (final group in groups)
-                                    ListTile(
-                                      title: Text(
-                                        group.label,
-                                        style: DesktopChrome.control(),
-                                      ),
-                                      onTap: () =>
-                                          Navigator.pop(context, group.id),
-                                    ),
-                                ],
-                              ),
-                      ),
-                      // Older closed groups are a page away whatever the
-                      // rows above show: newer finished groups or a search
-                      // can leave none of them archived or matching.
-                      if (projectId != null && c.hasEarlierDormant(projectId))
-                        ListTile(
-                          key: const ValueKey('super-archived-earlier'),
-                          title: Text(
-                            c.dormantLoading(projectId)
-                                ? 'Loading…'
-                                : 'Show earlier',
-                            style: DesktopChrome.control(
-                              color: DesktopChrome.muted,
-                            ),
-                          ),
-                          onTap: c.dormantLoading(projectId)
-                              ? null
-                              : () => unawaited(
-                                  c.loadDormant(projectId, earlier: true),
-                                ),
-                        ),
-                    ],
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Close'),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
-    );
-    if (!mounted || widget.controller != c || selected == null) return;
-    c.select(selected);
   }
 
   /// [boardProjectId]: the project whose Board holds the middle, whose row is then lit.
@@ -2308,7 +2113,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// A thread reply shows in its thread, and here only when also sent.
 
   List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
-    final messages = c.taskMessages(id);
+    final messages = c.messages(id);
     final answered = answeredPromptAlerts(
       messages,
       (agentId) => c.snapshot?.agent(agentId),
@@ -2521,101 +2326,6 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
-  /// The agents of [group] waiting on the reader: one with a question in its
-  /// terminal, or one the task's work waits on for an answer from them
-  /// ([_asksReader]). A task blocked on CI, a review or another person is not
-  /// here; its status line already says why (Leo, #3017).
-  List<SuperTabAgent> _needsHuman(SuperTabConversation group) =>
-      c.snapshot?.agents
-          .where(
-            (agent) =>
-                group.agentIds.contains(agent.id) &&
-                (widget.app?.questionFor(agent.machineId, agent.harnessId) !=
-                        null ||
-                    _asksReader(group, agent)),
-          )
-          .toList() ??
-      const [];
-
-  /// Whether [group]'s work, done by [agent], waits on the reader's answer:
-  /// `needs_human` asked of them by name, else of
-  /// whom the server says it waits on, else (a backend that names nobody)
-  /// of whoever reads. `blocked` is never a question.
-  bool _asksReader(SuperTabConversation group, SuperTabAgent agent) {
-    final work = group.assignment;
-    if (work == null || work['agentId'] != agent.id) return false;
-    if (work['status'] != 'needs_human') return false;
-    final liveness = group.liveness;
-    final waited = liveness != null && liveness['why'] == 'person';
-    final Object? person =
-        work['askedOf'] ?? (waited ? liveness['personId'] : null);
-    return person == null || person == c.accountId;
-  }
-
-  /// The bar's click: the question where it is, so it visibly does something
-  /// (Leo, #3017). A question
-  /// in the chat comes into view, lit; a prompt in the terminal opens it, or
-  /// says it is already open.
-  void _openQuestion(SuperTabConversation group, SuperTabAgent agent) {
-    final asks = widget.app?.questionFor(agent.machineId, agent.harnessId);
-    final message = asks != null ? null : _askedIn(group, agent);
-    if (message != null) {
-      _showMessage(group.id, message);
-      return;
-    }
-    if (_terminalsVisible) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(
-            "${_agentName(agent)}'s question is in its terminal, open beside this chat.",
-          ),
-        ),
-      );
-      return;
-    }
-    _openAgent(agent);
-  }
-
-  /// The message where [agent] asked [group]'s question: the one that says
-  /// what the assignment's result says, else the agent's latest in the chat
-  /// (a line of the task itself is never it).
-  SuperTabMessage? _askedIn(SuperTabConversation group, SuperTabAgent agent) {
-    final said = [
-      for (final m in _ownShown(group.id))
-        if (m.author['kind'] == 'agent' &&
-            m.author['id'] == agent.id &&
-            !m.isTaskLine)
-          m,
-    ];
-    final ask = (group.assignment?['result'] as String?)?.trim();
-    if (ask != null && ask.isNotEmpty) {
-      for (final m in said.reversed) {
-        if (m.text.contains(ask)) return m;
-      }
-    }
-    return said.lastOrNull;
-  }
-
-  /// Brings [message] of chat [id] into view, lit, from the chat's own view.
-  void _showMessage(String id, SuperTabMessage message) {
-    widget.onCloseTerminal?.call();
-    setState(() {
-      _target = message.id;
-      // Stop following the end: the question is what to see.
-      _scrollRequest++;
-      _jumpingToEnd = false;
-      _follow(id, false);
-    });
-    _revealTarget(
-      id,
-      0,
-      arrived: (row) {
-        unawaited(Scrollable.ensureVisible(row, alignment: .3));
-        _light(message.id);
-      },
-    );
-  }
-
   void _openAgent(SuperTabAgent agent) {
     widget.onOpenTerminal(agent);
   }
@@ -2682,9 +2392,7 @@ class _SuperTabViewState extends State<SuperTabView>
               : 'Choose a project'
         : _groupName(group);
     if (name == null) {
-      return superTabCarriesPriority(group!)
-          ? _taskTitle(group, style)
-          : SuperTabWorkgroupName(group, style: style);
+      return SuperTabWorkgroupName(group!, style: style);
     }
     if (group != null &&
         c.snapshot!.isProjectLead(group.id) &&
@@ -2717,102 +2425,6 @@ class _SuperTabViewState extends State<SuperTabView>
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: style,
-    );
-  }
-
-  /// A task's name in its header (task #3117): its number, its priority as a
-  /// button that opens the priority menu, then its title without a legacy
-  /// marker, which the badge now says; a refused change is said after it.
-  Widget _taskTitle(SuperTabConversation task, TextStyle style) {
-    final refusal = _priorityRefusal;
-    return Row(
-      key: const ValueKey('super-task-title'),
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (task.number case final number?) ...[
-          Text('$number', style: style.copyWith(color: DesktopChrome.muted)),
-          const SizedBox(width: grid.AppDesktop.controlGap),
-        ],
-        _priorityMenu(task),
-        const SizedBox(width: grid.AppDesktop.controlGap),
-        Flexible(
-          child: Text(
-            superTabTitlePriority(task.title).title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: style,
-          ),
-        ),
-        if (refusal != null && refusal.taskId == task.id) ...[
-          const SizedBox(width: grid.AppDesktop.groupGap),
-          Flexible(
-            child: Text(
-              refusal.error,
-              key: const ValueKey('super-task-priority-error'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(),
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  /// The priority menu's widest: room for the longest meaning on one line.
-  static const double _priorityMenuWidth = 340;
-
-  /// [task]'s priority badge, `P1 ▾`, opening the four priorities with what
-  /// each means, the current one checked.
-  Widget _priorityMenu(SuperTabConversation task) {
-    final current = superTabTaskPriority(task);
-    final editable = c.canWrite && !c.saving && !c.hasPendingAction;
-    return AppDropdown(
-      width: _priorityMenuWidth,
-      consumeOutsideTap: false,
-      alignmentOffset: Offset.zero,
-      children: [
-        for (final priority in SuperTabTaskPriority.values)
-          fingerTarget(
-            enabled: _phone,
-            AppMenuItem(
-              key: ValueKey('super-task-priority-${priority.name}'),
-              label: priority.badge,
-              // A sentence, so the row's second line: beside the label it
-              // would be cut ([AppMenuItem.detail]).
-              detail: priority.meaning,
-              selected: priority == current,
-              // On the Board, by role (#3820); the server enforces it.
-              onPressed: editable && c.mayPrioritize(task, priority)
-                  ? () => unawaited(_setPriority(task, priority))
-                  : null,
-            ),
-          ),
-      ],
-      builder: (context, menu, _) => Tooltip(
-        message: 'Priority: ${current.meaning}',
-        child: InkWell(
-          key: const ValueKey('super-task-priority'),
-          borderRadius: BorderRadius.circular(DesktopChrome.controlRadius),
-          onTap: () => menu.isOpen ? menu.close() : menu.open(),
-          child: SuperTabPriorityBadge(current, menu: true),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _setPriority(
-    SuperTabConversation task,
-    SuperTabTaskPriority priority,
-  ) async {
-    if (priority == superTabTaskPriority(task)) return;
-    setState(() => _priorityRefusal = null);
-    final refused = await c.setTaskPriority(task.id, priority);
-    if (!mounted) return;
-    setState(
-      () => _priorityRefusal = refused == null
-          ? null
-          : (taskId: task.id, error: refused),
     );
   }
 
@@ -3123,21 +2735,6 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// A task's brief as a card (anh Dee's mockup, 11-07, #4529): who it went
-  /// to and the task's title; View brief shows the whole brief in place.
-  Widget _briefCard(SuperTabConversation group, SuperTabMessage message) {
-    final agentId = group.assignment?['agentId'] as String?;
-    return SwarmChatCard(
-      icon: AppIcons.send,
-      label: agentId == null
-          ? 'Brief'
-          : 'Sent to ${c.snapshot!.agentName(agentId, fallback: 'its agent')}',
-      title: group.title,
-      action: 'View brief',
-      details: SuperTabMessageText(message.text),
-    );
-  }
-
   /// Whether [message] is said between the two parties of a one-on-one chat
   /// (a Buddy chat, an agent chat): the reader and that chat's own agent. Its
   /// bubble carries no name or face (#4529); a line from anyone else there,
@@ -3236,42 +2833,18 @@ class _SuperTabViewState extends State<SuperTabView>
   String? get _openViewName =>
       _menuNamesViews && _terminalsVisible ? 'Group terminals' : null;
 
-  /// The line under the header's title: on a phone the open view, then the
-  /// group's linked tasks.
-  Widget? _subtitle(SuperTabConversation? group) {
-    final line = c.linkedLine(group);
-    final linked = line == null
-        ? null
-        : Text(
-            line,
-            key: const ValueKey('super-linked-line'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.metadata(),
-          );
-    final view = _openViewName;
-    if (view == null) return linked;
-    return Row(
-      children: [
-        Flexible(
-          child: Text(
-            view,
-            key: const ValueKey('super-open-view'),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.metadata(color: DesktopChrome.foreground),
-          ),
-        ),
-        if (linked != null) ...[
-          Text(' · ', style: DesktopChrome.metadata()),
-          Flexible(child: linked),
-        ],
-      ],
-    );
-  }
+  /// The line under the header's title: on a phone, the open view.
+  Widget? get _subtitle => switch (_openViewName) {
+    final view? => Text(
+      view,
+      key: const ValueKey('super-open-view'),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: DesktopChrome.metadata(color: DesktopChrome.foreground),
+    ),
+    null => null,
+  };
 
-  /// A project's channel or one of its tasks' chats: agents post there, people read (Swarm v4). A person's chat with their
-  /// own agent is the one place they write.
   /// The project's task list, open beside its channel (Swarm v4).
   bool _taskListOpen = false;
 
@@ -3384,15 +2957,16 @@ class _SuperTabViewState extends State<SuperTabView>
         : null;
   }
 
+  /// A project's channel: agents post there, people read (Swarm v4). A person's chat with their own agent is the one
+  /// place they write.
   bool _agentsOnly(SuperTabConversation group) =>
-      c.snapshot?.isProjectLead(group.id) == true || group.task != null;
+      c.snapshot?.isProjectLead(group.id) == true;
   bool _agentsOnlyId(String id) => switch (c.snapshot?.conversation(id)) {
     final group? => _agentsOnly(group),
     null => false,
   };
 
-  /// Whether [id] is where Swarm v4's agents talk to each other: a project's channel or one of its tasks' chats, drawn as the
-  /// board draws them.
+  /// Whether [id] is where Swarm v4's agents talk to each other: a project's channel, drawn as the board draws them.
   bool _agentTalk(String id) => _agentsOnlyId(id);
 
   /// The teammates [message] is to, by the name their tags read: each its words do not tag opens its bubble.
@@ -3581,8 +3155,7 @@ class _SuperTabViewState extends State<SuperTabView>
                     )
                   else
                     _title(group),
-                  if (!_devicesVisible && !_listViewHoldsThePane)
-                    ?_subtitle(group),
+                  if (!_devicesVisible && !_listViewHoldsThePane) ?_subtitle,
                 ],
               ),
             ),
@@ -3714,16 +3287,6 @@ class _SuperTabViewState extends State<SuperTabView>
       ],
     ),
   );
-
-  /// Until all of the project's closed groups are read, it may have archived
-  /// ones: the list reads them when it opens.
-  bool _mayHaveArchived(String projectId) =>
-      !c.dormantLoaded(projectId) ||
-      c.hasEarlierDormant(projectId) ||
-      c.snapshot?.conversations.any(
-            (g) => g.archived && g.projectId == projectId,
-          ) ==
-          true;
 
   /// A project's chat header, `# name ▾`, which opens its menu (Quiet Swarm,
   /// screen 9).
@@ -3858,32 +3421,11 @@ class _SuperTabViewState extends State<SuperTabView>
                   'Earlier chat in ${project.name}',
                   () => unawaited(c.select(earlier.id)),
                 ),
-        ] else ...[
-          // A private conversation is chat only: it has no work.
-          if (group.audience == null)
-            item('Work details', () => _groupAction('work', group)),
-          if (editable) ...[
-            // An agent's own chat renames the agent, whose name its header shows (audit finding 16 of #4436).
-            item('Rename', switch (_ownAgent(group)) {
-              final agent? => () => _renameAgent(agent),
-              null => () => _groupAction('rename', group),
-            }),
-            item(
-              group.archived ? 'Reopen conversation' : 'Archive',
-              group.assignment == null ||
-                      const [
-                        'done',
-                        'stopped',
-                        'cancelled',
-                      ].contains(group.assignment!['status'])
-                  ? () => _groupAction('archive', group)
-                  : null,
-            ),
-          ],
-        ],
+        ] else if (editable)
+          // An agent's own chat renames the agent, whose name its header shows (audit finding 16 of #4436).
+          if (_ownAgent(group) case final agent?)
+            item('Rename', () => _renameAgent(agent)),
         _notifyMenu(group),
-        if (_mayHaveArchived(group.projectId))
-          item('Archived conversations', () => _groupAction('archived', group)),
       ],
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
@@ -4092,15 +3634,6 @@ class _SuperTabViewState extends State<SuperTabView>
         message: message,
       );
     }
-    if (SuperTabShipRow.shows(message)) {
-      return SuperTabShipRow(
-        key: ValueKey(
-          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
-        ),
-        message: message,
-        controller: c,
-      );
-    }
     if (message.terminalEvent) {
       return SuperTabTerminalRow(
         key: ValueKey(
@@ -4129,10 +3662,6 @@ class _SuperTabViewState extends State<SuperTabView>
     final thread = inThread || root != message.id
         ? null
         : c.thread(message.conversationId, message.id);
-    final group = inThread
-        ? null
-        : c.snapshot?.conversation(message.conversationId);
-    final card = group?.cards.of(message.id);
     return SuperTabMessageRow(
       key: ValueKey(
         '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
@@ -4141,16 +3670,6 @@ class _SuperTabViewState extends State<SuperTabView>
       joinsBelow: joinsBelow,
       oneOnOne: _oneOnOne(message),
       to: _postTo(message),
-      brief: card?.task == true ? _briefCard(group!, message) : null,
-      card: card == null
-          ? null
-          : SuperTabLiveCard(
-              group: group!,
-              card: card,
-              controller: c,
-              facts: _facts,
-              titled: !card.task,
-            ),
       author: _shownAuthor(c, message),
       // A person is found by their username, as they are tagged, and reads
       // as the name they set.
@@ -5096,32 +4615,6 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
-        if (group != null)
-          for (final agent in _needsHuman(group))
-            _inColumn(
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
-                child: ListTile(
-                  key: ValueKey('super-needs-human-${agent.id}'),
-                  dense: true,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  tileColor: grid.AppPalette.warn.withValues(alpha: .08),
-                  leading: Icon(
-                    AppIcons.messageCircleQuestionMark,
-                    color: grid.AppPalette.warn,
-                    size: 18,
-                  ),
-                  title: Text(
-                    '${_agentName(agent)} needs you',
-                    style: DesktopChrome.control(medium: true),
-                  ),
-                  trailing: const Icon(AppIcons.arrowRight, size: 16),
-                  onTap: () => _openQuestion(group, agent),
-                ),
-              ),
-            ),
         ListenableBuilder(
           listenable: completing,
           builder: (context, _) {
@@ -5194,14 +4687,6 @@ class _SuperTabViewState extends State<SuperTabView>
                       c.openBuddyChat(SuperTabController.kSwarmBuddyKey),
                     ),
                     child: const Text('Open # buddy'),
-                  )
-                else if (c.canWrite)
-                  TextButton(
-                    key: const ValueKey('super-group-reopen'),
-                    onPressed: c.saving
-                        ? null
-                        : () => _groupAction('archive', group),
-                    child: const Text('Reopen'),
                   ),
               ],
             ),

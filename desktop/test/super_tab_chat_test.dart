@@ -15,18 +15,6 @@ import 'support/super_tab_fixture.dart';
 import 'support/super_tab_swarm.dart' show addAskingAgent, swarm;
 
 void main() {
-  test('work that waits on a person reads as people say it', () {
-    expect(superTabWorkWaits('needs_human'), isTrue);
-    expect(superTabWorkWaits('blocked'), isTrue);
-    expect(superTabWorkWaits('working'), isFalse);
-    expect(superTabWorkWaits(null), isFalse);
-    expect(superTabWorkStatusLabel('blocked'), 'stuck');
-    expect(superTabWorkStatusLabel('needs_human'), 'needs human');
-    expect(superTabWorkStatusLabel('reconciling'), 'reconciling');
-    expect(superTabWorkStatusLabel('cancelled'), 'cancelled');
-    expect(superTabWorkWaits('cancelled'), isFalse);
-  });
-
   Future<SuperTabController> show(
     WidgetTester tester,
     ConversationServer server, {
@@ -524,50 +512,6 @@ void main() {
             .text,
         isEmpty,
       );
-    },
-  );
-
-  testWidgets(
-    'a human request belongs only to its group and clears with the recorded state',
-    (tester) async {
-      final server = ConversationServer.chat();
-      server.state['agents'] = [
-        {
-          'id': 'builder',
-          'name': 'Builder',
-          'machineId': 'host',
-          'harnessId': 'session',
-          'contributorId': 'owner',
-          'configuration': {'engine': 'codex'},
-        },
-      ];
-      (server.state['conversations'] as List)[1]['agentIds'] = ['builder'];
-      final group = (server.state['conversations'] as List)[1] as Map;
-      group['assignment'] = {
-        'id': 'attempt',
-        'agentId': 'builder',
-        'status': 'needs_human',
-        'result': 'Which device should I test?',
-      };
-      final c = await show(tester, server);
-      expect(find.text('Builder needs you'), findsNothing);
-      c.select('offline');
-      await tester.pumpAndSettle();
-      expect(find.text('Builder needs you'), findsOneWidget);
-      group['assignment']['status'] = 'working';
-      server.revision++;
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(find.text('Builder needs you'), findsNothing);
-      // Stuck is a wait on CI, a review or a machine, not a question to the
-      // reader: no bar (#3017).
-      group['assignment']
-        ..['status'] = 'blocked'
-        ..['result'] = 'The staging key is missing.';
-      server.revision++;
-      await c.refresh();
-      await tester.pumpAndSettle();
-      expect(find.text('Builder needs you'), findsNothing);
     },
   );
 

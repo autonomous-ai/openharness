@@ -9,9 +9,6 @@
   "desktop/lib/super_tabs/attachment_text_viewer.dart": {
     "edge-insets": 1
   },
-  "desktop/lib/super_tabs/confetti.dart": {
-    "hex-color": 6
-  },
   "desktop/lib/super_tabs/local_models.dart": {
     "edge-insets": 7,
     "border-radius": 3
@@ -43,14 +40,10 @@
   "desktop/lib/super_tabs/sharing.dart": {
     "edge-insets": 4
   },
-  "desktop/lib/super_tabs/ship_row.dart": {
-    "edge-insets": 1
-  },
   "desktop/lib/super_tabs/terminal_row.dart": {
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/view.dart": {
-    "edge-insets": 16,
-    "border-radius": 1
+    "edge-insets": 15
   }
 }

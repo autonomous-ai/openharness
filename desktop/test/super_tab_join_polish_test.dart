@@ -7,7 +7,6 @@ import 'package:harness/super_tabs/join_link.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/switch_pm.dart';
-import 'package:harness/super_tabs/work_details.dart';
 
 import 'support/super_tab_fixture.dart';
 
@@ -114,10 +113,6 @@ void main() {
       t,
       (context, c) => showProjectAction(context, c, project(c), 'sharing'),
     );
-  });
-
-  testWidgets('Work details offers Check again', (t) async {
-    await pendingIn(t, (context, c) => showSuperTabWork(context, c, 'offline'));
   });
 
   testWidgets('Switch Product Manager offers Check again', (t) async {

@@ -415,12 +415,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       }
       return;
     }
-    bool waitsThere(SuperTabConversation group) =>
-        group.assignment?['agentId'] == agent.id &&
-        superTabWorkWaits(group.assignment?['status']);
     final group =
         groups.where((g) => g.id == request.conversationId).firstOrNull ??
-        groups.where(waitsThere).firstOrNull ??
         groups.where((g) => g.id == controller.selectedId).firstOrNull ??
         groups.first;
     _focusAgent(controller, tabId, agent, group.id);
