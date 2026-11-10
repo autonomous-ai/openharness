@@ -14,7 +14,7 @@ import 'super_tab_fixture.dart';
 /// channel only agents post in. Juno is on a computer that is off. Its channel is `channel`, not the default `lead`, so what a
 /// first open lands on is the project's own. Each agent has its 1:1 chat with its person, `agent-chat-<id>`. A smaller world
 /// than `swarmV4Server`'s replay of lampOS: every line in it is known, so a test can say what a person sees of each.
-ConversationServer swarmV4Channel() {
+ConversationServer swarmV4Channel({String pip = 'Pip', String juno = 'Juno'}) {
   final server = ConversationServer()..threads = true;
   final groups = (server.state['conversations'] as List)
       .cast<Map<String, dynamic>>();
@@ -55,14 +55,10 @@ ConversationServer swarmV4Channel() {
   };
   server.state['agents'] = [
     agent('faye', 'Faye', 'pm'),
-    agent('pip', 'Pip', 'regular'),
-    agent('juno', 'Juno', 'regular', machine: 'laptop', down: true),
+    agent('pip', pip, 'regular'),
+    agent('juno', juno, 'regular', machine: 'laptop', down: true),
   ];
-  for (final (id, name) in [
-    ('faye', 'Faye'),
-    ('pip', 'Pip'),
-    ('juno', 'Juno'),
-  ]) {
+  for (final (id, name) in [('faye', 'Faye'), ('pip', pip), ('juno', juno)]) {
     groups.add({
       ...conversationFixture('agent-chat-$id', name),
       'kind': 'agent-chat',

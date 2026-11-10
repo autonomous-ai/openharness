@@ -115,8 +115,7 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/terminal', scope: 'machine' },
   { method: 'GET', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId', scope: 'machine' },
-  // A read-only token for a queued start's repository, to clone and fetch its folder before the agent exists: a team account
-  // has no git login of its own (routes/superTabs.ts).
+  // A queued start's repository token (retired with Swarm v4, slice S6: answered as a server without the app, routes/superTabs.ts).
   { method: 'POST', url: '/api/super-tabs/hosts/:machineId/starts/:tabId/:startId/github-token', scope: 'machine' },
   { method: 'POST', url: '/api/super-tabs/:tabId/machines/:machineId', scope: 'machine' },
   // The same readings for all of its Swarms in one call (DB roadmap 2.5).
@@ -139,8 +138,8 @@ export const TEAM_ROUTES: readonly TeamRoute[] = [
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/instructions/revisions/:revision', scope: 'agent' },
   // Its project's rules record, which a Team-account PM reads for the revision it saves on (superTabs/policy.ts).
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/rules', scope: 'agent' },
-  // What the route ranks by: the project's measured costs and its CI load (superTabs/costs/read.ts, github/ciLoad.ts). Missing
-  // here until 2026-11-03, so a Team PM routed without them and the CI hold never applied.
+  // What the route ranks by: the project's measured costs and its CI load (superTabs/costs/read.ts; the CI load answers
+  // "unavailable" since Swarm v4, slice S6).
   { method: 'GET', url: '/api/super-tabs/:tabId/costs', scope: 'agent' },
   { method: 'GET', url: '/api/super-tabs/:tabId/projects/:projectId/ci-load', scope: 'agent' },
   // The decisions its agent asked of people, and their answers (superTabs/decisions.ts).

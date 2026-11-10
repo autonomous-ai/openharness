@@ -134,9 +134,18 @@ HarnessLaunchIntegration swarmNewAgent(
 
 /// Attach, beside + in Your Team (Swarm v4, anh Dee 2026-11-09: "this is like cmd p. while + is like cmd n"): an agent
 /// already running on one of its person's own computers joins their team as + New agent's does, with its own 1:1 chat,
-/// which opens. Its name is the one its person gave it, else one of the Swarm's. Nothing is typed into it: it goes on with
-/// what it was doing, and its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection
-/// lost is tried again as the same operation, which never adds it twice.
+/// which opens. A stopped one is resumed first, in the same step (anh Dee 2026-11-10). It keeps its own name (anh Dee
+/// 2026-11-10, attaching juno and pip: "they got different name?") unless that name is automatic or the Swarm already
+/// uses or refuses it, when it gets one of the Swarm's. Nothing is typed into it: it goes on with what it was doing, and
+/// its daemon tells it the team's ways once it is in (cli superTabs/host.ts). A join the connection lost is tried again
+/// as the same operation, which never adds it twice.
+/// The server's refusals of a name (backend superTabs/agentRename.ts).
+const _nameRefusals = {
+  'AGENT_NAME_TAKEN',
+  'AGENT_NAME_ROLE',
+  'INVALID_AGENT_NAME',
+};
+
 Future<void> swarmAttachAgent(
   AppNotifier app,
   String tabId,
@@ -151,14 +160,22 @@ Future<void> swarmAttachAgent(
       'Only Claude Code or Codex can join this Swarm.',
     );
   }
-  final creationId = superTabOperationId();
   final started = DateTime.now();
+  if (native.isStopped) {
+    final refused = await app.resumeStoppedSession(machineId, native.id);
+    if (refused != null) throw SuperTabFailure('AGENT_UNAVAILABLE', refused);
+  }
+  final creationId = superTabOperationId();
   final snapshot = await app.superTabs.readSnapshot(tabId);
-  final name = native.nameChosen == true
-      ? native.name
-      : freshAgentName([
-          for (final agent in snapshot.agents) agent.displayName ?? agent.name,
-        ]);
+  final taken = [
+    for (final agent in snapshot.agents) agent.displayName ?? agent.name,
+  ];
+  final own = native.name.trim();
+  final keepOwn =
+      own.isNotEmpty &&
+      !isAutomaticHarnessName(own) &&
+      !taken.any((name) => name.toLowerCase() == own.toLowerCase());
+  var name = keepOwn ? own : freshAgentName(taken);
 
   Future<Map<String, dynamic>> run(
     String step,
@@ -184,7 +201,7 @@ Future<void> swarmAttachAgent(
     }
   }
 
-  final chat = await run('chat', {
+  Future<Map<String, dynamic>> newChat(String step) => run(step, {
     'type': 'agent.new',
     'kind': 'regular',
     'machineId': machineId,
@@ -192,6 +209,16 @@ Future<void> swarmAttachAgent(
     'name': name,
     'local': true,
   });
+  Map<String, dynamic> chat;
+  try {
+    chat = await newChat('chat');
+  } on SuperTabFailure catch (failure) {
+    // The server refuses names Desktop cannot see (a person's here, a reserved
+    // word): its own name then gives way, as an automatic one does.
+    if (!keepOwn || !_nameRefusals.contains(failure.code)) rethrow;
+    name = freshAgentName([...taken, own]);
+    chat = await newChat('chat-named');
+  }
   final chatId = chat['conversationId'] as String;
   await run('join', {
     'type': 'agent.add',
