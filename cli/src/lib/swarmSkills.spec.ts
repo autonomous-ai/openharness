@@ -47,10 +47,12 @@ describe('Swarm sessions without skill files (task #4673)', () => {
     expect(SWARM_BASICS).toContain('harness super-tab read ok|hold OWNER/REPO#N SHA \'what you found\'')
     for (const byHand of ['status:taken', 'taken by', 'READ-OK <sha>', 'HOLD <sha>']) expect(SWARM_BASICS, byHand).not.toContain(byHand)
   })
-  it('keeps what code reads from an agent: its name opening each post on GitHub, and its name opening its branch', () => {
+  it('keeps what code reads from an agent: its name opening each post on GitHub and its branch, and its label on its pull request', () => {
     // githubMentions.ts signedBy: its own post is not brought back to it. githubMerge.ts authorOf: whose pull request it is.
     expect(SWARM_BASICS).toContain('open each post with your name')
     expect(SWARM_BASICS).toContain('Branch <your name>/<N>')
+    // githubMentions.ts: what is said on a pull request is brought to the agent whose builder label it carries.
+    expect(SWARM_BASICS).toContain('has your builder:<name> label')
   })
   it('tells every agent where the team talks and how a post wakes someone', () => {
     for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'coordinator', key: 'lead' }] as const) {
