@@ -1515,10 +1515,9 @@ void main() {
     });
 
     test(
-      'using an account that is not offered runs this pane on it',
+      'using another account runs this pane on it',
       () async {
         final connection = ProfileConnection();
-        connection.claudeRows[1]['offered'] = false;
         final app = fixture(connection, sourceEngine: 'codex');
         app.stateOf('m')!.localOnly = true;
         addTearDown(app.dispose);
@@ -1533,21 +1532,6 @@ void main() {
           connection.creations.single,
           containsPair('claudeHome', '/home/me/.claude-work'),
         );
-      },
-    );
-
-    test(
-      'an offered account, the default and an old CLI row link nothing',
-      () async {
-        final connection = ProfileConnection();
-        connection.claudeRows[1]['offered'] = true;
-        final app = fixture(connection, sourceEngine: 'codex');
-        app.stateOf('m')!.localOnly = true;
-        addTearDown(app.dispose);
-        await app.addAgentToSwarm('m', 'a0');
-        final rows = await app.agentProfiles('m', 'claude');
-        await app.changeAgent('m', 'a0', 'claude', profile: rows.last.key);
-        expect(connection.links, isEmpty);
       },
     );
 

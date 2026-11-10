@@ -95,7 +95,6 @@ void main() {
           'm',
           setupId: 'setup-1',
           alive: () => true,
-          readResources: (_) async => null,
         ).then((id) => added = id),
       );
       // Preparation is ready from its second read, a second apart.
