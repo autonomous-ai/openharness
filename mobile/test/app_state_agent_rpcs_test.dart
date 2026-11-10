@@ -2202,6 +2202,37 @@ void main() {
   });
 
   group('the machine itself', () {
+    test('a Harness OS computer\'s refusal keeps its own code and words; '
+        'only no answer is unavailable', () async {
+      final rig = await signedInWith({
+        'm': ['a'],
+      });
+      addTearDown(rig.app.dispose);
+
+      rig.conn('m').answers['os_device'] = (_) =>
+          throw const WsRequestFailure(
+            responseType: 'os_device_result',
+            code: 'BUSY',
+          );
+      expect(await rig.app.osDevice('m', {'action': 'update'}), {
+        'error': 'BUSY',
+      });
+      rig.conn('m').answers['os_device'] = (_) =>
+          throw const WsRequestFailure(
+            responseType: 'os_device_result',
+            code: 'WRONG_PASSWORD',
+            message: 'That is not the computer\'s password.',
+          );
+      expect(await rig.app.osDevice('m', {'action': 'password'}), {
+        'error': 'WRONG_PASSWORD',
+        'message': 'That is not the computer\'s password.',
+      });
+      rig.conn('m').answers['os_device'] = (_) => throw StateError('gone');
+      expect(await rig.app.osDevice('m', {'action': 'update'}), {
+        'error': 'UNAVAILABLE',
+      });
+    });
+
     test('a rename goes to the account and shows at once', () async {
       final rig = await signedInWith({
         'm': ['a'],
