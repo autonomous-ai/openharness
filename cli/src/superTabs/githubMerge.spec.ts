@@ -149,6 +149,15 @@ describe('Harness merges by rule, as lampOS\'s train bot does (githubMerge.ts)',
     expect(f.comments()).toEqual([expect.stringMatching(/not merged yet at f6edb44: the READ-OK from deehw is unsigned, and every agent of its person posts as that login: its reader signs it, as in "<name>, \d\d:\d\d: READ-OK f6edb44"\.$/)])
   })
 
+  // A reader is one however it writes its name: a HOLD as "Kai Lee" stood for good after its READ-OK as "kai-lee".
+  it('lets a reader\'s later READ-OK lift its own HOLD however it writes its name', async () => {
+    const f = setup()
+    f.github.repo.comments.set(4, [comment('Kai Lee, 14:10: HOLD f6edb44 fix the test'),
+      comment('kai-lee, 14:30: READ-OK f6edb44', { created_at: '2026-11-09T12:30:00Z' })])
+    await f.merger.tick()
+    expect(f.merges()).toHaveLength(1)
+  })
+
   it('counts a reader who signs its name two ways once for TWO READS', async () => {
     const f = setup()
     f.github.repo.pulls = [pull({ body: 'Closes #2\n\nTWO READS: it changes the default voice.' })]
