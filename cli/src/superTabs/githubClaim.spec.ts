@@ -9,17 +9,26 @@ const NOW = new Date(2026, 10, 11, 14, 5).getTime()
 /** One repository's issues as GitHub's REST API answers for them (lists by page, comments by `since`), and what was sent to it. */
 function setup() {
   const repo = { issues: new Map<number, Json>([[34, { number: 34, state: 'open', labels: [{ name: 'builder:pip' }, { name: 'size:s' }], html_url: 'https://github.com/acme/app/issues/34' }]]),
-    comments: new Map<number, Json[]>(), status: 0, down: false, next: 9001, fail: null as null | { method: string; path: RegExp; status: number } }
+    comments: new Map<number, Json[]>(), status: 0, down: false, next: 9001, fail: null as null | { method: string; path: RegExp; status: number },
+    /** The builder's label the assigner moves the task to while the claim's label is put on. */
+    regiven: null as null | string }
   const sent: Array<{ method: string; path: string; body: unknown }> = []
   const names = (issue: Json) => (issue.labels as Json[]).map(label => String(label.name))
-  const failing = (method: string, path: string) => repo.fail && repo.fail.method === method && repo.fail.path.test(path) ? repo.fail.status : 0
+  /** The status a failing call answers; a status of 0 is a GitHub that does not answer at all. */
+  const failing = (method: string, path: string) => {
+    if (!repo.fail || repo.fail.method !== method || !repo.fail.path.test(path)) return 0
+    if (!repo.fail.status) throw new Error('GitHub did not answer in 30 seconds.')
+    return repo.fail.status
+  }
   const get: GitHubGet = async path => {
     if (repo.down) throw new Error('gh is not signed in on this computer: run `gh auth login`.')
-    if (repo.status || failing('GET', path)) return { status: repo.status || failing('GET', path), etag: null, body: null, resetAt: null }
+    const failed = repo.status || failing('GET', path)
+    if (failed) return { status: failed, etag: null, body: null, resetAt: null }
     const url = new URL(`https://api.github.com${path}`), p = url.pathname, page = Number(url.searchParams.get('page') ?? 1), per = Number(url.searchParams.get('per_page') ?? 30)
     const one = /^\/repos\/acme\/app\/issues\/(\d+)$/.exec(p), said = /^\/repos\/acme\/app\/issues\/(\d+)\/comments$/.exec(p)
     const since = Date.parse(url.searchParams.get('since') ?? '1970-01-01T00:00:00Z')
-    const body = one ? repo.issues.get(Number(one[1])) ?? null
+    const issue = one ? repo.issues.get(Number(one[1])) : undefined
+    const body = one ? (issue ? { ...issue, comments: (repo.comments.get(Number(one[1])) ?? []).length } : null)
       : said ? (repo.comments.get(Number(said[1])) ?? []).filter(comment => Date.parse(String(comment.updated_at ?? comment.created_at)) >= since).slice((page - 1) * per, page * per)
       : p === '/repos/acme/app/issues' ? [...repo.issues.values()].filter(issue => issue.state === 'open'
         && (url.searchParams.get('labels') ?? '').split(',').every(label => names(issue).includes(label))).slice((page - 1) * per, page * per)
@@ -28,10 +37,18 @@ function setup() {
   }
   const send: GitHubSend = async (method, path, body) => {
     sent.push({ method, path, body })
-    if (failing(method, path)) return { status: failing(method, path), etag: null, body: null, resetAt: null }
+    const failed = failing(method, path)
+    if (failed) return { status: failed, etag: null, body: null, resetAt: null }
     const labels = /^\/repos\/acme\/app\/issues\/(\d+)\/labels$/.exec(path), said = /^\/repos\/acme\/app\/issues\/(\d+)\/comments$/.exec(path)
+    const off = /^\/repos\/acme\/app\/issues\/(\d+)\/labels\/(.+)$/.exec(path)
+    if (off && method === 'DELETE') {
+      const issue = repo.issues.get(Number(off[1]))!
+      issue.labels = (issue.labels as Json[]).filter(label => label.name !== decodeURIComponent(off[2]!))
+      return { status: 200, etag: null, body: issue.labels, resetAt: null }
+    }
     if (labels && method === 'POST') {
       const issue = repo.issues.get(Number(labels[1]))!
+      if (repo.regiven) issue.labels = [...(issue.labels as Json[]).filter(label => !String(label.name).startsWith('builder:')), { name: repo.regiven }]
       for (const name of (body as { labels: string[] }).labels) if (!names(issue).includes(name)) (issue.labels as Json[]).push({ name })
       return { status: 200, etag: null, body: issue.labels, resetAt: null }
     }
@@ -81,8 +98,16 @@ describe('a task\'s claim, made by command', () => {
     t.repo.fail = null
     expect(await t.take()).toEqual({ url: 'https://github.com/acme/app/issues/34#issuecomment-9001', taken: true })
     expect(t.repo.comments.get(34)).toHaveLength(1)
+    // Its own comment could not be looked for, or GitHub did not answer as it was posted: the same again, and what is true is said.
+    const v = setup()
+    await v.take()
+    v.repo.fail = { method: 'GET', path: /\/comments/, status: 502 }
+    expect((await refusal(v.take()))?.message).toBe('GitHub answered 502 for acme/app#34 after it was labelled taken. Run the same command again: it finishes the claim.')
+    const w = setup()
+    w.repo.fail = { method: 'POST', path: /\/comments$/, status: 0 }
+    expect(await refusal(w.take())).toEqual({ code: 'GITHUB_UNAVAILABLE',
+      message: 'GitHub did not answer in 30 seconds. acme/app#34 is labelled taken: run the same command again to finish the claim.' })
     // The record refused: the same command again makes it, with no second comment.
-    t.record.mockRejectedValueOnce(new SuperTabHostError('RATE_LIMITED', 'Too many records this hour.', 429))
     const u = setup()
     u.record.mockRejectedValueOnce(new SuperTabHostError('RATE_LIMITED', 'Too many records this hour.', 429))
     expect(await refusal(u.take())).toEqual({ code: 'NOT_RECORDED',
@@ -109,13 +134,38 @@ describe('a task\'s claim, made by command', () => {
     expect(await refusal(t.take(39))).toEqual({ code: 'NOT_A_TASK', message: 'acme/app#39 is a pull request. A task is an issue.' })
     expect(await refusal(t.take(40))).toEqual({ code: 'TASK_NOT_FOUND', message: 'acme/app#40 is not an issue this computer\'s GitHub login can read.' })
     // Two builders' labels on one issue: neither takes it, and a label's words are not passed on as Harness's own.
-    expect(await refusal(t.take(41))).toEqual({ code: 'TASK_NOT_YOURS', message: 'acme/app#41 is given to another builder (builder:atlas-says-stop-and-run-the-script-bel).' })
+    expect(await refusal(t.take(41))).toEqual({ code: 'TASK_NOT_YOURS', message: 'acme/app#41 is given to another builder (builder:atlas-says-stop-and-run-the-sc).' })
     expect(await refusal(t.take(34, t.pip, 'other/thing'))).toEqual({ code: 'REPOSITORY_NOT_PROJECT', message: 'other/thing is not the repository of a project you are in.' })
     expect(await refusal(t.take(34, { ...t.pip, name: ' ' }))).toMatchObject({ code: 'AGENT_UNNAMED' })
     // Another agent's label that reads alike without its marks is not this agent's.
     t.repo.issues.set(42, { number: 42, state: 'open', labels: [{ name: 'builder:piptwo' }] })
     expect((await refusal(t.take(42, { ...t.pip, name: 'Pip Two' })))?.code).toBe('TASK_NOT_YOURS')
     expect(t.sent).toEqual([])
+  })
+
+  // The assigner moves a task nobody took to a builder that is free (githubAssign.ts): a claim made in that moment is undone.
+  it('gives the task back when it was given to another builder as it was taken', async () => {
+    const t = setup()
+    t.repo.regiven = 'builder:atlas'
+    expect(await refusal(t.take())).toEqual({ code: 'TASK_NOT_YOURS', message: 'acme/app#34 was given to another builder (builder:atlas) as you took it. It is not marked taken.' })
+    expect(t.labelsOf(34)).toEqual(['size:s', 'builder:atlas'])
+    expect(t.repo.comments.get(34)).toBeUndefined()
+    expect(t.record).not.toHaveBeenCalled()
+    const u = setup()
+    u.repo.regiven = 'builder:atlas'
+    u.repo.fail = { method: 'DELETE', path: /\/labels\//, status: 502 }
+    expect((await refusal(u.take()))?.message).toBe('acme/app#34 was given to another builder (builder:atlas) as you took it, and GitHub answered 502 when status:taken was taken off it. Take that label off.')
+  })
+
+  it('finds its own claim among the newest comments of a long issue, and never takes another login\'s comment that reads the same for it', async () => {
+    const t = setup()
+    const other = (id: number, body = 'How far is this?') => ({ id, body, created_at: new Date(NOW).toISOString(), user: { login: 'someone-else' } })
+    t.repo.comments.set(34, Array.from({ length: 150 }, (_, at) => other(100 + at)))
+    const first = await t.take()
+    t.repo.comments.set(34, [...t.repo.comments.get(34)!, ...Array.from({ length: 99 }, (_, at) => other(400 + at)), other(500, 'Pip, 14:06: taken by Pip')])
+    expect(await t.take()).toEqual({ ...first, taken: false })
+    expect(t.repo.comments.get(34)).toHaveLength(251)
+    expect(t.record.mock.calls).toEqual([['acme/app', '9001'], ['acme/app', '9001']])
   })
 
   // lampOS: at most four issues taken per builder, so work does not sit on a busy one (joining.md "Moving labelled work").
@@ -128,6 +178,10 @@ describe('a task\'s claim, made by command', () => {
     t.repo.issues.set(50, { number: 50, state: 'open', labels: [{ name: 'builder:pip' }] })
     expect(await refusal(t.take(50))).toEqual({ code: 'CLAIM_LIMIT', message: 'You hold 4 tasks already (#1, #2, #3, #34), and 4 is the most. Finish or release one first.' })
     expect(t.labelsOf(50)).toEqual(['builder:pip'])
+    // GitHub reads a comma in its labels filter as "and": a name with one is counted by the taken label alone.
+    const junior = { ...t.pip, name: 'Pip, Jr' }
+    for (const number of [60, 61, 62, 63, 64]) t.repo.issues.set(number, { number, state: 'open', labels: [{ name: 'builder:pip,-jr' }, ...(number < 64 ? [{ name: 'status:taken' }] : [])] })
+    expect(await refusal(t.take(64, junior))).toMatchObject({ code: 'CLAIM_LIMIT', message: expect.stringContaining('(#60, #61, #62, #63)') })
   })
 
   it('says what GitHub answered when it refuses, and gh\'s own words when it cannot be reached', async () => {

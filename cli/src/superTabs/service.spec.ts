@@ -1077,13 +1077,14 @@ describe('a verdict by command', () => {
     const t = verdictSetup()
     t.github.get.mockImplementation(async (path: string) => ({ status: 200, etag: null, resetAt: null,
       body: /\/issues\/34$/.test(path) ? { number: 34, state: 'open', labels: [{ name: 'builder:juno' }], html_url: 'https://github.com/acme/app/issues/34' }
-        : path.includes('/comments') ? [{ id: 9001, body: 'Juno, 14:05: taken by Juno' }] : [] }))
+        : [] }))
     t.github.send.mockImplementation(async (_method: string, path: string, body?: unknown) => { t.sent.push({ path, body })
-      return { status: path.endsWith('/labels') ? 200 : 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } })
+      return path.endsWith('/labels') ? { status: 200, etag: null, resetAt: null, body: [{ name: 'builder:juno' }, { name: 'status:taken' }] }
+        : { status: 201, etag: null, resetAt: null, body: { id: 9001, html_url: 'https://github.com/acme/app/pull/27#issuecomment-9001' } } })
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner))
       .toEqual({ ok: true, value: { url: 'https://github.com/acme/app/pull/27#issuecomment-9001', taken: true } })
-    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/comments', '/repos/acme/app/issues/34/labels'])
-    expect(t.sent[0]!.body).toEqual({ body: expect.stringMatching(/^Juno, \d\d:\d\d: taken by Juno$/) })
+    expect(t.sent.map(sent => sent.path)).toEqual(['/repos/acme/app/issues/34/labels', '/repos/acme/app/issues/34/comments'])
+    expect(t.sent[1]!.body).toEqual({ body: expect.stringMatching(/^Juno, \d\d:\d\d: taken by Juno$/) })
     expect(t.call).toHaveBeenCalledWith('POST', `/api/super-tabs/tab/github-comments?asAgentId=${t.agentId}`, { repository: 'acme/app', kind: 'issue', commentId: '9001' })
     expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 0 }, owner)).toEqual({ error: 'INVALID_REQUEST' })
     t.service.port.stop()
@@ -1094,6 +1095,8 @@ describe('a verdict by command', () => {
     for (const other of [{ contributorId: 'mate' }, { machineOwnerId: 'mate' }]) {
       const t = verdictSetup(other)
       expect(await t.read()).toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'A verdict is posted with its person\'s own GitHub login, on that person\'s computer.' })
+      expect(await t.service.requests.super_tabs({ action: 'take', tabId: 'tab', harnessId: 'native', repository: 'acme/app', number: 34 }, owner))
+        .toEqual({ error: 'AGENT_UNAVAILABLE', detail: 'A task is taken with its person\'s own GitHub login, on that person\'s computer.' })
       expect(t.github.get).not.toHaveBeenCalled()
       t.service.port.stop()
     }
