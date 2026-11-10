@@ -9,19 +9,19 @@ import 'support/super_tab_fixture.dart';
 /// sits centered between messages only after a pause of more than about five
 /// minutes; a bubble's exact time is on its tooltip.
 void main() {
-  ConversationServer server() {
+  /// Three messages before [last], in this computer's time zone: by default a
+  /// fixed noon, so they never straddle a midnight, whenever the test runs.
+  ConversationServer server({DateTime? last}) {
     final server = ConversationServer.chat();
-    // A fixed noon, in this computer's own time zone: the three never straddle a midnight, whenever and wherever the test
-    // runs (CI on UTC failed it from 00:10 to 00:28, when the third fell on the next day and drew a day line, no time).
-    final now = DateTime(2026, 11, 7, 12);
-    for (final (text, minutesAgo) in [
+    final end = last ?? DateTime(2026, 11, 7, 12);
+    for (final (text, minutesBefore) in [
       ('First', 30),
       ('Two minutes on', 28),
       ('After a pause', 10),
     ]) {
       server.append(text);
-      server.messages.last['createdAt'] = now
-          .subtract(Duration(minutes: minutesAgo))
+      server.messages.last['createdAt'] = end
+          .subtract(Duration(minutes: minutesBefore))
           .toUtc()
           .toIso8601String();
     }
@@ -56,6 +56,15 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  testWidgets('after a midnight the day line stands for the time', (
+    tester,
+  ) async {
+    // The third falls on the next day: its day line, and no time of its own.
+    await showView(tester, server(last: DateTime(2026, 11, 8, 0, 15)));
+    expect(time('message-3'), findsNothing);
+    expect(find.textContaining('Nov 8'), findsWidgets);
   });
 
   testWidgets('a bubble\'s exact time is on its tooltip', (tester) async {
