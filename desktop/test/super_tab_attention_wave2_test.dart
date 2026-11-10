@@ -72,19 +72,12 @@ ConversationServer _swarm() {
   _fromLead(server, 'Release notes are up.', 'roster');
   server.markReadElsewhere('roster', server.revision);
   _fromLead(server, 'Mockup posted for review.', 'offline');
-  server.tag('message-2', conversationId: 'offline');
   _fromLead(
     server,
     'Heavy CI is held while the account is at its limit.',
     'routing',
   );
   _fromLead(server, 'Which option should ship?', 'web-lead');
-  server.ask(
-    ['Ship it behind a flag?'],
-    conversationId: 'web-lead',
-    projectId: 'web',
-  );
-  server.tag('message-1', threadId: 'message-1');
   _fromLead(server, 'Weekly plan', 'lead');
   _fromLead(server, 'Looks right to me.', 'lead');
   server.messages.last['thread'] =

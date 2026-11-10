@@ -203,9 +203,10 @@ void main() {
         matching: find.text(long),
       ),
     );
-    // Side by side: the name gives way, and who it is to stays beside it.
+    // Side by side on one line: the name gives way with an ellipsis, and who it is to stays beside it.
     expect(to.left, greaterThanOrEqualTo(name.right));
     expect((to.center.dy - name.center.dy).abs(), lessThan(8));
+    expect(name.height, to.height);
   });
 
   testWidgets('a task\'s chat reads its posts the same way', (tester) async {

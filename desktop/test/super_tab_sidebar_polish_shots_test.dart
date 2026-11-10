@@ -1,8 +1,7 @@
 // The left pane's fixes of the Desktop 1.3.89 audit (task #4445, group C), for the PR's pictures, light and dark, at
-// an 880 window (the left pane at its least) and at 1500: a folded Projects with a tag waiting (finding 19), a row
-// reached by Tab beside the selected one (finding 21), and the polish (a long Swarm name, a PM's project after a
-// separator, an agent with no chat yet, "No projects yet."). Writes nothing unless HARNESS_SUPER_TAB_CAPTURE
-// names a folder.
+// an 880 window (the left pane at its least) and at 1500: a row reached by Tab beside the selected one (finding 21),
+// and the polish (a long Swarm name, a PM's project after a separator, an agent with no chat yet, "No projects
+// yet."). Writes nothing unless HARNESS_SUPER_TAB_CAPTURE names a folder.
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
@@ -44,12 +43,7 @@ void main() {
 
   for (final brightness in Brightness.values) {
     for (final width in [880.0, 1500.0]) {
-      for (final scene in [
-        'folded-waiting',
-        'focus',
-        'polish',
-        'no-projects',
-      ]) {
+      for (final scene in ['focus', 'polish', 'no-projects']) {
         testWidgets('$scene at ${width.toInt()} (${brightness.name})', (
           tester,
         ) async {
@@ -80,7 +74,6 @@ void main() {
               'agentIds': ['kestrel'],
             });
           }
-          if (scene == 'folded-waiting') server.tag('message-1');
           if (scene == 'polish') {
             server.state['name'] = 'Autonomous Robotics Collective';
           }
