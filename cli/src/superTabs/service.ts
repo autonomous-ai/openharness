@@ -16,6 +16,7 @@ import { answerFirstRun } from '../engines/launchPrep.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
+import { FirstAnswers } from './firstAnswers.js'
 import { GitHubMentions, watchedAgents } from './githubMentions.js'
 import { ShippingReporter } from './shipping.js'
 import { githubRest } from './githubRest.js'
@@ -121,6 +122,8 @@ export interface SuperTabServiceOptions {
   githubAssign?: (core: CoreApi, sources: () => SwarmSources) => Pick<GitHubAssign, 'start' | 'stop'>
   /** What reports what this computer's person's agents shipped to the Swarm's leaderboard (superTabs/shipping.ts), for a spec. */
   shipping?: (core: CoreApi) => Pick<ShippingReporter, 'start' | 'stop'>
+  /** What posts an agent's answer to its launch line in its chat (superTabs/firstAnswers.ts), for a spec. */
+  firstAnswers?: (core: CoreApi, sources: () => SwarmSources) => Pick<FirstAnswers, 'start' | 'stop'>
 }
 const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
 /** What an agent's commands send as the agent: a post or an answer, and a read of another agent's terminal or typing into it.
@@ -187,6 +190,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     get: github.get, send: github.send })))(core, sources)
   // What this computer's person's agents shipped, read from GitHub with their own gh and told to the leaderboard (shipping.ts).
   const shipping = (options.shipping ?? (api => new ShippingReporter(api)))(core)
+  // An agent's answer to the launch line the daemon typed as it made it, in its chat with its person (firstAnswers.ts): as
+  // the agent, as the host posts a reply (agentReplies.ts).
+  const firstAnswers = (options.firstAnswers ?? ((api, held) => new FirstAnswers({
+    me: async () => (await api.account.identity().catch(() => null))?.accountId ?? null, live: id => !!api.agents.byAgent(id),
+    roster: async () => (await held().feed.current(60_000)).roster, read: async (tabId, agentId) => (await held().reads.read(tabId, agentId)).state,
+    working: async id => { const now = (await api.agents.activity([id]))[id]; return now === 'working' ? true : now === 'idle' ? false : null },
+    lastTurn: async id => { const session = api.agents.byAgent(id)?.sessionId; return session ? api.transcripts.lastTurn(session) : null },
+    post: (agent, operationId, text) => backend(api, 'POST', `/api/super-tabs/${agent.tabId}/commands`, { operationId, asAgentId: agent.agentId,
+      command: { type: 'message.send', conversationId: agent.chat, text, replyTo: null, recipientIds: [] } }),
+    file: join(api.dataDir, 'super-tab-first-answers.json'),
+  })))(core, sources)
   const wake = () => {
     const machine = core.daemon.machineId()
     if (host?.machineId !== machine) { host?.stop(); host = null }
@@ -197,6 +211,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     merges.start()
     assigns.start()
     shipping.start()
+    firstAnswers.start()
     return host
   }
   // The Swarm cards for a Harness Pro (superTabs/cards.ts), read while a device that shows them is attached and told to the core.
@@ -215,7 +230,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   const tokens = (options.githubTokens ?? (api => new GitHubTokenRefresher(api, sources)))(core)
   // The server's word that one of this machine's Swarms changed, heard while no host runs (Amon, #3215).
   let hostWake: (() => void) | null = null
-  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
+  const disconnect = () => { hostWake?.(); hostWake = null; preparations.clear(); claudeSignIns.stop(); host?.stop(); host = null; mentions.stop(); merges.stop(); assigns.stop(); shipping.stop(); firstAnswers.stop(); held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop() }
   const port = {
     connected: () => {
       tokens.start()

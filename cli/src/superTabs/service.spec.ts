@@ -172,6 +172,17 @@ it('starts the leaderboard\'s reporter with the host and stops it with the servi
   service.port.disconnected()
   expect(shipping.stop).toHaveBeenCalledOnce()
 })
+// An agent's answer to its launch line, posted in its chat (superTabs/firstAnswers.ts), looked for while the host runs.
+it('starts the first answers with the host and stops them with the service', async () => {
+  const firstAnswers = { start: vi.fn(), stop: vi.fn() }
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost,
+    shipping: () => ({ start: vi.fn(), stop: vi.fn() }), firstAnswers: () => firstAnswers })
+  expect(firstAnswers.start).not.toHaveBeenCalled()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(firstAnswers.start).toHaveBeenCalledOnce()
+  service.port.disconnected()
+  expect(firstAnswers.stop).toHaveBeenCalledOnce()
+})
 it('limits the owner proxy to Super Tab endpoints and preserves backend failures', async () => {
   const t = setup()
   for (const path of ['/api/auth/me', '/api/super-tabs/../auth/me', '/api/super-tabs%2F..', 'https://elsewhere.invalid', '/api/super-tabs#other']) {
