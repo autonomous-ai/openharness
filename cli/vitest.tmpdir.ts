@@ -13,14 +13,16 @@
  * so a run going at the same time, as another gate on the same Mac does, never changes it either.
  *
  * The names are short on purpose: vitest.setup.ts puts the daemon's data folder, which holds its Unix socket,
- * in here, a socket's path has 96 bytes (lib/localSocket.ts), and macOS's temporary folder takes 48.
+ * in here, and a socket's path has 96 bytes (lib/localSocket.ts); the run's folder is in /tmp on macOS for it.
  * The end-to-end suite runs one file at a time, with its own socket budget, and does not load this.
+ * On Windows os.tmpdir() reads TEMP, which this leaves alone: there each machine runs one suite at a time (windows.yml).
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { RUN_DIR } from './src/__fixtures__/vitestRun.js'
 
-const root = process.env.HARNESS_TEST_ROOT
-// Without its run's folder, every run would share the system's again.
+const root = process.env[RUN_DIR]
+// Without its run's folder, every run would share one folder again.
 if (!root) throw new Error('vitest.tmpdir.ts needs src/__fixtures__/vitestRun.ts as the run\'s globalSetup, which makes the run\'s folder')
 const folder = join(root, `${process.env.VITEST_POOL_ID ?? process.pid}`)
 mkdirSync(folder, { recursive: true, mode: 0o700 })
