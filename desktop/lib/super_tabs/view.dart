@@ -3248,6 +3248,21 @@ class _SuperTabViewState extends State<SuperTabView>
 
   Future<void> _projectSettings(
     SuperTabConversation group,
+    SuperTabProject opened,
+  ) => showProjectSettings(
+    context,
+    c,
+    opened,
+    () => _projectSettingsRows(
+      group,
+      c.snapshot?.projectById(opened.id) ?? opened,
+    ),
+    rowHeight: _phone ? kFingerTarget : 32,
+  );
+
+  /// Project settings' rows from what is held now: the dialog asks again on each change (task #4705).
+  List<ProjectSettingsRow> _projectSettingsRows(
+    SuperTabConversation group,
     SuperTabProject project,
   ) {
     final editable = c.canWrite && !c.saving && !c.hasPendingAction;
@@ -3264,7 +3279,7 @@ class _SuperTabViewState extends State<SuperTabView>
     // (task #3194).
     final repository = project.repository;
     final leadId = c.snapshot?.conversation(project.leadConversationId)?.leadId;
-    return showProjectSettings(context, c, project, [
+    return [
       if (editable && owner)
         row('Rename project', 'rename', value: project.name),
       row(
@@ -3285,7 +3300,7 @@ class _SuperTabViewState extends State<SuperTabView>
           value: leadId == null ? 'Starting…' : c.snapshot!.agentName(leadId),
         ),
       if (editable && owner) row('Delete Project', 'delete', danger: true),
-    ], rowHeight: _phone ? kFingerTarget : 32);
+    ];
   }
 
   /// The group's ⋮ menu. With [views] (a phone) it opens on the views the
@@ -4671,7 +4686,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                       ? null
                                       : group == null
                                       ? 'Loading conversation…'
-                                      : c.canWrite
+                                      : c.canWrite && !group.archived
                                       ? _messageHint(group)
                                       : 'Read-only conversation',
                                   border: InputBorder.none,

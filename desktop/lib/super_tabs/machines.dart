@@ -249,9 +249,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       m['machineId'] as String,
   };
 
-  /// The rows: one per computer.
-  Iterable<String> get _rowIds => _ids;
-
   @override
   void initState() {
     super.initState();
@@ -439,10 +436,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     final person = snapshot.people
         .where((p) => p.id == contributor)
         .firstOrNull;
-    final reading = shared;
     final state = app?.stateOf(id);
     final observation = superTabMap(
-      reading?['observation'] ?? const <String, dynamic>{},
+      shared?['observation'] ?? const <String, dynamic>{},
     );
     final now = widget.now();
     final received = observation['receivedAt'];
@@ -457,7 +453,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // this very computer when it contributes and its own sample is the newer, which is why it stays live while
     // the Swarm cannot be read. Any other contributing machine is known by what it reports through the Swarm.
     final direct =
-        reading == null ||
+        shared == null ||
         (state?.isLocalMachine == true &&
             sample != null &&
             (observedAt == null || sample.$2.isAfter(observedAt)));
@@ -513,7 +509,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         (agentsOnly && person != null
             ? "${person.shownName}'s computer"
             : 'Unavailable machine');
-    final paused = reading?['paused'] == true;
+    final paused = shared?['paused'] == true;
     final removal = shared?['removal'];
     final cleaning =
         removal is Map && superTabMap(removal)['state'] == 'cleaning';
@@ -1405,7 +1401,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   /// Keep offline machines in the same list and on the same columns.
   List<_MachineView> _sortedViews() {
-    final views = [for (final id in _rowIds) _view(id)];
+    final views = [for (final id in _ids) _view(id)];
     String key(_MachineView view) =>
         superTabMachineName(view.name).toLowerCase();
     int rank(_MachineView view) => switch (view.status) {

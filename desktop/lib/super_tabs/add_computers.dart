@@ -36,7 +36,8 @@ class AddComputerRow {
 }
 
 /// The rows of Add your computers: every computer signed in to the reader's
-/// own account, never another account's. This computer comes first while it is not
+/// own account, never another account's nor a leftover Harness Team
+/// account (the removal pop-up takes those away). This computer comes first while it is not
 /// added; then those that can be added, those that cannot yet, and those
 /// already in the Swarm. [added] are computers this box has just added.
 List<AddComputerRow> addComputerRows(
@@ -49,7 +50,7 @@ List<AddComputerRow> addComputerRows(
   final rows = <AddComputerRow>[];
   for (final m in app.machineStates.values) {
     final id = m.machine.machineId;
-    if (m.belongsToOtherAccount) continue;
+    if (m.belongsToOtherAccount || m.machine.isTeamAccount) continue;
     final here = m.isLocalMachine;
     final inSwarm =
         added.contains(id) || pools.any((p) => p['machineId'] == id);

@@ -1941,11 +1941,7 @@ class SuperTabController extends ChangeNotifier {
   int _loadedMessageSequence(String id) {
     final mainOnly = snapshot?.conversation(id)?.lastMainSequence != null;
     return _messages[id]?.reversed
-            .where(
-              (m) =>
-                  m.source['kind'] != 'update-request' &&
-                  (!mainOnly || m.inMainStream),
-            )
+            .where((m) => !mainOnly || m.inMainStream)
             .firstOrNull
             ?.sequence ??
         0;
@@ -2853,10 +2849,7 @@ class SuperTabController extends ChangeNotifier {
       return quoteGaveUp(id, link.messageId) ? null : (message: null);
     }
     final message = read.message;
-    // A waiting notice is never announced, so it is not previewed either.
-    return message == null || message.source['kind'] == 'delivery-hold'
-        ? null
-        : (message: message);
+    return message == null ? null : (message: message);
   }
 
   /// Opens conversation [id], reading it first when it is not held

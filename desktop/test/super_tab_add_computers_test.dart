@@ -32,12 +32,14 @@ void main() {
     bool online = true,
     bool needsLink = false,
     bool shared = false,
+    String? sessionKind,
   }) {
     final machine = Machine(
       machineId: id,
       authMode: MachineAuthMode.remote,
       name: name,
       isShared: shared,
+      sessionKind: sessionKind,
     );
     f.app.machines = [...f.app.machines, machine];
     f.app.machineStates[id] = MachineState(machine)
@@ -144,8 +146,10 @@ void main() {
         computer(f, 'twin', 'Studio');
         computer(f, 'rig', '2x 4090 Rig');
         computer(f, 'old', 'Old iMac', needsLink: true);
-        // Another account's harness and whole computer: never a row.
+        // Another account's harness and whole computer, and a leftover
+        // Harness Team account: never rows of their own.
         computer(f, 'theirs', 'Diego’s harness', shared: true);
+        computer(f, 'team', 'Studio · Team', sessionKind: 'team');
         f.connection.server.state['machines'] = [
           {'machineId': 'rig', 'name': '2x 4090 Rig', 'contributorId': 'owner'},
           // A teammate's machine in the Swarm is theirs to add, not a row.
@@ -182,6 +186,7 @@ void main() {
       expect(inRow('m', thisMac(f)), findsOneWidget);
       expect(find.text('Studio'), findsNWidgets(2));
       expect(find.textContaining('Diego'), findsNothing);
+      expect(row('team'), findsNothing);
       expect(find.text('Tony Mac'), findsNothing);
       expect(tester.takeException(), isNull);
       await close(tester, f, c);

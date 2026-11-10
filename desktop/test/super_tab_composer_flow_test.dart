@@ -38,6 +38,29 @@ void main() {
   }
 
   final composer = find.byKey(const ValueKey('super-message-composer'));
+
+  testWidgets('an archived chat says it is read-only in its box', (
+    tester,
+  ) async {
+    final server = ConversationServer.chat()..append('Done here.');
+    final c = await show(tester, server);
+    final id = c.selectedId!;
+    expect(
+      tester.widget<TextField>(composer).decoration!.hintText,
+      isNot('Read-only conversation'),
+    );
+    (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == id)['archived'] =
+        true;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    expect(c.selectedId, id);
+    expect(
+      tester.widget<TextField>(composer).decoration!.hintText,
+      'Read-only conversation',
+    );
+  });
   FocusNode composerFocus(WidgetTester tester) =>
       tester.widget<TextField>(composer).focusNode!;
   String composerText(WidgetTester tester) =>
