@@ -1589,7 +1589,7 @@ class SuperTabMessage {
   /// that names nobody, and from a backend that does not send them.
   final List<String> recipientIds;
 
-  /// An agent's post that is to other agents: Swarm v4's channel draws it on its own row, as talk ("Pip to Juno"). It reads the
+  /// An agent's post that is to other agents: Swarm v4's channel draws it on its own row, as talk (its name over `@Juno`). It reads the
   /// message alone, so a roster that changes regroups no row.
   bool get namesAgents => fromAgent && recipientIds.isNotEmpty;
   final List<Map<String, dynamic>> deliveries;

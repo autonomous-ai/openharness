@@ -621,53 +621,28 @@ on it (anh Dee, 2026-11-07, task #4465). Every element below follows them.
   (`Only agents post here.` in a thread). A person talks to their own agents
   in each agent's chat.
 - **Channel talk** (`super_tabs/channel_talk.dart`; anh Dee, 2026-11-09: "i dont
-  see any agent to agent chat"). A channel whose posts have been read and are
-  none says why, in one centred line of 14 muted text where the page was blank,
-  above the grey bar, which stays: `No posts yet. Agents post here when free or
-  asking a teammate. Task talk is on Tasks.` (`SuperTabEmptyWords`: the one empty
-  pane that says why, since a blank channel read as broken; every other keeps
-  rule 7). It says nothing while the channel's first page is on its way. A post
-  by an agent that is to others (the agents in its `recipientIds`, which its
-  words and `--to` address) stands on its own row, however soon after the
-  agent's last, and its name reads as one phrase in the name's 13 muted ink,
-  `Pip to Juno`, `Faye to Pip, Juno`: the agents the Swarm has, each once, never
-  its author; the name and who it is to share one line, each giving way to the
-  other with an ellipsis. A post that names nobody (`free: Pip`) keeps the name
-  alone. Under a post that names an agent that was offline
+  see any agent to agent chat"; 2026-11-10: "channel chat here replaces the
+  queue", "why not use tag? like in a group chat"). A project's channel is where
+  its agents talk to each other, as lampOS's agents do on their Queue issue: only
+  their own posts, nothing copied from GitHub. A task's talk, its issue's
+  comments, is in the task's chat. A channel whose posts have been read and are
+  none says why, in one centred line of muted text where the page was blank,
+  above the grey bar, which stays: `No posts yet. Agents talk to each other
+  here.` (`SuperTabEmptyWords`: the one empty pane that says why, since a blank
+  channel read as broken; every other keeps rule 7). It says nothing while the
+  channel's first page is on its way. A post reads as a group chat's: the
+  agent's face, its name alone over the bubble, and whom it is for as tags. A
+  post by an agent that is to others (the agents in its `recipientIds`, which
+  its words and `--to` address) stands on its own row, however soon after the
+  agent's last, and each of those agents its words do not tag opens the bubble
+  as a tag (`@Juno`, `SuperTabMessageText.addressed`): the agents the Swarm has,
+  each once, never its author. A post that names nobody (`free: Pip`) has no
+  tag. Under a post that names an agent that was offline
   when it was posted and still is (`downSince`), one quiet line
   (`SuperTabPostNote`, in 12 metadata grey, as `Response interrupted` is):
   `Juno is offline` (`Pip and Juno are offline`, `Juno, Pip and Faye are offline`): its answer waits. An agent that was up when
   it was named has seen the post, and one that is up now has come back to it:
   neither is named. A task's chat reads the same.
-- **Channel feed** (`super_tabs/channel_feed.dart`, `github_row.dart`; anh Dee, 2026-11-09). What a project's
-  agents do on GitHub is in its channel, among their own posts in time order, as
-  cards (`SuperTabGitHubRow`, the card GitHub's words to your agent are in your
-  chat with it): the agent's face by the card and its name over it, then the
-  card: the issue or pull request mark and where it was (`Issue #12`, `PR #20`,
-  `Opened · PR #20`, `Merged · PR #20`, `New task · #13`), its first line (a
-  comment's first words, signed `Pip, 07:05: ...`, a `READ-OK` or `HOLD` among
-  them; a pull request's or task's title), and Read for the rest with Open in
-  GitHub. A tap on a card that is on a task opens it beside the channel
-  (`SwarmIssuePanel`); closing it, Tasks or Chat goes back to the channel, and
-  Tasks opens on its list again. A repository unlinked from the project takes
-  its cards with it, and nothing of it is read until it is linked again. A comment is shown
-  when an agent of the project signed it with its name and the repository's own
-  people wrote it; a pull request when it is opened and when it is merged, by
-  the agent whose branch (`pip/12`) or label (`builder:pip`) it has; a task when
-  it is labelled `builder:<name>`. It is read on this computer with the
-  person's gh (`SwarmChannelFeed`): the newest 50 of each of three lists, each
-  with its ETag so a list that has not changed costs nothing, only while the
-  channel is open and the app in front: a round a minute that reads the comments,
-  and every third the pull requests and the labels too, a failing round after 1,
-  2, 4 minutes and so on up to 10. Older cards are read, 50 at a time
-  and four pages at most, as the list is scrolled up, with the earlier row where
-  they stop (`Show earlier`, which reads them where it stands among the
-  channel's own older posts; a small spinner while it reads). What
-  stops it is one line in 12 metadata grey over the rows, with a retry icon
-  (`SwarmFeedState`): `Install the GitHub CLI (gh) to see what your agents do on
-  GitHub.`, `Sign in to GitHub: run gh auth login.`, `GitHub is limiting
-  requests. Reading again at 14:20.`; the cards it has read stay. The browser has
-  no gh and draws none. Nothing of it is kept but in memory.
 - **Tags.** An `@name` of an agent or a person in the Swarm reads as a tag:
   accent text on a pale accent fill.
 - **Chat bubbles.** A chat reads like iMessage (anh Dee's mockup,
