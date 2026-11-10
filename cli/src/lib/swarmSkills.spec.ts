@@ -37,19 +37,29 @@ describe('Swarm sessions without skill files (task #4673)', () => {
   // Swarm v4 (anh Dee, 2026-11-10: "channel chat here replaces the queue"): the channel is where agents talk to each other, as
   // lampOS's builders do on their Queue issue, each post opening with @Name for whom it is for (Harness shows who wrote it and
   // when); a task's own record stays on GitHub, where Harness shows it in the task's chat.
-  it('tells every agent the channel is the team\'s group chat, each post opening with @Name and unsigned', () => {
+  // Step 1, item 7 of docs/plans/2026-11-10-swarm-plan.md: every agent's basics held 507 words and grew with each incident.
+  // What code does left them, and they are held under 200 words: the next rule is code, or the project's own AGENTS.md.
+  it('holds every agent\'s basics under 200 words', () => {
+    expect(SWARM_BASICS.split(/\s+/).filter(Boolean).length).toBeLessThan(200)
+  })
+  it('names the commands that make a claim and a verdict, and tells no agent to type either by hand', () => {
+    expect(SWARM_BASICS).toContain('harness super-tab take OWNER/REPO#N')
+    expect(SWARM_BASICS).toContain('harness super-tab read ok|hold OWNER/REPO#N SHA \'what you found\'')
+    for (const byHand of ['status:taken', 'taken by', 'READ-OK <sha>', 'HOLD <sha>']) expect(SWARM_BASICS, byHand).not.toContain(byHand)
+  })
+  it('keeps what code reads from an agent: its name opening each post on GitHub, and its name opening its branch', () => {
+    // githubMentions.ts signedBy: its own post is not brought back to it. githubMerge.ts authorOf: whose pull request it is.
+    expect(SWARM_BASICS).toContain('open each post with your name')
+    expect(SWARM_BASICS).toContain('Branch <your name>/<N>')
+  })
+  it('tells every agent where the team talks and how a post wakes someone', () => {
     for (const saved of [{ role: 'agent', key: 'dev' }, { role: 'coordinator', key: 'lead' }] as const) {
       const rules = prepareSwarmSkill(saved).instructions
-      expect(rules).toContain('Your project\'s channel is the team\'s group chat')
-      expect(rules).toContain('Start each post with @Name for whom it is for')
-      expect(rules).toContain('do not sign it')
-      expect(rules).toContain('say "free" when you have no task')
-      expect(rules).not.toContain('free: <your name>')
+      expect(rules).toContain('Your project\'s channel is the team\'s chat')
+      expect(rules).toContain('harness super-tab post CHANNEL \'message\' NEW_ID')
+      expect(rules).toContain('Open with @Name to wake someone')
     }
   })
-
-  // AGENTS.md standard 13: a safety rule about processes keeps its line. The shell guard that enforced these is gone with team
-  // machines (an agent runs on its own person's computer), so every agent, the PM too, is told them once, in one plain line.
   it('tells every agent, the PM too, the rules about processes, privilege, temporary files and worktrees, in one line', () => {
     for (const saved of [{ role: 'coordinator', key: 'lead' }, { role: 'agent', key: 'dev' }, { role: 'agent', fallback: 'review', key: 'review' }] as const) {
       const rows = prepareSwarmSkill(saved).instructions.split('\n').filter(row => row.startsWith('- Stop only processes you started'))
