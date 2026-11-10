@@ -35,7 +35,7 @@ function githubDir(core: CoreApi, session: Session | undefined): string | null {
  *  of #2390). A backend that could not be reached, or GitHub not answering it (GITHUB_UNAVAILABLE), decides nothing, and an
  *  unexpired token stays. */
 const DECIDED_5XX = new Set(['GITHUB_APP_NOT_CONFIGURED', 'GITHUB_APP_MISCONFIGURED'])
-export const decided = (error: SuperTabHostError) => (error.status >= 400 && error.status < 500) || DECIDED_5XX.has(error.code)
+const decided = (error: SuperTabHostError) => (error.status >= 400 && error.status < 500) || DECIDED_5XX.has(error.code)
 
 /**
  * The token of [harnessId]'s task: asked as each Swarm membership this machine's roster lists for that harness (one,

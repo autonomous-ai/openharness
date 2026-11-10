@@ -165,7 +165,6 @@ export async function inspectCapacity(target: Daemon, request: Json) {
   return { capacity, engine, quota, ...admission(capacity, engine, quota, requirements, !!request.codexHome || !!request.gridModel) }
 }
 
-
 /** Whether the machine launches `engine` with a model of its own for that session (lib/launchModel.ts). A daemon from
  *  before the flags does not name the field, and agent_create would silently drop a model it does not know. */
 const launchesWithModel = (capacity: Json, engine: unknown) => Array.isArray(capacity.launchModel) && capacity.launchModel.includes(engine)

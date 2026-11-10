@@ -362,6 +362,17 @@ describe('agent_create, refused before any pane exists', () => {
     expect(deps.receipts.has(`${CREATION}-new`, creationFingerprint({ ...before, swarmRole: 'dev' }))).toBe(true)
   })
 
+  // A start asked with the Harness GitHub App before this machine's update still finds the receipt its first ask got.
+  it('finds the receipt a start got with the GitHub App before the update when it is asked again', async () => {
+    const { ask, create, deps, replies } = setup()
+    const before = { engine: 'claude', cwd: '/w', bypassPermission: true, permissionMode: null, grid: null, codexHome: null, dsh: null, prompt: null,
+      swarmRole: 'dev', swarmGitHub: true, name: null, agent: null, resumeSessionId: null, takeOver: null }
+    await deps.receipts.run(CREATION, creationFingerprint(before), async () => ({ state: 'created', agentId: 'new-agent' }))
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: 'dev', swarmGitHub: true, creationId: CREATION })
+    await vi.waitFor(() => expect(replies.at(-1)).toMatchObject({ state: 'created' }))
+    expect(create).not.toHaveBeenCalled()
+  })
+
   it('passes the project\'s skill mode with a Swarm role, and refuses one it does not know before dispatch', async () => {
     const { ask, create } = setup()
     for (const swarmSkillMode of ['default', 'orchestration']) {

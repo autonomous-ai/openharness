@@ -543,7 +543,10 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     // The fingerprint names the role in the wire's values, as every receipt from before role kinds does: a start asked again
     // after this machine's update still finds the receipt its first ask got, whichever value set the asker sends.
     const { swarmFallback: _fallback, ...stable } = input
-    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm) } : input
+    // A start asked with the Harness GitHub App before this machine's update named it, and its worktree offline, in its receipt:
+    // asked again, it finds that receipt (and launches on this machine's own login). Delete on or after 2026-12-10.
+    const app = swarm && payload.swarmGitHub === true
+    const recorded = swarm ? { ...stable, swarmRole: wireRole(swarm), ...(app ? { swarmGitHub: true } : {}) } : input
     const fingerprintInput = model.state === 'ok' ? { ...recorded, modelSelection: model.selection } : recorded
     if (creationId !== undefined) {
       // Reserve before spawning. A transport retry carries the SAME creationId; a deliberate
@@ -551,7 +554,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       // on this connection, just as engines_probe is detached above.
       const create = onCreateAgent
       try {
-        const fingerprint = creationFingerprint(projectFolder ? { ...fingerprintInput, projectFolder } : fingerprintInput)
+        const fingerprint = creationFingerprint(projectFolder
+          ? { ...fingerprintInput, projectFolder: app && projectFolder.source === 'worktree' ? { ...projectFolder, offline: true } : projectFolder } : fingerprintInput)
         // A new project too, which waits for its engine as any other create does (above).
         const durableNative = !!prepareCreate && !resumeSessionId
         // A new project is refused at once for a harness or named agent it cannot have, as it always was, rather than
