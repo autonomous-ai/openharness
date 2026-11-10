@@ -156,35 +156,37 @@ class SuperTabMessageText extends StatelessWidget {
         style: DesktopChrome.metadata(),
       ),
     );
-    // Arabic or Hebrew reads from the right, its lines ending at the bubble's right edge, whatever the app's direction.
+    // Arabic or Hebrew reads from the right, its lines ending at the bubble's right edge, whatever the app's direction. One
+    // direction for the message, from its first words: a chat message is mostly one language.
     final own = directionOf(text);
     return own == null || own == Directionality.of(context)
         ? body
         : Directionality(textDirection: own, child: body);
   }
 
-  /// The direction [text]'s words run in, by Unicode's rule (its first strong letter): rtl for Hebrew, Arabic and the other
-  /// right-to-left scripts, ltr for any other letter, null with no letter at all. Tags and task numbers that open it (`@Pip`,
-  /// `#12`) are names, not its words, and do not decide it.
+  /// The direction [text]'s words run in: right to left when the first letter of its prose is Hebrew, Arabic or another
+  /// right-to-left script's, left to right for any other letter. Code, links, `@name` tags and `#12` task numbers are not its
+  /// words and do not decide it. Null when it has no right-to-left letter at all, the app's own direction then holding.
   static TextDirection? directionOf(String text) {
-    final words = text.replaceFirst(_openingNames, '');
-    for (final rune in words.runes) {
-      if (_rightToLeft(rune)) return TextDirection.rtl;
-      if (_letter.hasMatch(String.fromCharCode(rune))) return TextDirection.ltr;
-    }
-    return null;
+    // Most messages have none: they cost one scan and nothing more.
+    if (!_rightToLeft.hasMatch(text)) return null;
+    final words = _prose(text).replaceAll(_names, ' ');
+    final letter = _letter.firstMatch(words)?.group(0);
+    if (letter == null) return null;
+    return _rightToLeft.hasMatch(letter)
+        ? TextDirection.rtl
+        : TextDirection.ltr;
   }
 
-  static final _openingNames = RegExp(r'^(?:\s*[@#][^\s]+)+\s*');
+  static final _names = RegExp(r'@\S+|#\d+');
   static final _letter = RegExp(r'\p{L}', unicode: true);
 
-  static bool _rightToLeft(int rune) =>
-      (rune >= 0x0590 && rune <= 0x08FF) || // Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan, Mandaic
-      (rune >= 0xFB1D &&
-          rune <= 0xFDFF) || // Hebrew and Arabic presentation forms
-      (rune >= 0xFE70 && rune <= 0xFEFF) ||
-      (rune >= 0x10800 && rune <= 0x10FFF) || // historic right-to-left scripts
-      (rune >= 0x1E800 && rune <= 0x1EFFF);
+  /// A letter of a right-to-left script: digits, marks and the byte order mark are no letters and never count.
+  static final _rightToLeft = RegExp(
+    r'(?=\p{L})[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}'
+    r'\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}]',
+    unicode: true,
+  );
 }
 
 /// GFM encodes '%' again in bare URLs. Keep the original URL, including encoded
@@ -385,9 +387,13 @@ class _CodeBlock extends MarkdownElementBuilder {
   ) {
     final code = element.children?.firstOrNull;
     final info = code is md.Element ? code.attributes['class'] : null;
-    return SuperTabCodeBlock(
-      code: element.textContent.replaceFirst(RegExp(r'\n$'), ''),
-      language: info?.replaceFirst('language-', ''),
+    // Code reads left to right in any message, an Arabic one's too.
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: SuperTabCodeBlock(
+        code: element.textContent.replaceFirst(RegExp(r'\n$'), ''),
+        language: info?.replaceFirst('language-', ''),
+      ),
     );
   }
 }
