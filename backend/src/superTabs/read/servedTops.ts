@@ -8,7 +8,7 @@
  * whole from the change feed. A poll's other groups are light (parts/light.ts) and carry no such number.
  *
  * Only project chats are looked at: those lines were written there alone. Which row is the newest people read depends only on
- * the stored rows at or below that number, never on the reader (a project chat is no Buddy chat), and stored rows do not
+ * the stored rows at or below that number, never on the reader, and stored rows do not
  * change, so each answer is kept by (Swarm, chat, number) for as long as this server runs, up to KEPT answers; a restarted
  * server looks each chat up once again. A chat whose number moved is looked up once more: a row people read moves it there,
  * so that lookup reads the one row at the number by the (tabId, conversationId, sequence) index and answers the number.
@@ -41,7 +41,7 @@ export class ServedTops {
     const missing = asked.filter(g => !this.kept.has(key(g.key, topOf(g)!)))
     if (missing.length) {
       const chatsAsked = missing.map(g => ({ id: g.key, lastMainSequence: topOf(g)!, lastMessageSequence: (g.data as Conversation).lastMessageSequence }) as Conversation)
-      const { latest } = await latestIn(this.db, tabId, state, chatsAsked)
+      const { latest } = await latestIn(this.db, tabId, chatsAsked)
       for (const g of missing) {
         // None read within the rows looked at, or none at all: the stored number stands, as before.
         const top = topOf(g)!, found = latest.get(g.key)?.sequence

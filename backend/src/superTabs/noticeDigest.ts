@@ -1,5 +1,4 @@
 import type { SuperTabDelivery } from '@prisma/client'
-import { isBuddy } from './buddies.js'
 import { forRecipients, stableId, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
 
@@ -20,7 +19,7 @@ const OTHER_ACCOUNT_LINE = 'From another account:'
 const TITLE_MAX = 40
 const STEP_MAX = 20
 
-/** Notices nobody waits on within minutes. Not `pair-loop`, `buddy-proposal`, `update-request` (throttled
+/** Notices nobody waits on within minutes. Not `pair-loop`, `update-request` (throttled
  *  already, with instructions of their own): each delivers at once, as any kind not listed does. A `terminal-alert` and an
  *  `agent-only` row are gathered only in the forms `gatheredNotice` names. */
 export const DIGEST_KINDS: ReadonlySet<unknown> = new Set(['work-stalled', 'work-lost', 'work-resumed', 'idle', 'review-failed', 'review-capacity', 'overlap', 'note-removed'])
@@ -39,19 +38,16 @@ export function gatheredNotice(source: unknown): boolean {
     || (row?.kind === 'terminal-alert' && GATHERED_ALERTS.has(row.alert))
 }
 
-/** A row as an agent's post is stored: by an agent that is not a Buddy, with no source of its own. A Buddy carries its person's
- *  words, so it goes at once, as a person's message does. An agent gone from the Swarm counts as an agent. */
-export function agentPost(state: Pick<SuperTabState, 'agents'>, message: Pick<MessageDraft, 'author' | 'source'>): boolean {
-  if (message.author.kind !== 'agent' || message.source) return false
-  const sender = state.agents.find(a => a.id === message.author.id)
-  return !sender || !isBuddy(sender)
+/** A row as an agent's post is stored: by an agent, with no source of its own. */
+export function agentPost(message: Pick<MessageDraft, 'author' | 'source'>): boolean {
+  return message.author.kind === 'agent' && !message.source
 }
 
 /** Whether a message to a coordinator waits for its digest: a notice gatheredNotice takes, or an agent's post (message.send, never
  *  a notice the server writes under an agent's name, such as a confirmed stop) with no files: a digest line carries none, and a
  *  host fetches a message's files only for a delivery it lists. */
-export function gatheredMessage(state: Pick<SuperTabState, 'agents'>, message: Pick<MessageDraft, 'author' | 'source' | 'attachments' | 'post'>): boolean {
-  return gatheredNotice(message.source) || (!!message.post && agentPost(state, message) && !message.attachments?.length)
+export function gatheredMessage(message: Pick<MessageDraft, 'author' | 'source' | 'attachments' | 'post'>): boolean {
+  return gatheredNotice(message.source) || (!!message.post && agentPost(message) && !message.attachments?.length)
 }
 
 /** A gathered alert whose agent no longer has that alert: it ended before the digest went, so the digest leaves it out. An agent

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { AGENT_MEMORY_BYTES, projectFolder, type ContributedMachine } from './machines.js'
-import { BUDDY_REQUIREMENTS } from './buddies.js'
 import { createSuperTab, type Actor, type SuperTabState } from './model.js'
 import { canReadAgent, projectOf } from './projects.js'
 import * as store from './parts/index.js'
@@ -56,7 +55,7 @@ function startedMember(f: ReturnType<typeof swarm>, projectId: string, harnessId
     membershipGeneration: kaiPerson.generation, machineOwnerId: 'kai', hostGrant: null, harnessId: null, dispatched: false, error: null, requestedAt: NOW,
     request: { conversationId: chatId, machineId: 'kai-mac', engine: 'claude', name: 'Kai · member', worktree: true,
       cwd: projectFolder(f.state.machines!.find(m => m.machineId === 'kai-mac')!, projectOf(f.state, projectId)),
-      requirements: { ...BUDDY_REQUIREMENTS, memoryBytes: AGENT_MEMORY_BYTES },
+      requirements: { memoryBytes: AGENT_MEMORY_BYTES, diskBytes: 1024 ** 3, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false },
       regular: true, mainProjectId: projectId, member: { projectId } } })
   const own = { contribution: { machineOwnerId: 'kai', contributorId: 'kai' } }
   f.run({ type: 'agent.startDispatch', startId: id }, kai, own)

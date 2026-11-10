@@ -5,8 +5,6 @@
  */
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { activeWork, agent, isLeads, SuperTabError, type Agent, type SuperTabState } from '../model.js'
-import { buddyChatOf, isBuddy, isSwarmBuddy, isSwarmBuddyChat } from '../buddies.js'
-import { buddyEngineChat } from '../buddyEngine.js'
 import { hostLocalGrid, machineContribution, machineLimitReached, type MachineCleanup } from '../machines.js'
 import { agentProjectId, agentSetRole, canWatchAgent, confidentialSets, isConfidential, groupProject, ledProject, projectsOf, skillModeOf, startProject, skillSetOf, watchClosed, type ConfidentialSets } from '../projects.js'
 import type { HostAgentRow, HostPool, HostRosterRow, HostTabRows } from './contract.js'
@@ -57,7 +55,6 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
   const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
   const custom = home && skillSetOf(home) === 'custom' ? home : null
   const chosen = custom ? agentSetRole(state, custom, target) : null
-  const buddyChat = isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? buddyChatOf(state, target) : undefined
   return {
     tabId, tabName: state.name, lastChangedAt, paused: state.paused,
     // `active` lets the host release members that are only in archived groups to automatic cleanup.
@@ -69,15 +66,13 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     agent: target,
     // The Swarm owner's host adds the machine any live agent of theirs runs on, in any Swarm they own: a Lead, or a plain v4 agent, which
     // leads nothing (a Personal Swarm may hold nothing else, and never got its machine). Since #4120 a machine takes only its own person's
-    // agents, so this adds no one else's work to it. Never for a Buddy: a Buddy-only record is not the machine in the Swarm; an agent of the
-    // owner there still joins it, which makes the record an ordinary machine (commands.ts machine.contribute ifMissing; security review 2
-    // of #2234). Not where machine.contribute would refuse it (#2637): a Buddy-only record is counted already, so it still joins. Never
+    // agents, so this adds no one else's work to it. Not where machine.contribute would refuse it (#2637). Never
     // a machine its person took out of the Swarm (removedMachines): an older host adds it back on this word alone (cli host.ts); a person
     // who wants it back adds it.
-    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !isBuddy(target)
+    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub
       && state.conversations.some(c => !c.archived && c.agentIds.includes(target.id))
-      && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly) && !state.removedMachines?.some(r => r.machineId === machineId)
-      && (state.machines?.some(m => m.machineId === machineId) || !machineLimitReached(state, user.sub)),
+      && !state.machines?.some(m => m.machineId === machineId) && !state.removedMachines?.some(r => r.machineId === machineId)
+      && !machineLimitReached(state, user.sub),
     skillMode: home ? skillModeOf(home) : 'orchestration',
     // What the host installs as the agent's instructions, read again when the revision moves (project instructions, phase 3).
     roleName: roleNameOf(state, target),
@@ -95,7 +90,6 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     // The conversation it leads: the chat its host rebuilds its start prompt from when it switches it (cli leadSwitchRequest.ts).
     // A field of its own: an older host reads leadsConversationId as "only this conversation's deliveries" (cli host.ts).
     ledConversationId: ledProject(state, target.id)?.leadConversationId ?? null,
-    ...(isSwarmBuddy(target) && !target.buddySession ? { buddyConversationId: buddyChat?.id ?? buddyEngineChat(state, target) } : {}),
     stopRequested: target.workDecision === 'stop' && !state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id),
     observers: lookups.people.filter(p => p.id !== user.sub && canWatchAgent(state, { kind: 'person', userId: p.id, email: p.email }, target, closed, sets))
       .map(p => ({ email: p.email, userId: p.id })),
@@ -103,8 +97,6 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     confidential: isConfidential(state, target, closed, sets),
     // But for this Swarm's current Lead: its listed observers watch it while this row is in force (Ken, 2026-10-28).
     membersWatch: isConfidential(state, target, closed, sets) && !watchClosed(state, target, closed, sets),
-    // Which of its person's Buddies' chats it is in (task #3818).
-    ...isSwarmBuddy(target) || (target.buddySession && target.buddyOf) ? { buddyChatId: buddyChat?.id ?? null } : {},
   }
 }
 
@@ -114,24 +106,20 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
   if (!contribution || contribution.contributorId !== user.sub) return null
   const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && s.poolGeneration === contribution.generation
     && (!s.harnessId || !s.poolSettled) && !s.error)
-  // A host from before Buddies reads only `starts`, and would launch a Buddy as a Builder: it never sees one. Nor a Product
-  // Manager (leadStart.ts), which goes only to a host that said it starts one.
+  // No host sees a Product Manager's start (leadStart.ts) but one that said it starts one.
   // Nor a Regular agent (commands.ts agent.new, task #4116), which an older host would launch in a project folder it lacks.
-  const starts = pending.filter(s => !s.request.buddyOf && !s.request.leadFor && !s.request.regular), buddyStarts = pending.filter(s => s.request.buddyOf)
+  const starts = pending.filter(s => !s.request.leadFor && !s.request.regular)
   const regularStarts = pending.filter(s => s.request.regular)
   const leadStarts = pending.filter(s => s.request.leadFor)
-  const buddyChats = new Set(buddyStarts.map(s => s.request.conversationId))
   const reservations = (state.harnessReservations ?? []).filter(r => r.machineId === machineId)
   const removedHere = (state.removedSessions ?? []).filter(r => r.machineId === machineId).map(r => r.harnessId)
-  return { tabId, paused: state.paused, machine: contribution, starts, ...(buddyStarts.length ? { buddyStarts } : {}), ...(leadStarts.length ? { leadStarts } : {}),
+  return { tabId, paused: state.paused, machine: contribution, starts, ...(leadStarts.length ? { leadStarts } : {}),
     ...(regularStarts.length ? { regularStarts } : {}),
     ...(contribution.scope === 'swarm' ? { projects: projectsOf(state).filter(p => pending.some(s => startProject(state, s.request)?.id === p.id))
       .map(p => ({ id: p.id, leadConversationId: p.leadConversationId, repository: p.repository,
-        // A private conversation is chat only and never runs work here, so its id stays with its audience; a Buddy chat whose
-        // Buddy starts here is named, so the host may prepare the project's folder for it.
-        conversationIds: state.conversations.filter(c => !isLeads(c) && !isSwarmBuddyChat(c) && (!c.audience || buddyChats.has(c.id)) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
-    // A Buddy-only machine never joins the Swarm's grid: it serves nobody's models (machines.ts buddyOnly).
-    ...(contribution.buddyOnly ? {} : hostLocalGrid(state)),
+        // A private conversation is chat only and never runs work here, so its id stays with its audience.
+        conversationIds: state.conversations.filter(c => !isLeads(c) && !c.audience && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
+    ...hostLocalGrid(state),
     reservations: reservations.map(({ harnessId, generation }) => ({ harnessId, generation })),
     // Sessions whose agents left as closed, which this host lists again if they reopen (closedAgents.ts restoreSessions). Ids only,
     // and only to the machine's own host. Absent when there are none.

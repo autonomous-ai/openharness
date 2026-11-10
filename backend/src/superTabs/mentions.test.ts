@@ -29,8 +29,9 @@ function fixture() {
   const worker = run({ type: 'agent.add', conversationId: app.conversationId, harnessId: 'worker', machineId: 'machine', name: 'Worker', lead: false,
     configuration }).result.agentId as string
   const group = run({ type: 'conversation.create', projectId: app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
-  // A conversation only `peer` reads: their chat with their Buddy.
-  const pmChat = run({ type: 'buddy.chat', projectId: app.projectId }, peer).result.conversationId as string
+  // A conversation only `peer` reads: their chat with their own agent.
+  const pmChat = run({ type: 'agent.new', kind: 'regular', machineId: 'peer-mac', engine: 'claude', local: true }, peer,
+    { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }).result.conversationId as string
   const send = (conversationId: string, mentions: string[], actor: Actor = owner) => run({ type: 'message.send', conversationId,
     text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.find(m => !m.source)!
   /** A post that tags only by what its text says, as people type in chat. */

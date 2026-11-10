@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import { giveOwnBuddy } from './ownBuddy.test-support.js'
 import { appendRouting, instructionsHash, legacyRoleName, MAX_INSTRUCTIONS_BYTES, roleNameOf, routingSummary, summarySchema } from './instructions.js'
 import type { SwarmProject } from './projects.js'
 import { INSTRUCTIONS_TEMPLATE, TEMPLATE_WORKFLOW } from './instructionsTemplate.js'
@@ -227,17 +226,15 @@ describe('the built-in template', () => {
 })
 
 describe('role names', () => {
-  it('reads an agent without one by what it is: PM, Buddy, its custom role, Reviewer or Engineer; a stored one wins', () => {
+  it('reads an agent without one by what it is: PM, its custom role, Reviewer or Engineer; a stored one wins', () => {
     const f = fixture()
     const lead = f.add('lead', 'lead', true), group = f.group()
     const engineer = f.add('engineer', group), named = f.add('named', group)
     f.state.agents.find(a => a.id === named)!.roleName = 'QA on the device'
     const reviewer = f.add('reviewer', group)
     f.state.agents.find(a => a.id === reviewer)!.role = 'reviewer'
-    const buddy = f.add('buddy', group)
-    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
     const name = (id: string) => roleNameOf(f.state, f.state.agents.find(a => a.id === id)!)
-    expect([lead, engineer, reviewer, buddy, named].map(name)).toEqual(['PM', 'Engineer', 'Reviewer', 'Buddy', 'QA on the device'])
+    expect([lead, engineer, reviewer, named].map(name)).toEqual(['PM', 'Engineer', 'Reviewer', 'QA on the device'])
     // A custom set an older client made names its agents, the PM's included.
     Object.assign(f.state.projects![0]!, { skillSet: 'custom', roles: [{ id: 'lead', name: 'Coordinator', kind: 'lead', version: 'v' },
       { id: 'dev', name: 'Builder', kind: 'builder', version: 'v' }, { id: 'review', name: 'Checker', kind: 'reviewer', version: 'v' }] })
@@ -349,9 +346,6 @@ describe('instructions.save', () => {
     expect(effects.instructions).toMatchObject({ writtenBy: { kind: 'agent', id: lead }, askedBy: 'peer' })
     expect(effects.messages).toEqual([])
     expect(() => f.run(save(2, 'Engineer text.', { askedBy: 'owner' }), as(engineer))).toThrow(expect.objectContaining({ code: 'COORDINATOR_REQUIRED' }))
-    const buddy = f.add('buddy', group)
-    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'tab' }
-    expect(() => f.run(save(2, 'Buddy text.', { askedBy: 'owner' }), as(buddy))).toThrow(expect.objectContaining({ code: 'BUDDY_FORBIDDEN' }))
     const viewer = fixture()
     viewer.invite('viewer')
     expect(() => viewer.run(save(1, 'Viewer text.'), peer)).toThrow(expect.objectContaining({ code: 'READ_ONLY' }))
@@ -445,28 +439,12 @@ describe('an instructions save keeps the rules people gave', () => {
     expect(f.run(save(2, doc(reworded, merged), { askedBy: 'owner' }), as(lead), stored(doc(leo, merged), 2)).result.revision).toBe(3)
   })
 
-  it('lets a drop approved by the rule\'s person go through, and their own Buddy tells them in one private line', () => {
-    // With no Buddy, no line: only they and their own agent post in their private chat (task #4558); the history records it.
-    const bare = pm()
-    expect(bare.f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'] }), as(bare.lead),
-      { ...stored(), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] }).messages).toEqual([])
+  it('lets a drop approved by the rule\'s person go through, and posts no line: the history records it', () => {
     const { f, lead } = pm()
-    giveOwnBuddy(f.state, 'peer')
     const effects = f.run(save(1, doc(tony, quiet), { askedBy: 'owner', approvals: ['yes-from-peer'] }), as(lead),
       { ...stored(), approvals: [approval('yes-from-peer', { kind: 'person', id: 'peer' })] })
     expect(effects.result.revision).toBe(2)
-    const notices = effects.messages.filter(m => m.conversationId !== 'lead')
-    expect(notices.length).toBeGreaterThan(0)
-    for (const notice of notices) {
-      expect(notice.recipients).toEqual([])
-      expect(notice.author).toMatchObject({ kind: 'agent', id: 'peer-buddy' })
-      expect(notice.text.split('\n')).toHaveLength(1)
-      expect(notice.text).toContain('A bug that reaches stable')
-      const chat = f.state.conversations.find(c => c.id === notice.conversationId)!
-      expect(chat.audience).toMatchObject({ people: [{ id: 'peer' }] })
-    }
-    // Nothing in the project chat: a save posts no line there (#3132), and the person's notice is theirs alone.
-    expect(effects.messages.filter(m => m.conversationId === 'lead')).toEqual([])
+    expect(effects.messages).toEqual([])
   })
 
   it('lets the rule\'s person drop it themselves with no approval and no notice', () => {
@@ -483,7 +461,7 @@ describe('an instructions save keeps the rules people gave', () => {
     expect(drop([], 'peer')).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
     expect(drop([approval('owner-said', { kind: 'person', id: 'owner' })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
     expect(drop([approval('pm-said', { kind: 'agent', id: lead })])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
-    expect(drop([approval('buddy-said', { kind: 'person', id: 'peer' }, true)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
+    expect(drop([approval('relayed', { kind: 'person', id: 'peer' }, true)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })
     // Review of #3112 (Heron21): an old "thanks", from before the revision this save replaces, approves nothing; nor does a
     // message in a conversation of another project.
     expect(drop([approval('old-thanks', { kind: 'person', id: 'peer' }, false, 400)])).toMatchObject({ code: 'INSTRUCTIONS_RULES_DROPPED' })

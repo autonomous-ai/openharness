@@ -15,7 +15,7 @@ function scene() {
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const peerGeneration = state.people.find(p => p.id === peer.userId)!.generation
-    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peer.userId, generation: peerGeneration }] } })
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'agent-chat', audience: { people: [{ id: peer.userId, generation: peerGeneration }] } })
     const worker = state.agents.find(a => a.id === s.worker)!
     worker.downNamed = 'named'
     worker.limitedUntil = new Date(NOW - MINUTE).toISOString()
@@ -32,15 +32,6 @@ const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machin
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 
 describe('reader view of the parts (design 4.1, 4.3)', () => {
-  // Task #3818 (Desktop's ask, #3820): the head always says how many Buddies a person may have, so an app tells a backend that
-  // makes several from an older one, which sends none.
-  it('always sends the Swarm\'s Buddy cap: its owner\'s number, else the default', () => {
-    const { s } = scene()
-    const head = (state: typeof s.state) => readerView(store.split(state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, {}).parts.head.data
-    expect(head(s.state).buddyCap).toBe(5)
-    expect(head({ ...s.state, buddyCap: 3 }).buddyCap).toBe(3)
-  })
-
   it('sends the head without owner-only and internal fields, and projects without their progress', () => {
     const { parts } = scene()
     const { head } = readerView(parts, peer, NOW, {}).parts
@@ -62,12 +53,11 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(keys(readerView(parts, peer, NOW, {}).parts.groups)).not.toContain(s.secretGroup)
   })
 
-  it('keeps a Buddy chat from every reader but its owner, the Lead and the Swarm owner included, and a closed Chat with PM from all', () => {
+  it('keeps a person\'s 1:1 chat from every reader but its owner, the Lead and the Swarm owner included, and a closed Chat with PM from all', () => {
     const { s, parts, privateId } = scene()
     const groups = (actor: Actor, from = parts) => keys(readerView(from, actor, NOW, {}).parts.groups)
     expect(groups(peer)).toContain(privateId)
     for (const reader of [agentActor(s.lead), owner, outsider, agentActor(s.worker)]) expect(groups(reader)).not.toContain(privateId)
-    expect(readerView(parts, peer, NOW, {}).parts.groups.find(g => g.key === privateId)!.data).toMatchObject({ buddyOwnerId: peer.userId })
     s.edit(state => { delete state.conversations.find(c => c.id === privateId)!.kind })
     const closed = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
     for (const reader of [peer, agentActor(s.lead), owner]) expect(groups(reader, closed)).not.toContain(privateId)
@@ -109,13 +99,6 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
       const view = readerView(parts, actor, NOW, {})
       expect(keys(view.parts.groups)).not.toContain('old-leads')
       expect(view.parts.head.data).not.toHaveProperty('leadsConversationId')
-    }
-  })
-
-  it('says to every reader that this server takes New session in a thread reply', () => {
-    const { s, parts } = scene()
-    for (const actor of [owner, peer, agentActor(s.worker)]) {
-      expect(readerView(parts, actor, NOW, {}).derived).toMatchObject({ threadSessions: true, sessionsFromChat: true })
     }
   })
 

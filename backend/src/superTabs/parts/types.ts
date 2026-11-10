@@ -48,7 +48,7 @@ export interface MachineData {
   /** Harnesses a host proved stopped, oldest first, at most RELEASED_CAP. */
   released: string[]
   closingSessions: Array<Omit<NonNullable<SuperTabState['closingSessions']>[number], 'machineId'>>
-  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string; buddyOnly?: true }>
+  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string }>
   /** Absent on a part with none, as on every part from before it. */
   removedSessions?: Array<Omit<NonNullable<SuperTabState['removedSessions']>[number], 'machineId'>>
 }
