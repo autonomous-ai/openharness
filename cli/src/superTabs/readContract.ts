@@ -35,8 +35,6 @@ export interface Derived {
   otherProjectsWork?: Json[]
   /** The board's pulse of each project the reader sees, by project id (backend superTabs/pulse.ts, task #3384). */
   pulse?: Record<string, Json>
-  /** A person only. */
-  mentionsWaiting?: number
   /** A person only: a digest of which of their tags wait, moving when one is made, answered or expires. */
   mentionsDigest?: string
   /** A person only: a digest of which decisions asked of them are open (backend read/views.ts). */
