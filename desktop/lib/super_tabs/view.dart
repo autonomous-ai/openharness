@@ -63,7 +63,6 @@ import 'model.dart';
 import 'new_agent.dart' show swarmAttachAgent;
 import 'agent_info.dart';
 import 'identity.dart' show SuperTabAvatar;
-import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
 import 'message_link.dart';
 import 'message_link_swarms.dart';
@@ -72,7 +71,6 @@ import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
 import 'day_pill.dart';
-import 'terminal_row.dart';
 import 'agent_instructions.dart';
 import '../core/test_run.dart';
 import 'github_issues.dart';
@@ -2080,14 +2078,7 @@ class _SuperTabViewState extends State<SuperTabView>
   /// A thread reply shows in its thread, and here only when also sent.
 
   List<SuperTabMessage> _shownMessages(String id, {bool replies = false}) {
-    final messages = c.messages(id);
-    final answered = answeredPromptAlerts(
-      messages,
-      (agentId) => c.snapshot?.agent(agentId),
-    );
-    return messages
-        .where((m) => (replies || m.inMainStream) && !answered.contains(m.id))
-        .toList();
+    return c.messages(id).where((m) => replies || m.inMainStream).toList();
   }
 
   /// [id]'s own rows as its list shows them: without its steps' rows, which
@@ -3531,15 +3522,6 @@ class _SuperTabViewState extends State<SuperTabView>
           '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
         ),
         message: message,
-      );
-    }
-    if (message.terminalEvent) {
-      return SuperTabTerminalRow(
-        key: ValueKey(
-          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
-        ),
-        message: message,
-        controller: c,
       );
     }
     final agent = message.fromAgent
