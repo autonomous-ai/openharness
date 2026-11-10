@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, postable, type Command, type CommandContext } from './commands.js'
 import { PERSONAL_SWARM_OPERATION } from './deletion.js'
-import { createSuperTab, stableId, SuperTabError, type Actor, type SuperTabState } from './model.js'
+import { createSuperTab, stableId, SuperTabError, visibleState, type Actor, type SuperTabState } from './model.js'
 import { projectsOf } from './projects.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -108,7 +108,9 @@ describe('a project\'s chat in a Personal Swarm, until the Personal Swarm v4', (
       return effects
     }
     const created = run({ type: 'project.create', name: 'Games', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
-    return { run, ...created, get project() { return projectsOf(state).find(p => p.id === created.projectId)! } }
+    // The store numbers a chat's messages as it commits them (parts/commit.ts); applyCommand alone leaves the count.
+    const numbered = () => { state.conversations.find(c => c.id === created.conversationId)!.lastMessageSequence = 1 }
+    return { run, numbered, ...created, get project() { return projectsOf(state).find(p => p.id === created.projectId)! } }
   }
 
   it('keeps the person\'s first message for the PM, and the first claim starts it', () => {
@@ -118,9 +120,60 @@ describe('a project\'s chat in a Personal Swarm, until the Personal Swarm v4', (
     expect(f.run({ type: 'lead.claim', projectId: f.projectId, machineId: 'mac' }).result.leadStart).toBe('start')
   })
 
-  it('is the only exemption: the same message in any other Swarm\'s project chat is refused', () => {
+  it('is the only exemption past the opening request: the next message in any other Swarm\'s project chat is refused', () => {
     const f = project(false)
-    expect(refusal(() => f.run(post(f.conversationId, 'make the landing page dark')))).toMatchObject({ code: 'AGENTS_ONLY', status: 403, message: SENTENCE })
+    f.run(post(f.conversationId, 'make the landing page dark'))
+    f.numbered()
+    expect(refusal(() => f.run(post(f.conversationId, 'and the buttons round')))).toMatchObject({ code: 'AGENTS_ONLY', status: 403, message: SENTENCE })
     expect(f.project.leadWaiting).toBeUndefined()
+  })
+})
+
+// Exempt for now: New project's opening request. When the Swarm starts the PM, Desktop posts its person's request, with its files,
+// in the new project's channel right before lead.start (launch.dart startInSwarm), and the PM reads it there when it joins. Kept
+// only from the project's creator, only while the channel holds no message and no PM was asked for or holds it. It goes when
+// New project hands its request to the PM's own 1:1 chat, which needs lead.start to create that chat and return its id.
+describe('New project\'s opening request, until lead.start makes the PM\'s own chat', () => {
+  function fresh() {
+    const f = swarm()
+    const created = f.run({ type: 'project.create', name: 'Games', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    // The store numbers a chat's messages as it commits them (parts/commit.ts); applyCommand alone leaves the count.
+    const numbered = () => { f.state.conversations.find(c => c.id === created.conversationId)!.lastMessageSequence = 1 }
+    return { run: f.run, numbered, ...created, get state() { return f.state }, project: () => projectsOf(f.state).find(p => p.id === created.projectId)! }
+  }
+
+  it('is kept from the project\'s creator, with its files, and the PM that joins the channel reads it', () => {
+    const f = fresh()
+    expect(refusal(() => postable(f.state, owner, f.conversationId))).toBeNull()
+    const sent = f.run(post(f.conversationId, 'Build the landing page.')).messages.find(m => m.text === 'Build the landing page.')!
+    expect(sent).toMatchObject({ conversationId: f.conversationId, author: { kind: 'person', id: 'owner' } })
+    const pm = f.run({ type: 'agent.add', conversationId: f.conversationId, machineId: 'owner-mac', harnessId: 'h-games-pm', name: 'Pia', lead: true,
+      configuration: config } as Command, owner, own('owner')).result.agentId as string
+    const asPm: Actor = { kind: 'agent', agentId: pm, machineOwnerId: 'owner' }
+    expect(visibleState(f.state, asPm, 2_000).conversations.map(c => c.id)).toContain(f.conversationId)
+  })
+
+  it('is refused once the channel holds a message: one request, not a conversation', () => {
+    const f = fresh()
+    f.run(post(f.conversationId, 'Build the landing page.'))
+    f.numbered()
+    expect(refusal(() => f.run(post(f.conversationId, 'And dark mode.')))).toMatchObject({ code: 'AGENTS_ONLY' })
+  })
+
+  it('is refused once a PM was asked for or holds the channel', () => {
+    const asked = fresh()
+    asked.project().lead = { status: 'starting', machineId: 'owner-mac', machineName: 'Owner Mac', startId: 'start-1' }
+    expect(refusal(() => asked.run(post(asked.conversationId, 'Build the landing page.')))).toMatchObject({ code: 'AGENTS_ONLY' })
+    const held = fresh()
+    held.run({ type: 'agent.add', conversationId: held.conversationId, machineId: 'owner-mac', harnessId: 'h-games-pm', name: 'Pia', lead: true,
+      configuration: config } as Command, owner, own('owner'))
+    expect(refusal(() => held.run(post(held.conversationId, 'Build the landing page.')))).toMatchObject({ code: 'AGENTS_ONLY' })
+  })
+
+  it('is refused from anyone but the project\'s creator, and in a task\'s chat', () => {
+    const f = fresh()
+    expect(refusal(() => f.run(post(f.conversationId, 'Build the landing page.'), mate))).toMatchObject({ code: 'AGENTS_ONLY' })
+    const task = f.run({ type: 'conversation.create', projectId: f.projectId, title: 'Landing', brief: 'Build it.', checks: [] } as Command).result.conversationId as string
+    expect(refusal(() => f.run(post(task, 'Build the landing page.')))).toMatchObject({ code: 'AGENTS_ONLY' })
   })
 })

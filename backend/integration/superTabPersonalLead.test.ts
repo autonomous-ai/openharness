@@ -35,9 +35,9 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-async function personal() {
+async function personal(operation = PERSONAL_SWARM_OPERATION) {
   const store = new SuperTabStore(db, () => Date.now(), { store: new MemoryAttachmentStore(), prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
-  const tab = (await store.create(owner, PERSONAL_SWARM_OPERATION, 'Personal', 'private')).id
+  const tab = (await store.create(owner, operation, operation === PERSONAL_SWARM_OPERATION ? 'Personal' : 'Team', 'private')).id
   const execute = (command: Command) => store.execute(owner, tab, { operationId: randomUUID(), command })
   const games = (await execute({ type: 'project.create', name: 'Games', visibility: 'private', brief: '' })).result as { projectId: string; conversationId: string }
   const send = async (text: string) => String((await execute({ type: 'message.send', conversationId: games.conversationId, text, replyTo: null, recipientIds: [] }))
@@ -60,5 +60,19 @@ describe('a Personal Swarm project chat with no Lead', () => {
     // Once it leads, a message goes to it as to any Lead, and nothing waits any more.
     const third = await f.send('thanks')
     expect((await delivered(f.tab, lead)).sort()).toEqual([first, second, third].sort())
+  })
+})
+
+// New project's opening request in any Swarm (agentsOnly.test.ts): its creator's request is kept in the new project's channel
+// before lead.start, and the PM that joins reads it there; the channel is agents only after it.
+describe('New project\'s opening request in a Team Swarm', () => {
+  it('is kept for the PM that joins, which reads it; the next post is refused', async () => {
+    const f = await personal(randomUUID())
+    const request = await f.send('make the landing page dark')
+    await expect(f.send('and the buttons round')).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
+    const lead = await f.join()
+    const read = await f.store.messages(owner, f.tab, f.games.conversationId, {}, lead)
+    expect(read.messages.find(m => m.id === request)).toMatchObject({ text: 'make the landing page dark', author: { kind: 'person', id: owner.sub } })
+    await expect(f.send('thanks')).rejects.toMatchObject({ code: 'AGENTS_ONLY' })
   })
 })
