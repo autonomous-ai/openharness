@@ -585,7 +585,7 @@ code), `new` (code-able, nothing does it yet), `judgment`, `remove` (v1/v2 lefto
 | PM applies the order itself; route ranks nothing | instructionsTemplate.ts:120 | remove | Stale: the route already returns a pick (commands.ts `decision.record.pick`); #4546 makes the router own it |
 | Each start/assignment gives the rule as its reason | instructionsTemplate.ts:120-121 | code | commands.ts ROUTE_REASON_REQUIRED when not the route's pick |
 | "idle" or "first in the list" is no reason | instructionsTemplate.ts:121 | new | Backend: refuse an `overrideReason` that is only "idle"/"first"/"first in the list" (anchored match, same refusal) |
-| Out of quota mid-task: hand the branch to another account | instructionsTemplate.ts:122-123 | code | liveness.ts loses the task at a usage limit and hands it on; crewKeep.ts `crewTrouble` 'quota'/'quota-low' moves crew; cli limitResume.ts |
+| Out of quota mid-task: hand the branch to another account | instructionsTemplate.ts:122-123 | code | liveness.ts loses the task at a usage limit and hands it on; crewKeep.ts `crewTrouble` 'quota'/'quota-low' moves crew |
 | Urgent work ignores quota | instructionsTemplate.ts:124 | building | #4546 (quota) |
 | Any member may change it; PM says what it changed | instructionsTemplate.ts:129 | code | commands.ts instructions.save: member/coordinator only (COORDINATOR_REQUIRED), `summary` required |
 | Every agent reads its own role's part | instructionsTemplate.ts:129-130 | building | #4537 (one job page per role, re-sent on version change) |
@@ -679,7 +679,7 @@ once, under the first skill, and the repeat is one `remove` row pointing back to
 | Lost task: hand on at once | swarm-lead, swarmSkills.ts:475 | code | dispatch.ts / handed.ts: lost work goes to anyone free in its lane |
 | Lost task: avoid the failed machine, account or engine | swarm-lead, swarmSkills.ts:475-476 | building | #4546 |
 | Successor continues from the pushed branch | swarm-lead, swarmSkills.ts:475 | code | commands.ts `assignTo` recovery lines ("Continue the previous attempt from its pushed work", PR ref and head) |
-| Usage-limit task resumes by itself at reset | swarm-lead, swarmSkills.ts:476 | code | cli superTabs/limitResume.ts |
+| Usage-limit task resumes by itself at reset | swarm-lead, swarmSkills.ts:476 | removed | Swarm v4 (backend S13a, #3847): a lost task is not given back; the CLI's limitResume.ts went with `work.resume` |
 | Hand on early only to an account with allowance | swarm-lead, swarmSkills.ts:476 | building | #4546 (quota) |
 | Morning digest at 08:00 per project | swarm-lead, swarmSkills.ts:477 | code | digest.ts, `project.digest` |
 | Move or turn off the digest only when a person asks | swarm-lead, swarmSkills.ts:477 | new | commands.ts `project.digest`: from an agent, require `askedIn` (a person's message in the last day), as `rule.set` does |
