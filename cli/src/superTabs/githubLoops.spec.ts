@@ -70,6 +70,10 @@ function liveGitHub(clock: { now: number }) {
         .filter(i => String(i.updated_at) >= since), url)
       : p === `/repos/${REPO}/pulls` ? page([...pulls.values()].filter(r => r.state === 'open'), url)
       : /\/issues\/\d+\/comments$/.test(p) ? page((comments.get(n(-2)) ?? []).filter(c => String(c.updated_at) >= since), url)
+      : /\/pulls\/\d+\/reviews$/.test(p) ? []
+      // Each head its own change, so a push is something new to read.
+      : /\/compare\/main\.\.\.[0-9a-f]+$/.test(p) ? { files: [{ filename: 'app.py', status: 'modified', changes: 1, patch: `@@ -1 +1 @@\n+${p.split('...').at(-1)}` }] }
+      : /\/pulls\/\d+\/commits$/.test(p) ? [{ sha: (pulls.get(n(-2))?.head as Json | undefined)?.sha }]
       : p === `/repos/${REPO}/labels` ? page(labels, url)
       : /\/commits\/[0-9a-f]+\/check-runs$/.test(p) ? { check_runs: runs.get(String(p.split('/').at(-2))) ?? [] }
       : /\/commits\/[0-9a-f]+\/status$/.test(p) ? { statuses: [] }
