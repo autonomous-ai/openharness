@@ -67,12 +67,7 @@ describe('engine live checkpoints', () => {
     const recovered = await t.page()
     const expected = await continuous[LIVE_READ](finalAsk, who) as { answer: LivePage }
     expect(recovered.frames.flatMap(frame => frame.events)).toEqual(expected.answer.frames.flatMap(frame => frame.events))
-    // When each read the turn open is its own: the recovered stream keeps when this one first did.
-    const { openedAt, ...turn } = recovered.cursor.turn
-    const { openedAt: _continuousOpenedAt, ...expectedTurn } = expected.answer.cursor.turn
-    expect(turn).toEqual(expectedTurn)
-    expect(openedAt).toBe(finalAsk.cursor?.turn.openedAt)
-    if (engine === 'claude') expect(openedAt).toEqual(expect.any(Number))
+    expect(recovered.cursor.turn).toEqual(expected.answer.cursor.turn)
   })
 
   it('remembers a Codex goal across an ordinary turn and worker restart', async () => {

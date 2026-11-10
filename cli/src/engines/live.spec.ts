@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { newFold } from '../testing/transcriptOracle.js'
 import { liveFor } from './live.js'
 import { engineFor } from './registry.js'
@@ -48,7 +48,7 @@ describe('the live engine facet', () => {
     parser.ingest(prompt('two'))
     const two = parser.snapshot()
     expect(two.identity).not.toBe(one.identity)
-    expect(one).toEqual({ identity: one.identity, turnOpen: true, continued: false, openedAt: one.openedAt })
+    expect(one).toEqual({ identity: one.identity, turnOpen: true, continued: false })
     parser.closeTurn('hook')
     expect(two.turnOpen).toBe(true)
     parser.ingest(continuation)
@@ -59,21 +59,24 @@ describe('the live engine facet', () => {
     expect(idle.turnOpen).toBe(false)
   })
 
-  // A Stop hook run before the daemon read its turn open is about an earlier turn (engines/kit/stopHook.ts).
-  it('says when it read the record that opened each turn, and keeps it while the turn goes on', () => {
+  // A Stop hook its engine ran before a turn's opening record was written is about an earlier turn (engines/kit/stopHook.ts).
+  it('says when the record that opened each turn was written, and keeps it while the turn goes on', () => {
     const parser = liveFor('claude')!.create({ engine: 'claude' })
-    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    const at = (line: string, timestamp: string) => JSON.stringify({ ...JSON.parse(line), timestamp })
     expect(parser.snapshot().openedAt).toBeUndefined()
-    parser.ingest(prompt('one'))
-    now.mockReturnValue(2_000)
-    parser.ingest(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } }))
-    expect(parser.snapshot().openedAt).toBe(1_000)
-    parser.ingest(continuation)
-    expect(parser.snapshot().openedAt).toBe(1_000)
+    parser.ingest(at(prompt('one'), '2026-11-10T00:00:01.000Z'))
+    parser.ingest(at(JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'working' }] } }), '2026-11-10T00:00:02.000Z'))
+    expect(parser.snapshot().openedAt).toBe(Date.parse('2026-11-10T00:00:01.000Z'))
+    parser.ingest(at(continuation, '2026-11-10T00:00:03.000Z'))
+    expect(parser.snapshot().openedAt).toBe(Date.parse('2026-11-10T00:00:01.000Z'))
     parser.closeTurn('hook')
-    parser.ingest(continuation)
-    expect(parser.snapshot().openedAt).toBe(2_000)
-    now.mockRestore()
+    parser.ingest(at(continuation, '2026-11-10T00:00:04.000Z'))
+    expect(parser.snapshot().openedAt).toBe(Date.parse('2026-11-10T00:00:04.000Z'))
+    // A record with no time of its own, or one that is no time, says nothing.
+    parser.ingest(prompt('two'))
+    expect(parser.snapshot().openedAt).toBeUndefined()
+    parser.ingest(at(prompt('three'), 'soon'))
+    expect(parser.snapshot().openedAt).toBeUndefined()
   })
 
   it('keeps the previous cancel semantics, but clears abandoned tools on relaunch or Stop', () => {

@@ -149,7 +149,7 @@ describe('how turns end', () => {
       && String(frame.payload?.content ?? '').includes('!slow 3000'))
     expect(answer && client.frames.indexOf(answer) < client.frames.indexOf(ended), 'the answer before the turn ends').toBe(true)
     // It was heard while the turn ran, and closed nothing.
-    expect(d.log()).toMatch(/Stop run before the open turn was read opening: left open/)
+    expect(d.log()).toMatch(/Stop ran before the open turn opened: left open/)
     expect(d.log()).not.toMatch(/force-closed by Stop hook/)
     client.close()
   })

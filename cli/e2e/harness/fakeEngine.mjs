@@ -481,7 +481,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
     child.stderr.on('data', (chunk) => { if (stderr.length < 2_000) stderr += chunk })
     const limit = (Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : 60) * 1000
     let killed = false
-    const timer = setTimeout(() => {
+    // A held hook is not timed: the CLI ran and waited for it at once, and only the daemon heard it late.
+    const timer = held ? undefined : setTimeout(() => {
       killed = true
       hookLog(`${what} killed at its timeout of ${limit} ms`)
       child.kill('SIGTERM')
@@ -524,9 +525,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
     await Promise.all([...commands].map(([command, timeout]) => runHookCommand(event, command, timeout, input, held)))
   }
   // `!latestop` (Claude Code): its Stop reaches the daemon only after the next turn has been read opening (the
-  // test's `late-stop.release` says when), and that turn's prompt hook 4 s after it, as a loaded daemon took them
-  // in the same-words end to end run (2026-11-10): the CLI ran the hooks in order, but their requests were read late.
+  // test's `late-stop.release` says when), and that turn's prompt hook only as its answer is written, as a loaded
+  // daemon took them in the same-words end to end run (2026-11-10): the CLI ran the hooks in order, but their
+  // requests were read late.
   let lateStop = null
+  let latePrompt = null
+  /** Until the test writes `file`, for at most a minute: a test that failed first does not leave this waiting. */
+  const released = async (file) => {
+    for (const end = Date.now() + 60_000; !existsSync(file) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
+  }
   const hookHeld = () => {
     const file = join(config.root, `held-hook-${randomUUID()}`)
     return { file, release: () => writeFileSync(file, '') }
@@ -1172,6 +1179,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
     }
   }
   const finish = async (text) => {
+    if (latePrompt) {
+      const { release, hooks } = latePrompt
+      latePrompt = null
+      release()
+      await hooks
+    }
     if (engine === 'claude') {
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
     } else {
@@ -1304,13 +1317,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
       claude({ type: 'user', message: { role: 'user', content: prompt } })
       claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
       if (late) {
-        const release = join(config.root, 'late-stop.release')
-        while (!existsSync(release)) await new Promise((resolve) => setTimeout(resolve, 20))
+        await released(join(config.root, 'late-stop.release'))
         late.release()
         await late.stop
-        await new Promise((resolve) => setTimeout(resolve, 4_000))
-        promptHeld.release()
-        await promptHooks
+        // The prompt hook comes in once the turn's answer is written (`finish`), after any Stop grace has run out.
+        latePrompt = { release: promptHeld.release, hooks: promptHooks }
       }
     } else {
       codex('event_msg', { type: 'task_started', turn_id: open })

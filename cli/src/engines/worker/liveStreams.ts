@@ -103,8 +103,7 @@ export class LiveStreams {
       stream.turn = { ...after, identity: `${token}:${offset.toString(36)}` }
       stream.closed = false
     } else {
-      // Rebuilt after a restart, the parser reads the turn's opening again: it was read first when the checkpoint says.
-      stream.turn = { ...after, identity: stream.turn.identity, ...(stream.turn.openedAt === undefined ? {} : { openedAt: stream.turn.openedAt }) }
+      stream.turn = { ...after, identity: stream.turn.identity }
       if (after.turnOpen) stream.closed = false
     }
     for (const event of result.events) if (event.type === 'turn_started') stream.lastStarted = event

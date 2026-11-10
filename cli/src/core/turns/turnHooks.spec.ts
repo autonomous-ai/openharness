@@ -255,7 +255,7 @@ describe('turn hooks', () => {
     // The same-words end to end run under load (2026-11-10): a turn's Stop reached the daemon after the queued
     // next turn had been read opening but before that turn's prompt hook, so nothing said it was old, and it
     // force-closed the next turn 2.5 s in, losing its reply and the question open in it.
-    it('closes nothing with a Stop its engine ran before the open turn was read opening, a failure included', async () => {
+    it('closes nothing with a Stop its engine ran before the open turn opened, a failure included', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('claude')
       run.hooks.onPromptHook('s1', 500)
@@ -268,17 +268,22 @@ describe('turn hooks', () => {
       expect(state.turnOpen).toBe(true)
       expect(run.deps.emit).not.toHaveBeenCalled()
       expect(log.mock.calls.map(call => String(call[0]))).toEqual([
-        '[turn] s1 Stop run before the open turn was read opening: left open',
-        '[turn] s1 StopFailure run before the open turn was read opening: left open'])
+        '[turn] s1 Stop ran before the open turn opened: left open',
+        '[turn] s1 StopFailure ran before the open turn opened: left open'])
       log.mockClear()
-      // Nor one that opens in the drain after a Stop run before it was read.
+      // Nor one read opening in the drain after the Stop ran, or once its grace is over.
       state.turnOpen = false
       vi.mocked(run.deps.drain).mockImplementationOnce(async () => { state.turnOpen = true; state.openedAt = 4_000 })
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error', firedAt: 3_000 })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      state.openedAt = 2_000
+      vi.mocked(run.deps.drain).mockImplementationOnce(async () => {}).mockImplementationOnce(async () => { state.opened = 3; state.openedAt = 4_000 })
+      run.hooks.onTurnStop({ sessionId: 's1', status: 'error', firedAt: 3_000 })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
       expect(state.turnOpen).toBe(true)
       expect(run.deps.emit).not.toHaveBeenCalled()
-      // Run after the turn was read opening: about it, and closed once the grace is over, as before.
+      expect(log.mock.calls.map(call => String(call[0]))).toEqual(Array(2).fill('[turn] s1 StopFailure ran before the open turn opened: left open'))
+      // Run after the turn opened: about it, and closed once the grace is over, as before.
       log.mockClear()
       run.hooks.onTurnStop({ sessionId: 's1', firedAt: 5_000 })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)

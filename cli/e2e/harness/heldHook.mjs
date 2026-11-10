@@ -5,4 +5,5 @@
 import { existsSync } from 'node:fs'
 
 const release = process.env.FAKE_HOOK_RELEASE
-if (release) while (!existsSync(release)) await new Promise((resolve) => setTimeout(resolve, 20))
+// At most a minute: a test that failed first does not leave its hooks waiting.
+if (release) for (const end = Date.now() + 60_000; !existsSync(release) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 20))
