@@ -71,17 +71,9 @@ set(BOARD_SRCS
 
 set(BOARD_REQUIRES
     nvs_flash
-    esp_wifi
-    esp_netif
-    esp_event
-    esp_http_server
-    esp_http_client
-    esp_https_ota
     app_update
     esp_partition
     mbedtls
-    esp_websocket_client
-    esp-tls
     esp_lcd
     esp_lcd_touch
     esp_codec_dev

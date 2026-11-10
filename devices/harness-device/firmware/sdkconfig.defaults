@@ -18,10 +18,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # PENDING_VERIFY and must call esp_ota_mark_app_valid_cancel_rollback() once healthy, else the
 # bootloader reverts to the previous slot on the next reboot (a bad update can't brick the device).
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
-# Allow OTA over plain HTTP (no TLS). Security here is version-gate + SHA-256 integrity check
-# (the Wi-Fi OTA path, since replaced by the host's push over the cable); image signing / HTTPS was a deferred follow-up. Without this, esp_https_ota_begin
-# refuses a non-verified server ("No option for server verification is enabled").
-CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
 # --- FreeRTOS ---
 CONFIG_FREERTOS_HZ=1000

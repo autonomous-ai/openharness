@@ -26,6 +26,7 @@
 #include "ui/ui_screens.h"
 #include "ui/habitat/supertab.h"
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "cable_client";
 
@@ -1598,7 +1599,9 @@ bool cable_client_start(void)
     if (s_started) return true;
     TaskHandle_t hello_task = NULL;
     cable_machines_init(&s_machines);
-    s_agents = calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t));
+    // The roster is read a few times per frame at most and never from an ISR: PSRAM, with internal RAM as the fallback.
+    s_agents = heap_caps_calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_agents) s_agents = calloc(CABLE_MAX_AGENTS, sizeof(cable_agent_t));
     s_agents_lock = xSemaphoreCreateMutex();
     s_models_sem = xSemaphoreCreateBinary();
     if (!s_agents || !s_agents_lock || !s_models_sem) {
