@@ -224,7 +224,10 @@ These are my calls unless marked as Ken's.
    unbound. It never takes the session from the first.
 4. **The database is found from the TUI process.** The state folder is the folder of the `state/openclaw.sqlite`
    that the TUI holds open (`/proc/<pid>/fd` on Linux, `lsof -p` on macOS). If that cannot be read (Windows), the
-   order is the pane's `OPENCLAW_STATE_DIR`, then `~/.openclaw`. The agent's folder is
+   order is the folder remembered at bind, then the daemon's `OPENCLAW_STATE_DIR`, then `~/.openclaw`. Measured on
+   Windows 2026-11-10: Harness has no Windows reader for another process's open files or environment, so a TUI run with
+   `--profile` or a pane-only `OPENCLAW_STATE_DIR` is not followed there; a default install is. (My call: not built
+   until someone needs it on Windows.) The agent's folder is
    `<stateDir>/agents/<agentId>/agent/`, unless the config (read-only) moves it with `agentDir`. A header URL that is
    not loopback means a remote Gateway, and the named state is `This OpenClaw runs on another machine.`
 5. **Named states**, each with a log line:
@@ -254,7 +257,8 @@ These are my calls unless marked as Ken's.
     its tools run in the pane's folder.
 11. **Install**: after Part 0, the recipe is `npm i -g openclaw` with the Node and npm that Harness ships, as the npm
     recipes of the other engines are. An `openclaw` on PATH under an older Node gets `OpenClaw needs Node 24.`
-12. **Windows**: OpenClaw manages its Gateway through `schtasks` there, so native Windows is the target. Measure on
+12. **Windows**: OpenClaw runs natively there (measured 2026-11-10 on a Windows 11 ARM64 VM with Node 24.22.2: onboard,
+    Gateway, TUI, a Harness launch bound and streamed, no window opened). Measure on
     the Windows VM. If it does not run natively, the PR says so with the evidence, and Windows shows the engine as
     unavailable with the reason. Harness does not go through WSL.
 
